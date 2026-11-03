@@ -267,7 +267,7 @@
   "web-search-forced-declaration.test.ts": "web-search", "web-search-loop-iteration-usage.test.ts": "web-search",
   "web-search-loop-error-usage.test.ts": "web-search", "web-search-rotation-usage-attribution.test.ts": "web-search",
   "claude-devin-output-order.test.ts": "claude-integration",
-  "codex-config-preservation.test.ts": "codex-integration", "codex-credits.test.ts": "codex-integration",
+  "codex-config-preservation.test.ts": "codex-integration", "codex-profile-preservation.test.ts": "codex-integration", "codex-credits.test.ts": "codex-integration",
   "codex-credits-settings.test.ts": "codex-integration", "codex-credits-probes.test.ts": "codex-integration",
     "codex-credits-after-limit.test.ts": "codex-integration",
     "codex-pool-credit-policy.test.ts": "codex-integration", "codex-credit-retry-after.test.ts": "codex-integration", "codex-credit-scoped-retry.test.ts": "codex-integration",

@@ -73,6 +73,11 @@ export interface CodexInjectionPlanOk {
   content: string;
   /** The exact string about to replace the profile file. */
   profileContent: string;
+  /**
+   * The profile bytes `profileContent` preserved keys from (null when absent).
+   * Re-checked under the write lock so an edit landing meanwhile is not overwritten.
+   */
+  profileSource: string | null;
   /** The resolved catalog path, never the raw option. */
   catalogPath: string | null;
   providerTableMode: boolean;
@@ -325,8 +330,9 @@ export function deriveCodexInjectionPlan(
     managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
   }
 
+  const profileSource = existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf-8") : null;
   const profileContent = preserveUnmanagedProfileKeys(
-    existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf-8") : null,
+    profileSource,
     buildProfileFileForTarget(
       routingTarget,
       catalogPath,
@@ -400,6 +406,7 @@ export function deriveCodexInjectionPlan(
     baselineContent,
     content,
     profileContent,
+    profileSource,
     catalogPath,
     providerTableMode,
     keepRootOverrideAlongsideTable,

@@ -692,12 +692,19 @@ const MANAGED_PROFILE_ROOT_KEYS = new Set([
  * template dropped them without a word (#8066), so any root key this build does
  * not own is carried over, ahead of the first table. Values that span several
  * lines are copied whole, because one line of a multi-line value would not
- * parse.
+ * parse, and every carried assignment keeps its original bytes: nothing is
+ * decoded and reserialized, so a 64-bit integer Bun cannot represent survives.
+ *
+ * A carried root key named like a table the generated profile writes (an inline
+ * `features = { ... }` against a generated `[features]`) is dropped: TOML
+ * forbids defining the same table twice, and the generated table wins because
+ * it carries the settings this build manages.
  */
 export function preserveUnmanagedProfileKeys(existing: string | null, generated: string): string {
   if (!existing) return generated;
   const generatedKeys = rootKeysOf(generated);
   if (generatedKeys.size === 0) return generated;
+  const generatedTables = topLevelTableNamesOf(generated);
 
   const existingSource = rootSourceLines(existing);
   const carried: string[] = [];
@@ -708,6 +715,7 @@ export function preserveUnmanagedProfileKeys(existing: string | null, generated:
     if (!span) continue;
     index = span.end - 1;
     if (generatedKeys.has(span.key) || MANAGED_PROFILE_ROOT_KEYS.has(span.key)) continue;
+    if (generatedTables.has(span.key)) continue;
     if (carriedKeys.has(span.key)) continue;
     carriedKeys.add(span.key);
     carried.push(span.text.replace(/\s+$/, ""));
@@ -736,6 +744,19 @@ function rootKeysOf(content: string): Set<string> {
     index = span.end - 1;
   }
   return keys;
+}
+
+/** First path segment of every table header in a generated document. */
+function topLevelTableNamesOf(content: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of rootSourceLines(content).lines) {
+    if (!line.structural || !/^\s*\[/.test(line.text)) continue;
+    try {
+      const name = Object.keys(Bun.TOML.parse(line.text))[0];
+      if (name !== undefined) names.add(name);
+    } catch { /* the template only writes valid headers */ }
+  }
+  return names;
 }
 
 export function chooseCatalogPathForInjection(

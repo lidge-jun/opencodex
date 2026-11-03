@@ -440,6 +440,8 @@ async function injectCodexConfigImpl(
         message: "Codex config injection refused: config.toml changed while the write lock was being acquired. Retry to inject on the latest bytes.",
       });
     }
+    // The profile carries unmanaged root keys from the bytes the plan read; a profile edit since then would be overwritten.
+    if (readCurrentProfile() !== admittedPlan.profileSource) throw new CodexInjectRefusal({ success: false, retryable: true, message: "Codex config injection refused: opencodex.config.toml changed while the write lock was being acquired. Retry to inject on the latest bytes." });
     if (missingConfig) publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (_path, hooks) => { hooks.validateBeforeRename?.(CODEX_CONFIG_PATH); createEmptyCodexConfigInBoundary(); hooks.afterRename?.(CODEX_CONFIG_PATH); });
     let nativeInput = rawContent;
     let plan = admittedPlan;
