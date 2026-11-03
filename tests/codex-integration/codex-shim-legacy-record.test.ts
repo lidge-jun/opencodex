@@ -300,6 +300,28 @@ describe("Windows shim uninstall acts only on a validated record", () => {
     expect(uninstallCodexShim()).toMatchObject({ removed: true });
     expect(fs.existsSync(seeded.statePath)).toBe(false);
   });
+
+  test("a launcher directory replaced at the same path during removal is refused", () => {
+    const seeded = seed(bin);
+    let replaced = false;
+    setLegacyShimUninstallStepHookForTests(() => {
+      if (replaced) return;
+      replaced = true;
+      fs.renameSync(bin, join(root, "npm-aside"));
+      fs.mkdirSync(bin);
+      for (const name of fs.readdirSync(join(root, "npm-aside"))) fs.copyFileSync(join(root, "npm-aside", name), join(bin, name));
+    });
+    asWindows();
+    const result = uninstallCodexShim();
+    Object.defineProperty(process, "platform", platform);
+    expect(replaced).toBe(true);
+    expect(result).toMatchObject({ removed: false, refused: true });
+    for (const dir of [bin, join(root, "npm-aside")]) {
+      expect(fs.readFileSync(join(dir, "codex.cmd"), "utf8")).toContain("opencodex codex autostart shim");
+      expect(fs.readFileSync(join(dir, "codex.opencodex-real.cmd"), "utf8")).toBe(NATIVE);
+    }
+    expect(fs.existsSync(seeded.statePath)).toBe(true);
+  });
 });
 
 describe("other Windows shim consumers refuse an invalid record", () => {
@@ -328,6 +350,38 @@ describe("other Windows shim consumers refuse an invalid record", () => {
     expect(result).toMatchObject({ installed: false, refused: true });
     expect(result.message).toContain("needs manual restore");
     expect(snapshot()).toEqual(before);
+  });
+
+  test("a fresh install refuses an empty launcher instead of recording an unusable backup", () => {
+    const launcher = join(bin, "codex.cmd");
+    fs.writeFileSync(launcher, "");
+    const previousPath = process.env.PATH;
+    process.env.PATH = bin;
+    const before = snapshot();
+    asWindows();
+    try {
+      const result = installCodexShim({ assertRuntimeWritable: () => {} });
+      expect(result).toMatchObject({ installed: false, refused: true });
+      expect(result.message).toContain("empty");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      process.env.PATH = previousPath;
+    }
+    expect(snapshot()).toEqual(before);
+  });
+
+  test("auto-restore reports a record that became unreadable under its lock", () => {
+    const seeded = seed(bin);
+    fs.writeFileSync(seeded.wrapperPath, NATIVE.replace("native", "updated"));
+    asWindows();
+    const result = autoRestoreCodexShim({
+      enabled: () => true, stabilitySleep: () => {}, assertRuntimeWritable: () => {},
+      afterRestoreLockAcquired: () => fs.writeFileSync(seeded.statePath, "{broken"),
+    });
+    expect(result.status).toBe("ineligible");
+    expect("message" in result ? result.message : "").toContain("needs manual restore");
+    expect(fs.readFileSync(seeded.wrapperPath, "utf8")).toBe(NATIVE.replace("native", "updated"));
+    expect(fs.readFileSync(seeded.backupPath, "utf8")).toBe(NATIVE);
   });
 
   test.skipIf(process.platform === "win32")("a side-by-side launcher that is a hard link to another file is never written through", () => {
@@ -420,8 +474,8 @@ describe("on-disk checks (every OS, host filesystem)", () => {
     const link = join(root, "linked-npm");
     fs.symlinkSync(bin, link, linkType);
     const resolved = resolveLegacyShimDirectory(link);
-    expect(resolved).toEqual({ ok: true, resolved: fs.realpathSync.native(bin) });
-    expect(resolveLegacyShimDirectory(join(root, "missing"))).toEqual({ ok: true, resolved: null });
+    expect(resolved).toMatchObject({ ok: true, resolved: fs.realpathSync.native(bin) });
+    expect(resolveLegacyShimDirectory(join(root, "missing"))).toEqual({ ok: true, resolved: null, identity: null });
     // A resolver that reports a link inside the resolved chain is refused.
     const linked = resolveLegacyShimDirectory(bin, undefined, {
       lstat: path => { const entry = fs.lstatSync(path); return path === dirname(fs.realpathSync.native(bin)) ? { ...entry, isFile: () => false, isDirectory: () => false, isSymbolicLink: () => true, size: 0 } : entry; },

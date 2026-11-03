@@ -108,14 +108,14 @@ export function validateLegacyWindowsShimRecord(value: unknown, api: PlatformPat
 }
 
 export interface LegacyShimDiskDeps {
-  lstat?: (path: string) => { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number | bigint; nlink?: number | bigint };
+  lstat?: (path: string) => { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number | bigint; nlink?: number | bigint; dev?: number | bigint; ino?: number | bigint };
   realpath?: (path: string) => string;
   readPrefix?: (path: string, bytes: number) => string;
 }
 
 export type LegacyShimDirectoryVerdict =
   /** `resolved` is null when the recorded directory no longer exists: nothing to act on. */
-  | { ok: true; resolved: string | null }
+  | { ok: true; resolved: string | null; identity: string | null }
   | { ok: false; reason: string };
 
 function defaultReadPrefix(path: string, bytes: number): string {
@@ -140,28 +140,33 @@ function defaultReadPrefix(path: string, bytes: number): string {
  * it can only select a directory the record could name directly, and callers act on the
  * resolved directory.
  */
+const defaultLstat = (path: string) => lstatSync(path, { bigint: true });
+
 export function resolveLegacyShimDirectory(recordedDirectory: string, api: PlatformPath = hostShimPathApi(), deps: LegacyShimDiskDeps = {}): LegacyShimDirectoryVerdict {
-  const lstat = deps.lstat ?? lstatSync;
+  const lstat = deps.lstat ?? defaultLstat;
   const realpath = deps.realpath ?? realpathSync.native;
   let resolved: string;
   try {
     resolved = realpath(recordedDirectory);
   } catch (error) {
     const code = fileErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") return { ok: true, resolved: null };
+    if (code === "ENOENT" || code === "ENOTDIR") return { ok: true, resolved: null, identity: null };
     return { ok: false, reason: "the launcher directory could not be resolved" };
   }
   if (!api.isAbsolute(resolved)) return { ok: false, reason: "the launcher directory could not be resolved" };
+  let identity: string | null = null;
   try {
     for (let current = resolved; ; current = api.dirname(current)) {
       const entry = lstat(current);
       if (entry.isSymbolicLink() || !entry.isDirectory()) return { ok: false, reason: "the launcher directory resolves through a link" };
+      // Device and inode: a directory replaced at the same path is a different directory.
+      if (current === resolved) identity = `${entry.dev}:${entry.ino}`;
       if (api.dirname(current) === current) break;
     }
   } catch {
     return { ok: false, reason: "the launcher directory could not be inspected" };
   }
-  return { ok: true, resolved };
+  return { ok: true, resolved, identity };
 }
 
 type EntryShape = "absent" | "file" | "shared" | "other";
@@ -180,7 +185,7 @@ function entryShape(path: string, lstat: NonNullable<LegacyShimDiskDeps["lstat"]
 
 /** File shapes inside the resolved directory: launchers are regular files, a backup is a non-empty non-shim file. */
 export function legacyShimFilesProblem(files: readonly ShimFileState[], resolvedDirectory: string, api: PlatformPath = hostShimPathApi(), deps: LegacyShimDiskDeps = {}): string | null {
-  const lstat = deps.lstat ?? lstatSync;
+  const lstat = deps.lstat ?? defaultLstat;
   const readPrefix = deps.readPrefix ?? defaultReadPrefix;
   for (const file of files) {
     for (const launcher of new Set([file.wrapperPath, file.originalPath])) {
@@ -202,7 +207,7 @@ export function legacyShimFilesProblem(files: readonly ShimFileState[], resolved
 }
 
 export type LegacyShimCheck =
-  | { ok: true; files: ShimFileState[]; recordedDirectory: string; resolvedDirectory: string | null }
+  | { ok: true; files: ShimFileState[]; recordedDirectory: string; resolvedDirectory: string | null; directoryIdentity: string | null }
   | { ok: false; reason: string };
 
 /** Lexical layout, resolved directory, and file shapes, in that order. */
@@ -215,13 +220,24 @@ export function checkLegacyShimRecord(value: unknown, api: PlatformPath = hostSh
     const problem = legacyShimFilesProblem(record.files, directory.resolved, api, deps);
     if (problem) return { ok: false, reason: problem };
   }
-  return { ok: true, files: record.files, recordedDirectory: record.directory, resolvedDirectory: directory.resolved };
+  return { ok: true, files: record.files, recordedDirectory: record.directory, resolvedDirectory: directory.resolved, directoryIdentity: directory.identity };
 }
 
-/** True when the recorded directory still resolves to the same link-free directory. */
-export function legacyShimDirectoryUnchanged(recordedDirectory: string, resolvedDirectory: string, api: PlatformPath = hostShimPathApi(), deps: LegacyShimDiskDeps = {}): boolean {
+/** A launcher a fresh install backs up must be a non-empty file; an empty backup is refused by every later restore. */
+export function legacyShimFreshLaunchersProblem(files: readonly ShimFileState[], resolvedDirectory: string | null, api: PlatformPath = hostShimPathApi(), deps: LegacyShimDiskDeps = {}): string | null {
+  if (resolvedDirectory === null) return "the launcher directory is missing";
+  const lstat = deps.lstat ?? defaultLstat;
+  for (const file of files) {
+    const original = entryShape(api.join(resolvedDirectory, api.basename(file.originalPath)), lstat);
+    if (original.shape !== "file" || original.size === 0) return "a launcher is empty or not a regular file";
+  }
+  return null;
+}
+
+/** True when the recorded directory still resolves to the same link-free directory, by path and identity. */
+export function legacyShimDirectoryUnchanged(recordedDirectory: string, resolvedDirectory: string | null, identity: string | null, api: PlatformPath = hostShimPathApi(), deps: LegacyShimDiskDeps = {}): boolean {
   const now = resolveLegacyShimDirectory(recordedDirectory, api, deps);
-  return now.ok && now.resolved === resolvedDirectory;
+  return now.ok && now.resolved === resolvedDirectory && now.identity === identity;
 }
 
 let mutationGuard: (() => void) | null = null;
@@ -234,8 +250,7 @@ let mutationGuard: (() => void) | null = null;
 export function setLegacyShimMutationGuard(check: Extract<LegacyShimCheck, { ok: true }> | null): () => void {
   const previous = mutationGuard;
   mutationGuard = check && (() => {
-    const now = resolveLegacyShimDirectory(check.recordedDirectory);
-    if (!now.ok || now.resolved !== check.resolvedDirectory) {
+    if (!legacyShimDirectoryUnchanged(check.recordedDirectory, check.resolvedDirectory, check.directoryIdentity)) {
       throw new Error("Codex shim launcher directory changed after validation; refusing to modify it");
     }
   });

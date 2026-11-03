@@ -63,6 +63,7 @@ import {
   legacyShimBackupPath,
   legacyShimDirectoryUnchanged,
   legacyShimFilesProblem,
+  legacyShimFreshLaunchersProblem,
   legacyShimManualRestoreMessage,
   setLegacyShimMutationGuard,
 } from "./shim-legacy-record";
@@ -884,7 +885,8 @@ function installCodexShimFromState(options: InstallCodexShimInternalOptions, exi
   if (!targets) return { installed: false, message: lastShimDiscoveryError ?? "Could not find a codex executable on PATH." };
   // The writer obeys the rules every later restore checks, so it never records a layout it would refuse.
   const fresh = checkLegacyShimRecord(primaryState(targets));
-  if (!fresh.ok) return { installed: false, refused: true, message: `Refusing to install the Codex autostart shim: ${fresh.reason}.` };
+  const freshProblem = fresh.ok ? legacyShimFreshLaunchersProblem(fresh.files, fresh.resolvedDirectory) : fresh.reason;
+  if (!fresh.ok || freshProblem) return { installed: false, refused: true, message: `Refusing to install the Codex autostart shim: ${freshProblem}.` };
   setLegacyShimMutationGuard(fresh); // released with the caller's guard
 
   for (const target of targets) {
@@ -1160,7 +1162,7 @@ function autoRestoreWindowsCodexShim(options: RuntimePreflightDeps & {
     });
     return result.installed
       ? { status: "restored", message: result.message }
-      : { status: "deferred" };
+      : result.refused ? { status: "ineligible", message: result.message } : { status: "deferred" };
   } finally {
     lock.release();
   }
@@ -1191,12 +1193,12 @@ function uninstallWindowsCodexShim(): { removed: boolean; message: string; refus
   }
   const checked = checkLegacyShimRecord(read.state);
   if (!checked.ok) return refused(checked.reason);
-  const { files, recordedDirectory, resolvedDirectory } = checked;
+  const { files, recordedDirectory, resolvedDirectory, directoryIdentity } = checked;
   if (resolvedDirectory !== null) {
     const api = hostShimPathApi();
     const at = (path: string) => api.join(resolvedDirectory, api.basename(path));
     // Act only inside the directory that was validated, and only while it still resolves there.
-    const stillValid = () => legacyShimDirectoryUnchanged(recordedDirectory, resolvedDirectory)
+    const stillValid = () => legacyShimDirectoryUnchanged(recordedDirectory, resolvedDirectory, directoryIdentity)
       && legacyShimFilesProblem(files, resolvedDirectory) === null;
     let step = 0;
     for (const [index, file] of files.entries()) {
