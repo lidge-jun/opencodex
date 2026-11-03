@@ -299,7 +299,7 @@ export type HomeCodexSettingsSource =
 export async function resolveHomeCodexSettings(
   connection: LinkHomeConnection,
   admissionKey: string,
-  deps: LinkHomeDeps & { now?: () => Date } = {},
+  deps: LinkHomeDeps & { now?: () => Date; withWriteGuard?: <T>(write: () => T) => T } = {},
 ): Promise<HomeCodexSettingsSource> {
   const linkId = connection.link?.linkId;
   if (!linkId) return { source: "local", reason: "not a Remote Link Child" };
@@ -308,7 +308,8 @@ export async function resolveHomeCodexSettings(
     return { source: "home", document: fetched.document, fetchedAt: (deps.now ?? (() => new Date()))().toISOString() };
   }
   if (fetched.kind === "unsupported") {
-    clearHomeCodexSettingsRecord();
+    if (deps.withWriteGuard) deps.withWriteGuard(clearHomeCodexSettingsRecord);
+    else clearHomeCodexSettingsRecord();
     return { source: "local", reason: "the Home does not publish Codex settings; upgrade the Home" };
   }
   const cached = readHomeCodexSettingsRecord(linkId);

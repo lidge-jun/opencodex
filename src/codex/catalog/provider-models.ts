@@ -54,7 +54,7 @@ import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { captureAntigravityModelObservation, recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
-import { discoverAntigravitySiblings } from "./antigravity-discovery";
+import { antigravityActiveAccountCurrent, discoverAntigravitySiblings } from "./antigravity-discovery";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
@@ -794,16 +794,14 @@ export async function fetchProviderModelsWithAuth(
     }
     if (antigravity) {
       if (getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
+      // A needsReauth/replacement of the active account stops every later sibling refresh and send.
+      const activeCurrent = () => isCurrentCacheGeneration() && (!auth.oauthAccountId
+        || antigravityActiveAccountCurrent(name, auth.oauthAccountId, apiKey, auth.oauthGeneration));
       const admitSiblings = resolveAuth.kind === "refreshing" && name === "google-antigravity"
         && prov.authMode === "oauth" && auth.oauthAccountId
-        ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir)
+        ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir, activeCurrent)
         : () => [];
-      if (!isCurrentCacheGeneration() || getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
-      const activeAccount = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
-      if (auth.oauthAccountId && (!activeAccount || activeAccount.paused || activeAccount.needsReauth
-        || activeAccount.credential.expires <= Date.now() || activeAccount.credential.access !== apiKey
-        || credentialGeneration(activeAccount.credential) !== auth.oauthGeneration))
-        return observed(withConfiguredRetention(configured), "degraded");
+      if (!activeCurrent() || getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
       const byId = new Map(antigravity.map(model => [model.id, model]));
       for (const model of admitSiblings()) if (!byId.has(model.id)) byId.set(model.id, model);
       const merged = [...byId.values()];

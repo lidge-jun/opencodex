@@ -46,8 +46,8 @@ async function fixture(run: (root: string, home: string) => void | Promise<void>
 function launch(base = { ...process.env }) {
   let reads = 0, reason: string | undefined;
   const env = buildCodexLaunchEnv(base, {
-    routingKind: "opencodex-local", serviceToken: () => { reads++; return token; },
-    credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }),
+    routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, serviceToken: () => { reads++; return token; },
+    credentialDestination: (home, report, proof) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }, proof),
   });
   return { env, reads, reason };
 }
@@ -234,7 +234,7 @@ describe("Codex launcher native home and proxy environment", () => {
   test("feature argv cannot enable a bypass-ignoring system proxy", () => fixture(() => {
     for (const args of [["--enable", "respect_system_proxy"], ["--enable=respect_system_proxy"]]) {
       let reads = 0;
-      buildCodexLaunchEnv(process.env, { routingKind: "opencodex-local", args, serviceToken: () => { reads++; return token; } });
+      buildCodexLaunchEnv(process.env, { routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, args, serviceToken: () => { reads++; return token; } });
       expect(reads).toBe(0);
     }
   }));
