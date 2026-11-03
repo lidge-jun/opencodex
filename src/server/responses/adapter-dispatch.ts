@@ -1,3 +1,5 @@
+import { clientFacingModelText } from "../../lib/error-destination";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError, carryProxyError } from "../../lib/client-error-body";
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
@@ -121,8 +123,7 @@ import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
-import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
-
+import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "logCtx" | "req">,
@@ -233,8 +234,6 @@ export async function prepareAdapterExchange(
     reserveCredentialHop,
     claimAmbiguousResend,
   } = sendBudgetState;
-
-
   let selfContainedJudgment: boolean | undefined;
   // On the Antigravity direct lane the raw body carries only settings; judge the body the bridge
   // would have sent, built only if an ambiguous reset actually asks.
@@ -559,7 +558,7 @@ export async function prepareAdapterExchange(
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
     if (refusal instanceof AdmissionModelDeniedError) {
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
-      return admissionModelDeniedResponse(refusal, logCtx);
+      return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(refusal, logCtx));
     }
     const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -842,7 +841,7 @@ export async function prepareAdapterExchange(
           cleanupUpstreamAbort();
           upstream.abort();
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
-          return { failed: admissionModelDeniedResponse(scopeRefusal, logCtx) };
+          return { failed: admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx)) };
         }
         const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -1652,7 +1651,7 @@ export async function prepareAdapterExchange(
             cleanupUpstreamAbort();
             upstream.abort();
             releaseCodexAuthContextProbeLease(admissionState.authCtx);
-            return admissionModelDeniedResponse(scopeRefusal, logCtx);
+            return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx));
           }
          // A throw before the send — snapshot fetch, credential application, adapter
           // resolution — must hand the reservation back. Without this the ladder charges the
@@ -1887,15 +1886,16 @@ export async function prepareAdapterExchange(
         cleanupUpstreamAbort();
       }
       if (upstreamResponse.status === 413) {
+        if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
-          ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
+          ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
           : jsonContextOverflowResponse();
       }
       const policyRefusal = rewriteUpstreamPolicyRefusal({
         status: upstreamResponse.status,
         errorText,
         stream: clientRequestedStream,
-        modelId: parsed._responseModelId ?? parsed.modelId,
+        modelId: clientFacingModelText(options.clientModelLabel),
         // The same host check covers the openai-chat wire: both xAI hosts serve Chat too.
         destinationIsXai: isXaiResponsesDestination(route.provider),
         translatorBudget,

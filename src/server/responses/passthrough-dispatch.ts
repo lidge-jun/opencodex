@@ -1,3 +1,4 @@
+import { clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { passthroughBuildErrorResponse } from "./passthrough-build-error";
@@ -877,14 +878,14 @@ export async function preparePassthroughExchange(
       console.warn(
         `[responses] refused an oversized outbound body: bytes=${result.bytes} limit=${result.limit} `
         + `input_images=${result.imageCount} image_bytes=${result.imageBytes} `
-        + `model=${JSON.stringify(parsed.modelId)}`,
+        + `model=${JSON.stringify(clientFacingModelText(options.clientModelLabel))}`,
       );
       // A streaming client treats HTTP 413 as a retryable transport error and resends the same
       // oversized body — the reconnect loop #3177 exists to stop. Terminal overflow is the
       // honest shape, and it is what the upstream-413 path already returns.
       if (clientRequestedStream) {
         return streamingContextOverflowResponse(
-          parsed._responseModelId ?? parsed.modelId,
+          clientFacingModelText(options.clientModelLabel),
           translatorBudget,
         );
       }

@@ -59,6 +59,16 @@ export class UnknownComboError extends Error {
 }
 
 declare const exclusionBrand: unique symbol;
+/** Service diagnostics name configured positions and validated providers only. */
+export function comboLogLabel(config: OcxConfig, comboId: string): string {
+  const index = Object.keys(config.combos ?? {}).indexOf(comboId);
+  return index < 0 ? "combo" : `combo ${index + 1}`;
+}
+export function comboTargetLogLabel(config: OcxConfig, comboId: string, target: OcxComboTarget): string {
+  const index = getCombo(config, comboId)?.targets.findIndex(item => targetKey(item) === targetKey(target)) ?? -1;
+  return `target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))})`;
+}
+
 export type ComboExclusionReasons = string & { readonly [exclusionBrand]: true };
 
 export class NoAvailableComboTargetsError extends Error {
@@ -332,7 +342,7 @@ function reserveAllCooledTargets(
   const next = state ?? { successes: 0, currentWeights: new Map<string, number>(), successfulUses: new Map<string, number>() };
   next.lastCooldownReprobeAt = now;
   selectionState.set(comboId, next);
-  console.warn(`[combo] ${comboId}: reserving all-cooled targets for one request; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
+  console.warn(`[combo] ${comboLogLabel(config, comboId)}: reserving all-cooled targets for one request; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
   return reserved;
 }
 
@@ -632,7 +642,7 @@ export async function pickComboTargetWithWait(
     const normalDelay = soonest === undefined ? undefined : soonest.expiry - now;
     if (normalDelay !== undefined && normalDelay <= options.waitForCooldownMs) {
       console.warn(
-        `[combo] ${comboId}: deferring last resort, waiting ${normalDelay}ms for ${targetKey(soonest!.target)}`,
+        `[combo] ${comboLogLabel(config, comboId)}: deferring last resort, waiting ${normalDelay}ms for ${comboTargetLogLabel(config, comboId, soonest!.target)}`,
       );
       try {
         await (options.sleep ?? sleepWithAbort)(normalDelay, options.abortSignal);
@@ -685,7 +695,7 @@ export async function pickComboTargetWithWait(
   // Its target preserves configured order for ties.
   const target = earliest.target;
   console.warn(
-    `[combo] ${comboId}: all targets cooling, waiting ${delay}ms for ${targetKey(target)}`,
+    `[combo] ${comboLogLabel(config, comboId)}: all targets cooling, waiting ${delay}ms for ${comboTargetLogLabel(config, comboId, target)}`,
   );
   try {
     await (options.sleep ?? sleepWithAbort)(delay, options.abortSignal);

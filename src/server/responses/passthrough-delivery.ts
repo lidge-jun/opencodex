@@ -1,3 +1,5 @@
+import { clientFacingModelText } from "../../lib/error-destination";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -645,15 +647,16 @@ export async function deliverPassthroughResponse(
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
       if (upstreamResponse.status === 413) {
+        if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
-          ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
+          ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
           : jsonContextOverflowResponse();
       }
       const policyRefusal = rewriteUpstreamPolicyRefusal({
         status: upstreamResponse.status,
         errorText,
         stream: clientRequestedStream,
-        modelId: parsed._responseModelId ?? parsed.modelId,
+        modelId: clientFacingModelText(options.clientModelLabel),
         destinationIsXai: isXaiResponsesDestination(route.provider),
         translatorBudget,
         turnAdmissionLease: options.turnAdmissionLease,

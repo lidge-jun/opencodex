@@ -286,7 +286,9 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(response.status).toBe(503);
     expect(Number(response.headers.get("retry-after"))).toBeGreaterThanOrEqual(119);
     expect(Number(response.headers.get("retry-after"))).toBeLessThanOrEqual(120);
-    expect(await response.text()).toContain("No available targets for combo");
+    const body = await response.text();
+    expect(body).toContain("No available targets for combo");
+    expect(body).not.toContain("No available targets for combo: fan");
   });
 
   test("a target cooled earlier by a 502 does not replace the fallback's 401", async () => {
@@ -365,7 +367,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
       expect(line).toMatch(/failed with 401 after \d+ms: auth_failed$/);
       expect(line).not.toContain(key);
       expect(line).not.toContain("Incorrect API key");
@@ -383,7 +385,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
       expect(line).toBeDefined();
       expect(line!.includes(credential)).toBe(false);
       expect(line).toMatch(/failed with 502 after \d+ms: upstream_failed$/);
@@ -399,7 +401,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
       expect(line).toMatch(/failed with 429 after \d+ms: billing_exhausted$/);
       expect(line).not.toContain("generic");
     } finally { warn.mockRestore(); }
@@ -410,7 +412,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
       expect(line).toMatch(/failed with 502 after \d+ms: upstream_failed$/);
       expect(line).not.toContain("session=abc123");
     } finally {

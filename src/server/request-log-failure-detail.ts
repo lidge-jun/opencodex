@@ -67,6 +67,12 @@ export function projectLocalModelRefusalLog(
   logCtx.model = known(logCtx.model) ?? "unknown";
   logCtx.requestedModel = known(logCtx.requestedModel);
   logCtx.requestedAlias = known(logCtx.requestedAlias);
+  logCtx.wireModel = known(logCtx.wireModel); logCtx.resolvedModel = known(logCtx.resolvedModel);
+  logCtx.servedModel = known(logCtx.servedModel); logCtx.responseModelEcho = known(logCtx.responseModelEcho);
+  for (const attempt of logCtx.attempts ?? []) {
+    attempt.model = known(attempt.model) ?? "unknown";
+    if (!providerKnown(attempt.provider)) attempt.provider = "unknown";
+  }
   const decision = logCtx.routeDecision;
   if (decision && (!known(decision.requestedModel)
     || decision.candidates.some(candidate => !known(candidate.model) || !providerKnown(candidate.provider))

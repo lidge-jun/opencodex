@@ -1,4 +1,4 @@
-import { clientFacingModelLabel } from "../../lib/error-destination";
+import { clientFacingModelLabel, type ClientFacingModelLabel } from "../../lib/error-destination";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { rmSync } from "node:fs";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
-  admissionModelDeniedResponse,
+  admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
@@ -327,6 +327,7 @@ function compactHandoffRoute(
 }
 
 export interface HandleResponsesCompactOptions {
+  clientModelLabel?: ClientFacingModelLabel;
   advisorAdmissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   compactionRoutingOverride?: CompactionRoutingOverride | null;
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
@@ -687,6 +688,8 @@ export async function handleResponsesCompact(
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
+  const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(options.compactionRoutingOverride?.sourceModel ?? (body as { model?: unknown }).model);
+  options = { ...options, clientModelLabel };
   // Compaction forwards client history upstream too; keep local artifact paths out of it.
   redactHostedImageDisplayPaths(body);
   if (!options.compactionRoutingOverride) {
@@ -740,14 +743,14 @@ export async function handleResponsesCompact(
     // Routed xAI OAuth compaction must preview its Fast wire model here;
     // native compact keeps checking the destination it dispatches directly.
     const callerTier = (raw as Record<string, unknown>).service_tier;
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), clientFacingModelLabel(compactRequestedModel), {
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), clientModelLabel, {
       providerName: route.providerName,
       modelId: previewXaiOauthWireModel({ options: {
         serviceTier: compactFastRow ? "priority" : typeof callerTier === "string" ? callerTier : undefined,
       } }, route, config, "responses"),
     });
   } catch (err) {
-    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so a failed compact policy request stays
@@ -1787,7 +1790,7 @@ export async function handleResponsesCompact(
     // fallback spend four more.
     // internalReq keeps only FORWARD_HEADERS, so the caller principal is resolved from req.
     const replayPrincipal = { clientPrincipalId: resolveContextPrincipal(req, config, admission) };
-    const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, ...(admission ? { admission } : {}) });
+    const response = await handleResponses(internalReq, config, logCtx, { clientModelLabel: options.clientModelLabel, abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, ...(admission ? { admission } : {}) });
     if (req.signal.aborted) {
       void response.body?.cancel(req.signal.reason).catch(() => undefined);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");

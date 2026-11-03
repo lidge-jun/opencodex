@@ -192,9 +192,15 @@ export function admissionModelDeniedBody(error: AdmissionModelDeniedError): {
  * it to retry with another, and would make an operator's own denial
  * indistinguishable from a typo in the model name.
  */
-export function admissionModelDeniedResponse(error: AdmissionModelDeniedError, logCtx?: import("./request-log").RequestLogContext): Response {
-  if (logCtx) projectLocalModelRefusalLog(logCtx, clientFacingModelLabel(error.requestedModel,
+/** Project scope refusals before any caller finalizes its request log. */
+export function projectAdmissionModelDeniedLog(error: AdmissionModelDeniedError, logCtx: import("./request-log").RequestLogContext): AdmissionModelDeniedError {
+  projectLocalModelRefusalLog(logCtx, clientFacingModelLabel(error.requestedModel,
     error.requestedModel === UNNAMED_DESTINATION_MODEL ? "unnamed" : "requested"));
+  logCtx.requestedModel = error.requestedModel;
+  return error;
+}
+
+export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): Response {
   const response = new Response(JSON.stringify(admissionModelDeniedBody(error)), {
     status: 403,
     headers: { "Content-Type": "application/json" },

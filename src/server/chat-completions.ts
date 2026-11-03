@@ -79,7 +79,7 @@ import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../providers/caller-authorization";
 import type { AdmissionLease } from "../lib/admission";
 import {
-  admissionModelDeniedResponse,
+  admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   MODEL_NOT_ALLOWED_FOR_KEY,
   assertRouteAllowedByScope,
@@ -316,8 +316,9 @@ async function handleChatCompletionsWithBudget(
     }
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;
+      projectAdmissionModelDeniedLog(err, logCtx);
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
-      return admissionModelDeniedResponse(err, logCtx);
+      return admissionModelDeniedResponse(err);
     }
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;

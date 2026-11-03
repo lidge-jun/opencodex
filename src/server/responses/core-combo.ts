@@ -1,3 +1,6 @@
+import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
+import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
@@ -384,19 +387,22 @@ export async function executeComboResponses(
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
   requestDispatchers: ResponsesDispatchers,
 ): Promise<Response> {
+  const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(undefined);
+  const responseModel = clientFacingModelText(clientModelLabel);
   const requestedModel = options.mainHardLockFallbackOverride?.sourceModel
     ?? (typeof (rawBody as { model?: unknown } | null)?.model === "string"
       ? (rawBody as { model: string }).model
       : `combo/${comboId}`);
+  if (requestedModel !== responseModel) options = { ...options, clientResponseModelLabel: clientModelLabel };
   Object.assign(logCtx, {
-    requestedModel,
-    model: requestedModel,
+    requestedModel: responseModel,
+    model: responseModel,
     provider: "combo",
     comboId,
   });
   const combo = getCombo(config, comboId);
   if (!combo) {
-    return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
+    return formatErrorResponse(404, "invalid_request_error", "Unknown combo");
   }
   // Resolve against the original request once; every bridge candidate receives the same trusted
   // result after its provisional Authorization is removed, including an explicitly keyless result.
@@ -460,7 +466,7 @@ export async function executeComboResponses(
     );
   }
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
-    return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
+    return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
   const comboReplaySnapshot = {
     sourceBody: body,
@@ -512,8 +518,8 @@ export async function executeComboResponses(
     }
     carryProxyErrorContext(childLog, logCtx);
     Object.assign(logCtx, childLog, {
-      requestedModel,
-      model: requestedModel,
+      requestedModel: responseModel,
+      model: responseModel,
       provider: "combo",
       comboId,
       routeDecision: logCtx.routeDecision,
@@ -521,6 +527,11 @@ export async function executeComboResponses(
       activeAttempt: undefined,
       activeAttemptStartedAt: undefined,
     });
+    if (requestedModel !== responseModel) {
+      projectLocalModelRefusalLog(logCtx, clientModelLabel);
+      logCtx.model = responseModel; logCtx.requestedModel = responseModel;
+      if (options.clientModelLabel) logCtx.jevDecision = undefined;
+    }
   };
 
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
@@ -814,7 +825,7 @@ export async function executeComboResponses(
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
-    logCtx.jevDecision = normalizePersistedJevDecision({
+    logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
       version: 1,
       comboId,
       selected: {
@@ -833,10 +844,10 @@ export async function executeComboResponses(
       ...(decision.quota ? { quota: decision.quota } : {}),
       ...(decision.pinned ? { pinned: true } : {}),
       ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
-    });
+    }) : undefined;
     console.debug("[combo] JEV decision", {
       backend: decision.backend,
-      targetKey: decision.targetKey,
+      target: comboTargetLogLabel(config, comboId, pick.target),
       effort: decision.effort,
       gate: decision.gate,
       latencyMs: decision.latencyMs,
@@ -855,7 +866,7 @@ export async function executeComboResponses(
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
-  const decision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
+  const decision = comboRouteDecisionTrace(config, comboId, pick, responseModel);
   const selectedReason = options.memoryModelPhase
     ? memoryModelRouteReason(options.memoryModelPhase)
     : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : jevDecision?.pinned ? JEV_SESSION_PIN_ROUTE_REASON : undefined;
@@ -1291,8 +1302,8 @@ export async function executeComboResponses(
       settleComboReprobeSuccess(pick);
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
-        requestedModel,
-        model: requestedModel,
+        requestedModel: responseModel,
+        model: responseModel,
         provider: "combo",
         comboId,
         routeDecision: logCtx.routeDecision,
@@ -1429,7 +1440,7 @@ export async function executeComboResponses(
       adoptFailedChildLog(childLog);
       if (classifyOverflow && failureDecision === "stop") {
         return wantsStream
-          ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+          ? streamingContextOverflowResponse(responseModel, options.translatorBudget)
           : jsonContextOverflowResponse();
       }
       return lastFailure;
@@ -1438,7 +1449,7 @@ export async function executeComboResponses(
       adoptFailedChildLog(childLog);
       if (classifyOverflow) {
         return wantsStream
-          ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+          ? streamingContextOverflowResponse(responseModel, options.translatorBudget)
           : jsonContextOverflowResponse();
       }
       return lastFailure;
@@ -1455,7 +1466,7 @@ export async function executeComboResponses(
       status: failure.response.status, code: failure.upstreamCode, type: failure.upstreamType, message: failure.upstreamMessage,
     });
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`
+      `[combo] ${comboLogLabel(config, comboId)}: ${comboTargetLogLabel(config, comboId, pick.target)} failed with ${failure.response.status}`
         + ` after ${Date.now() - started}ms${failureReason ? `: ${failureReason}` : ""}`,
     );
     const failureNow = Date.now();
@@ -1578,11 +1589,11 @@ export async function executeComboResponses(
   ) {
     if (localAdmissionRefusals?.length) logCtx.errorCode = "input_admission_refused";
     const localMessage = localAdmissionRefusals?.length
-      ? `opencodex refused this turn locally; nothing was sent upstream. No target of combo ${comboId} `
+      ? `opencodex refused this turn locally; nothing was sent upstream. No target of this combo `
         + `that was tried can fit its input: ${localAdmissionRefusals.join(" ")} Compact the conversation before retrying.`
       : undefined;
     return (rawBody as { stream?: unknown } | null)?.stream === true
-      ? streamingContextOverflowResponse(requestedModel, options.translatorBudget, localMessage)
+      ? streamingContextOverflowResponse(responseModel, options.translatorBudget, localMessage)
       : jsonContextOverflowResponse(localMessage);
   }
   return failure;

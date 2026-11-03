@@ -979,11 +979,14 @@ test("Chat request read failures use a fixed local diagnostic", async () => {
   expect(text).not.toContain(KEY);
 });
 
-async function assertPersistedRefusal(requestId: string, status: number): Promise<void> {
+async function assertPersistedRefusal(requestId: string, status: number, expected?: { model?: string; requestedModel?: string; errorCode?: string }): Promise<void> {
   const { readUsageEntries, resetUsageReadCacheForTests } = await import("../../src/usage/log");
   resetUsageReadCacheForTests();
   const row = readUsageEntries().find(entry => entry.requestId === requestId);
   expect(row).toBeDefined(); expect(row!.status).toBe(status);
+  if (expected?.model !== undefined) expect(row!.model).toBe(expected.model);
+  if (expected?.requestedModel !== undefined) expect(row!.requestedModel).toBe(expected.requestedModel);
+  if (expected?.errorCode !== undefined) expect(row!.errorCode).toBe(expected.errorCode);
   expect(JSON.stringify(row)).not.toContain(KEY);
 }
 
@@ -1001,14 +1004,14 @@ for (const stream of [false, true]) test(`policy alias refusal uses the client s
 });
 
 for (const slot of ["model", "provider"] as const) test(`scope refusals project late-bound log ${slot}`, async () => {
-  const { AdmissionModelDeniedError, admissionModelDeniedResponse } = await import("../../src/server/admission-model-scope");
+  const { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } = await import("../../src/server/admission-model-scope");
   const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
   const { getRequestLogEntries } = await import("../../src/server/request-log");
   const requestId = crypto.randomUUID();
-  const ctx = { model: slot === "model" ? KEY : "gpt-6", provider: slot === "provider" ? `https://${KEY}@provider.example/path` : "fixture", requestedModel: "client-selector", errorCode: "model_not_allowed_for_key" };
+  const ctx = { model: slot === "model" ? KEY : "gpt-6", provider: slot === "provider" ? `https://${KEY}@provider.example/path` : "fixture", requestedModel: "client-selector", errorCode: "model_not_allowed_for_key", wireModel: KEY, resolvedModel: KEY, servedModel: KEY, responseModelEcho: KEY };
   // Exercise runtime callers too: an unbranded label must never authorize copied text.
   const failure = new AdmissionModelDeniedError("client-selector" as never, { providerName: "fixture", modelId: KEY });
-  const response = admissionModelDeniedResponse(failure, ctx);
+  const response = admissionModelDeniedResponse(projectAdmissionModelDeniedLog(failure, ctx));
   expect(response.status).toBe(403);
   const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text();
   expect(JSON.parse(text).error.type).toBe("model_not_allowed_for_key"); expect(JSON.parse(text).error.code).toBeUndefined();
@@ -1016,4 +1019,209 @@ for (const slot of ["model", "provider"] as const) test(`scope refusals project 
   const row = getRequestLogEntries().find(row => row.requestId === requestId);
   expect(row).toBeDefined(); expect(row!.status).toBe(403); expect(row!.errorCode).toBe("permission_denied");
   expect(JSON.stringify(row)).not.toContain(KEY); await assertPersistedRefusal(requestId, 403);
+});
+
+for (const stream of [false, true]) for (const endpoint of ["responses", "compact", "compact-recall"] as const) test(`original model labels survive combo overflow endpoint=${endpoint} stream=${stream}`, async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { handleResponsesCompact } = await import("../../src/server/responses/compact");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../src/combos");
+  clearComboSelectionState(); clearComboTargetCooldowns();
+  let sends = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { sends++; return Response.json({ error: { message: "fixture input too large", type: "invalid_request_error", code: "context_length_exceeded" } }, { status: 413 }); } });
+  try {
+    const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true } }, combos: { [KEY]: { strategy: endpoint === "responses" ? "jev" : "failover", targets: [{ provider: "fixture", model: "model" }] } }, compactionRouting: { model: `combo/${KEY}` } };
+    config.providers.jev = { adapter: "jev-decision", apiKey: "synthetic", baseUrl: "https://api.typesafe.ai/v1/systemone", fetch: (async () => Response.json({ answers: { route: { choice: "fixture/model:none" } } })) as typeof fetch };
+    config.providers.fixture!.reasoningEfforts = [];
+    const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+    if (endpoint === "compact-recall") {
+      delete config.compactionRouting;
+      const { rememberComboForLane, clearComboRecallForTests } = await import("../../src/server/responses/combo-session-recall");
+      const { sessionLaneIdFromRequest } = await import("../../src/server/request-log-conversation");
+      const { captureConfigGeneration } = await import("../../src/lib/state-store-sweeper");
+      clearComboRecallForTests();
+      rememberComboForLane(sessionLaneIdFromRequest(new Headers({ session_id: requestId })), KEY, { provider: "fixture", model: "model" }, "client-model", captureConfigGeneration());
+    }
+    const req = new Request(`http://localhost/v1/responses${endpoint !== "responses" ? "/compact" : ""}`, { method: "POST", headers: { "content-type": "application/json", session_id: requestId, ...(endpoint === "compact-recall" ? {} : { "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction", compaction: { trigger: "manual" } }) }) }, body: JSON.stringify({ model: "client-model", stream, input: [{ type: "compaction_trigger" }] }) });
+    const response = endpoint !== "responses" ? await handleResponsesCompact(req, config, ctx) : await handleResponses(req, config, ctx);
+    expect(response.status).toBe(endpoint !== "responses" ? 502 : stream ? 200 : 413);
+    const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text();
+    const payload = stream && endpoint === "responses" ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.type === "response.failed")?.response : JSON.parse(text);
+    expect(payload).toBeDefined(); expect(payload.error.type).toBe(endpoint !== "responses" ? "server_error" : "invalid_request_error"); expect(payload.error.code).toBe(endpoint !== "responses" ? "upstream_server_error" : "context_length_exceeded"); expect(sends).toBe(1);
+    if (stream && endpoint === "responses") { expect(payload.status).toBe("failed"); expect(payload.model).toBe("client-model"); }
+    expect(text).not.toContain(KEY);
+    const row = getRequestLogEntries().find(row => row.requestId === requestId);
+    expect(row).toBeDefined(); expect(row!.status).toBe(endpoint !== "responses" ? 502 : stream ? 400 : 413); expect(row!.model).toBe("client-model"); expect(row!.requestedModel).toBe("client-model"); expect(JSON.stringify(row)).not.toContain(KEY);
+    await assertPersistedRefusal(requestId, endpoint !== "responses" ? 502 : stream ? 400 : 413, { model: "client-model", requestedModel: "client-model" });
+  } finally { await upstream.stop(true); }
+});
+
+for (const selector of ["directive", "picker"] as const) test(`Messages model label precedes ${selector} decoding`, async () => {
+  const { handleClaudeMessages } = await import("../../src/server/claude-messages");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: "https://provider.example/v1" } }, claudeCode: { model: `fixture/${KEY}` }, apiKeys: [{ id: "scope", name: "scope", key: "synthetic-scope", createdAt: "2026-01-01T00:00:00Z", allowedProviders: ["other"] }] };
+  const requestId = crypto.randomUUID();
+  const original = selector === "picker" ? `ocx-claude-native--claude-${KEY}-${"x".repeat(80)}` : "client-model";
+  if (selector === "picker") { expect(original.length).toBeGreaterThan(128); expect((await import("../../src/claude/alias")).resolveAlias(original)!.length).toBeLessThanOrEqual(128); }
+  const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: original, max_tokens: 16, ...(selector === "directive" ? { system: `<!-- ocx-route: fixture/${KEY} -->` } : {}), messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" }, { requestId, start: Date.now(), admission: { kind: "configured", keyId: "scope", source: "bearer" } });
+  expect(response.status).toBe(403); const text = await response.text(); const payload = JSON.parse(text);
+  expect(payload.error.type).toBe("model_not_allowed_for_key"); expect(payload.error.code).toBeUndefined();
+  expect(payload.error.model).toBe(selector === "picker" ? "the requested model" : "client-model");
+  expect(text).not.toContain(`fixture/${KEY}`);
+  expect(text).not.toContain(KEY);
+  const row = getRequestLogEntries().find(row => row.requestId === requestId);
+  expect(row).toBeDefined(); expect(row!.status).toBe(403); expect(JSON.stringify(row)).not.toContain(KEY); await assertPersistedRefusal(requestId, 403, { requestedModel: selector === "picker" ? "the requested model" : "client-model", errorCode: "permission_denied" });
+});
+
+for (const slot of ["combo", "model", "url"] as const) test(`combo service diagnostics bound configured ${slot}`, async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../src/combos");
+  clearComboSelectionState(); clearComboTargetCooldowns();
+  const output: string[] = []; const warn = console.warn; const debug = console.debug;
+  console.warn = (...args) => output.push(args.map(arg => typeof arg === "string" ? arg : JSON.stringify(arg)).join(" "));
+  console.debug = console.warn;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return Response.json({ error: { message: "fixture failure" } }, { status: 500 }); } });
+  try {
+    const combo = slot === "combo" ? KEY : "bounded-diagnostics";
+    const model = slot === "url" ? `https://${KEY}@provider.example/model?key=${KEY}` : slot === "model" ? KEY : "model";
+    const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true } }, combos: { [combo]: { strategy: "failover", targets: [{ provider: "fixture", model }] } } };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `combo/${combo}`, input: "hi" }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(500); const payload = await response.json(); expect(payload.error).toBeDefined(); expect(payload.error.type).toBe("server_error"); expect(payload.error.code).toBe("upstream_server_error");
+    expect(output.some(line => line.includes("failed with 500"))).toBe(true);
+    expect(output.join("\n")).not.toContain(KEY);
+    expect(output.join("\n")).toContain("target 1 (fixture)");
+  } finally { console.warn = warn; console.debug = debug; await upstream.stop(true); }
+});
+
+for (const stream of [false, true]) test(`concrete compaction overflow uses the client model stream=${stream}`, async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return Response.json({ error: { message: "fixture context overflow" } }, { status: 413 }); } });
+  try {
+    const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true } }, compactionRouting: { model: `fixture/${KEY}` } };
+    const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json", "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction", compaction: { trigger: "manual" } }) }, body: JSON.stringify({ model: "client-model", stream, input: [{ type: "compaction_trigger" }] }) }), config, ctx);
+    expect(response.status).toBe(stream ? 200 : 413);
+    const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text();
+    const body = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.type === "response.failed")?.response : JSON.parse(text);
+    expect(body).toBeDefined(); expect(body.error.type).toBe("invalid_request_error"); expect(body.error.code).toBe("context_length_exceeded");
+    expect(text).not.toContain(KEY);
+    const row = getRequestLogEntries().find(row => row.requestId === requestId);
+    expect(row).toBeDefined(); expect(row!.status).toBe(stream ? 400 : 413); expect(JSON.stringify(row)).not.toContain(KEY);
+  } finally { await upstream.stop(true); }
+});
+
+test("combo effort diagnostics omit the configured model", async () => {
+  const { concreteComboRequestBody } = await import("../../src/combos/request");
+  const output: unknown[][] = []; const debug = console.debug;
+  console.debug = (...args) => { output.push(args); };
+  try {
+    const body = concreteComboRequestBody({ input: "hi" }, { provider: "fixture", model: KEY }, "high", []);
+    expect(body.model).toBe(`fixture/${KEY}`);
+    expect(output).toHaveLength(1); expect(output[0]![0]).toBe("[opencodex] combo default effort omitted");
+    expect(JSON.stringify(output)).not.toContain(KEY);
+  } finally { console.debug = debug; }
+});
+
+for (const mode of ["wait", "last-resort", "reprobe"] as const) test(`combo cooldown diagnostics use positions mode=${mode}`, async () => {
+  const { clearComboSelectionState, pickComboTargetWithWait } = await import("../../src/combos/resolve");
+  const { clearComboTargetCooldowns, coolComboTarget } = await import("../../src/combos/failover");
+  clearComboSelectionState(); clearComboTargetCooldowns();
+  const model = `https://${KEY}@provider.example/${KEY}?key=${KEY}`;
+  const target = { provider: "fixture", model };
+  const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-chat", baseUrl: "https://provider.example/v1" } }, combos: { [KEY]: { strategy: "failover", targets: [target, ...(mode === "last-resort" ? [{ provider: "fixture", model: "backup", lastResort: true }] : [])], ...(mode === "last-resort" ? { cooldownWaitPolicy: "before-last-resort" } : {}), ...(mode === "reprobe" ? { cooldownReprobe: { enabled: true, intervalMs: 1000 } } : {}) } } };
+  const now = Date.now(); coolComboTarget(KEY, target, { now, cooldownMs: 10 });
+  const output: string[] = []; const warn = console.warn;
+  console.warn = (...args) => { output.push(args.join(" ")); };
+  try {
+    const pick = await pickComboTargetWithWait(config, KEY, { now, waitForCooldownMs: 100, sleep: async () => {} });
+    expect(pick).not.toBeNull(); expect(pick!.target.model).toBe(model);
+    expect(output).toHaveLength(1); expect(output[0]).toContain(mode === "reprobe" ? "reserving all-cooled" : mode === "last-resort" ? "deferring last resort" : "all targets cooling");
+    expect(output.join("\n")).not.toContain(KEY);
+    if (mode !== "reprobe") expect(output[0]).toContain("target 1 (fixture)");
+  } finally { console.warn = warn; clearComboTargetCooldowns(); clearComboSelectionState(); }
+});
+
+for (const surface of ["chat", "claude", "compact", "native-messages"] as const) test(`scope row projection precedes final logging surface=${surface}`, async () => {
+  const { handleClaudeMessages } = await import("../../src/server/claude-messages");
+  const { handleResponsesCompact } = await import("../../src/server/responses/compact");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const native = surface === "native-messages";
+  const selector = surface === "compact" || native ? "fixture/client-model" : `fixture/${"x".repeat(130)}${KEY}`;
+  const config: OcxConfig = { port: 0, providers: { fixture: { adapter: native ? "anthropic" : "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: native ? "https://api.anthropic.com" : "https://provider.example/v1" } }, apiKeys: [{ id: "scope-order", name: "scope", key: "synthetic-scope-order", createdAt: "2026-01-01T00:00:00Z", ...(native ? { allowedModels: [`fixture/${KEY}`] } : { allowedProviders: ["other"] }) }], ...(surface === "compact" ? { compactionRouting: { model: `fixture/${KEY}` } } : {}), ...(native ? { blockedModelRedirects: { "client-model": KEY }, protocols: { rollout: { managedMessagesNative: true } } } : {}) };
+  const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+  const admission = { kind: "configured" as const, keyId: "scope-order", source: "bearer" as const };
+  const req = new Request("http://localhost/v1/fixture", { method: "POST", headers: { "content-type": "application/json", "anthropic-beta": "advisor-tool-2026-03-01" }, body: JSON.stringify({ model: selector, stream: false, max_tokens: 16, ...(surface === "compact" ? { input: [] } : { messages: [{ role: "user", content: "hi" }] }), ...(native ? { tools: [{ type: "advisor_20260301", name: "advisor", model: "other" }] } : {}) }) });
+  const response = surface === "compact" ? await handleResponsesCompact(req, config, ctx, undefined, admission) : surface === "chat" ? await handleChatCompletions(req, config, ctx, { requestId, start: Date.now(), admission }) : await handleClaudeMessages(req, config, ctx, { requestId, start: Date.now(), admission });
+  expect(response.status).toBe(403);
+  const text = await (surface === "compact" ? responseWithDeferredRequestLog(response, requestId, Date.now(), ctx) : response).text();
+  const body = JSON.parse(text); expect(body.error.type).toBe("model_not_allowed_for_key"); expect(body.error.code).toBeUndefined();
+  const row = getRequestLogEntries().find(row => row.requestId === requestId);
+  expect(row).toBeDefined(); expect(row!.status).toBe(403);
+  expect(row!.requestedModel).toBe(surface === "compact" || native ? selector : "the requested model");
+  expect(JSON.stringify(row)).not.toContain(KEY); await assertPersistedRefusal(requestId, 403, { requestedModel: surface === "compact" || native ? selector : "the requested model", errorCode: "permission_denied" });
+});
+
+test("streaming memory admission projects the final request row", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: "https://provider.example/v1", contextWindow: 16 } }, memoryModels: { extract: { model: `fixture/${KEY}` } } };
+  const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json", "x-codex-turn-metadata": JSON.stringify({ request_kind: "memory", thread_source: "memory_consolidation" }) }, body: JSON.stringify({ model: "client-model", stream: true, input: "a".repeat(4000) }) }), config, ctx);
+  expect(response.status).toBe(200); const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text();
+  const failed = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.type === "response.failed");
+  expect(failed).toBeDefined(); expect(failed.response.status).toBe("failed"); expect(failed.response.error.code).toBe("context_length_exceeded");
+  const row = getRequestLogEntries().find(row => row.requestId === requestId);
+  expect(row).toBeDefined(); expect(row!.status).toBe(400); expect(JSON.stringify(row)).not.toContain(KEY); await assertPersistedRefusal(requestId, 400);
+});
+
+for (const combo of [false, true]) for (const capped of [false, true]) test(`input refusal distinguishes the input cap combo=${combo} capped=${capped}`, async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../src/combos");
+  clearComboSelectionState(); clearComboTargetCooldowns();
+  const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: "https://provider.example/v1", contextWindow: 100, ...(capped ? { modelMaxInputTokens: { model: 16 } } : {}) } }, ...(combo ? { combos: { bounded: { strategy: "failover", targets: [{ provider: "fixture", model: "model" }] } } } : {}) };
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: combo ? "combo/bounded" : "fixture/model", input: "a".repeat(4000), ...(combo ? { max_output_tokens: 8 } : {}) }) }), config, { model: "", provider: "" });
+  expect(response.status).toBe(413); const body = await response.json(); expect(body.error.type).toBe("invalid_request_error"); expect(body.error.code).toBe(combo ? "context_length_exceeded" : "input_admission_refused");
+  expect(body.error.message).toContain(capped ? "input limit" : "context window");
+  expect(body.error.message).toContain("100 tokens");
+  if (capped) { expect(body.error.message).toContain("16 tokens"); expect(body.error.message).not.toContain("context window of fixture/model (16 tokens)"); }
+  if (combo) expect(body.error.message).toContain("No target of this combo");
+});
+
+test("combo outbound-size diagnostics use the original client label", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../src/combos");
+  clearComboSelectionState(); clearComboTargetCooldowns();
+  const output: string[] = []; const warn = console.warn;
+  console.warn = (...args) => { output.push(args.join(" ")); };
+  try {
+    const config: OcxConfig = { port: 0, maxUpstreamBodyBytes: 1, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: "https://provider.example/v1" } }, combos: { bounded: { strategy: "failover", targets: [{ provider: "fixture", model: KEY }] } } };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "combo/bounded", input: "hi" }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(413); const body = await response.json(); expect(body.error.type).toBe("upstream_error"); expect(body.error.code).toBe("upstream_error");
+    expect(output.some(line => line.includes("refused an oversized outbound body"))).toBe(true);
+    expect(output.join("\n")).not.toContain(KEY);
+  } finally { console.warn = warn; }
+});
+
+test("committed combo failure keeps the original model in its request row", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { getRequestLogEntries, addFinalRequestLog } = await import("../../src/server/request-log");
+  const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../src/combos");
+  clearComboSelectionState(); clearComboTargetCooldowns();
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { let next = 0; return new Response(new ReadableStream({ async pull(controller) { if (next++ === 0) controller.enqueue(new TextEncoder().encode("event: response.output_text.delta\n" + frame({ type: "response.output_text.delta", delta: "fixture output", item_id: "msg_fixture", output_index: 0, content_index: 0 }))); else { await Bun.sleep(10); controller.enqueue(new TextEncoder().encode("event: response.failed\n" + frame({ type: "response.failed", response: { status: "failed", model: "model", output: [], error: { type: "server_error", code: "upstream_server_error", message: "fixture failed" } } }))); controller.close(); } } }), { headers: { "content-type": "text/event-stream" } }); } });
+  try {
+    const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true } }, combos: { [KEY]: { strategy: "failover", targets: [{ provider: "fixture", model: "model" }] } } };
+    const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `combo/${KEY}`, stream: true, input: "hi" }) }), config, ctx, { clientModelLabel: (await import("../../src/lib/error-destination")).clientFacingModelLabel("client-model") });
+    expect(response.status).toBe(200); const text = await response.text();
+    const failed = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.type === "response.failed");
+    expect(text).toContain("fixture output"); expect(failed).toBeDefined(); expect(failed.response.status).toBe("failed"); expect(failed.response.error.type).toBe("server_error"); expect(failed.response.error.code).toBe("upstream_server_error"); expect(text).not.toContain(KEY);
+    addFinalRequestLog(requestId, Date.now(), ctx, 500, { closeReason: "terminal", terminalStatus: "failed" });
+    const row = getRequestLogEntries().find(row => row.requestId === requestId);
+    expect(row).toBeDefined(); expect(row!.status).toBe(500); expect(row!.errorCode).toBe("upstream_server_error"); expect(JSON.stringify(row)).not.toContain(KEY); await assertPersistedRefusal(requestId, 500);
+  } finally { await upstream.stop(true); }
 });

@@ -146,7 +146,7 @@ import {
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
 import {
   admissionMayUseMeteredComboTargets,
-  admissionModelDeniedResponse,
+  admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
@@ -855,7 +855,7 @@ export async function prepareResponsesRequest(
     }
     const policyRefusal = policyCandidateRefusalResponse(err);
     if (policyRefusal) return policyRefusal;
-    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoAvailableComboTargetsError) {
       return comboUnavailable(err.comboId, undefined, err.reasons);
     }
@@ -1075,7 +1075,7 @@ export async function prepareResponsesRequest(
       } catch (err) {
         const policyRefusal = policyCandidateRefusalResponse(err);
         if (policyRefusal) return policyRefusal;
-        if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
+        if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
         if (err instanceof NoAvailableComboTargetsError) {
           return comboUnavailable(err.comboId, undefined, err.reasons);
         }
@@ -1297,7 +1297,7 @@ export async function prepareResponsesRequest(
             } catch (err) {
               const policyRefusal = policyCandidateRefusalResponse(err);
               if (policyRefusal) return policyRefusal;
-              if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
+              if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
               if (err instanceof NoAvailableComboTargetsError) {
                 return comboUnavailable(err.comboId, undefined, err.reasons);
               }
@@ -1465,8 +1465,14 @@ export async function prepareResponsesRequest(
   const scopedDestination = parsed._wireModelOverride === undefined
     ? route
     : { providerName: route.providerName, modelId: parsed._wireModelOverride };
+  // Synthetic turns keep the original client envelope label across provider normalization.
+  if (options.compactionRoutingOverride || options.mainHardLockFallbackOverride || options.clientResponseModelLabel
+    || options.internalDecisionCall || options.memoryModelPhase || options.visionDescribeTerminal
+    || options.policyFallbackCandidate || parsed._memoryModelPhase || logCtx.shadowCallRewrittenFrom) {
+    parsed._responseModelId = clientFacingModelText(options.clientResponseModelLabel ?? inboundSelector);
+  }
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
-    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx);
+    return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -1521,13 +1527,13 @@ export async function prepareResponsesRequest(
       // instead of treating the first incompatible candidate as the end of the chain. The
       // distinct code is what lets the fallback layer tell the two apart -- an upstream
       // `context_length_exceeded` still stops, because retrying it elsewhere is guesswork.
+      projectLocalModelRefusalLog(logCtx, inboundSelector);
       if (clientRequestedStream && !options.comboAttempt) {
         return streamingContextOverflowResponse(
           clientFacingModelText(inboundSelector),
           translatorBudget,
         );
       }
-      projectLocalModelRefusalLog(logCtx, inboundSelector);
       return markProxyError(formatErrorResponse(
         413,
         "input_admission_refused",

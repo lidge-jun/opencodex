@@ -1,5 +1,13 @@
 # Combo Streaming Boundaries
 
+## Client model identity
+
+Combo dispatch in `src/server/responses/core-combo.ts` keeps its routing selector separate
+from the original branded client label. Generated overflow envelopes use that label for
+response models and fixed local wording; failed rewritten-turn request rows use only client
+or catalog model identities. Synthetic children carry the label through their existing
+options. Service diagnostics follow the [producer bounds](../ops/service-logging.md#combo-diagnostics).
+
 ## Context-window refusals
 
 `isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.

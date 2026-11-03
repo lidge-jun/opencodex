@@ -70,7 +70,7 @@ import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
 import {
   AdmissionModelDeniedError,
-  admissionModelDeniedResponse,
+  admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   assertRouteAllowedByScope,
 } from "../admission-model-scope";
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
@@ -347,7 +347,7 @@ export async function prepareResponsesTransport(
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
-    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(error, logCtx);
+    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(error, logCtx));
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = markProxyError(formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
       error.message));
