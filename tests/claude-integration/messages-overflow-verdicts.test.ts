@@ -6,11 +6,13 @@ import { ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES } from "../../src/lib/clie
 import { fixturePath, helperPath, repoRoot } from "../helpers/repo-root";
 import { messagesOverflowFixtures, messagesOverflowLanes, type MessagesOverflowFixture } from "../helpers/messages-overflow-cases";
 
-type Row = { lane: string; input: MessagesOverflowFixture; status: number; type?: string; code?: string | null; text: string; decision: boolean; clientRecognizes: boolean; compactionSentence: boolean };
-const golden = JSON.parse(readFileSync(fixturePath("messages-overflow-decisions.json"), "utf8")) as { baseCommit: string; rows: Row[] };
+type Observation = { status: number; type?: string; code?: string | null; text: string; clientRecognizes: boolean; compactionSentence: boolean; internalDecisions: Record<string, boolean> };
+type Row = { lane: string; input: MessagesOverflowFixture; base?: Observation; head?: Observation };
+const golden = JSON.parse(readFileSync(fixturePath("messages-overflow-decisions.json"), "utf8")) as { schemaVersion: number; baseCommit: string; rows: Row[] };
 const head = new Map<string, Row>();
 const key = (row: Row) => `${row.lane}/${row.input.id}`;
 beforeAll(async () => {
+  expect(golden.schemaVersion).toBe(2);
   expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
   const scratch = mkdtempSync(join(tmpdir(), "ocx-overflow-decisions-"));
   try {
@@ -25,14 +27,17 @@ beforeAll(async () => {
     for (const row of result.rows) { expect(head.has(key(row))).toBe(false); head.set(key(row), row); }
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }, 60000);
-for (const base of golden.rows) test(`${key(base)}: origin/dev overflow decision`, () => {
+for (const base of golden.rows) test(`${key(base)}: origin/dev client recovery`, () => {
   const current = head.get(key(base))!;
   expect(current).toBeDefined(); expect(current.input).toEqual(base.input);
-  expect(current.text.length).toBeGreaterThan(0);
-  expect(current.text).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
-  expect(current.compactionSentence).toBe(base.decision);
-  expect(current.status).toBe(base.status);
-  expect(ANTHROPIC_ERROR_TYPES.has(current.type ?? "")).toBe(true);
-  if (ANTHROPIC_ERROR_TYPES.has(base.type ?? "")) expect(current.type).toBe(base.type);
-  expect(current.code).toBe(typeof base.code === "string" && ANTHROPIC_ERROR_CODES.has(base.code) ? base.code : undefined);
+  const before = base.base!; const after = current.head!;
+  expect(after.text.length).toBeGreaterThan(0);
+  expect(after.text).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
+  expect(after.status).toBe(before.status);
+  expect(after.clientRecognizes).toBe(before.clientRecognizes);
+  expect(after.compactionSentence).toBe(before.clientRecognizes);
+  expect(after.internalDecisions).toEqual(before.internalDecisions);
+  expect(ANTHROPIC_ERROR_TYPES.has(after.type ?? "")).toBe(true);
+  if (ANTHROPIC_ERROR_TYPES.has(before.type ?? "")) expect(after.type).toBe(before.type);
+  expect(after.code).toBe(typeof before.code === "string" && ANTHROPIC_ERROR_CODES.has(before.code) ? before.code : undefined);
 });

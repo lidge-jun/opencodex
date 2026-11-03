@@ -340,13 +340,17 @@ supply client error text. Local pre-handler, admission and thread-refusal envelo
 
 Status, retry, overflow, rotation, quota and logging decisions retain their original evidence.
 `messagesOverflowPresentation` in `src/lib/messages-error-body.ts` selects only the owned compaction
-sentence. Native HTTP reuses its existing overflow verdict, and native fold reuses its existing
-sized-error decision. Translated replies, the converter and direct encoder retain their established
-code/shared-predicate decisions and throughput handling. Raw direct collection reuses the context
-code check that decides its status. Passthrough Messages/count_tokens use the case-insensitive
-Claude Code phrase check on the original message: "prompt is too long" or "input is too long for
-requested model". The shared `isContextOverflowError` source and its #8128 suite remain unchanged;
-`tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their source bytes.
+sentence by applying Claude Code's case-insensitive, unanchored phrase check to the message this
+path previously delivered: "prompt is too long" or "input is too long for requested model".
+Native HTTP retains its existing overflow verdict and formatter; native fold retains its sized-error
+branch, formatter and redaction. Translated replies, converter and direct encoder use their legacy
+formatter's message. Buffered passthrough Messages/count_tokens and raw direct collection use the
+original message they previously relayed. Internal overflow decisions and HTTP status stay separate
+from this client-message check: a coded raw-collector throughput refusal still answers 400 without
+selecting the compaction sentence. The shared `isContextOverflowError` source and its #8128 suite
+remain unchanged; `tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their
+source bytes. The executable overflow golden compares actual client recovery-phrase recognition,
+HTTP status and the original internal decisions independently on every fixture/path row.
 The direct encoder retains original adapter fields by terminal identity independently of shared
 classification. Buffered passthrough and count_tokens preserve the upstream status and closed
 type/code. The type chosen
@@ -391,4 +395,5 @@ media types use application/octet-stream. Rebuilt error bodies always use litera
 `tests/claude-integration/messages-overflow-verdicts.test.ts` compares every owned path with
 `tests/fixtures/messages-overflow-decisions.json`. Its explicit baseline generator observes the
 existing branch verdicts without changing their results or client bytes. Normal tests run head only
-and require no git history; all compared overflow decisions must match.
+and require no git history; client recovery-phrase recognition, HTTP status and internal decisions
+must each match the baseline.

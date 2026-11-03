@@ -604,7 +604,7 @@ export function responsesSseToAnthropicSse(
           : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
         const legacy = anthropicErrorBody(status, message, type, code);
         const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
-          overflow: messagesOverflowPresentation({ lane: "converter", baselineOverflow: code === "context_length_exceeded" && !isThroughputLimitText(message) }),
+          overflow: messagesOverflowPresentation((legacy.error as Rec).message),
           condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined, contract,
           ...(local ? { localError: markProxyError({ message }) } : {}),
         });

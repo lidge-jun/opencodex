@@ -452,7 +452,7 @@ async function anthropicNativePassthrough(
   const isError = !upstream.ok || (isRec(parsed) && (parsed.type === "error" || Object.hasOwn(parsed, "error")));
   const originalMessage = typeof error.message === "string" ? error.message : "";
   const throughput = isThroughputLimitText(originalMessage);
-  const overflow = messagesOverflowPresentation({ lane: "passthrough", message: originalMessage });
+  const overflow = messagesOverflowPresentation(originalMessage);
   const clientBody = isError ? JSON.stringify(ownedAnthropicErrorPayload({ status: upstream.status,
     overflow, ...(throughput ? { condition: "rate_limited" as const } : {}),
     type: typeof error.type === "string" ? error.type : undefined,
@@ -1359,13 +1359,13 @@ async function handleClaudeMessagesWithBudget(
     else if (transient) outHeaders.set("Retry-After", "2");
     if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
     const decidedCode = replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : undefined;
-    const legacyBody = JSON.stringify(anthropicErrorBody(outStatus, message, undefined, decidedCode));
-    const baselineOverflow = decidedCode === "context_length_exceeded" && !isThroughputLimitText(message);
+    const legacy = anthropicErrorBody(outStatus, message, undefined, decidedCode);
+    const legacyBody = JSON.stringify(legacy);
     const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
       status: outStatus,
       evidence: { status: response.status, type: originalType, code: originalCode, message },
       code: decidedCode,
-      overflow: messagesOverflowPresentation({ lane: "translated", baselineOverflow }),
+      overflow: messagesOverflowPresentation((legacy.error as Rec).message),
       ...(contextError && isThroughputLimitText(message) ? { condition: "rate_limited" as const } : {}),
       ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
       ...(isProxyError(response) ? { localError: markProxyError({ message }) } : {}),
@@ -1456,12 +1456,16 @@ async function handleClaudeMessagesWithBudget(
     const originalMessage = typeof error?.message === "string" ? error.message : "";
     if (error && isContextOverflowError(error, originalMessage)) {
       const throughput = isThroughputLimitText(originalMessage);
+      const legacy = anthropicErrorBody(400, originalMessage, "invalid_request_error", "context_length_exceeded");
       return Response.json(ownedAnthropicErrorPayload({
-        status: 400, type: "invalid_request_error", code: "context_length_exceeded", overflow: messagesOverflowPresentation({ lane: "translated", baselineOverflow: !throughput }),
+        status: 400, type: "invalid_request_error", code: "context_length_exceeded", overflow: messagesOverflowPresentation((legacy.error as Rec).message),
         ...(throughput ? { condition: "rate_limited" as const } : {}), evidence: { status: 400, message: originalMessage },
       }), { status: 400 });
     }
-    return Response.json(ownedAnthropicErrorPayload({ status: 502, type: "api_error", evidence: { status: 502, message: error?.message, type: error?.type, code: error?.code } }), { status: 502 });
+    const legacy = anthropicErrorBody(502, originalMessage, "api_error");
+    return Response.json(ownedAnthropicErrorPayload({ status: 502, type: "api_error",
+      overflow: messagesOverflowPresentation((legacy.error as Rec).message),
+      evidence: { status: 502, message: error?.message, type: error?.type, code: error?.code } }), { status: 502 });
   }
   let message: Rec;
   try {

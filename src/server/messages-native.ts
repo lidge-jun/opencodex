@@ -990,7 +990,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           if (localMessage !== undefined) return fail(502, localMessage, "api_error");
         }
         const baselineOverflow = isNativeOverflowError(error, text);
-        const overflow = messagesOverflowPresentation({ lane: "native", baselineOverflow });
+        const legacy = anthropicErrorBody(baselineOverflow ? 400 : 502,
+          redactSecretString(baselineOverflow ? claudePromptTooLongMessage(text) : text),
+          baselineOverflow ? "invalid_request_error" : "api_error");
+        const overflow = messagesOverflowPresentation((legacy.error as Rec).message);
         if (baselineOverflow) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error);
         return failEvidence(502, text, "api_error", undefined, overflow, error);
       }
@@ -1148,7 +1151,12 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     && !isThroughputLimitText(safeMessage)
     && (classified.code === "context_length_exceeded" || upstreamCode === "context_length_exceeded"
       || isContextOverflowText(safeMessage));
-  const overflow = messagesOverflowPresentation({ lane: "native", baselineOverflow: legacyOverflow });
+  const legacy = anthropicErrorBody(status,
+    legacyOverflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
+    transient ? "overloaded_error" : upstreamType,
+    replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+  );
+  const overflow = messagesOverflowPresentation((legacy.error as Rec).message);
   const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
     status, type: transient ? "overloaded_error" : upstreamType,
     code: replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
@@ -1156,11 +1164,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
     ...(clientZenMessage === undefined ? {} : { localError: markProxyError({ message: clientZenMessage }) }),
   })), { status, headers });
-  attachComboFailureEvidence(out, JSON.stringify(anthropicErrorBody(status,
-    legacyOverflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
-    transient ? "overloaded_error" : upstreamType,
-    replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
-  )));
+  attachComboFailureEvidence(out, JSON.stringify(legacy));
   return replayRefusal ? retainReplayRefusal(out) : out;
 }
 
