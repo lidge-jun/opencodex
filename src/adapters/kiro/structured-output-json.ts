@@ -128,9 +128,12 @@ export function kiroDecimal(lexeme: string): KiroDecimal {
   const all = whole + fraction;
   const lead = all.search(/[1-9]/);
   if (lead < 0) return { sign: 0, digits: "", exponent: 0n };
+  // One backward scan for trailing zeros: `/0+$/` retries a long zero run at every position.
+  let end = all.length;
+  while (end > lead && all.charCodeAt(end - 1) === 48) end -= 1;
   return {
     sign: minus ? -1 : 1,
-    digits: all.slice(lead).replace(/0+$/, ""),
+    digits: all.slice(lead, end),
     exponent: BigInt(whole.length - lead) + BigInt(exp),
   };
 }

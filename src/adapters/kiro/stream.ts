@@ -1099,6 +1099,11 @@ async function* parseKiroAttemptEvents(
           terminal: { type: "done", usage: finalUsage, endTurn: true, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
         };
       }
+      // A clean stop without an accepted answer, prose or nothing at all, earns the one bounded
+      // retry: an empty END_TURN is as recoverable as prose, and the caller still needs JSON.
+      if (cleanStop) {
+        return { assistantText, sawReasoning, needsFallback: true, usage: finalUsage, providerState: finalProviderState };
+      }
     }
     if (mode === "required" && nativeCompletionStop) {
       return {

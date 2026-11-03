@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { sanitizeKiroSchema } from "../../../src/adapters/kiro-tools";
 import { kiroStructuredOutputSpec, parseKiroStructuredText, parseKiroStructuredToolInput } from "../../../src/adapters/kiro/structured-output";
-import { readKiroJson } from "../../../src/adapters/kiro/structured-output-json";
+import { kiroDecimal, readKiroJson } from "../../../src/adapters/kiro/structured-output-json";
 import { validateKiroStrictValue } from "../../../src/adapters/kiro/structured-output-schema";
 import { parseRequest } from "../../../src/responses/parser";
 import type { OcxParsedRequest } from "../../../src/types";
@@ -449,5 +449,30 @@ describe("Kiro strict numbers, types and wrapping edges", () => {
     const deep = "[".repeat(520) + "9007199254740993" + "]".repeat(520);
     expect(parseKiroStructuredToolInput(spec, '{"value":' + deep + "}"))
       .toEqual({ error: FAIL + ": the value nests deeper than the proxy can relay exactly" });
+  });
+});
+
+describe("Kiro decimal and wrapped reference edges", () => {
+  test("a long run of zeros inside a number is normalized in linear time", () => {
+    const lexeme = "1" + "0".repeat(200_000) + "1";
+    const decimal = kiroDecimal(lexeme);
+    expect(decimal.digits.length).toBe(200_002);
+    expect(kiroDecimal("1" + "0".repeat(200_000)).digits).toBe("1");
+  }, 30_000);
+
+  test("an encoded root-relative reference is re-pointed under value when wrapping", () => {
+    const spec = kiroStructuredOutputSpec(request({ type: "array", items: { anyOf: [{ type: "string" }, { $ref: "#%2Fitems" }] } }, false))!;
+    expect(spec.wrapped).toBe(true);
+    const tool = spec.toolSchema as { properties: { value: { items: { anyOf: Array<{ $ref?: string }> } } } };
+    expect(tool.properties.value.items.anyOf[1]!.$ref).toBe("#/properties/value%2Fitems");
+  });
+
+  test("references inside a nested $id resource are left relative to that resource", () => {
+    const spec = kiroStructuredOutputSpec(request({
+      type: "array",
+      items: { $id: "https://example.com/inner", type: "object", properties: { x: { type: "string" }, y: { $ref: "#/properties/x" } } },
+    }, false))!;
+    const tool = spec.toolSchema as { properties: { value: { items: { properties: { y: { $ref: string } } } } } };
+    expect(tool.properties.value.items.properties.y.$ref).toBe("#/properties/x");
   });
 });

@@ -510,26 +510,30 @@ const SCHEMA_MAPS = new Set(["properties", "$defs", "definitions"]);
  * the `/properties/value` prefix. `#/$defs/...` and `#/definitions/...` keep their target because
  * the wrapper hoists the definitions to its own root.
  */
-export function rewriteKiroWrappedRefs(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(rewriteKiroWrappedRefs);
+export function rewriteKiroWrappedRefs(schema: unknown, root = true): unknown {
+  if (Array.isArray(schema)) return schema.map(item => rewriteKiroWrappedRefs(item, false));
   if (!isRecord(schema)) return schema;
+  // A nested `$id` starts its own resource: references inside it are relative to that resource,
+  // which moves along with it, so they stay as written.
+  if (!root && typeof schema.$id === "string") return schema;
   // fromEntries defines own properties, so a key such as "__proto__" stays a key.
   return Object.fromEntries(Object.entries(schema).map(([key, child]): [string, unknown] => {
     if (SCHEMA_MAPS.has(key) && isRecord(child)) {
-      return [key, Object.fromEntries(Object.entries(child).map(([name, sub]) => [name, rewriteKiroWrappedRefs(sub)]))];
+      return [key, Object.fromEntries(Object.entries(child).map(([name, sub]) => [name, rewriteKiroWrappedRefs(sub, false)]))];
     }
     if (LITERAL_KEYS.has(key)) return [key, child];
     if (key === "$ref" && typeof child === "string") return [key, movedRef(child)];
-    return [key, rewriteKiroWrappedRefs(child)];
+    return [key, rewriteKiroWrappedRefs(child, false)];
   }));
 }
 
 /** One reference rewritten for the wrapped document. */
 function movedRef(ref: string): string {
-  if (ref !== "#" && !ref.startsWith("#/")) return ref;
-  // Judge the decoded pointer: `#/%24defs/item` names the hoisted `$defs` as surely as `#/$defs/item`.
+  // Judge the decoded pointer: `#%2Fitems` is root-relative and `#/%24defs/item` names the hoisted
+  // `$defs`, exactly like their unencoded forms. Prefixing the raw remainder keeps its encoding.
   let decoded = ref;
-  try { decoded = decodeURIComponent(ref); } catch { /* an undecodable pointer is moved like any other */ }
+  try { decoded = decodeURIComponent(ref); } catch { /* an undecodable pointer is judged as written */ }
+  if (decoded !== "#" && !decoded.startsWith("#/")) return ref;
   if (decoded.startsWith("#/$defs/") || decoded.startsWith("#/definitions/")) return ref;
   return `#/properties/value${ref.slice(1)}`;
 }

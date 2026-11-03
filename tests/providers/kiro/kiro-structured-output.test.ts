@@ -441,3 +441,12 @@ describe("Kiro wrapped structured output keeps the model's number bytes", () => 
     expect(parseKiroStructuredToolInput(spec, '{"value":[9007199254740993, 1e400]}')).toEqual({ json: "[9007199254740993, 1e400]" });
   });
 });
+
+describe("Kiro structured output after an empty clean first response", () => {
+  test.each([false, true])("an empty END_TURN earns the bounded retry (buffered=%p)", async buffered => {
+    const { bodies, texts, terminal } = await runWith(structuredRequest(), buffered, [stop("END_TURN")], structured({ title: "Fix Kiro" }));
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([{ type: "text_delta", text: '{"title":"Fix Kiro"}', phase: "final_answer" }]);
+    expect(terminal).toMatchObject({ type: "done", endTurn: true });
+  });
+});
