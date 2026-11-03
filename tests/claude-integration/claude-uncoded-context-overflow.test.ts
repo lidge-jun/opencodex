@@ -46,6 +46,14 @@ describe("isContextOverflowError", () => {
     [{ type: "authentication_error" }, OVERFLOW, false],
     [{ code: "invalid_prompt" }, OVERFLOW, false],
     [{}, "connection reset by peer", false],
+    [{ type: "server_error" }, "Failed to load model context window configuration", false],
+    [{}, "invalid field 'context_window': expected an integer, see maximum context docs", false],
+    [{}, "This model's maximum context length is 272000 tokens. However, your messages resulted in 301234 tokens.", true],
+    [{}, "Your request exceeded model token limit: 262144", true],
+    [{ type: "server_error", status: 429 }, OVERFLOW, false],
+    [{ status: 401 }, OVERFLOW, false],
+    [{ status: 403 }, OVERFLOW, false],
+    [{ code: "context_length_exceeded", status: 500 }, "unfamiliar wording", true],
   ] as const)("%j %s -> %s", (error, message, expected) => {
     expect(isContextOverflowError(error, message)).toBe(expected);
   });
@@ -79,6 +87,19 @@ describe("translated Responses stream", () => {
     expect(String(limit.message)).not.toContain("prompt is too long");
     const reset = await translatedErrorFrame({ message: "connection reset by peer" });
     expect(reset.type).toBe("overloaded_error");
+  });
+
+  test("a streamed overflow carrying a rate-limit or credential status is not an overflow", async () => {
+    for (const status of [429, 401]) {
+      const frame = await translatedErrorFrame({ type: "server_error", status, message: OVERFLOW });
+      expect(frame.code).not.toBe("context_length_exceeded");
+      expect(String(frame.message)).not.toContain("prompt is too long");
+    }
+  });
+
+  test("a configuration failure that mentions the context window keeps its 5xx class", async () => {
+    const frame = await translatedErrorFrame({ type: "server_error", message: "Failed to load model context window configuration" });
+    expect(frame.type).toBe("overloaded_error");
   });
 });
 

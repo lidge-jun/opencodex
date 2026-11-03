@@ -135,6 +135,13 @@ export function isThroughputLimitText(message: string): boolean {
 /** Codes that say nothing about the cause, so the message decides (#8127). */
 const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "api_error", "internal_error"]);
 const NON_OVERFLOW_ERROR_TYPES: ReadonlySet<string> = new Set(["rate_limit_error", "authentication_error", "permission_error"]);
+const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
+/**
+ * Wording that asserts the request itself is over a size limit. Narrower than
+ * CONTEXT_OVERFLOW_TEXT_RE on purpose: without a code, a message that only mentions the context
+ * window (for example a configuration failure) must not make Claude Code compact.
+ */
+const DEFINITE_OVERFLOW_TEXT_RE = /prompt is too long|input is too long|maximum context length is \d+|\b(?:input|prompt|request|messages?|conversation)\b[^.\n]{0,60}\bexceed(?:s|ed)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
 
 /**
  * Whether a translated refusal is an oversized-input refusal. A coded context_length_exceeded
@@ -149,7 +156,9 @@ export function isContextOverflowError(error: { type?: unknown; code?: unknown }
   if (code === "context_length_exceeded") return true;
   if (code != null && !(typeof code === "string" && GENERIC_FAILURE_CODES.has(code))) return false;
   if (typeof error.type === "string" && NON_OVERFLOW_ERROR_TYPES.has(error.type)) return false;
-  return isContextOverflowText(message) && !isThroughputLimitText(message);
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === "number" && NON_OVERFLOW_STATUSES.has(status)) return false;
+  return DEFINITE_OVERFLOW_TEXT_RE.test(message) && !isThroughputLimitText(message);
 }
 
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
