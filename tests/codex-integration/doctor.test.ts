@@ -474,6 +474,24 @@ describe("live native-main admission in doctor", () => {
     expect(formatNativeMainAdmissionLines(report).join("\n")).toContain("reason: foreign-ownership");
   });
 
+  test("reports a healthy ready proxy as no admission warning", async () => {
+    const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    const report = await fetchNativeMainAdmission(target, {
+      readRuntime: () => ({ pid: 4242, port: 10100, attestationSecret: secret }),
+      createNonce: () => nonce,
+      now: () => 1_800_000_000_000,
+      fetchImpl: (async () => Response.json({ admissionStatus: "ready" }, {
+        status: 200,
+        headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)! },
+      })) as typeof fetch,
+    });
+
+    expect(report).toEqual({ status: "ready" });
+    expect(formatNativeMainAdmissionLines(report)).toEqual([]);
+  });
+
   test("runDoctor reports a separate fenced service process, not its local gate", async () => {
     const secret = "A".repeat(43);
     const home = mkdtempSync(join(tmpdir(), "ocx-doctor-admission-"));

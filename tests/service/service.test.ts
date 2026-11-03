@@ -465,8 +465,16 @@ describe("systemd service unit", () => {
       // the complete shell command. Both emitted commands keep the pin after `-lc`.
       expect(plist).toContain("CODEX_HOME=&apos;");
       expect(plist).toContain("export CODEX_HOME OPENCODEX_HOME;");
+      const launchdCommand = /<key>ProgramArguments<\/key>\s*<array>\s*<string>\/bin\/sh<\/string>\s*<string>-lc<\/string>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+      expect(launchdCommand).toBeDefined();
+      expect(launchdCommand).toContain("exec ");
+      expect(launchdCommand!.indexOf("export CODEX_HOME OPENCODEX_HOME;")).toBeLessThan(launchdCommand!.indexOf("exec "));
       // systemd doubles backslashes inside the ExecStart string.
       expect(unit).toContain(pinned.replace(/\\/g, "\\\\"));
+      const systemdCommand = /^ExecStart=(.*)$/m.exec(unit)?.[1];
+      expect(systemdCommand).toBeDefined();
+      expect(systemdCommand).toContain("exec ");
+      expect(systemdCommand!.indexOf(pinned.replace(/\\/g, "\\\\"))).toBeLessThan(systemdCommand!.indexOf("exec "));
       expect(unit).toContain('Environment="CODEX_SQLITE_HOME=' + join(TEST_DIR, "pinned-sqlite-home") + '"');
       expect(unit).not.toContain("local-secret");
       expect(unit).not.toContain('Environment="OPENCODEX_API_AUTH_TOKEN=');
