@@ -5,6 +5,8 @@ import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import type { DesktopAppInstall } from "../desktop-app/types";
 
+// Baseline with completed native acceptance evidence; admission is proof-based below,
+// so this version never allows or denies an installed build by itself.
 export const DESKTOP_COMPATIBILITY_ASSESSED_VERSION = "26.924.2738.0";
 export const DESKTOP_COMPATIBILITY_ASSESSED_FAMILY = "OpenAI.Codex_2p2nqsd0c76g0";
 
@@ -56,7 +58,9 @@ export const DESKTOP_PACKAGE_PROOF_SCRIPT = [
   "[pscustomobject]@{id=$p.PackageFamilyName;root=$root.FullName;relaunch=$p.PackageFamilyName+'!App';proof=@{packageFullName=$p.PackageFullName;publisherId=$p.PublisherId;publisher=$p.Publisher;manifestName=[string]$manifest.Package.Identity.Name;manifestPublisher=[string]$manifest.Package.Identity.Publisher;manifestVersion=[string]$manifest.Package.Identity.Version;appId=[string]$entry.Id;executable=[string]$entry.Executable;canonicalExecutable=$exe.FullName;manifestDigest=$digest;executableIdentity=([string]$exe.Length+':'+$exe.CreationTimeUtc.Ticks+':'+$exe.LastWriteTimeUtc.Ticks);ancestryIdentity=$ancestry}}|ConvertTo-Json -Depth 3 -Compress",
 ].join("; ");
 
-/** Last completed probe outcome. Only public package facts: never paths, keys or account data. */
+/** Last completed probe outcome. Only public package facts: never paths, keys or account data.
+ * `verified` is the official-package proof verdict at `completedAt`; `assessedVersion` stays the
+ * baseline that holds native acceptance evidence, reported separately from admission. */
 export interface DesktopBuildAssessment {
   assessedVersion: string;
   observedVersion: string | null;
@@ -71,7 +75,9 @@ function assessInstalledPackage(install: DesktopPackageObservation): { observedV
     && !!parts && `OpenAI.Codex_${parts[4]}` === install.id;
   const observedVersion = identified ? parts![1] : null;
   const proof = install.proof;
-  const verified = identified && observedVersion === DESKTOP_COMPATIBILITY_ASSESSED_VERSION && !!proof
+  // Official-package proof admits a build; the observed version stays inside the
+  // hashed identity, so an update still revokes a prior trial before correction.
+  const verified = identified && !!proof
     && /^[A-Za-z]:\\/.test(install.root) && win32.normalize(install.root) === install.root
     && proof.packageFullName === name && proof.publisherId === "2p2nqsd0c76g0"
     && typeof proof.publisher === "string" && proof.publisher.length > 0 && proof.publisher.length <= 1024
@@ -143,6 +149,7 @@ export function createInstalledBuildProbe(query: (signal: AbortSignal) => Promis
   };
 }
 
+// Reports the official-package proof verdict, not equality with the assessed baseline.
 export async function isAssessedDesktopInstalled(): Promise<boolean> {
   const probe = createInstalledBuildProbe();
   try { return await probe.check(); } finally { await probe.close(); }
