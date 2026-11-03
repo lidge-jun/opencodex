@@ -718,7 +718,8 @@ export function preserveUnmanagedProfileKeys(existing: string | null, generated:
     if (generatedTables.has(span.key)) continue;
     if (carriedKeys.has(span.key)) continue;
     carriedKeys.add(span.key);
-    carried.push(span.text.replace(/\s+$/, ""));
+    // Drop only trailing blank lines; the assignment's own bytes, trailing spaces included, stay.
+    carried.push(span.text.replace(/(?:\r?\n[ \t]*)+$/, ""));
   }
   if (carried.length === 0) return generated;
 

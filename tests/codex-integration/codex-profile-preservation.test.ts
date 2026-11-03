@@ -32,9 +32,17 @@ describe("carried assignments keep their original bytes", () => {
     const merged = preserveUnmanagedProfileKeys(`${assignment}\nstream_max_retries = 8\n`, generated);
     expect(merged).toContain(`${assignment}\nstream_max_retries = 8\n`);
     expect(merged.indexOf("limits")).toBeLessThan(merged.indexOf("[features]"));
-    // Bun cannot decode these integers at all, so validate the rest of the document
-    // with them swapped for an in-range value.
+    // These are valid TOML 1.0 integers that Codex reads, but Bun cannot decode them (dev
+    // already preserves wide scalars this way), so check the rest of the document with
+    // them swapped for an in-range value.
     expect(() => Bun.TOML.parse(merged.replace(/-?(?:9_?223_?372_?036_?854_?775_?80[78]|0x7fff_ffff_ffff_ffff)/g, "0"))).not.toThrow();
+  });
+
+  test("a carried assignment keeps its trailing spaces and comment exactly", () => {
+    const assignment = "stream_max_retries = 8   # keep   ";
+    const merged = preserveUnmanagedProfileKeys(`${assignment}\n\n\n`, buildProfileFileForTarget(loopback, null));
+    expect(merged).toContain(`${assignment}\n`);
+    expect(Bun.TOML.parse(merged)).toMatchObject({ stream_max_retries: 8 });
   });
 
   test("an integer outside signed 64 bits is invalid TOML and is not carried", () => {
