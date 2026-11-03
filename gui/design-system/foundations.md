@@ -28,7 +28,7 @@ v2는 위 v1 토큰을 `src/design/bridge.css`에서 아래 `--ocx-*` 토큰으�
 |---|---|---|---:|---:|
 | 메인(기본 버튼, 선택 상태, 켜진 토글) | `--ocx-accent` | `bg-accent` | `#18181b` | `#fafafa` |
 | 메인 위 글자 | `--ocx-on-accent` | `text-on-accent` | `#ffffff` | `#09090b` |
-| 하이라이트(포커스 링, 링크) | `--ocx-highlight` | `text-highlight` | `#0284c7` | `#38bdf8` |
+| 하이라이트(포커스 링, 링크) | `--ocx-highlight` | `text-highlight` | `#0369a1` | `#38bdf8` |
 | 하이라이트 바탕 | `--ocx-highlight-soft` | `bg-highlight-soft` | sky 12% | sky 16% |
 
 메인은 화면의 반전색이다. 다크에서는 흰색, 라이트에서는 흰 배경에 묻히지 않게 거의 검정이다.

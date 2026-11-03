@@ -74,7 +74,8 @@
   --ocx-line-strong: light-dark(rgb(9 9 11 / 0.14), rgb(255 255 255 / 0.14));
   --ocx-fg: light-dark(#09090b, #fafafa);
   --ocx-fg-muted: light-dark(#52525b, #a1a1aa);
-  --ocx-fg-subtle: light-dark(#a1a1aa, #63636b);
+  /* subtle still meets 4.5:1 for small text on bg and surface (#6e6e78 4.6–5.0, #8b8b94 5.1–5.9) */
+  --ocx-fg-subtle: light-dark(#6e6e78, #8b8b94);
 
   /* primary: the inverse of the page, as an Aceternity gradient pair (top -> bottom) */
   --ocx-accent: light-dark(#18181b, #fafafa);
@@ -84,7 +85,8 @@
   --ocx-on-accent: light-dark(#ffffff, #09090b);
 
   /* highlight: sky blue for focus rings and links */
-  --ocx-highlight: light-dark(#0284c7, #38bdf8);
+  /* sky-700 on light keeps small link text above 4.5:1 (5.4–5.9); sky-400 on dark is 8+ */
+  --ocx-highlight: light-dark(#0369a1, #38bdf8);
   --ocx-highlight-soft: light-dark(rgb(2 132 199 / 0.12), rgb(56 189 248 / 0.16));
 
   --ocx-success: light-dark(#0e9f6e, #34d399);
