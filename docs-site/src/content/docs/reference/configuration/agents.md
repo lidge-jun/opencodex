@@ -393,3 +393,10 @@ after a compaction model switch or combo failover.
 alongside the existing caps: omitted fields stay unchanged, `null` clears the map, and a map
 entry set to `null` or `""` deletes only that key. Invalid combined updates leave both caps
 and pins unchanged. Saving a pin does not alter the featured subagent roster.
+
+## CLI updates during v1 synchronization
+
+When an explicit `multiAgentMode: "v1"` synchronization must disable Codex's global v2
+override, an ongoing Codex CLI update can temporarily refuse the synchronization.
+Retry after the update finishes. A home already using v1 can still synchronize during
+the update because no native feature command is needed.
