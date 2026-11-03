@@ -8,6 +8,7 @@
     "codex-installation-turn-limit.test.ts": "responses",
     "claude-installation-helper.test.ts": "claude-integration",
     "codex-role-configured-credentials.test.ts": "server",
+    "responses-native-output-identity.test.ts": "responses",
     "provider-anthropic-usage-windows.test.ts": "providers",
     "anthropic-active-limit-routing.test.ts": "adapters/anthropic",
     "advisor-caller-policy.test.ts": "advisor",
