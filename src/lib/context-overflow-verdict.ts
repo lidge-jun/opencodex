@@ -20,6 +20,7 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "maximum context length",
   "maximum context window",
   "too many tokens",
+  "at or past the model's context window",
 ];
 
 /**

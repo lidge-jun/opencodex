@@ -39,6 +39,8 @@ export function registerComboContextOverflowCases<Server>({
     // A relay that serializes a Python SDK exception quotes the provider verdict inside a dict repr.
     "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
+    // Devin's opaque context-window refusal: emitted as a structured event with code context_length_exceeded.
+    "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
   ]) {
     test(`context-length 400 advances once without cooling: ${message}`, async () => {
       const hits: string[] = [];
