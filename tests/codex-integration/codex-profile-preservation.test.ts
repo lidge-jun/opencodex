@@ -187,3 +187,85 @@ describe("the injection plan", () => {
     } finally { rmSync(home, { recursive: true, force: true }); }
   }, SPAWN_BUDGET_MS);
 });
+
+// One injection scenario in a child process against its own Codex home. `script` runs with fs,
+// paths, inject and coord in scope, after `before` holds the profile, and prints one JSON line.
+// The coordinated case first injects once so the home has a coordinator row and a generated
+// profile; the scenario then injects for another port so the profile it publishes differs. A
+// fresh home holding an operator profile stays on the legacy uncoordinated path.
+const homes = [
+  { path: "coordinated", prime: true },
+  { path: "legacy-uncoordinated", prime: false },
+];
+const EDIT = "stream_max_retries = 9\n";
+function runInjectChild(prime: boolean, script: string): Record<string, any> {
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-profile-rollback-")));
+  try {
+    writeFileSync(join(home, "config.toml"), 'model = "fixture-model"\n');
+    if (!prime) writeFileSync(join(home, "opencodex.config.toml"), "stream_idle_timeout_ms = 1\n");
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      const fs=require('node:fs'),{spyOn}=require('bun:test');
+      const paths=require('./src/codex/paths'),coord=require('./src/codex/inject-coordination'),inject=require('./src/codex/inject');
+      const read=()=>fs.readFileSync(paths.CODEX_PROFILE_PATH,'utf8');
+      const run=async(port=10101)=>{try{return await inject.injectCodexConfig(port);}catch(error){return {threw:String(error&&error.message)};}};
+      if(${prime}){const primed=await run(10100);if(!primed.success)throw new Error('priming failed: '+JSON.stringify(primed));}
+      const before=read();const kinds=[];inject.setBeforeHistoryArtifactCommitForTests(kind=>kinds.push(kind));
+      ${script}
+    `], { cwd: repoRoot(), env: { ...process.env, CODEX_HOME: home, OPENCODEX_HOME: join(home, ".ocx-fixture") },
+      stdout: "pipe", stderr: "pipe", timeout: SPAWN_BUDGET_MS - 5_000 });
+    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    return JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+}
+
+describe("rolling back a failed injection", () => {
+  test.each(homes)("a refusal before the profile publish leaves an edit made after the preimage capture ($path)", ({ path, prime }) => {
+    const out = runInjectChild(prime, `
+      const original=coord.captureCodexPreImages;let edited=false;
+      const spy=spyOn(coord,'captureCodexPreImages').mockImplementation(()=>{
+        const pre=original();
+        if(!edited){edited=true;fs.writeFileSync(paths.CODEX_PROFILE_PATH,${JSON.stringify(EDIT)}+before);}
+        return pre;
+      });
+      let first;try{first=await run();}finally{spy.mockRestore();}
+      const afterRefusal=read();
+      const retry=await run();
+      console.log(JSON.stringify({first,before,afterRefusal,retry,profile:read(),kinds}));
+    `);
+    expect(out.first).toMatchObject({ success: false, retryable: true });
+    expect(out.first.message).toContain("opencodex.config.toml changed");
+    expect(out.afterRefusal).toBe(EDIT + out.before);
+    expect(out.retry).toMatchObject({ success: true });
+    expect(out.kinds).toEqual([path]);
+    expect((Bun.TOML.parse(out.profile) as Record<string, unknown>).stream_max_retries).toBe(9);
+  }, SPAWN_BUDGET_MS);
+
+  test.each(homes)("a failure after the profile publish restores the profile when nobody else wrote it ($path)", ({ path, prime }) => {
+    const out = runInjectChild(prime, `
+      let published;
+      inject.setHistoryArtifactStageForTests(stage=>{if(stage==='after-artifacts'){published=read();throw new Error('fixture failure after publish');}});
+      const result=await run();
+      inject.setHistoryArtifactStageForTests(undefined);
+      console.log(JSON.stringify({result,before,published,profile:read(),kinds}));
+    `);
+    expect(JSON.stringify(out.result)).toContain("fixture failure after publish");
+    expect(out.kinds).toEqual([path]);
+    expect(out.published).not.toBe(out.before);
+    expect(out.profile).toBe(out.before);
+  }, SPAWN_BUDGET_MS);
+
+  test.each(homes)("a failure after the profile publish keeps a concurrent foreign write ($path)", ({ path, prime }) => {
+    const out = runInjectChild(prime, `
+      inject.setHistoryArtifactStageForTests(stage=>{if(stage==='after-artifacts'){
+        fs.writeFileSync(paths.CODEX_PROFILE_PATH,'stream_max_retries = 4\\n');
+        throw new Error('fixture failure after publish');
+      }});
+      const result=await run();
+      inject.setHistoryArtifactStageForTests(undefined);
+      console.log(JSON.stringify({result,profile:read(),kinds}));
+    `);
+    expect(JSON.stringify(out.result)).toContain("fixture failure after publish");
+    expect(out.kinds).toEqual([path]);
+    expect(out.profile).toBe("stream_max_retries = 4\n");
+  }, SPAWN_BUDGET_MS);
+});

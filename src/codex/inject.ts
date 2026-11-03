@@ -25,6 +25,7 @@ import {
   captureCodexPreImages,
   codexInjectLockOutcome,
   codexWriteCoordinationEligibility,
+  type CodexProfilePublish,
   CodexPartialWriteError,
   CodexWriteConflictError,
   DEFAULT_INJECT_LOCK_TIMEOUT_MS,
@@ -492,6 +493,7 @@ async function injectCodexConfigImpl(
     publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.content, undefined, hooks));
     historyArtifactStageForTests?.("after-config");
     assertCodexHomeOwner(getCodexHome());
+    profilePublish.published = plan.profileContent;
     publishCodexArtifact(CODEX_PROFILE_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.profileContent, undefined, hooks));
     publishCodexArtifact(JOURNAL_PATH, heldConfigWriteLock, (_path, hooks) => markJournalInjectedState(plan.content, plan.profileContent, {
       // A root override is ours whenever we wrote one and no user-owned value won. That is
@@ -531,6 +533,7 @@ async function injectCodexConfigImpl(
    * legacy-uncoordinated home, which publishes no transition to resolve.
    */
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
+  const profilePublish: CodexProfilePublish = {}; // rollback reverts only profile bytes this operation published
 
   /*
    * The file-level write lock every config.toml writer shares (see
@@ -596,7 +599,7 @@ async function injectCodexConfigImpl(
         effectivePlan = resolved.plan;
       } catch (error) {
         if (error instanceof ConfigWriteDestinationChanged || codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
-        const restored = restoreCodexPreImages(preImages, heldConfigWriteLock);
+        const restored = restoreCodexPreImages(preImages, heldConfigWriteLock, profilePublish);
         if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
         throw error;
       }
@@ -616,7 +619,7 @@ async function injectCodexConfigImpl(
         ...(eligibility.kind === "adopt" ? { adoption: { direction: "apply" as const } } : {}),
         onPostCallbackFailure: () => {
           if (!coordinatedPreImages) throw new Error("Codex injection preimages were not captured.");
-          const restored = restoreCodexPreImages(coordinatedPreImages, heldConfigWriteLock);
+          const restored = restoreCodexPreImages(coordinatedPreImages, heldConfigWriteLock, profilePublish);
           if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
         },
         admitted: { authoritySnapshotId: witness.comparisonId },
@@ -693,7 +696,7 @@ async function injectCodexConfigImpl(
           if (error instanceof ConfigWriteDestinationChanged || codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
           // Compensate, then ALWAYS throw. Returning a partial result would let the
           // lock commit a row describing an apply that did not finish.
-          const restored = restoreCodexPreImages(preImages, heldConfigWriteLock);
+          const restored = restoreCodexPreImages(preImages, heldConfigWriteLock, profilePublish);
           if (!restored.complete) {
             throw new CodexPartialWriteError(restored.unrestored);
           }
