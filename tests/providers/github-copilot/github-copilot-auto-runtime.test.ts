@@ -268,6 +268,17 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(await response.text()).not.toContain("must-not-echo");
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
   });
+  test("passthrough refresh regenerates numeric retry advice instead of relaying its bytes", async () => {
+    const numericKey = "73915028461739205817";
+    for (const [raw, expected] of [["9999", "3600"], [numericKey, null]] as const) {
+      await accounts();
+      const f = fixture({ nativeFirst: true, negotiationRefusal: 429, negotiationRefusalAt: 2, negotiationRetryAfter: raw });
+      const response = await handleResponses(request("hello", false), f.config, { model: "", provider: "" });
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBe(expected);
+      expect(await response.text()).not.toContain(numericKey);
+    }
+  });
   test("passthrough refresh malformed session remains a bounded 502", async () => {
     await accounts();
     const f = fixture({ nativeFirst: true, malformedSessionAt: 2 });

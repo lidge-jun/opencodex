@@ -43,6 +43,20 @@ describe("passthrough header sanitization (RC5 / F4)", () => {
     expect(sanitized.has("set-cookie2")).toBe(false);
     expect(sanitized.get("content-type")).toBe("text/event-stream");
   });
+
+  test("model headers are relayed only as a model id the route or a catalog already knows", () => {
+    const key = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+    const upstream = (model: string) => new Headers({ "content-type": "application/json", "openai-model": model, "x-codex-safety-buffering-faster-model": model });
+    // Non-vacuous: ordinary headers still pass on every call below.
+    const unknown = sanitizePassthroughHeaders(upstream(key), { knownModels: ["gpt-5.5"], provider: "openai" });
+    expect(unknown.get("content-type")).toBe("application/json");
+    expect([unknown.has("openai-model"), unknown.has("x-codex-safety-buffering-faster-model")]).toEqual([false, false]);
+    const routed = sanitizePassthroughHeaders(upstream("custom-route-model"), { knownModels: ["custom-route-model"] });
+    expect(routed.get("openai-model")).toBe("custom-route-model");
+    // Without route context only a bundled catalog id passes.
+    expect(sanitizePassthroughHeaders(upstream("gpt-5.6-sol")).get("openai-model")).toBe("gpt-5.6-sol");
+    expect(sanitizePassthroughHeaders(upstream("custom-route-model")).has("openai-model")).toBe(false);
+  });
 });
 
 describe("codex safety-buffering hint headers", () => {

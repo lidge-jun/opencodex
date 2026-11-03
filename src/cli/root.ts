@@ -13,11 +13,13 @@ import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
 import { parseStopApproval } from "./stop-approval";
 import { parseSyncExpectation, SYNC_EXPECTATION_USAGE_EXIT } from "./sync-expectation";
+import { parseSyncFanoutFlags } from "./sync-flags";
 import { maybeAutoRestoreCodexShimAsync } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
 import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
 import { maybeNoticeVersionSkew } from "./version-skew-notice";
+import { isOrchestratedUpdateArgv } from "../update/orchestrated-arguments.mjs";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -40,6 +42,7 @@ export function parseCliHead(argv: string[]): CliHead {
   const args = argv;
   // Codex owns its forwarded grammar; wrapper documentation is `ocx help codex`.
   if (command === "codex") return { kind: "command", command, args };
+  if (command === "update" && isOrchestratedUpdateArgv(args.slice(1))) return { kind: "command", command, args };
   if (command === "--version" || command === "-v" || command === "version") {
     return { kind: "version", command, args };
   }
@@ -147,6 +150,11 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       }
       // #7694: a malformed pinned sync is refused before any preflight reads or repairs anything.
       if (head.command === "sync") {
+        const flags = parseSyncFanoutFlags(head.args.slice(1));
+        if (!flags.ok) {
+          console.error(flags.message);
+          process.exit(SYNC_EXPECTATION_USAGE_EXIT);
+        }
         const pinned = parseSyncExpectation(head.args.slice(1));
         if (!pinned.ok) {
           console.error(pinned.message);

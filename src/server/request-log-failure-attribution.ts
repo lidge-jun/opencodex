@@ -100,3 +100,25 @@ export function attributeSealedAttempt(
   if (attribution?.stage) attempt.failureStage = attribution.stage;
   if (attribution?.cause) attempt.failureCause = attribution.cause;
 }
+
+/**
+ * Re-derive the pair for the physical attempt alone, from its own status and observations.
+ *
+ * Used when a native ingress owns the request outcome separately (for example an upstream 200
+ * whose native conversion then failed, or a client cancel after the send succeeded): the request
+ * row carries the outer outcome while the attempt keeps the exchange it actually had.
+ */
+export function attributePhysicalAttempt(attempt: PersistedUsageAttempt): void {
+  const attribution = deriveRequestFailureAttribution({
+    status: attempt.status,
+    ...(attempt.streamAborted === true ? { streamAborted: true } : {}),
+    outputObserved: attempt.firstOutputMs !== undefined,
+    sideEffectObserved: (attempt.deliverySummary?.sideEffectEvents ?? 0) > 0,
+    locallyAnswered: false,
+    recoveryKinds: attempt.recoveryKinds,
+  });
+  if (attribution?.stage) attempt.failureStage = attribution.stage;
+  else delete attempt.failureStage;
+  if (attribution?.cause) attempt.failureCause = attribution.cause;
+  else delete attempt.failureCause;
+}

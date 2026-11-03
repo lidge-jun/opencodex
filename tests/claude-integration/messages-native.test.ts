@@ -445,7 +445,9 @@ describe("managed native Messages", () => {
     } else {
       expect(message).toBe(upstreamMessage);
     }
-    expect(row.upstreamError).toBe(message);
+    // The row carries the classified condition, never the provider's message.
+    expect(row.upstreamError).toBeUndefined();
+    expect(row.upstreamCondition).toBe("rate_limited");
     expect(text).not.toContain("fixture-key-alpha");
   });
   test("an upstream error answers in Anthropic shape without the key", async () => {
@@ -503,7 +505,8 @@ describe("managed native Messages", () => {
       expect(row.terminalSource).toBe("synthetic");
       expect(row.failureCause).toBe("transport-ambiguous");
       expect(row.attempts?.at(-1)?.streamAborted).toBe(true);
-      expect(row.upstreamError).toContain("anthropic passthrough upstream stream failed: ");
+      expect(row.failureDetail).toEqual({ code: "stream_failed" });
+      expect(row.upstreamError).toBeUndefined();
       expect(JSON.stringify(row)).not.toContain("fixture-key-alpha");
     } finally {
       truncated.stop();
@@ -562,7 +565,7 @@ describe("managed native Messages", () => {
     expect(row.status).toBe(502);
     expect(row.terminalStatus).toBe("incomplete");
     expect(row.closeReason).toBe("body_stall");
-    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
+    expect(row.failureDetail).toMatchObject({ code: "body_stall" });
   });
 
   test("a client that disconnects mid-stream is logged as a cancel, not an upstream failure", async () => {

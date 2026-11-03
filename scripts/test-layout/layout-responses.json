@@ -5,5 +5,7 @@
   "passthrough-media-type.test.ts": "responses",
   "passthrough-override.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",
-  "passthrough-abort.test.ts": "responses"
+  "passthrough-abort.test.ts": "responses",
+  "current-turn-tool-catalog-direct.test.ts": "responses",
+  "current-turn-tool-catalog-namespace.test.ts": "responses"
 }

@@ -54,8 +54,9 @@ confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`; 
 retain their existing alias/email labels. `gui/src/pages/providers-page-utils.ts` also strips
 Claude email metadata from the catalog/Add Provider account-status projection without mutating
 the source OAuth status; generic/custom account-status labels remain intact. The current quota section keeps
-that label even if usage is unavailable. Pro and Max 5x keep their measured five-hour and
-weekly windows; an explicitly absent/inactive session never fabricates a meter.
+that label even if usage is unavailable. Pro, Max 5x and Team retain measured five-hour and
+weekly windows regardless of which is binding. An explicitly null five-hour bucket permits
+a session meter only when its finite measurement is explicitly active.
 
 `src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
 to `currentTier.id` (paid accounts report `free-tier` there), alongside the discovered project
@@ -188,10 +189,13 @@ preserves, `null` deletes and an instance sets; an unset choice is never written
 `src/providers/claude-cli-usage.ts` display and the raw advisory projection in
 `src/providers/quota/anthropic-decision-windows.ts`. Recognized `limits` rows take
 precedence over their legacy buckets: `session`, `weekly_all`, and model-scoped
-`weekly_scoped`. An inactive row suppresses its legacy duplicate; an absent/null
-five-hour bucket contributes no measurement. Older rows without `is_active` retain
-their original active semantics. Unknown flags are not active, and unknown kinds
-or model families preserve usable shared windows without claiming a complete
+`weekly_scoped`. Each recognized row is represented before any skip, so duplicates
+and malformed shared measurements cannot revive legacy data and make family enumeration
+incomplete. Shared finite measurements are used regardless of the binding `is_active` flag;
+a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is explicitly
+null, only a finite session marked active creates a five-hour meter. Inactive shared usage
+is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics;
+unknown kinds or model families preserve usable shared windows without claiming a complete
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.

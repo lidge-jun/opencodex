@@ -240,7 +240,11 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 
 ## Katalog senkronizasyonu
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+Remote Link Home üzerinde güncel katalog başarıyla kaydedildikten sonra `ocx sync`, uygun bağlı Child makineleri de eşitler. `--local-only` bu dağıtımı kapatır. `--json`, Home sonucunu ve her Child durumunu içeren tek bir `ocx.sync.fanout/1` belgesi yazdırır; atlanan Child için neden de belirtilir. Home'un kendi sıfırdan farklı çıkış kodu değiştirilmeden döndürülür. Home başarılı olduğunda bir Child hatası veya zaman aşımı ya da okunamayan bağlantı deposu çıkış kodu 6 üretir; diğer durumlarda, Child makineler atlandığında da komut 0 koduyla çıkar. Metin kipindeki okunamayan depo hatası dosya yolu içermez. Kod 7, sürmekte olan bir güncelleme için ayrılmıştır. JSON kipinde Home eşitlemesi hata fırlatırsa stdout yine tek sonuç belgesi içerir ve stderr güvenli biçimde gösterilen bir tanı verir.
+
+Dağıtım, bir Child üzerinde Codex uygulamasının veya app-server'ın yeniden başlatılmasını asla istemez. Bunun için GOAT kullanın veya Child üzerinde `ocx sync --restart-codex` çalıştırın. Bununla birlikte Child'ın sabitlenmiş eşitlemesi, değişen Home ayarlarını uyguladıktan sonra kendi OpenCodex istemci çalışma zamanını yeniden başlatabilir. Home zaman aşımında yerel SSH işlemini durdursa bile başlamış bir uzak eşitleme Child üzerinde devam edebilir.
 
 > **Remote Link Child:** `ocx sync` Home'un Codex ayarlarını da uygular ve istemci çalışma zamanı bu uygulamadan önce başlamışsa, yeniden başlatma bayrağı olmadan da onu yeniden başlatır. Yeniden başlatma başarısız olursa önceki çalışma zamanı hizmet vermeye devam eder ve komut sıfırdan farklı bir kodla çıkar. `ocx status --json` ve `ocx link status --json` içindeki ilgili alanlar için [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (İngilizce) bölümüne bakın.
 

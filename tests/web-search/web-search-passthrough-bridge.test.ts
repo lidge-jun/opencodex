@@ -1846,7 +1846,7 @@ describe("the reported turn, end to end through handleResponses", () => {
     expect(result.searches).toBe(0);
     expect(result.body).toContain("response.failed");
     expect(result.body).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
-    expect(result.body).toContain("frobnicate");
+    expect(result.body).not.toContain("frobnicate");
   });
 
   test("an exa-backed gateway executes hosted-only search without the ollama origin", async () => {
