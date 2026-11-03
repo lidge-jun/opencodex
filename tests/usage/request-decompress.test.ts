@@ -16,6 +16,7 @@ import {
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { decodeRequestErrorResponse } from "../../src/server/responses/core";
+import { serializedJsonByteLength } from "../../src/server/json-serialized-bytes";
 import type { OcxConfig } from "../../src/types";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
@@ -622,5 +623,35 @@ describe("readJsonRequestBody", () => {
       body: Bun.zstdCompressSync(new TextEncoder().encode("{\"model\":")),
     });
     await expect(readJsonRequestBody(req)).rejects.toBeInstanceOf(SyntaxError);
+  });
+});
+
+describe("serializedJsonByteLength", () => {
+  test("matches the UTF-8 length of JSON.stringify for parsed JSON", () => {
+    const sources = [
+      "null", "true", "false", "0", "-0", "1e20", "1e400", "-1e400", "0.1", "1.5e-7", "123456789012345678901234567890",
+      "\"\"", "\"plain\"", "\"\\ud800\"", "\"\\udc00x\\ud83d\\ude00\"", "\"\\u0000\\u001f\\u007f\"", "\"é漢字\\\"\\\\\\n\"",
+      "[]", "{}", "[[]]", "[{}]", "{\"a\":{}}", "[[],[[]],{}]", "[1,\"x\",null,true,[2,3],{\"k\":[]}]",
+      "{\"__proto__\":{\"x\":1},\"constructor\":[1]}", "{\"a\":1,\"a\":2}", "{\"2\":1,\"1\":2,\"b\":3,\"a\":4}",
+      "{\"\\ud800\":\"\\udfff\",\"é\":\"漢\"}", JSON.stringify({ input: [{ role: "user", content: "x".repeat(1000) }] }),
+    ];
+    for (const source of sources) {
+      const parsed: unknown = JSON.parse(source);
+      expect([source, serializedJsonByteLength(parsed)]).toEqual([source, Buffer.byteLength(JSON.stringify(parsed), "utf8")]);
+    }
+  });
+
+  test("measures nesting deeper than a recursive serializer can walk", () => {
+    const depth = 500_000;
+    const parsed: unknown = JSON.parse("[".repeat(depth) + "]".repeat(depth));
+    expect(() => JSON.stringify(parsed)).toThrow(RangeError);
+    expect(serializedJsonByteLength(parsed)).toBe(2 * depth);
+  });
+
+  test("measures wide and mixed containers exactly", () => {
+    const wide = JSON.parse("[" + Array(1_000_000).fill("0").join(",") + "]");
+    expect(serializedJsonByteLength(wide)).toBe(Buffer.byteLength(JSON.stringify(wide), "utf8"));
+    const mixed = JSON.parse(JSON.stringify({ a: Array.from({ length: 50_000 }, (_, i) => ({ [`k${i}`]: [i, "é", null] })) }));
+    expect(serializedJsonByteLength(mixed)).toBe(Buffer.byteLength(JSON.stringify(mixed), "utf8"));
   });
 });
