@@ -76,13 +76,15 @@ export function ProxyControls({
       {previewText !== null ? (
         <span aria-hidden className={cn(
           "min-w-0 flex-1 truncate text-[13px] leading-5",
-          preview === "stop" ? "font-medium text-danger" : preview === "restart" ? "font-medium text-fg" : "text-fg-muted",
+          preview === "stop" ? "font-medium text-danger" : preview === "restart" ? "ocx-shine font-medium" : "text-fg-muted",
         )}>{previewText}</span>
       ) : (
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-5">
           <span className="shrink-0 font-medium text-fg">{label}</span>
           <span className="sr-only">{status}</span>
-          <span className="min-w-0 truncate text-xs text-fg-subtle tabular-nums" aria-hidden={!busy && !!detail ? undefined : true}>
+          {/* A reload in flight shines sky so it is noticed; everything else stays quiet. */}
+          <span className={cn("min-w-0 truncate text-xs tabular-nums", restarting && !stopping ? "ocx-shine font-medium" : "text-fg-subtle")}
+            aria-hidden={!busy && !!detail ? undefined : true}>
             {busy ? status : detail ?? statusLabel}
           </span>
         </span>

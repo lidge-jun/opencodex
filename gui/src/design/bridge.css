@@ -263,6 +263,23 @@
   min-width: 0;
   padding-right: 10px;
 }
+/* A Codex reload, about to be fired by the proxy lever or already running: sky text with a light
+   sweep, so the one action that keeps the proxy up is noticed. Stills to plain sky for reduced motion. */
+.ocx-shine {
+  color: var(--ocx-highlight);
+  background: linear-gradient(100deg, var(--ocx-highlight) 40%, color-mix(in oklab, var(--ocx-highlight) 35%, white) 50%, var(--ocx-highlight) 60%) 0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ocx-shine 1.6s linear infinite;
+}
+@keyframes ocx-shine {
+  from { background-position: 100% 0; }
+  to { background-position: -150% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ocx-shine { animation: none; background: none; -webkit-text-fill-color: currentColor; }
+}
 .sidebar-pref-row > .lang-toggle { flex: 1 1 auto; min-width: 0; }
 .sidebar-github-row > .sidebar-github-link { flex: 0 0 auto; padding-right: 3px; }
 /* one line beside "GitHub": a long prerelease id ellipsizes, and the tooltip holds it whole */

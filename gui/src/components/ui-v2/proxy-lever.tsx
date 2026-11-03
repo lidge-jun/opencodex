@@ -149,7 +149,7 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
         aria-hidden
         className={cn(
           "pointer-events-none absolute top-[5px] h-[5px] w-3 rounded-[2px] shadow-sm",
-          zone === "stop" ? "bg-danger" : zone === "restart" ? "bg-fg" : settled ? "bg-success" : "bg-fg-muted group-hover:bg-fg",
+          zone === "stop" ? "bg-danger" : zone === "restart" ? "bg-highlight" : settled ? "bg-success" : "bg-fg-muted group-hover:bg-fg",
         )}
         style={{
           transform: `translateY(${pos * TRAVEL}px)`,
