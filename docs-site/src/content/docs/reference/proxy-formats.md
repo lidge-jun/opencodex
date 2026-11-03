@@ -20,6 +20,16 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Function tool strictness on Chat input
+
+When Chat Completions is translated to OpenAI's Responses API or the ChatGPT backend,
+function tools keep Chat's non-strict
+default: an omitted `strict` is sent as `false`. Explicit `true` and `false` are preserved;
+legacy `functions` also stay non-strict. Optional arguments remain optional, including
+Computer Use's alternative element-index and coordinate selectors. This does not rewrite
+the caller's parameter schema or change the defaults for native Responses requests,
+Chat destinations, or third-party Responses providers.
+
 ## Required tools on buffered native combo routes
 
 A combo checks buffered native `openai-responses` JSON results when `tool_choice` is `required`

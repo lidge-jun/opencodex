@@ -449,6 +449,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           provider.preserveResponsesInputItemIds === true,
         ),
         isXaiSchemaTarget(provider),
+        parsed._chatCompletionsInput === true && isOpenAiOperatedResponsesDestination(provider),
       );
       const unnormalizedBody = stripDisabledVerbosity(
         stripDisabledReasoningSummaries(
