@@ -35,7 +35,7 @@ describe("stop failure classification (#3008)", () => {
 
     const cliCodes = [...read("src/cli/index.ts").matchAll(/process\.exit(?:Code)?\s*(?:=|\()\s*(\d+)/g)]
       .map(match => Number(match[1]));
-    const dispatchCodes = [...read("src/cli/dispatch.ts").matchAll(/return (\d+);/g)]
+    const dispatchCodes = ["src/cli/dispatch.ts", "src/cli/sync-command.ts"].flatMap(path => [...read(path).matchAll(/return (\d+);/g)])
       .map(match => Number(match[1]));
     expect(cliCodes).not.toContain(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
     expect(dispatchCodes).not.toContain(STOP_HISTORY_INCOMPLETE_EXIT_CODE);

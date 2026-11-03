@@ -42,7 +42,9 @@ test("upstream failures record the error code and request id without the body", 
   expect(log.upstreamErrorCode).toBe("server_error");
   expect(log.upstreamErrorType).toBe("server_error");
   expect(warnings.join("\n")).not.toContain("secret upstream body");
-  expect(warnings.some(line => line.includes("code=server_error") && line.includes("request_id=req_abc123"))).toBe(true);
+  // Service logs persist: only closed-vocabulary values are printed, never an upstream request id.
+  expect(warnings.some(line => line.includes("type=server_error"))).toBe(true);
+  expect(warnings.join("\n")).not.toContain("req_abc123");
 });
 
 
@@ -131,7 +133,7 @@ test("an unrecognized bare top-level code is never recorded as a diagnostic", ()
 });
 
 
-test("final request rows expose original upstream error type, code, request id and mapped status", () => {
+test("final request rows keep the mapped status and closed condition; upstream diagnostics stay on the context", () => {
   const log = context();
   noteUpstreamRequestId(log, new Headers({ "openai-request-id": "req_diagnostic_fixture" }));
   inspectResponseLogJson(log, JSON.stringify({ type: "error",
@@ -141,9 +143,12 @@ test("final request rows expose original upstream error type, code, request id a
     { terminalStatus: "failed", closeReason: "terminal" }, entry => rows.push(entry));
   expect(rows).toHaveLength(1);
   expect(rows[0]!.status).toBe(503);
-  expect(rows[0]!.upstreamErrorType).toBe("overloaded_error");
-  expect(rows[0]!.upstreamErrorCode).toBe("overloaded_error");
-  expect(rows[0]!.upstreamRequestId).toBe("req_diagnostic_fixture");
+  // The context keeps the bounded upstream diagnostics; the row keeps only the closed condition.
+  expect(log.upstreamErrorType).toBe("overloaded_error");
+  expect(log.upstreamErrorCode).toBe("overloaded_error");
+  expect(log.upstreamRequestId).toBe("req_diagnostic_fixture");
+  expect(rows[0]!.upstreamCondition).toBe("upstream_unavailable");
+  expect(JSON.stringify(rows[0])).not.toContain("req_diagnostic_fixture");
 });
 
 // #6740: the Codex WebSocket wraps a backend failure as {type:"error", status|status_code, error}.
@@ -202,7 +207,8 @@ test("a wrapped 503 reaches the final row as an upstream overload instead of a g
   expect(rows[0]!.status).toBe(503);
   expect(rows[0]!.errorCode).toBe("server_is_overloaded");
   expect(rows[0]!.failureCause).toBe("upstream-declined");
-  expect(rows[0]!.upstreamErrorCode).toBe("server_error");
+  expect(log.upstreamErrorCode).toBe("server_error");
+  expect(rows[0]!.upstreamErrorCode).toBeUndefined();
   // Same transient class as the 502 it replaces: account health and rotation do not move.
   expect(classifyCodexUpstreamOutcome(503)).toBe(classifyCodexUpstreamOutcome(502));
 });

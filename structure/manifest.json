@@ -437,7 +437,7 @@
       "path": "transports/responses-combo-boundaries.md",
       "tier": 3,
       "title": "Combo Streaming Boundaries",
-      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings.",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities.",
       "documents": [
         "src/server/"
       ]
@@ -517,6 +517,45 @@
       "title": "Append-only Claude Tool Loading",
       "scope": "Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites.",
       "documents": ["src/claude/", "src/server/responses/"]
+    },
+    {
+      "path": "data-planes/ollama-inbound.md",
+      "tier": 3,
+      "title": "Ollama-Compatible Inbound",
+      "scope": "Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership.",
+      "documents": [
+        "src/server/ollama-inbound.ts",
+        "src/server/ollama-native-paths.ts",
+        "src/server/ollama-route-policy.ts",
+        "src/server/native-final-log.ts",
+        "src/server/admitted-http-turn.ts",
+        "src/server/index/ollama-routes.ts",
+        "src/protocols/codecs/ollama.ts"
+      ]
+    },
+    {
+      "path": "data-planes/error-detail.md",
+      "tier": 3,
+      "title": "Proxy-Owned Error Detail",
+      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs.",
+      "documents": [
+        "src/usage/error-detail.ts",
+        "src/lib/upstream-condition.ts",
+        "src/lib/client-retry-after.ts",
+        "src/lib/failure-detail.ts",
+        "src/lib/response-service-tier.ts",
+        "src/lib/model-identity.ts",
+        "src/server/safe-response-headers.ts",
+        "src/server/request-log-failure-detail.ts",
+        "src/lib/client-error-body.ts",
+        "src/lib/error-destination.ts",
+        "src/combos/resolve.ts",
+        "src/lib/upstream-retry.ts",
+        "src/server/admission-model-scope.ts",
+        "src/server/responses/input-admission.ts",
+        "src/oauth/generic-account-failover.ts",
+        "src/chat/failure-verdict.ts"
+      ]
     },
     {
       "path": "data-planes/chat-reasoning-details.md",
@@ -698,6 +737,17 @@
       ]
     },
     {
+      "path": "providers/codex-pool-affinity.md",
+      "tier": 4,
+      "title": "Durable Codex Pool Affinity",
+      "scope": "Restart persistence of Codex pool pins and conversation-state issuers: store, fences, single-writer lease, fail-closed recovery.",
+      "documents": [
+        "src/codex/routing/thread-affinity-store.ts",
+        "src/codex/routing/thread-affinity.ts",
+        "src/lib/config-ownership.ts"
+      ]
+    },
+    {
       "path": "providers/pool-credit-renewal.md",
       "tier": 4,
       "title": "Pool credit renewal",
@@ -712,6 +762,13 @@
         "documents": ["src/codex/installation-id.ts", "src/codex/auth-context.ts", "src/codex/auth-context-provider.ts", "src/codex/forward-transport-headers.ts", "src/adapters/openai-responses/transport.ts", "src/adapters/openai-responses/passthrough.ts", "src/server/ws-bridge.ts", "src/server/responses/codex-ws-request.ts", "src/server/responses/codex-ws-pool.ts", "src/server/responses/compact.ts", "src/server/responses/passthrough-build-error.ts", "src/server/context-history.ts", "src/server/search.ts", "src/server/images.ts", "src/server/live.ts", "src/server/audio-live.ts", "src/server/audio-dictation.ts", "src/server/index/serve-options.ts", "src/server/index/websocket-handler.ts", "src/server/index/live-sideband.ts", "src/server/claude-messages.ts", "src/codex/affinity-debug.ts"]
     },
     {
+      "path": "providers/codex-request-owned-affinity.md",
+      "tier": 3,
+      "title": "Codex Request-Owned Affinity",
+      "scope": "Opt-in conversation affinity for a caller's own ChatGPT bearer in Pool mode, honest selection-time affinity labels, and the persistence exclusion contract.",
+      "documents": ["src/codex/request-owned-affinity.ts", "src/codex/request-owned-main-pin.ts", "src/codex/auth-context.ts"]
+    },
+    {
       "path": "providers/openai-accounts.md",
       "tier": 4,
       "title": "OpenAI Account Identity And Pool Operations",
@@ -720,6 +777,13 @@
         "src/codex/",
         "src/config.ts"
       ]
+    },
+    {
+      "path": "providers/codex-round-robin-placement.md",
+      "tier": 4,
+      "title": "Codex Round-Robin Placement",
+      "scope": "Round-robin new-conversation placement preferring accounts under their effective auto-switch threshold, with all-over fallback and bound, failover and lineage boundaries.",
+      "documents": ["src/codex/routing/selection.ts"]
     },
     {
       "path": "providers/openai-signed-in-preservation.md",
@@ -1148,8 +1212,8 @@
       "path": "ops/service-logging.md",
       "tier": 6,
       "title": "Managed Service Logging",
-      "scope": "Service-only console timestamps and bounded copy-truncate log retention.",
-      "documents": ["src/service/logging.ts"]
+      "scope": "Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics.",
+      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/server/responses/core-combo.ts"]
     },
     {
       "path": "ops/service-health-recovery.md",

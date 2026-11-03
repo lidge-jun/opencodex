@@ -1,0 +1,10 @@
+export type Holder = "sync" | "update" | "free" | "unknown";
+export type Observation = "free" | "active" | "unknown";
+export type Acquisition = { kind: "acquired"; addDelegate(pid: number): void; release(): void } | { kind: "busy"; holder: Exclude<Holder, "free"> };
+export declare function tryAcquireUpdateSyncMutex(home: string, kind: "sync" | "update", deps?: { now?: () => number; processAlive?: (pid: number) => boolean }): Acquisition;
+export declare function inspectUpdateSyncMutex(home: string): Holder;
+export declare function parentHoldsSyncMutex(home: string, claimedPid?: string): boolean;
+export declare function refuseSync(reason: "update-in-flight" | "sync-in-progress", args: readonly string[]): number;
+export declare function acquireSyncGuard(home: string, args: readonly string[]): { kind: "acquired"; addDelegate(pid: number): void; release(): void } | { kind: "refused"; exit: number };
+export declare function inspectUpdateMarker(home: string, deps?: { now?: () => number }): Observation;
+export declare function isUpdateInFlight(home: string, deps?: { mutex(home: string): Holder; ownershipLease(home: string): Observation; marker(home: string): Observation }): boolean;

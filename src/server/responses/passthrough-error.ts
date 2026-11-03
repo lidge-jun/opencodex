@@ -7,8 +7,8 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
 import {
+  formatClientRetryAfter,
   resolveClientRetryAfter,
-  validateClientRetryAfterHeader,
 } from "../../lib/retry-after";
 
 function isCyberPolicyBody(body: string): boolean {
@@ -93,7 +93,6 @@ export function formatPassthroughUpstreamError(
   const trimmed = bodyText.trim();
   const now = options?.now ?? Date.now();
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
-  const originalValid = validateClientRetryAfterHeader(upstreamRetryAfter, now);
   const cyberPolicyFailure = isCyberPolicyBody(trimmed);
   const replayRefusal = options?.replayRefusal === true || isReplayRefusalBody(trimmed);
   // Two different reasons to answer with no wait at all, handled the same way: a hard policy
@@ -108,12 +107,12 @@ export function formatPassthroughUpstreamError(
       now,
     });
 
+  // The header leaves in this proxy's own format: an integer of seconds, never the upstream bytes.
+  const formatted = resolved === undefined ? undefined : formatClientRetryAfter(resolved, now);
+
   if (trimmed) {
-    const needsSet = resolved !== undefined && upstreamRetryAfter !== resolved;
-    const needsDelete = (suppressRetryAfter && upstreamRetryAfter !== undefined)
-      || (resolved === undefined
-        && upstreamRetryAfter !== undefined
-        && originalValid === undefined);
+    const needsSet = formatted !== undefined && upstreamRetryAfter !== formatted;
+    const needsDelete = formatted === undefined && upstreamRetryAfter !== undefined;
 
     // A refusal always takes the rewriting path: it has a header to add even when the
     // upstream named no wait for it to remove.
@@ -128,7 +127,7 @@ export function formatPassthroughUpstreamError(
     const headers = options?.headers
       ? new Headers(options.headers)
       : new Headers({ "Content-Type": "application/json" });
-    if (needsSet) headers.set("Retry-After", resolved!);
+    if (needsSet) headers.set("Retry-After", formatted!);
     else headers.delete("Retry-After");
     if (replayRefusal) applyReplayRefusalClientHeaders(headers);
     const rewritten = new Response(bodyText, {
@@ -152,7 +151,8 @@ export function formatPassthroughUpstreamError(
   );
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
-  if (resolved !== undefined) headers.set("Retry-After", resolved);
+  if (formatted !== undefined) headers.set("Retry-After", formatted);
+  else headers.delete("Retry-After");
   if (replayRefusal) applyReplayRefusalClientHeaders(headers);
   const wrapped = new Response(response.body, { status: response.status, headers });
   return replayRefusal ? retainReplayRefusal(wrapped) : wrapped;

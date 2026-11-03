@@ -110,7 +110,7 @@ export function guardNativeMessagesEmptyToolCatalog(
         && (index === undefined || !permittedInputBlocks.has(index))) name ??= "<unnamed>";
       if (name !== undefined) {
         clear();
-        const message = redactSecretString(undeclaredToolCallMessage(name));
+        const message = redactSecretString(undeclaredToolCallMessage());
         onRefusal(message);
         enqueue(controller, `event: error\ndata: ${JSON.stringify(anthropicErrorBody(502, message, "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE))}\n\n`);
         settled = true;
