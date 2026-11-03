@@ -164,7 +164,9 @@ function posixSpellingVisited(configDir: string, euid: number): string[] | null 
   if (!posixTrustedAncestor(lstatSync(top), euid)) return null;
   const visited: Visited = new Set([top]);
   const walked = walkTrusted(top, absolute.slice(top.length).split(sep), euid, 0, visited);
-  if (walked.complete) return walked.path === realpathSync.native(configDir) ? [...visited] : null;
+  // The walk built its path from verified real directories; its realpath only normalizes spelling
+  // (case, Unicode form), which a case- or normalization-insensitive volume may store differently.
+  if (walked.complete) return realpathSync.native(walked.path) === realpathSync.native(configDir) ? [...visited] : null;
   const nearest = lstatSync(walked.path);
   return (nearest.uid === euid || nearest.uid === 0) && (nearest.mode & 0o022) === 0 ? [...visited, walked.path] : null;
 }
@@ -410,7 +412,7 @@ function onlyThisAccountCanChange(configDir: string): boolean {
   const tree = rootTree(rootPath, link => {
     const linkVisited: Visited = new Set();
     const walked = walkTrusted(dirname(link), [basename(link)], euid, 0, linkVisited, true);
-    return walked.complete ? { path: walked.path, visited: [...linkVisited] } : null;
+    return walked.complete ? { path: realpathSync.native(walked.path), visited: [...linkVisited] } : null;
   });
   if (tree === null) return false;
   const ancestors = rootAncestors(rootPath);

@@ -400,6 +400,27 @@ describe("owned path removal stays inside the config root", () => {
     }
   });
 
+  posix("an elevated run accepts a root and a tree link spelled in another case on a case-insensitive volume", () => {
+    const parent = mkdtempSync(join(realpathSync(tmpdir()), "ocx-removal-case-spelling-"));
+    try {
+      chmodSync(parent, 0o700);
+      const stored = join(parent, "Config");
+      mkdirSync(stored, { mode: 0o700 });
+      // A case-sensitive volume (most Linux runners) cannot show this; there is nothing to check.
+      if (!existsSync(join(parent, "config"))) return;
+      const dir = join(parent, "config");
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      mkdirSync(join(stored, "inner"), { mode: 0o700 });
+      writeFileSync(join(stored, "inner", "Target.txt"), "owned");
+      setUninstallElevationProbeForTests(() => true);
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+      symlinkSync(join(dir, "inner", "target.txt"), join(stored, "file-alias"), "file");
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
   posix("an elevated run refuses a directory deep inside a recorded directory that another account can write", () => {
     const { parent, dir } = ownedHome("ocx-removal-shared-descendant-");
     const deep = join(dir, "artifacts", "a", "b");
