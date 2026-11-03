@@ -2166,7 +2166,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(warnings
       .filter(args => String(args[0]).includes("all targets cooling, waiting"))
       .map(args => args[0]))
-      .toEqual(["[combo] free: all targets cooling, waiting 200ms for b/m2"]);
+      .toEqual(["[combo] combo 1: all targets cooling, waiting 200ms for target 2 (b)"]);
   });
 
   test("returns immediate 503 when all targets cool and the wait budget is unset", async () => {
@@ -2204,7 +2204,7 @@ describe("server combo failover 030 activation matrix", () => {
 
     const unavailable = await post(config);
     expect(unavailable.status).toBe(503);
-    expect(await unavailable.text()).toContain("No available targets for combo: free");
+    const unavailableBody = await unavailable.text(); expect(unavailableBody).toContain("No available targets for combo"); expect(unavailableBody).not.toContain("No available targets for combo: free");
     expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
   });
 

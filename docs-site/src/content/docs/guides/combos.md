@@ -1043,7 +1043,7 @@ Every target is currently ineligible: for example, its provider is disabled, it 
 it has already been attempted for this request, or an encrypted v2 task excludes it. Check target
 provider state and recent upstream errors. When no target was attempted, the error message lists
 why each target was skipped, for example
-`No available targets for combo: fast (openai/gpt-6: quota exhausted; anthropic/claude-opus-5-5: cooldown 42s)`.
+`No available targets for combo (2 targets; target 1 (openai): quota exhausted; target 2 (anthropic): cooldown)`. The client error names targets by position and provider only; the service log records the target's position and provider when it fails or when the proxy waits out its cooldown.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies

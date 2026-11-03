@@ -1,5 +1,13 @@
 # Combo Streaming Boundaries
 
+## Client model identity
+
+Combo dispatch in `src/server/responses/core-combo.ts` keeps its routing selector separate
+from the original branded client label. Generated overflow envelopes use that label for
+response models and fixed local wording; failed rewritten-turn request rows use only client
+or catalog model identities. Synthetic children carry the label through their existing
+options. Service diagnostics follow the [producer bounds](../ops/service-logging.md#combo-diagnostics).
+
 ## Context-window refusals
 
 `isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.
@@ -169,3 +177,5 @@ Account exhaustion stays target-scoped in `comboFailureCooldownScope`: it names 
 
 The Devin direct chat adapter (`src/adapters/devin/cloud-direct/chat.ts`) maps a Connect `failed_precondition` trailer to 429 only when it carries explicit spent-window wording (`TRAILER_EXHAUSTED_RE`: usage limit reached, out of credits, a weekly/monthly/daily/usage quota or usage window that has been or is exhausted). Per-minute, per-hour and rate wording vetoes that evidence. Only a 429 spent window earns the constant `usage limit reached` label, which survives formatting as target-local exhaustion with the 10-minute fallback instead of becoming provider-scoped `insufficient_quota`. Raw trailer text stays inside the parser. Unqualified exhaustion, transient quota preconditions and request-specific preconditions such as MCP configuration errors stay 400 and stop.
 Coverage: `tests/routing/router-combo-failover-classification.test.ts`, `tests/providers/devin-hardening.test.ts`, `tests/server/error-fidelity.test.ts`, `tests/codex-integration/combo-codex-exhaustion-cooldown.test.ts`, `tests/server/server-combo-quota-code-provenance.test.ts`, and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.
+
+Native Chat child error bodies follow [the owned client-body contract](../data-planes/error-detail.md#client-error-bodies-chat). Combo classification consumes the retained legacy envelope through the ordinary bounded reader, while headers and response identity retain their original owners.

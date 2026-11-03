@@ -1,3 +1,4 @@
+import { clientFacingModelText } from "../../lib/error-destination";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
@@ -33,10 +34,10 @@ import {
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
-import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, SendBudgetExhaustedError, errorDestinationLabel } from "../../lib/upstream-retry";
 import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
-import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
+import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
@@ -248,7 +249,7 @@ export async function executeResponsesSidecars(
     if (!sidecarScopeDenial || response.ok) return undefined;
     void response.body?.cancel().catch(() => {});
     releaseSearchProbeLease();
-    return admissionModelDeniedResponse(sidecarScopeDenial);
+    return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(sidecarScopeDenial, logCtx));
   };
   /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
@@ -471,7 +472,7 @@ export async function executeResponsesSidecars(
     options.abortSignal ?? new AbortController().signal, { attempted: false },
     () => !sendBudgetState.sendBudgetExhausted()
       && !!sendBudgetState.adapterDispatchBudget
-      && sendBudgetState.adapterDispatchBudget.spendEnforced !== true);
+      && sendBudgetState.adapterDispatchBudget.spendEnforced !== true, logCtx);
   const thinkingReceipt = (request: AdapterRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) =>
     adapter.name !== "anthropic" ? {} : { onPhysicalDispatch: () => {
       if (recovery === "opaque-blob-rejection") {
@@ -480,7 +481,7 @@ export async function executeResponsesSidecars(
         });
         if (sendBudgetState.adapterDispatchBudget?.spendEnforced || !decision?.allowed) {
           if (decision?.allowed) decision.permit.release();
-          throw new SendBudgetExhaustedError("sidecar thinking recovery");
+          throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
         }
         try { sendBudgetState.noteInitialDispatch(decision.permit); }
         finally { decision.permit.release(); }
@@ -579,7 +580,7 @@ export async function executeResponsesSidecars(
           ? clampImageMaxRounds(config.images?.maxRounds)
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      stallTimeoutSec: config.stallTimeoutSec,
+      stallTimeoutSec: config.stallTimeoutSec, proxyErrorContext: logCtx,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       fetchForRequest: (request, iterParsed, adapter, recovery) => {
@@ -633,7 +634,7 @@ export async function executeResponsesSidecars(
     if (imgScopeRefusal) return imgScopeRefusal;
     // A provider overflow on the first iteration answers as the main path's context failure (#7316).
     const imgResponse = options.comboAttempt ? imgLoopResponse : sidecarContextOverflowResponse(imgLoopResponse, {
-      stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
+      stream: parsed.stream, modelId: clientFacingModelText(options.clientModelLabel), translatorBudget,
     });
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
@@ -734,7 +735,7 @@ export async function executeResponsesSidecars(
       beforeSidecarDispatch: wsPlan.forwardSidecar?.beforeDispatch,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
-      stallTimeoutSec: wsPlan.stallTimeoutSec,
+      stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
       onRotatedUsage: billRotatedUsage,
@@ -770,7 +771,7 @@ export async function executeResponsesSidecars(
     const wsResponse = poolUsageLimit ? anthropicPoolCooldownResponse(poolUsageLimit, { logCtx })
       : options.comboAttempt ? loopResponse
         : sidecarContextOverflowResponse(loopResponse, {
-          stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
+          stream: parsed.stream, modelId: clientFacingModelText(options.clientModelLabel), translatorBudget,
         });
     // Register the sidecar stream as an active turn so drainAndShutdown waits for (or aborts)
     // in-flight web-search turns instead of skipping them during graceful shutdown.

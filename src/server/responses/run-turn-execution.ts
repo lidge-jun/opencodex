@@ -773,7 +773,7 @@ export async function executeResponsesRunTurn(
         type: "error",
         status: 502,
         errorType: "upstream_error",
-        message: undeclaredToolCallMessage(effectiveName),
+        message: undeclaredToolCallMessage(),
       };
     };
     const grokDevinPreflight = !options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
@@ -897,7 +897,7 @@ export async function executeResponsesRunTurn(
           queue.close();
         }, 2_000,
         {
-          translatorBudget,
+          translatorBudget, proxyErrorContext: logCtx,
           replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec,

@@ -1,3 +1,4 @@
+import { clientFacingModelLabel, clientFacingModelText } from "../lib/error-destination";
 import { classifyUpstreamCondition } from "../lib/upstream-condition";
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { recordLocalFailureDetail, type FailureDetail } from "./request-log-failure-detail";
@@ -12,7 +13,7 @@ import { recordLocalFailureDetail, type FailureDetail } from "./request-log-fail
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { resolveClaudeBridgePoolSession } from "./claude-bridge-pool-session";
 import {
-  admissionModelDeniedResponse,
+  admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
@@ -630,6 +631,7 @@ async function handleClaudeMessagesWithBudget(
   let effortRow: ParsedEffortRowId | null = null;
   let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
+  let clientModelLabel = clientFacingModelLabel(undefined);
   // Antigravity direct lane (off by default): planned before translation, kept only if routing
   // settles on the route the plan was made for.
   let directPlan: MessagesDirectPlan | undefined;
@@ -642,6 +644,7 @@ async function handleClaudeMessagesWithBudget(
   const advisorAdmissionPolicy = logIds?.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, logIds?.admission);
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
+    clientModelLabel = clientFacingModelLabel(isRec(anthropicBody) ? anthropicBody.model : undefined);
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
     // marker themselves; the 1M signal we act on is the anthropic-beta header.
     // Case-insensitive — the CLI matches /\[1m\]/i (audit 021 #7).
@@ -904,7 +907,7 @@ async function handleClaudeMessagesWithBudget(
     // the same billed Fast lane as their final Responses scope check.
     assertRouteAllowedByScope(
       resolveAdmissionModelScope(config, logIds?.admission),
-      String(internalBody.model ?? ""),
+      clientModelLabel,
       { providerName: route.providerName, modelId: previewXaiOauthWireModel({ options: {
         serviceTier: typeof internalBody.service_tier === "string" ? internalBody.service_tier : undefined,
       } }, route, config, "anthropic") },
@@ -915,7 +918,7 @@ async function handleClaudeMessagesWithBudget(
     // Before any route-specific shaping, so a request that leaves the lane is shaped as the bridge's.
     if (directPlan && !messagesDirectPlanHolds(directPlan, route, anthropicBody as Rec, config)) directLeaveError = leaveDirectPlan();
     if (directEncodersApply(config, route)) {
-      clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
+      clientEncoder = { protocol: "messages", stream, model: clientFacingModelText(clientModelLabel), inputTokenFloor: claudeRequestTokenFloor() };
     }
     if (route.provider.adapter === "openai-responses") {
       // max_output_tokens is the caller's spend cap: the adapter strips it only for the canonical
@@ -945,8 +948,10 @@ async function handleClaudeMessagesWithBudget(
   } catch (err) {
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;
+      projectAdmissionModelDeniedLog(err, logCtx);
+      const response = admissionModelDeniedResponse(err);
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
-      return admissionModelDeniedResponse(err);
+      return response;
     }
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
@@ -966,7 +971,7 @@ async function handleClaudeMessagesWithBudget(
   // The direct lane answers through the direct encoder whatever `directEncoders` says: neither
   // direction passes through the internal Responses body.
   if (directRoute) {
-    clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor(), requestLane: "direct" };
+    clientEncoder = { protocol: "messages", stream, model: clientFacingModelText(clientModelLabel), inputTokenFloor: claudeRequestTokenFloor(), requestLane: "direct" };
   }
 
   // PF-08: a managed-key Anthropic route sends its Messages body natively. The caller-forward
@@ -1129,7 +1134,7 @@ async function handleClaudeMessagesWithBudget(
     const { handleNativeMessages } = await import("./messages-native");
     return await handleNativeMessages({
       req, config, logCtx, ...(logIds ? { logIds } : {}),
-      route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
+      route: nativeMessagesRoute, body: nativeBody, requestedModel: clientFacingModelText(clientModelLabel), translatorBudget, selector: nativeSelector,
       modelScope: resolveAdmissionModelScope(config, logIds?.admission),
       // Compatibility identity is an opaque request-local handle, separate from credentials.
       clientIdentity: captureAnthropicClientIdentity(req.headers),
@@ -1263,6 +1268,7 @@ async function handleClaudeMessagesWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    clientModelLabel,
     ...(clientEncoder ? { clientEncoder } : {}),
     ...(directRoute && directPlan
       ? { directRequest: messagesDirectRequestOption(directPlan, anthropicBody, cc, translatorBudget) }
@@ -1344,7 +1350,7 @@ async function handleClaudeMessagesWithBudget(
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const anthropicSse = responsesSseToAnthropicSse(response.body, requestedModel, {
+    const anthropicSse = responsesSseToAnthropicSse(response.body, clientFacingModelText(clientModelLabel), {
       translatorBudget,
       nativeReasoningTagFor: blob => nativeReasoningTag(nativeReasoningMint.owner, blob),
       // Only a floor, and only for the first frame: an upstream that reports usage early wins
@@ -1364,7 +1370,7 @@ async function handleClaudeMessagesWithBudget(
     }
     let message: Rec;
     try {
-      message = await collectAnthropicMessage(anthropicSse, requestedModel, translatorBudget);
+      message = await collectAnthropicMessage(anthropicSse, clientFacingModelText(clientModelLabel), translatorBudget);
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) {
         return anthropicErrorResponse(413, error.message, "request_too_large", error.code);
@@ -1425,7 +1431,7 @@ async function handleClaudeMessagesWithBudget(
   }
   let message: Rec;
   try {
-    message = responsesJsonToAnthropicMessage(json, requestedModel, translatorBudget, blob => nativeReasoningTag(nativeReasoningMint.owner, blob));
+    message = responsesJsonToAnthropicMessage(json, clientFacingModelText(clientModelLabel), translatorBudget, blob => nativeReasoningTag(nativeReasoningMint.owner, blob));
   } catch (err) {
     if (!isTranslatorBudgetExceededError(err)) throw err;
     return anthropicErrorResponse(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
