@@ -39,11 +39,18 @@ because it records its own database through `recordOwnedConfigPath`.
 Uninstall holds the lock for its whole run: it validates every manifest path, writes an
 `uninstallStartedAt` tombstone, removes abandoned metadata temp files, removes the snapshot
 (a listed symlink is unlinked even when its target is gone),
-and deletes the owner marker and then the manifest. It removes the lock file after releasing it.
-While the run holds the lock, a second uninstall is refused as busy, a new path cannot be
-registered, and a listed path read without the lock sees the tombstone, so nothing new can be
-recorded behind the snapshot. (A writer that registered before the tombstone can still create its
-file afterwards; see the last item below.)
+and deletes the owner marker and then the manifest. It unlinks the lock file while still holding
+it, so a process that takes the old file afterwards sees the path change and retries instead of
+working beside a new installation's lock; Windows refuses to delete a file any handle has open, so
+there the unlink is retried after release and succeeds only when no other process has it open.
+Only an empty, single-link lock sidecar is removed after release. SQLite manages the `-journal`
+and `-wal` names of the lock database itself (opening the empty lock database removes them, as
+any lock acquisition does); a `-shm` holding data stays and is reported.
+While the run holds the lock, a second uninstall is refused as busy and a new path cannot be
+registered. A listed path read without the lock is refused by the tombstone, except inside a
+process's own uninstall teardown scope (described below), where it is accepted as recorded. So
+nothing new can be recorded behind the snapshot by another process. (A writer that registered
+before the tombstone can still create its file afterwards; see the last item below.)
 
 - A registration that acquires the lock after the tombstone throws
   `ConfigUninstallInProgressError` and writes nothing. A racing registration is therefore either in

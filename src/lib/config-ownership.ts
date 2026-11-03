@@ -149,7 +149,7 @@ const warnedFullManifest = new Set<string>();
  */
 let teardownDepth = 0;
 
-type UninstallStep = "snapshot-removed" | "owner-deleted";
+type UninstallStep = "snapshot-removed" | "owner-deleted" | "lock-retired";
 let uninstallStepHookForTests: ((step: UninstallStep) => void) | undefined;
 /**
  * Test seam, called inside uninstall's single lock hold: after it removed its snapshot, and after it
@@ -442,13 +442,19 @@ function withOwnershipLock<T>(configDir: string, run: () => T): { value: T } | u
       if (lockFileChanged(path, before)) continue;
       return { value: run() };
     } finally {
-      try { database.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
-      try { database.close(); } catch { /* the OS lock is released with the handle */ }
       // A holder that finds the metadata gone (a finished uninstall) retires the lock it held, and
       // only that file: a new installation may already have created its own lock at the same path.
-      if (!existsSync(ownerPath) && !existsSync(manifestPath)) {
-        try { if (!lockFileChanged(path, before)) removeOwnershipLockFile(configDir); } catch { /* uninstall reports what remains */ }
-      }
+      // It unlinks the file while still holding it, so a process that takes the old file afterwards
+      // sees the path change and retries instead of working beside a new installation's lock.
+      // Windows refuses to delete a file any handle has open, this one included, so there the
+      // unlink is retried after release and succeeds only when no other process has the file open.
+      const finished = !existsSync(ownerPath) && !existsSync(manifestPath);
+      const retired = !finished || unlinkLockFile(path, before);
+      if (finished && retired) uninstallStepHookForTests?.("lock-retired");
+      try { database.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
+      try { database.close(); } catch { /* the OS lock is released with the handle */ }
+      if (!retired) unlinkLockFile(path, before);
+      if (finished) removeEmptyLockSidecars(configDir);
     }
   }
   throw new ConfigOwnershipLockError("config ownership lock kept changing while it was acquired");
@@ -484,11 +490,33 @@ function acquireImmediate(database: Database): void {
   }
 }
 
-function removeOwnershipLockFile(configDir: string): void {
-  for (const suffix of ["", ...OWNERSHIP_LOCK_SIDECARS]) {
-    try { unlinkSync(join(configDir, `${CONFIG_OWNERSHIP_LOCK}${suffix}`)); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+/**
+ * Unlink the lock file `before` identifies; a file another installation put at the path is left
+ * alone. True once the path no longer names that file.
+ */
+function unlinkLockFile(path: string, before: string): boolean {
+  try {
+    if (lockFileChanged(path, before)) return true;
+    unlinkSync(path);
+    return true;
+  } catch {
+    return false; // uninstall reports what remains
+  }
+}
+
+/**
+ * Remove the lock's SQLite sidecars once released. SQLite deletes the journal its own transaction
+ * created when that transaction ends, and the lock never writes data, so a sidecar this module left
+ * is empty. A sidecar name holding data, or a link, is not provably ours: it stays and uninstall
+ * reports it.
+ */
+function removeEmptyLockSidecars(configDir: string): void {
+  for (const suffix of OWNERSHIP_LOCK_SIDECARS) {
+    const path = join(configDir, `${CONFIG_OWNERSHIP_LOCK}${suffix}`);
+    try {
+      const entry = lstatSync(path);
+      if (entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1 && entry.size === 0) unlinkSync(path);
+    } catch { /* absent, or uninstall reports it */ }
   }
 }
 
@@ -726,23 +754,30 @@ function onlyOwnershipLockFilesRemain(configDir: string): boolean {
 /** Remove leftover lock files only if no other process holds the lock (an uninstall still finishing). */
 function removeIdleLockFiles(configDir: string): "removed" | "busy" {
   const path = join(configDir, CONFIG_OWNERSHIP_LOCK);
-  if (existsSync(path)) {
-    const before = fileIdentity(path);
-    const database = new Database(path, { create: false, readwrite: true });
-    try {
-      acquireImmediate(database);
-    } catch (error) {
-      try { database.close(); } catch { /* acquisition already failed */ }
-      if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "SQLITE_BUSY") return "busy";
-      throw error;
-    }
+  const before = fileIdentity(path);
+  const database = new Database(path, { create: false, readwrite: true });
+  try {
+    acquireImmediate(database);
+  } catch (error) {
+    try { database.close(); } catch { /* acquisition already failed */ }
+    if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "SQLITE_BUSY") return "busy";
+    throw error;
+  }
+  let same: boolean;
+  try {
+    same = !lockFileChanged(path, before);
+  } finally {
     try { database.exec("ROLLBACK"); } catch { /* close releases it */ }
     database.close();
-    if (lockFileChanged(path, before)) return "busy";
   }
-  // Checked again under the idle lock: the files must still be empty leftovers when they are removed.
-  if (!onlyOwnershipLockFilesRemain(configDir)) return "busy";
-  removeOwnershipLockFile(configDir);
+  // Taking the lock proved no process holds it. The files are checked again only after release,
+  // because while held SQLite keeps this transaction's own rollback journal beside the lock file and
+  // deletes it when the transaction ends. Nothing else takes the lock in between: without ownership
+  // metadata no registration locks this root, creation never claims a nonempty one, and a second run
+  // of this cleanup removes the same files.
+  if (!same || !onlyOwnershipLockFilesRemain(configDir)) return "busy";
+  if (!unlinkLockFile(path, before)) throw new Error("the ownership lock file could not be removed");
+  removeEmptyLockSidecars(configDir);
   return "removed";
 }
 

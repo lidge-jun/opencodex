@@ -666,6 +666,38 @@ describe("an uninstall stopped after deleting the owner marker (#8093)", () => {
 });
 
 describe("ownership edge cases from review (#8093)", () => {
+  // SQLite itself manages the -journal and -wal names of a database it opens; -shm it leaves to us.
+  test("a lock sidecar holding data is kept and reported by uninstall", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, CONFIG_OWNERSHIP_LOCK + "-shm"), "user data");
+    expect(removeOwnedConfigState(dir)).toEqual({
+      status: "partial", reason: "unowned files remain in the config directory", residualPaths: [join(dir, CONFIG_OWNERSHIP_LOCK + "-shm")],
+    });
+    expect(readFileSync(join(dir, CONFIG_OWNERSHIP_LOCK + "-shm"), "utf8")).toBe("user data");
+  }));
+
+  test("an empty lock sidecar is removed by uninstall", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, CONFIG_OWNERSHIP_LOCK + "-shm"), "");
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+  }));
+
+  test("a finishing uninstall unlinks its lock file before releasing it", { skip: process.platform === "win32" }, withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    // A process that takes the old file after release must see the path change and retry, so the
+    // path is gone while this run still holds the lock.
+    const seen: Array<{ lockPresent: boolean; secondUninstall: string }> = [];
+    setUninstallStepHookForTests(step => {
+      if (step !== "lock-retired") return;
+      seen.push({ lockPresent: existsSync(join(dir, CONFIG_OWNERSHIP_LOCK)), secondUninstall: uninstallElsewhere(dir) });
+    });
+    let result;
+    try { result = removeOwnedConfigState(dir); } finally { setUninstallStepHookForTests(undefined); }
+    expect(seen).toEqual([{ lockPresent: false, secondUninstall: "refused" }]);
+    expect(result).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+  }));
+
   /** An older manifest without the config mutation database, optionally filled to the path cap. */
   const olderManifest = (dir: string, fill: boolean) => {
     const paths = manifest(dir).paths.filter(path => !path.startsWith("config-mutation.sqlite"));
