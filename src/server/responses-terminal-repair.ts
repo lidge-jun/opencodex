@@ -1,3 +1,4 @@
+import { rememberProxyIncomplete, carryProxyIncompleteContext } from "../lib/client-error-body";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { ResponsesTerminalRepairPolicy } from "../providers/registry";
 import { nextSseBlock, sseDataPayload } from "./sse-payload-rewrite";
@@ -80,6 +81,7 @@ export function relayResponsesSseWithTerminalRepair(
   policy: ResponsesTerminalRepairPolicy,
   budget: TranslatorBudget,
   scheduler: ResponsesTerminalRepairScheduler = systemScheduler,
+  proxyErrorContext: object = {},
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -191,6 +193,7 @@ export function relayResponsesSseWithTerminalRepair(
         ? { incomplete_details: { reason: "missing_terminal_event" } }
         : {}),
     };
+    if (kind === "incomplete") rememberProxyIncomplete(proxyErrorContext, "missing_terminal_event");
     const type = `response.${kind}`;
     return encoder.encode(`event: ${type}\ndata: ${JSON.stringify({
       type,
@@ -351,7 +354,7 @@ export function relayResponsesSseWithTerminalRepair(
     }
   };
 
-  return new ReadableStream<Uint8Array>({
+  return carryProxyIncompleteContext(proxyErrorContext, new ReadableStream<Uint8Array>({
     start(controller) {
       controllerRef = controller;
       if (upstream.signal.aborted) {
@@ -372,5 +375,5 @@ export function relayResponsesSseWithTerminalRepair(
       upstream.abort(reason);
       return reader.cancel(reason);
     },
-  });
+  }));
 }

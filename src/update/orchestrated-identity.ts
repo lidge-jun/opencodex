@@ -41,7 +41,9 @@ export async function inspectOrchestratedServingIdentity(deps: ServingIdentityDe
     else {
       const source = command[1] as string;
       const root = dirname(dirname(dirname(source)));
-      if (join(root, "src", "cli", "index.ts") !== source) return { kind: "unknown" };
+      // Windows accepts both separators; only separators are equated, so dotted or doubled forms still fail.
+      const native = process.platform === "win32" ? source.replace(/\//g, "\\") : source;
+      if (join(root, "src", "cli", "index.ts") !== native) return { kind: "unknown" };
       servingRoot = deps.realpath(root);
     }
     return { kind: "live", servingRoot, runtime: { pid: parsed.pid, port: parsed.port, hostname: parsed.hostname ?? "127.0.0.1", command } };

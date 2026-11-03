@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { spawn as spawnProcess, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { packageVersion } from "../lib/package-version";
 import { getConfigDir } from "../config/paths";
@@ -17,7 +17,7 @@ import { inspectLiveOrchestratedIdentity } from "./orchestrated-live-identity";
 import type { ServingIdentity } from "./orchestrated-identity";
 import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
 import { isUpdateInFlight } from "./sync-update-mutex";
-import { encodeOrchestratedExpect, type OrchestratedExpect } from "./orchestrated-session.mjs";
+import { createOrchestratedResultChannel, encodeOrchestratedExpect, type OrchestratedExpect } from "./orchestrated-session.mjs";
 import { waitForOrchestratedChild } from "./orchestrated-child.mjs";
 import { classifyOrchestratedOutcome, type Outcome } from "./orchestrated-outcome.mjs";
 import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
@@ -25,7 +25,7 @@ import { decideOrchestratedApply } from "./orchestrated-admission.mjs";
 import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { proxyIdentityAt } from "../server/proxy-liveness";
-import { probeSpawnSync } from "./mutation-guard.mjs";
+import { probeSpawn, probeSpawnSync } from "./mutation-guard.mjs";
 
 type Request = Extract<OrchestratedUpdateArgs, { ok: true }>;
 type DetectedInstaller = PlanInputs["installer"] | "standalone";
@@ -151,7 +151,7 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
   const base = { fromVersion: plan.currentVersion, toVersion: plan.targetVersion, installer: plan.installer,
     childExited: false, childExitCode: null, outcome: null, previousVerified: false, targetVerified: false, runtimeHealthy: false, restarted: false } as const;
   const uncertain = () => classifyOrchestratedOutcome(base);
-  let directory: string | undefined;
+  let channel: ReturnType<typeof createOrchestratedResultChannel> | undefined;
   let childStarted = false, childEverStarted = false;
   try {
     const before = await deps.identity();
@@ -163,13 +163,12 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
       return { exitCode: 10 as const, result: { ...uncertain().result, error: "plan-changed" } };
     }
     const started = deps.now();
-    directory = mkdtempSync(join(tmpdir(), "ocx-update-"));
-    const resultPath = join(directory, "result.json");
+    channel = createOrchestratedResultChannel();
     const expect = encodeOrchestratedExpect({ home: deps.home, cliRoot: plan.cliPath, servingRoot: live?.servingRoot ?? null,
       runtimePid: live?.runtime.pid ?? null, planToken: plan.planToken });
-    const args = ["update", "--version", plan.targetVersion, "--orchestrated-expect", expect, "--orchestrated-result", resultPath,
+    const args = ["update", "--version", plan.targetVersion, "--orchestrated-expect", expect, "--orchestrated-result", channel.resultPath,
       ...(request.notAfter === undefined ? [] : ["--not-after", String(request.notAfter)])];
-    const child = deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1" }, stdio: ["ignore", 2, 2] });
+    const child = deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, stdio: ["ignore", 2, 2] });
     childStarted = true; childEverStarted = true;
     const waited = await waitForOrchestratedChild(child, { overrunMs: (request.notAfter ?? started) + plan.mutationBoundMs - deps.now() });
     if (!waited.confirmed) {
@@ -178,8 +177,7 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
       return uncertain();
     }
     childStarted = false;
-    let outcome: Outcome | null = null;
-    try { outcome = JSON.parse(readFileSync(resultPath, "utf8")) as Outcome; } catch { /* no proof */ }
+    const outcome = channel.read() as Outcome | null;
     const activeRoot = outcome?.phase === "installed" ? outcome.activeRoot : plan.cliPath;
     const targetVerified = outcome?.phase === "installed" && activeRoot === plan.cliPath
       && verifyOrchestratedInstall(activeRoot, plan.targetVersion, "bun");
@@ -203,7 +201,7 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
     if (childEverStarted) return uncertain();
     return { exitCode: 10 as const, result: { ...uncertain().result, error: "plan-unavailable" } };
   } finally {
-    if (directory && !childStarted) { try { rmSync(directory, { recursive: true, force: true }); } catch { /* outcome remains authoritative */ } }
+    if (channel && !childStarted) channel.dispose();
   }
 }
 
@@ -226,7 +224,7 @@ export async function runOrchestratedUpdate(argv: string[]): Promise<number> {
   }
   if (plan.installer === "bun") {
     const result = await applyOrchestratedBun(plan, parsed, { home: getConfigDir(), identity: defaultDeps.identity,
-      now: Date.now, spawn: (exe, args, options) => spawnProcess(exe, args, options) });
+      now: Date.now, spawn: (exe, args, options) => probeSpawn(exe, args, options) });
     console.log(JSON.stringify(result.result));
     return result.exitCode;
   }

@@ -90,6 +90,79 @@ function runV1CoordinatorFailure(
   return JSON.parse(child.stdout);
 }
 
+function runSelectionScenario(codexHome: string, ocxHome: string, scenario: string) {
+  const script = `
+    const fs = require("node:fs"), { join } = require("node:path");
+    const { spyOn } = require("bun:test");
+    const gate = require("./src/codex/cli-update-selection-gate");
+    const recovery = require("./src/codex/cli-update-recovery");
+    const features = require("./src/codex/features");
+    const locks = require("./src/codex/config-write-lock");
+    const runtime = require("./src/codex/runtime");
+    const { injectCodexConfig } = require("./src/codex/inject");
+    const { setCodexMultiAgentV2ToggleForTests } = require("./src/codex/inject/multi-agent-v2");
+    const scenario = process.env.TEST_SCENARIO;
+    const path = join(process.env.CODEX_HOME, "config.toml");
+    const original = 'model = "gpt-5.5"\\n[features]\\nmulti_agent_v2 = ' + (scenario === "noop" ? "false" : "true") + '\\n';
+    fs.writeFileSync(path, original);
+    let asyncProbes = 0, syncProbes = 0, toggles = 0, seenGate, nestedEntered, workerEntered;
+    spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmissionAsync").mockImplementation(async () => { asyncProbes++; return false; });
+    spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmission").mockImplementation(() => { syncProbes++; throw new Error("unexpected sync recovery"); });
+    const worker = gate.createWorkerCommitWindow({ gate: gate.codexCliUpdateSelectionGate(), fence: gate.createCodexCliUpdateFence() });
+    if (scenario === "busy" || scenario === "noop") worker.tryEnter();
+    if (scenario === "aba") {
+      const inspect = features.isMultiAgentV2Enabled;
+      spyOn(features, "isMultiAgentV2Enabled").mockImplementationOnce(() => {
+        fs.writeFileSync(path, original.replace("= true", "= false"));
+        const value = inspect();
+        fs.writeFileSync(path, original);
+        return value;
+      });
+    }
+    if (scenario === "lock-failure") spyOn(locks, "acquireConfigWriteLock").mockResolvedValue({ ok: false, error: "locked" });
+    if (scenario === "lock-throw") spyOn(locks, "acquireConfigWriteLock").mockRejectedValue(new Error("fixture lock failure"));
+    if (scenario === "lost-owner") {
+      const acquire = locks.acquireConfigWriteLock;
+      spyOn(locks, "acquireConfigWriteLock").mockImplementation(async (...args) => {
+        const acquired = await acquire(...args);
+        const buffer = gate.codexCliUpdateSelectionGate();
+        gate.releaseCodexCliUpdateGateOwner(buffer, Atomics.load(new Int32Array(buffer), 0));
+        worker.tryEnter();
+        return acquired;
+      });
+    }
+    setCodexMultiAgentV2ToggleForTests(enabled => {
+      toggles++;
+      seenGate = gate.codexCliSelectionGateState();
+      const nested = gate.beginCodexCliSelectionParentWrite();
+      nestedEntered = nested.entered;
+      nested.exit();
+      workerEntered = worker.tryEnter();
+      if (workerEntered) worker.exit();
+      if (scenario === "persist") runtime.persistCodexRuntime({ command: "fixture-codex", source: "path", version: "1.0.0" });
+      if (scenario === "toggle-failure") throw new Error("fixture toggle failure");
+      fs.writeFileSync(path, fs.readFileSync(path, "utf8").replace("= true", "= " + enabled));
+    });
+    let result;
+    try { result = await injectCodexConfig(10100, { multiAgentMode: "v1" }); }
+    catch (error) { result = { threw: String(error) }; }
+    const after = fs.readFileSync(path, "utf8");
+    const beforeExitGate = gate.codexCliSelectionGateState();
+    worker.exit();
+    const runtimePath = join(process.env.OPENCODEX_HOME, "codex-runtime.json");
+    console.log(JSON.stringify({ result, toggles, asyncProbes, syncProbes, seenGate, nestedEntered, workerEntered,
+      unchanged: after === original, disabled: after.includes("multi_agent_v2 = false"), beforeExitGate,
+      finalGate: gate.codexCliSelectionGateState(), runtime: fs.existsSync(runtimePath) ? JSON.parse(fs.readFileSync(runtimePath, "utf8")) : null }));
+  `;
+  const child = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome, TEST_SCENARIO: scenario },
+    encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+  });
+  expect(child.status, child.stderr).toBe(0);
+  return JSON.parse(child.stdout);
+}
+
 describe("injectCodexConfig v1-surface reconcile", () => {
   let codexHome: string;
   let ocxHome: string;
@@ -102,6 +175,33 @@ describe("injectCodexConfig v1-surface reconcile", () => {
   afterEach(() => {
     removeTreeWithRetry(codexHome);
     removeTreeWithRetry(ocxHome);
+  });
+
+  test.each(["busy", "aba", "lost-owner"])("selection admission refuses %s before the native toggle", scenario => {
+    const out = runSelectionScenario(codexHome, ocxHome, scenario);
+    expect(out.result).toMatchObject({ success: false, retryable: true });
+    expect(out).toMatchObject({ toggles: 0, unchanged: true, syncProbes: 0, finalGate: "free" });
+  });
+
+  test.each(["selected", "persist"])("selection admission owns the toggle and nested %s runtime writes", scenario => {
+    const out = runSelectionScenario(codexHome, ocxHome, scenario);
+    expect(out.result).toMatchObject({ success: true });
+    expect(out).toMatchObject({ toggles: 1, asyncProbes: 1, syncProbes: 0, seenGate: "parent_write",
+      nestedEntered: true, workerEntered: false, disabled: true, beforeExitGate: "free", finalGate: "free" });
+    if (scenario === "persist") expect(out.runtime).toMatchObject({ command: "fixture-codex", selectedVersion: "1.0.0" });
+  });
+
+  test("selection admission leaves an already-v1 injection available during worker commit", () => {
+    const out = runSelectionScenario(codexHome, ocxHome, "noop");
+    expect(out.result).toMatchObject({ success: true });
+    expect(out).toMatchObject({ toggles: 0, asyncProbes: 0, syncProbes: 0, disabled: true, beforeExitGate: "worker_commit", finalGate: "free" });
+  });
+
+  test.each(["lock-failure", "lock-throw", "toggle-failure"])("selection admission releases ownership after %s", scenario => {
+    const out = runSelectionScenario(codexHome, ocxHome, scenario);
+    if (scenario === "lock-throw") expect(out.result.threw).toContain("fixture lock failure");
+    else expect(out.result.success).toBe(false);
+    expect(out).toMatchObject({ asyncProbes: 1, unchanged: true, beforeExitGate: "free", finalGate: "free" });
   });
 
   test("inject does not turn on multi_agent_v2; fresh installs stay on Codex's default v1 surface until the user opts in", () => {

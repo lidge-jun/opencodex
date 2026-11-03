@@ -57,9 +57,9 @@ test("Bun apply runs a pinned child and verifies the installed tree", async () =
     let killed = false, session: ReturnType<typeof createOrchestratedChildSession> | undefined, resultDir = "";
     const running = new EventEmitter(); Object.assign(running, { kill: () => { killed = true; return true; }, unref: () => {} });
     const overrun = await applyOrchestratedBun(plan, { ok: true, mode: "apply", notAfter: 1 }, { home, identity: async () => ({ kind: "absent" }), now: () => 900_002,
-      spawn: (_exe, args) => {
+      spawn: (_exe, args, options) => {
         resultDir = dirname(args[args.indexOf("--orchestrated-result") + 1]!);
-        session = createOrchestratedChildSession({ home, resultPath: args[args.indexOf("--orchestrated-result") + 1]!,
+        session = createOrchestratedChildSession({ home, resultPath: args[args.indexOf("--orchestrated-result") + 1]!, resultCapability: options.env.OCX_UPDATE_RESULT_CAPABILITY!,
           expect: decodeOrchestratedExpect(args[args.indexOf("--orchestrated-expect") + 1]!), verifyIdentity: () => true });
         session.start(); return running as never;
       } });

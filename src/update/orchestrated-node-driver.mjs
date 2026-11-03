@@ -1,8 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
 import { decideOrchestratedApply } from "./orchestrated-admission.mjs";
-import { encodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import { createOrchestratedResultChannel, encodeOrchestratedExpect } from "./orchestrated-session.mjs";
 import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import { waitForOrchestratedChild } from "./orchestrated-child.mjs";
 import { classifyOrchestratedOutcome } from "./orchestrated-outcome.mjs";
@@ -15,7 +13,7 @@ const BOUND = 900_000;
 
 /** Parent retains stdout and independently verifies all child-reported effects. */
 export async function applyNodeOrchestratedUpdate(request, deps) {
-  let started = false, exited = false, directory;
+  let started = false, exited = false, channel;
   let plan;
   const base = () => ({ fromVersion: plan?.currentVersion ?? deps.currentVersion, toVersion: plan?.targetVersion ?? null,
     installer: deps.installer, childExited: false, childExitCode: null, outcome: null, previousVerified: false,
@@ -58,13 +56,12 @@ export async function applyNodeOrchestratedUpdate(request, deps) {
       owner = resolved.owner;
     }
     const start = Date.now();
-    directory = mkdtempSync(join(tmpdir(), "ocx-update-"));
-    const resultPath = join(directory, "result.json");
+    channel = createOrchestratedResultChannel();
     const expect = encodeOrchestratedExpect({ home: deps.home, cliRoot: plan.cliPath, servingRoot: live?.servingRoot ?? null,
       runtimePid: live?.runtime.pid ?? null, planToken: plan.planToken });
     const args = [deps.launcher, "update", "--version", plan.targetVersion, "--orchestrated-expect", expect,
-      "--orchestrated-result", resultPath, ...(request.notAfter === undefined ? [] : ["--not-after", String(request.notAfter)])];
-    const child = deps.spawn(process.execPath, args, { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1" }, stdio: ["ignore", 2, 2] });
+      "--orchestrated-result", channel.resultPath, ...(request.notAfter === undefined ? [] : ["--not-after", String(request.notAfter)])];
+    const child = deps.spawn(process.execPath, args, { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, stdio: ["ignore", 2, 2] });
     started = true;
     const waited = await waitForOrchestratedChild(child, { overrunMs: (request.notAfter ?? start) + BOUND - Date.now() });
     if (!waited.confirmed) {
@@ -72,8 +69,7 @@ export async function applyNodeOrchestratedUpdate(request, deps) {
       return waited.reason === "overrun" ? { exitCode: 12, result: { ...uncertain().result, error: "overrun" } } : uncertain();
     }
     exited = true;
-    let outcome = null;
-    try { outcome = JSON.parse(readFileSync(resultPath, "utf8")); } catch { /* unknown outcome */ }
+    const outcome = channel.read();
     const activeRoot = outcome?.phase === "installed" ? outcome.activeRoot : plan.cliPath;
     const verify = (root, version) => deps.installer === "npm"
       ? root === plan.cliPath && verifyOrchestratedInstall(root, version, "npm")
@@ -98,6 +94,6 @@ export async function applyNodeOrchestratedUpdate(request, deps) {
   } catch {
     return started ? uncertain() : fail("plan-unavailable");
   } finally {
-    if (directory && (!started || exited)) { try { rmSync(directory, { recursive: true, force: true }); } catch { /* best effort */ } }
+    if (channel && (!started || exited)) channel.dispose();
   }
 }

@@ -1,3 +1,5 @@
+import { clientFacingModelText, errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
+import { knownModelIdentity } from "../lib/model-identity";
 /**
  * Proxy-authored failure detail for request logs.
  *
@@ -51,4 +53,28 @@ const INCOMPLETE_REASONS: Readonly<Record<string, readonly [string, FailureDetai
 export function incompleteReasonDetail(reason: string): { text: string; detail?: FailureDetail } {
   const known = Object.prototype.hasOwnProperty.call(INCOMPLETE_REASONS, reason) ? INCOMPLETE_REASONS[reason] : undefined;
   return known ? { text: known[0], detail: { code: known[1] } } : { text: `Upstream incomplete: ${reason}` };
+}
+
+/** Local model refusals keep only client or catalog identities in the request row. */
+export function projectLocalModelRefusalLog(
+  logCtx: import("./request-log").RequestLogContext,
+  clientModel: import("../lib/error-destination").ClientFacingModelLabel,
+): void {
+  const client = clientFacingModelText(clientModel);
+  const known = (value: unknown) => knownModelIdentity(value, [client]);
+  const providerKnown = (value: string) => errorDestinationText(providerErrorDestinationLabel(value)) === value;
+  if (logCtx.provider && !providerKnown(logCtx.provider)) logCtx.provider = "unknown";
+  logCtx.model = known(logCtx.model) ?? "unknown";
+  logCtx.requestedModel = known(logCtx.requestedModel);
+  logCtx.requestedAlias = known(logCtx.requestedAlias);
+  logCtx.wireModel = known(logCtx.wireModel); logCtx.resolvedModel = known(logCtx.resolvedModel);
+  logCtx.servedModel = known(logCtx.servedModel); logCtx.responseModelEcho = known(logCtx.responseModelEcho);
+  for (const attempt of logCtx.attempts ?? []) {
+    attempt.model = known(attempt.model) ?? "unknown";
+    if (!providerKnown(attempt.provider)) attempt.provider = "unknown";
+  }
+  const decision = logCtx.routeDecision;
+  if (decision && (!known(decision.requestedModel)
+    || decision.candidates.some(candidate => !known(candidate.model) || !providerKnown(candidate.provider))
+    || decision.selected && (!known(decision.selected.model) || !providerKnown(decision.selected.provider)))) logCtx.routeDecision = undefined;
 }

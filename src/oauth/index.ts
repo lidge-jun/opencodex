@@ -1,3 +1,4 @@
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { MuseLoginError, museLoginErrorMessage } from "./meta-muse-errors";
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { mapFill } from "../providers/resolved-model-policy-merge";
@@ -448,10 +449,9 @@ export function getOAuthCredentialApiBaseUrl(provider: string): string | undefin
 export function listOAuthProviders(): string[] {
   return Object.keys(OAUTH_PROVIDERS).filter(isPublicOAuthProvider);
 }
-
 export class UnsupportedOAuthProviderError extends Error {
   constructor(provider: string) {
-    super(`Unsupported OAuth provider in config: ${provider}`);
+    super(`Unsupported OAuth provider in config: ${errorDestinationText(providerErrorDestinationLabel(provider))}`);
     this.name = "UnsupportedOAuthProviderError";
   }
 }
@@ -460,7 +460,7 @@ export class OAuthLoginRequiredError extends Error {
   readonly provider: string;
 
   constructor(provider: string) {
-    super(`Not logged in to ${provider}. Run: ocx login ${provider}`);
+    super(`Not logged in to ${errorDestinationText(providerErrorDestinationLabel(provider))}. Run: ocx login ${errorDestinationText(providerErrorDestinationLabel(provider))}`);
     this.name = "OAuthLoginRequiredError";
     this.provider = provider;
   }

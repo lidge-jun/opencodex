@@ -107,6 +107,8 @@
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
+  "current-turn-tool-catalog-direct.test.ts": "responses",
+  "current-turn-tool-catalog-namespace.test.ts": "responses",
   "gentle-shell-path.test.ts": "clients", "gentle-shell-client.test.ts": "clients", "openai-native-hosted-search-history.test.ts": "adapters/openai", "responses-native-compact-search-history.test.ts": "responses", "config-hosted-search-projection.test.ts": "config",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
@@ -1404,6 +1406,7 @@
   "codex-role-auto-assign.test.ts": "routing", "omo-role-models.test.ts": "clients",
   "codex-role-capability-consent.test.ts": "routing",
   "codex-role-capability-redirects.test.ts": "routing",
+  "codex-role-capability-pages.test.ts": "routing",
   "codex-role-measured-ties.test.ts": "routing",
   "lazycodex-detection.test.ts": "clients", "codex-agent-role-routes.test.ts": "server",
   "codex-role-history-recovery.test.ts": "server",
@@ -1588,5 +1591,5 @@
   "hermes-profiles.test.ts": "clients", "hermes-profile-routes.test.ts": "clients"
   ,"cli-sync-expect-link.test.ts": "cli"
   ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "link-connection-generation.test.ts": "clients"
-  ,"request-log-error-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server"
+  ,"request-log-error-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server", "client-error-body.test.ts": "lib", "chat-error-body-normalization.test.ts": "responses", "chat-error-collector-verdicts.test.ts": "responses", "server-chat-error-body-evidence.test.ts": "server"
 }

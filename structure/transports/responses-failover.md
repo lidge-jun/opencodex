@@ -46,7 +46,7 @@ with the same item id. The batch/non-streaming bridge follows the same rule.
 
 ## Upstream reset retry
 
-`src/lib/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
+`src/lib/upstream-retry.ts` constructs send-budget destination labels through the [client error contract](../data-planes/error-detail.md#client-error-bodies-chat), retaining only a parsed origin or validated fixed provider id. It guards upstream fetches against stale pooled keep-alive sockets
 (Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
 `ECONNRESET` before any response bytes). `fetchWithResetRetry` never retries on its own
 account. A caller passing `replaySafe: true` permits up to 3 total attempts with jittered

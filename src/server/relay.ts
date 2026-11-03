@@ -1,3 +1,4 @@
+import { carryProxyError } from "../lib/client-error-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
   cyberPolicyErrorType,
@@ -904,6 +905,7 @@ export function responseWithDeferredRequestLog(
   start: number,
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  inspectionSource?: string,
 ): Response {
   // A synthetic 429 is a transport verdict, not evidence that the provider declined the turn.
   if (isReplayRefusalResponse(response)) {
@@ -933,6 +935,7 @@ export function responseWithDeferredRequestLog(
         && preinspectedJsonResponses.has(response);
       const body = createBoundedResponseLogBody(response.body, {
         json: contentType.includes("application/json"),
+        ...(inspectionSource !== undefined ? { inspectionSource } : {}),
         ...(preinspectedJson ? { maxInspectionBytes: 0 } : {}),
         inspect: preinspectedJson ? () => undefined : text => inspectResponseLogJson(logCtx, text),
         finalize: reason => {
@@ -950,11 +953,11 @@ export function responseWithDeferredRequestLog(
       // Logging re-wraps the response, and an in-process verdict does not survive a re-wrap on
       // its own. A replay refusal that lost it here would read to a later quota recorder or
       // Retry-After synthesizer as a 429 some upstream produced.
-      return carryReplayRefusal(response, new Response(body, {
+      return carryReplayRefusal(response, carryProxyError(response, new Response(body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
-      }));
+      })));
     }
     if (isUsageDebugEnabled() && logCtx.usageDebugBodyKind === undefined) {
       logCtx.usageDebugBodyKind = response.body ? "other" : "none";

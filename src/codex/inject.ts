@@ -446,7 +446,7 @@ async function injectCodexConfigImpl(
     if (v1Reconcile) {
       const reconciled = v1Reconcile.run(heldConfigWriteLock);
       if (!reconciled.ok) {
-        throw new CodexInjectRefusal({ success: false, message: reconciled.message });
+        throw new CodexInjectRefusal({ success: false, message: reconciled.message, retryable: reconciled.retryable });
       }
       nativeInput = reconciled.content;
       if (reconciled.content !== rawContent) {
@@ -548,6 +548,10 @@ async function injectCodexConfigImpl(
    */
   let effectivePlan: CodexInjectionPlanOk = admittedPlan;
 
+  if (v1Reconcile && !await v1Reconcile.admit()) {
+    return { success: false, retryable: true, message: "Codex config injection refused: the CLI selection is busy. Retry after the CLI update finishes." };
+  }
+  try {
   const configLock = await acquireConfigWriteLock(CODEX_CONFIG_PATH, {
     timeoutMs: Math.min(options.lockTimeoutMs ?? CONFIG_WRITE_LOCK_WAIT_MS, CONFIG_WRITE_LOCK_WAIT_MS),
   });
@@ -724,6 +728,9 @@ async function injectCodexConfigImpl(
   } finally {
     releaseConfigWriteLock(configLock.handle);
     heldConfigWriteLock = undefined;
+  }
+  } finally {
+    v1Reconcile?.release();
   }
   // Both write paths have committed, including the coordinator's post-callback checks.
   // Compare against the admitted original, not post-v1-reconcile input: the native

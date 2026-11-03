@@ -454,7 +454,7 @@ export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: tru
   if (child) {
     try {
       const expect = decodeOrchestratedExpect(child.expect);
-      session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, expect, notAfter: child.notAfter,
+      session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter,
         verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) });
       if (!session.start().ok) { process.exitCode = 10; return; }
       protectOrchestratedWorkerSignals();

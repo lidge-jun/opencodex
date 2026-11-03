@@ -459,7 +459,7 @@
       "path": "transports/responses-combo-boundaries.md",
       "tier": 3,
       "title": "Combo Streaming Boundaries",
-      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings.",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities.",
       "documents": [
         "src/server/"
       ]
@@ -562,7 +562,7 @@
       "path": "data-planes/error-detail.md",
       "tier": 3,
       "title": "Proxy-Owned Error Detail",
-      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format.",
+      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs.",
       "documents": [
         "src/usage/error-detail.ts",
         "src/lib/upstream-condition.ts",
@@ -571,7 +571,15 @@
         "src/lib/response-service-tier.ts",
         "src/lib/model-identity.ts",
         "src/server/safe-response-headers.ts",
-        "src/server/request-log-failure-detail.ts"
+        "src/server/request-log-failure-detail.ts",
+        "src/lib/client-error-body.ts",
+        "src/lib/error-destination.ts",
+        "src/combos/resolve.ts",
+        "src/lib/upstream-retry.ts",
+        "src/server/admission-model-scope.ts",
+        "src/server/responses/input-admission.ts",
+        "src/oauth/generic-account-failover.ts",
+        "src/chat/failure-verdict.ts"
       ]
     },
     {
@@ -1279,9 +1287,12 @@
       "path": "ops/service-logging.md",
       "tier": 6,
       "title": "Managed Service Logging",
-      "scope": "Service-only console timestamps and bounded copy-truncate log retention.",
+      "scope": "Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics.",
       "documents": [
-        "src/service/logging.ts"
+        "src/service/logging.ts",
+        "src/combos/resolve.ts",
+        "src/combos/request.ts",
+        "src/server/responses/core-combo.ts"
       ]
     },
     {
