@@ -11,6 +11,8 @@ import { initializeNodeLauncherContext } from "../../src/cli/launcher-context";
 import { buildNativeClaudeEnv } from "../../src/cli/claude";
 import { observeManagingClis } from "../../src/service/managing-cli";
 import { repoPath } from "../helpers/repo-root";
+import { tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
+import { createLegacyUpdateSession, createOrchestratedChildSession, createOrchestratedResultChannel } from "../../src/update/orchestrated-session.mjs";
 
 // Explicit private fixtures; only temp paths are written by this helper.
 function writeFileSync(path: string, data: Parameters<typeof writeFile>[1]): void {
@@ -64,6 +66,14 @@ function fakeSpawn(error?: string, exitSignal: NodeJS.Signals | null = null) {
 }
 
 describe("Desktop record and handoff policy", () => {
+  test("contract discovery and updates answer from the invoked package even with a Desktop record", () => {
+    for (const argv of [["capabilities", "--contracts", "--json"], ["update", "--plan", "--json"]]) {
+      expect(planDesktopCliHandoff({ platform: "linux", argv, env: {}, recordRead: ready() }, deps))
+        .toEqual({ kind: "continue", reason: "excluded" });
+    }
+    expect(planDesktopCliHandoff({ platform: "linux", argv: ["capabilities", "--json"], env: {}, recordRead: ready() }, deps).kind)
+      .toBe("handoff");
+  });
   test("fixed record location and injected reader path", () => {
     expect(desktopCliRecordPath({ platform: "darwin", home: "/Users/example" })).toBe("/Users/example" + "/.opencodex-desktop/cli.json");
     expect(desktopCliRecordPath({ platform: "win32", env: { USERPROFILE: "C:\\Users\\example" } })).toBe("C:\\Users\\example\\.opencodex-desktop\\cli.json");
@@ -226,6 +236,105 @@ function packageFixture() {
 }
 const posixTest = process.platform === "win32" ? test.skip : test;
 const launcher = repoPath("bin", "ocx.mjs");
+posixTest("sync Desktop handoff refuses an update before executing the target", () => {
+  const fixture = packageFixture(), ran = join(fixture.home, "ran");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);
+  const lock = tryAcquireUpdateSyncMutex(fixture.env.OPENCODEX_HOME!, "update");
+  if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const result = spawnSync("node", [launcher, "sync", "--json"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 7, stderr: expect.stringContaining("update-in-flight") });
+    expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+    expect(lstatExists(ran)).toBe(false);
+  } finally { lock.release(); }
+}, 15000);
+
+posixTest("sync Desktop handoff refuses a malformed lease before executing the target", () => {
+  const fixture = packageFixture(), ran = join(fixture.home, "ran");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);
+  const lock = join(fixture.env.OPENCODEX_HOME!, "sync-update.mutation.lock");
+  mkdirSync(lock); writeFileSync(join(lock, "malformed.json"), "{");
+  for (const json of [false, true]) {
+    const result = spawnSync("node", [launcher, "sync", ...(json ? ["--json"] : [])], { env: { ...fixture.env, OCX_TEST_HOME_GUARD: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect(result.status).toBe(7); expect(result.stderr.trim()).toBe("update-in-flight");
+    if (json) expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+    else expect(result.stdout).toBe("");
+    expect(lstatExists(ran)).toBe(false);
+  }
+}, 15000);
+
+function lstatExists(path: string) { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
+
+posixTest("old Desktop sync stays under launcher mutex until it exits", async () => {
+  const fixture = packageFixture();
+  writeFileSync(fixture.target, "#!/bin/sh\necho ready:$OCX_SYNC_MUTEX_HELD_BY\nread line\n"); chmodSync(fixture.target, 0o700);
+  const child = spawn("node", [launcher, "sync"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "pipe"] });
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  try {
+    const ready = await new Promise<string>((resolve, reject) => { child.stdout!.once("data", data => resolve(String(data))); child.once("error", reject); child.once("exit", () => reject(Error("target exited before ready"))); });
+    expect(ready.trim()).toBe(`ready:${child.pid}`);
+    const session = createLegacyUpdateSession({ home: fixture.env.OPENCODEX_HOME! });
+    expect(session.start()).toEqual({ ok: false, error: "sync-in-progress" });
+    child.stdin!.end("done\n");
+    expect(await exited).toBe(0);
+  } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
+}, 15000);
+posixTest("a killed launcher leaves the live Desktop delegate fenced past the stale interval", async () => {
+  const fixture = packageFixture(), home = fixture.env.OPENCODEX_HOME!;
+  const stop = join(fixture.home, "stop-delegate");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ready\nwhile [ ! -f '${stop}' ]; do sleep 0.1; done\n`); chmodSync(fixture.target, 0o700);
+  const launcherChild = spawn("node", [launcher, "sync"], { env: { ...fixture.env, OCX_TEST_HOME_GUARD: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "pipe"] });
+  let delegate = 0;
+  try {
+    await new Promise<void>((resolve, reject) => { launcherChild.stdout!.once("data", () => resolve()); launcherChild.once("error", reject); launcherChild.once("exit", () => reject(Error("launcher exited early"))); });
+    const lockPath = join(home, "sync-update.mutation.lock");
+    const deadline = Date.now() + 3000;
+    while (!delegate && Date.now() < deadline) {
+      const entries = readdirSync(lockPath);
+      if (entries.length === 1) delegate = JSON.parse(readFileSync(join(lockPath, entries[0]!), "utf8")).delegatePid ?? 0;
+      if (!delegate) await Bun.sleep(10);
+    }
+    expect(delegate).toBeGreaterThan(0);
+    const exited = new Promise<void>(resolve => launcherChild.once("exit", () => resolve()));
+    launcherChild.kill("SIGKILL"); await exited;
+    const futureTime = Date.now() + 31_000, future = () => futureTime;
+    expect(tryAcquireUpdateSyncMutex(home, "update", { now: future })).toEqual({ kind: "busy", holder: "sync" });
+    const realNow = Date.now;
+    try {
+      Date.now = future;
+      expect(createLegacyUpdateSession({ home }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+      const channel = createOrchestratedResultChannel();
+      try {
+        expect(createOrchestratedChildSession({ home, resultPath: channel.resultPath, resultCapability: channel.capability,
+          expect: { home, cliRoot: home, servingRoot: null, runtimePid: null, planToken: "a".repeat(43) }, verifyIdentity: () => true }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+      } finally { channel.dispose(); }
+    } finally { Date.now = realNow; }
+    writeFileSync(stop, "stop");
+    const end = Date.now() + 3000;
+    let lease = tryAcquireUpdateSyncMutex(home, "update", { now: future });
+    while (lease.kind !== "acquired" && Date.now() < end) { await Bun.sleep(10); lease = tryAcquireUpdateSyncMutex(home, "update", { now: future }); }
+    expect(lease.kind).toBe("acquired");
+    if (lease.kind === "acquired") { delegate = 0; lease.release(); }
+  } finally {
+    if (launcherChild.exitCode === null && launcherChild.signalCode === null) launcherChild.kill("SIGKILL");
+    if (delegate) { try { process.kill(delegate, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+  }
+}, 15000);
+posixTest("sync launcher releases its mutex after forwarding a signal and waiting for Desktop", async () => {
+  const fixture = packageFixture();
+  writeFileSync(fixture.target, "#!/bin/sh\ntrap 'exit 29' TERM\necho ready\nwhile :; do sleep 1; done\n"); chmodSync(fixture.target, 0o700);
+  const child = spawn("node", [launcher, "sync"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("exit", resolve);
+      child.stdout!.once("data", () => child.kill("SIGTERM"));
+    });
+    expect(code).toBe(29);
+    const lease = tryAcquireUpdateSyncMutex(fixture.env.OPENCODEX_HOME!, "update");
+    expect(lease.kind).toBe("acquired");
+    if (lease.kind === "acquired") lease.release();
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }
+}, 15000);
 posixTest("real Node launcher regenerates proof, forwards argv/stdin, mirrors exit and bypasses Bun lookup", () => {
   const fixture = packageFixture();
   writeFileSync(fixture.target, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), context: JSON.parse(process.env.OCX_NODE_LAUNCH_CONTEXT), stdin: fs.readFileSync(0, 'utf8'), bypass: process.env.OCX_NO_DESKTOP_HANDOFF }));\nprocess.exit(23);\n`);
@@ -297,7 +406,7 @@ test("launcher source anchors preserve exceptions before handoff and handoff bef
   const source = readFileSync(launcher, "utf8");
   const hook = source.indexOf("const desktopPlan =");
   expect(hook).toBeGreaterThan(source.indexOf("const codexCliUpdateInspection ="));
-  expect(hook).toBeLessThan(source.indexOf('if (process.argv[2] === "update" && installMethod === "mise")'));
+  expect(hook).toBeLessThan(source.indexOf('process.argv[2] === "update" && installMethod === "mise"'));
   expect(hook).toBeLessThan(source.indexOf("const probe = bootRestoreProbe("));
   expect(hook).toBeLessThan(source.indexOf("const bunRuntime = resolveBun("));
   expect(source).toContain("const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();");

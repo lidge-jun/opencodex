@@ -84,8 +84,10 @@ function noteBoundedDiagnostic(
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
   if (status === undefined || status >= 500) {
-    const { upstreamErrorCode: code, upstreamRequestId: requestId } = upstreamDiagnosticLogFields(logCtx);
-    console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${code ? ` code=${code}` : ""}${requestId ? ` request_id=${requestId}` : ""}`);
+    // Service logs persist too: print only closed-vocabulary values, never an upstream id or code.
+    const { upstreamErrorCode: rawCode, upstreamErrorType: type } = upstreamDiagnosticLogFields(logCtx);
+    const code = rawCode !== undefined && KNOWN_BARE_ERROR_CODES.has(rawCode) ? rawCode : undefined;
+    console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${type ? ` type=${type}` : ""}${code ? ` code=${code}` : ""}`);
   }
 }
 
