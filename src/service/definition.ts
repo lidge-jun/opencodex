@@ -52,8 +52,12 @@ export function resolveServiceListenPort(override?: number): number {
   return 10100;
 }
 
-export function buildServiceShellCommand(bun: string, cli: string | null, port = resolveServiceListenPort()): string {
-  const tokenFile = serviceApiTokenFilePath();
+export function buildServiceShellCommand(
+  bun: string,
+  cli: string | null,
+  port = resolveServiceListenPort(),
+  tokenFile = serviceApiTokenFilePath(),
+): string {
   const args = cli ? `${shellQuote(cli)} start` : "start";
   return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${args} --port ${port}`;
 }
@@ -64,8 +68,11 @@ export function buildServiceShellCommand(bun: string, cli: string | null, port =
  * in form: the service still reads the token from disk at start and never carries it in
  * the unit.
  */
-export function buildServiceLauncherShellCommand(launcher: string, port = resolveServiceListenPort()): string {
-  const tokenFile = serviceApiTokenFilePath();
+export function buildServiceLauncherShellCommand(
+  launcher: string,
+  port = resolveServiceListenPort(),
+  tokenFile = serviceApiTokenFilePath(),
+): string {
   return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(launcher)} start --port ${port}`;
 }
 

@@ -8,7 +8,7 @@ import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
-import { serviceApiTokenFilePath } from "../lib/service-secrets";
+import { serviceApiTokenFilePath, serviceApiTokenFilePathIn } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
 import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments } from "./definition";
@@ -147,6 +147,17 @@ function installedLaunchdPinnedHomes(readPlist: () => string): LaunchdPinnedHome
 }
 
 /**
+ * The homes the installed job runs with: the plist on disk, then the recorded install state,
+ * and the current shell only when neither records them. Every comparison against a job that
+ * is already loaded starts here, so a shell exporting other homes cannot make it read stale.
+ */
+function installedLaunchdHomes(state: ServiceInstallState | null, readPlist: () => string): LaunchdPinnedHomes {
+  return installedLaunchdPinnedHomes(readPlist)
+    ?? (state?.codexHome && state.opencodexHome ? { codexHome: state.codexHome, opencodexHome: state.opencodexHome } : null)
+    ?? currentLaunchdPinnedHomes();
+}
+
+/**
  * The complete exec line {@link buildPlist} bakes, for the runtime a single install already
  * resolved. Shared so `installLaunchd` can verify the live job against the exact string it
  * just wrote instead of re-deriving it from install state that has not been written yet
@@ -165,7 +176,9 @@ function launchdServiceCommand(
   homes: LaunchdPinnedHomes = currentLaunchdPinnedHomes(),
 ): string {
   const { bun, cli } = cliEntry(runtime);
-  return `${pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome)} ${buildServiceShellCommand(bun, cli, port)}`;
+  // The token file lives under the pinned OpenCodex home, so it follows the homes too.
+  const tokenFile = serviceApiTokenFilePathIn(homes.opencodexHome);
+  return `${pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome)} ${buildServiceShellCommand(bun, cli, port, tokenFile)}`;
 }
 
 /**
@@ -191,14 +204,12 @@ export function expectedLaunchdCommand(
   } = {},
 ): string {
   const state = deps.state === undefined ? readServiceInstallState() : deps.state;
-  const homes = deps.homes
-    ?? installedLaunchdPinnedHomes(deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")))
-    ?? (state?.codexHome && state.opencodexHome ? { codexHome: state.codexHome, opencodexHome: state.opencodexHome } : null)
-    ?? currentLaunchdPinnedHomes();
+  const homes = deps.homes ?? installedLaunchdHomes(state, deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")));
   const pinned = pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome);
-  if (state?.launcherPath) return `${pinned} ${buildServiceLauncherShellCommand(state.launcherPath, port)}`;
+  const tokenFile = serviceApiTokenFilePathIn(homes.opencodexHome);
+  if (state?.launcherPath) return `${pinned} ${buildServiceLauncherShellCommand(state.launcherPath, port, tokenFile)}`;
   const entry = deps.entry ?? cliEntry();
-  return `${pinned} ${buildServiceShellCommand(entry.bun, entry.cli, port)}`;
+  return `${pinned} ${buildServiceShellCommand(entry.bun, entry.cli, port, tokenFile)}`;
 }
 
 /**
@@ -771,13 +782,20 @@ export function installLaunchd(deps: {
 export function restartLaunchdJob(deps: {
   launchctl?: typeof runLaunchctl;
   probe?: typeof probeLaunchdLoadState;
-  /** The exec line the live job must carry; defaults to the one an install would bake. */
+  /**
+   * The exec line the live job must carry; defaults to the one an install would bake for the
+   * homes the installed plist pins, so a restart from a shell with other homes still matches.
+   */
   expectedCommand?: () => string;
+  readPlist?: () => string;
 } = {}): void {
   const run = deps.launchctl ?? runLaunchctl;
   const target = `${launchdGuiDomain()}/${LABEL}`;
   const expectedCommand = deps.expectedCommand
-    ?? (() => launchdServiceCommand());
+    ?? (() => launchdServiceCommand(undefined, undefined, installedLaunchdHomes(
+      readServiceInstallState(),
+      deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")),
+    )));
   const kicked = run(["kickstart", "-k", target]);
   const verdict = (deps.probe ?? probeLaunchdLoadState)({ expectedCommand });
   if (!kicked.ok || verdict.state === "not-loaded" || verdict.state === "loaded-stale") {

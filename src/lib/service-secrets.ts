@@ -16,8 +16,13 @@ export type ServiceApiTokenState =
   | { kind: "present"; token: string; fingerprint: string }
   | { kind: "unsafe"; reason: string };
 
+/** The service token file under one OpenCodex home, for a definition that pins that home. */
+export function serviceApiTokenFilePathIn(opencodexHome: string): string {
+  return join(opencodexHome, "service-api-token");
+}
+
 export function serviceApiTokenFilePath(): string {
-  return join(getConfigDir(), "service-api-token");
+  return serviceApiTokenFilePathIn(getConfigDir());
 }
 
 export function serviceApiTokenBackupPath(): string {

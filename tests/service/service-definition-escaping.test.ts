@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as serviceState from "../../src/service/state";
-import { buildPlist, buildUnit, buildWindowsServiceScript, expectedLaunchdCommand, installLaunchd, probeLaunchdLoadState, resolvedProxyEnv, runLaunchctl } from "../../src/service";
+import { buildPlist, buildUnit, buildWindowsServiceScript, expectedLaunchdCommand, installLaunchd, probeLaunchdLoadState, restartLaunchdJob, resolvedProxyEnv, runLaunchctl } from "../../src/service";
 import { buildServiceShellCommand, resolveServiceListenPort } from "../../src/service/definition";
 import { parseSystemdUnitHomes } from "../../src/service/systemd-env";
 
@@ -110,10 +110,10 @@ describe("systemd unit escaping", () => {
 describe("launchd live-job comparison", () => {
   const homes = { codexHome: "/pinned/codex", opencodexHome: "/pinned/opencodex" };
 
-  test("the expected command carries the pinned home assignments", () => {
+  test("the expected command carries the pinned home assignments and that home's token file", () => {
     const command = expectedLaunchdCommand(14001, { state: null, entry: { bun: "/b/bun", cli: "/c/cli.ts" }, homes });
     expect(command).toBe("CODEX_HOME='/pinned/codex' OPENCODEX_HOME='/pinned/opencodex' " + PIN_END + " "
-      + buildServiceShellCommand("/b/bun", "/c/cli.ts", 14001));
+      + buildServiceShellCommand("/b/bun", "/c/cli.ts", 14001, "/pinned/opencodex/service-api-token"));
   });
 
   test("an upgraded plist with a live job from the older plist is reloaded, not a no-op", () => {
@@ -204,18 +204,36 @@ describe("launchd plist string encoding", () => {
 });
 
 describe("launchd status from a shell with other homes", () => {
+  /**
+   * Run with both homes really exported, as a shell would: OPENCODEX_HOME also moves the
+   * service token file, which the home resolvers alone do not.
+   */
+  function withShellHomes<T>(codexHome: string, opencodexHome: string, body: () => T): T {
+    const previous = { codex: process.env.CODEX_HOME, opencodex: process.env.OPENCODEX_HOME };
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    try {
+      return withHomes(codexHome, opencodexHome, body);
+    } finally {
+      if (previous.codex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous.codex;
+      process.env.OPENCODEX_HOME = previous.opencodex;
+    }
+  }
+
   test("a job matching the installed plist reads as current, not stale", () => {
     const installedCodex = "/installed/codex & home";
     const installedOpencodex = "/installed/opencodex";
-    const plist = withHomes(installedCodex, installedOpencodex, () => buildPlist([]));
+    const plist = withShellHomes(installedCodex, installedOpencodex, () => buildPlist([]));
     const liveCommand = parsePlistStrings(plist).args[2]!;
+    expect(liveCommand).toContain("'/installed/opencodex/service-api-token'");
     const launchdPath = serviceState.plistPath();
     const original = fs.readFileSync;
     const read = spyOn(fs, "readFileSync").mockImplementation(((path: any, ...args: any[]) =>
       path === launchdPath ? plist : original(path, ...args)) as typeof fs.readFileSync);
     try {
       // The status shell exports different homes; only the plist on disk describes the job.
-      const verdict = withHomes("/status-shell/codex", "/status-shell/opencodex", () => probeLaunchdLoadState({
+      const verdict = withShellHomes("/status-shell/codex", "/status-shell/opencodex", () => probeLaunchdLoadState({
         uid: 501,
         launchctl: () => ({ ok: true, stdout: "arguments = {\n  /bin/sh\n  -lc\n  " + liveCommand + "\n}", stderr: "", status: 0 }),
       }));
@@ -223,6 +241,28 @@ describe("launchd status from a shell with other homes", () => {
     } finally {
       read.mockRestore();
     }
+  });
+
+  test("a restart from such a shell compares the job against the installed homes", () => {
+    const plist = withShellHomes("/installed/codex", "/installed/opencodex", () => buildPlist([]));
+    const liveCommand = parsePlistStrings(plist).args[2]!;
+    const launchctl = ((args: string[]) => args[0] === "print"
+      ? { ok: true, stdout: "arguments = {\n  /bin/sh\n  -lc\n  " + liveCommand + "\n}", stderr: "", status: 0 }
+      : { ok: true, stdout: "", stderr: "", status: 0 }) as typeof runLaunchctl;
+    const expected: string[] = [];
+    const probe = ((opts: Parameters<typeof probeLaunchdLoadState>[0]) => {
+      expected.push(opts!.expectedCommand!());
+      return probeLaunchdLoadState({ ...opts, uid: 501, launchctl });
+    }) as typeof probeLaunchdLoadState;
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      withShellHomes("/restart-shell/codex", "/restart-shell/opencodex", () => {
+        expect(() => restartLaunchdJob({ launchctl, probe, readPlist: () => plist })).not.toThrow();
+      });
+    } finally {
+      log.mockRestore();
+    }
+    expect(expected[0]).toBe(liveCommand);
   });
 
   test("recorded install state supplies the homes when the plist carries none", () => {
