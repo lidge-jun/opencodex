@@ -223,7 +223,7 @@ describe("everything else keeps today's settle", () => {
     ["first", [] as unknown[]],
     ["after the held preamble", [CREATED]],
   ])("a refusal whose metadata cannot be projected is delivered in the body when it arrives %s", async (_name, before) => {
-    const oversized = { ...OVERLOADED, headers: { "x-request-id": "a".repeat(5_000) } };
+    const oversized = { ...OVERLOADED, headers: { "x-codex-turn-state": "a".repeat(5_000) } };
     expect(await committed(await exchange(opened(...before, oversized)))).toContain("server_is_overloaded");
   });
 

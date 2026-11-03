@@ -28,6 +28,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+無人監督的 Link Child 處理結束訊號時，會在每次寫入前核對連線，並在關閉接聽器前還原 Codex 原生設定及受管理的 Grok。服務/Desktop、sibling、重新啟動交接和父程序 stop 收據會保留設定。結束中的重新啟動要求回傳 `409 runtime_stopping`。強制終止可能略過訊號處理，仍需父程序 `ocx stop` 的還原路徑。
+
 停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
 對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
@@ -148,7 +150,11 @@ ocx status --json
 
 ## 目錄同步
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+在 Remote Link Home 上成功提交最新目錄後，`ocx sync` 也會向符合條件的已連結 Child 同步。`--local-only` 可停用這個傳播。`--json` 會輸出單一 `ocx.sync.fanout/1` 文件，包含 Home 的結果與各 Child 的狀態；遭略過的 Child 也會顯示原因。Home 自身的非零結束碼會原樣回傳。Home 成功時，若 Child 失敗、逾時或連結儲存區無法讀取，指令以結束碼 6 結束；其他情況均以 0 結束，包括 Child 遭略過時。文字模式下，連結儲存區無法讀取的錯誤不包含路徑。結束碼 7 保留給進行中的更新。JSON 模式下若 Home 同步擲出例外，stdout 仍只包含一份結果文件，stderr 則輸出經安全轉義的診斷訊息。
+
+傳播不會要求重新啟動 Child 上的 Codex 應用程式或 app-server。若需要重新啟動，請使用 GOAT 或在該 Child 執行 `ocx sync --restart-codex`。不過，Child 的固定目標同步在套用變更後的 Home 設定時，仍可能重新啟動它自己的 OpenCodex 用戶端執行階段。Home 逾時並停止本機 SSH 程序後，已開始的遠端同步仍可能在 Child 上繼續。
 
 > **Remote Link Child：** `ocx sync` 也會套用 Home 的 Codex 設定；如果用戶端執行階段在該次套用之前啟動，即使沒有重新啟動旗標也會重新啟動執行階段。重新啟動失敗時，原有執行階段會繼續提供服務，指令以非零狀態結束。`ocx status --json` 與 `ocx link status --json` 的相關欄位請見 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
 

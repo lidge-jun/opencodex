@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { classifyError, httpStatusFromTerminalError, SEND_BUDGET_EXHAUSTED_CODE } from "../../src/lib/errors";
 import { adapterFailureFromEvent } from "../../src/bridge/internal";
-import { SendBudgetExhaustedError, UpstreamRetryEvidenceError } from "../../src/lib/upstream-retry";
+import { SendBudgetExhaustedError, providerErrorDestinationLabel, UpstreamRetryEvidenceError } from "../../src/lib/upstream-retry";
 
 /**
  * A refusal this proxy made must not be reported as a provider failure (#4708).
@@ -57,7 +57,7 @@ describe("a spent send budget is reported as this proxy's refusal", () => {
   });
 
   test("the error class and the classifier name the same identity", () => {
-    expect(new SendBudgetExhaustedError("host").code).toBe(SEND_BUDGET_EXHAUSTED_CODE);
+    expect(new SendBudgetExhaustedError(providerErrorDestinationLabel("host")).code).toBe(SEND_BUDGET_EXHAUSTED_CODE);
   });
 
   test("a committed stream carries the refusal as a structured terminal", () => {

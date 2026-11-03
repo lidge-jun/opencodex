@@ -65,6 +65,18 @@ export interface ProtocolTraceAttempt {
 const requestMarks = new WeakMap<object, EntryMark | BlockedMark>();
 const attemptMarks = new WeakMap<object, AttemptMark>();
 const shadowInputs = new WeakMap<object, ProtocolPlanInput>();
+const suppressedContexts = new WeakSet<object>();
+
+/** Suppress diagnostics for an internal protocol bridge while preserving request behavior. */
+export function suppressProtocolTrace(logCtx: object): void {
+  suppressedContexts.add(logCtx);
+  requestMarks.delete(logCtx);
+  shadowInputs.delete(logCtx);
+}
+
+export function protocolTraceSuppressed(logCtx: object): boolean {
+  return suppressedContexts.has(logCtx);
+}
 
 function boundedReasons(codes: Iterable<ProtocolReasonCode>): ProtocolReasonCode[] {
   const out: ProtocolReasonCode[] = [];
@@ -95,6 +107,7 @@ export function markProtocolEntry(
   logCtx: object,
   mark: { inbound: Protocol; lane: ProtocolLane; reasonCodes?: Iterable<ProtocolReasonCode>; features?: ProtocolFeatureSource },
 ): void {
+  if (protocolTraceSuppressed(logCtx)) return;
   try {
     requestMarks.set(logCtx, {
       kind: "entry",
@@ -110,6 +123,7 @@ export function markProtocolEntry(
 
 /** Features the request's entry or blocked mark recorded, for the shadow plan input. */
 export function protocolMarkFeatures(logCtx: object): readonly ProtocolFeature[] | undefined {
+  if (protocolTraceSuppressed(logCtx)) return undefined;
   try {
     const mark = requestMarks.get(logCtx);
     return mark ? [...mark.features] : undefined;
@@ -123,6 +137,7 @@ export function protocolMarkFeatures(logCtx: object): readonly ProtocolFeature[]
  * fixed vocabulary and the provider and model names the server already exposes, nothing else.
  */
 export function markProtocolShadowPlanInput(logCtx: object, input: ProtocolPlanInput): void {
+  if (protocolTraceSuppressed(logCtx)) return;
   try {
     shadowInputs.set(logCtx, input);
   } catch {
@@ -135,6 +150,7 @@ export function markProtocolBlocked(
   logCtx: object,
   mark: { inbound: Protocol; reasonCodes: Iterable<ProtocolReasonCode>; features?: ProtocolFeatureSource },
 ): void {
+  if (protocolTraceSuppressed(logCtx)) return;
   try {
     requestMarks.set(logCtx, {
       kind: "blocked",
@@ -152,6 +168,7 @@ export function markProtocolBlocked(
  * No-op without an entry mark, and a blocked mark is never reopened.
  */
 export function addProtocolEntryReason(logCtx: object, code: ProtocolReasonCode): void {
+  if (protocolTraceSuppressed(logCtx)) return;
   try {
     const mark = requestMarks.get(logCtx);
     if (mark?.kind !== "entry") return;
@@ -246,6 +263,7 @@ export function protocolTraceForRequest(
   logCtx: ProtocolTraceContext,
   attempts: readonly ProtocolTraceAttempt[] | undefined,
 ): ProtocolTraceV1 | undefined {
+  if (protocolTraceSuppressed(logCtx)) return undefined;
   const trace = observedTrace(logCtx, attempts);
   return trace ? withShadowPlan(logCtx, trace) : undefined;
 }
