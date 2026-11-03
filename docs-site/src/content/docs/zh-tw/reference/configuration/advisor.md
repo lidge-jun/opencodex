@@ -60,6 +60,10 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 所設定的顧問 provider 可能與 Worker 的 provider 不同。
 
+諮詢同時遵守呼叫者擷取的 API key 模型範圍、付費 combo 同意與裝置 fallback 限制，以及 Advisor 自身准入金鑰的主機限制：設定時為 `OPENCODEX_API_AUTH_TOKEN` 或本代理接受的服務 token 檔案，否則為第一個設定的 API key。只有在最後這種情況下金鑰順序才有影響：請把能存取 Advisor 模型的金鑰放在第一位，否則每次諮詢都無法使用。設定了環境或服務 token 時，由該 token 決定諮詢。這些規則同樣適用於 combo 選擇、巢狀決策模型與重試。無法滿足這些規則的諮詢會向 worker 回傳不可用通知。
+
+例如，`allowMeteredComboTargets: false` 的 `laptop` 金鑰無法透過 Advisor 在計費 combo 目標上花費，`fallback.devices.laptop.provider: false` 也會阻擋 Advisor 的 provider fallback 跳轉。沒有金鑰的 loopback 呼叫者仍需要 combo 的 `allowMeteredTargets: true` 選擇加入。當兩個金鑰都設定 `allowMeteredComboTargets: true` 且 combo 設定 `allowMeteredTargets: true` 時，即使經由公開綁定的 loopback 監聽器，Advisor 也能使用計費目標。伺服器在驗證請求時擷取呼叫者政策，早於等待本文容量或讀取本文；之後的金鑰或 fallback 編輯無法擴大該次諮詢。這也涵蓋路由的視覺輔助、compact 請求及其決策模型，以及 WebSocket 回合內的每次候選重試。每個新的 WebSocket 回合會擷取自己的政策。
+
 OpenCodex 不會把 provider API key、Authorization 標頭、OAuth token、僅後端使用的設定密鑰、行程環境或隱藏的思維鏈寫進該提示，也不會解密或轉送加密的 provider 私有推理。**任務內容不做通用脫敏。** 貼進任務的金鑰、工具讀到的檔案裡的秘密、工具或日誌印出的 token 都可能被傳送。OpenCodex 不執行通用 DLP。
 
 ## 權威

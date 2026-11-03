@@ -5,6 +5,7 @@ import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
 import type { DataPlaneAdmission } from "../server/auth-cors";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import {
   customRowInputModalities,
   isModelVisionSidecarConsumer as isModelTextOnly,
@@ -192,6 +193,7 @@ export interface VisionPlan {
   routedModel?: string;
   /** Loopback dispatch inputs for the routed backend (the listener decides WHICH local port). */
   routedConfig?: Pick<OcxConfig, "port" | "hostname" | "apiKeys" | "unauthenticatedLoopbackListener">;
+  advisorAdmissionPolicy?: CapturedAdmissionPolicy;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
 }
@@ -214,6 +216,7 @@ export function planVisionSidecar(
     admission?: Pick<DataPlaneAdmission, "source">;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     providerName?: string;
+    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
   } = {},
 ): VisionPlan | undefined {
   if (!requiresVisionPreprocessing(config, provider, modelId, options.providerName)) return undefined;
@@ -231,6 +234,7 @@ export function planVisionSidecar(
     return {
       backend: "routed",
       routedModel,
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy,
       routedConfig: {
         port: config.port,
         ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),

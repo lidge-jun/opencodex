@@ -254,6 +254,7 @@ export function requestLogDto(
 ): Record<string, unknown> {
   return {
     ...entry,
+    ...(entry.attemptNormalizationDropped === true ? { attemptNormalizationDropped: true } : {}),
     ...resendVerdict(entry),
     displayMetrics: {
       tokPerSecond: tokPerSecondResult(entry),

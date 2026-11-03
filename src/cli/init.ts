@@ -257,9 +257,9 @@ export async function runInit(): Promise<void> {
     prompt.throwIfCancelled();
     if (shimAnswer.trim().toLowerCase() !== "n") {
       try {
-        const { installCodexShim } = await import("../codex/shim");
+        const { installCodexShimAsync } = await import("../codex/shim");
         prompt.throwIfCancelled();
-        const result = installCodexShim();
+        const result = await installCodexShimAsync();
         console.log(result.installed ? `✅ ${result.message}` : `⚠️  ${result.message}`);
       } catch (err) {
         if (err instanceof InitCancelledError) throw err;

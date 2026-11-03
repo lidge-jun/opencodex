@@ -97,8 +97,8 @@ OrcaRouter key exchange uses the shared raw-byte reader before returning a durab
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
-Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
-only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
+Anthropic model-scoped quota labels in `src/providers/claude-cli-usage.ts` publish only canonical Fable, Opus, or Sonnet labels; unknown upstream display names are omitted.
+Display and advisory quota share [active usage-window selection](providers/anthropic-account-pool.md#pool-bound-quota-and-reset-grants), including authoritative `limits` precedence and inactive-window suppression.
 Anthropic usage flights replace older joinable transports when recovery requires a fresh read. `src/providers/quota/anthropic-cooldown-recovery.ts` fences successful, empty, and rejected results by credential and cooldown generation before cache publication. Live account quota entries retain that currentness predicate; routing and account-list readers reject a superseded entry before its TTL expires. Header-only family observations carry a private credential-generation fence and their own thirty-minute clock. Active non-enumerating probes retain absent families; authoritative limits enumeration retires them. Persisted observations carry no live probe predicate of their own.
 Per-account quota flights also retain their starting cooldown generation through token resolution. A stale token failure returns unavailable to its caller without replacing the cache row or its timestamp; a joined flight rechecks ownership before returning.
 Antigravity's [producer-bound JEV family evidence](providers/jev-decision.md#loaded-advisory-quota) stays separate from display quota and hard routing eligibility.
@@ -258,7 +258,7 @@ existing path prefix is preserved. Canonical presets may select a
 trusted URL/path/query, response envelope key, model identifier field, and declarative eligibility
 filter without persisting that policy into user config. A response is rejected before caching when
 it exceeds 4 MiB, contains more than 2,000 raw rows, has a malformed declared list envelope, or
-includes an invalid model id. Tests use fixtures and
+includes an invalid model id. For generic OpenAI-style `/models` envelopes, invalid row diagnostics identify its index and reason without row contents (provider-specific parsers such as WorkBuddy keep their plain rejection); catalog warnings and connection tests explain that a new API-key provider's initial selection can stay pending (login connections have none) and the static `models` / `liveModels: false` workaround. Tests use fixtures and
 must never depend on live provider endpoints. Newly promoted fixed key presets opt into
 `preserveCustomDestination`, so an older same-named custom provider keeps its configured adapter,
 destination, and key boundary instead of being silently canonicalized onto the new host. Fixed
@@ -555,7 +555,7 @@ uses `src/adapters/openai-responses/muse-tool-choice.ts` to normalize `tool_choi
 `additional_tools` items from `input`, and omits `tool_choice` and `parallel_tool_calls` from the
 outgoing body. Forced, named, and `allowed_tools` selections fail with HTTP 400 before the
 upstream send because Muse supports only `auto`. Filtering a required tool never changes the caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
-destination. The input body, historical tool calls and results, and non-Meta requests keep their existing meaning.
+destination. Combo eligibility excludes it before sending for known mandatory selectors, including direct hosted types and MCP selectors with a nonempty server label; malformed and unknown selectors retain the adapter error path. The input body, historical tool calls and results, and non-Meta requests keep their existing meaning.
 
 ## Shared type declarations
 

@@ -25,7 +25,7 @@ export const REQUEST_HISTORY_MAX_RECORD_BYTES = 1024 * 1024;
 
 // One small observation per live database handle, never retained ledger bytes. An
 // unterminated tail cannot advance indexedOffset, but need not be reread until its
-// exact file revision changes. The indexer's schema/identity/quick_check gates still run.
+// exact file revision changes. Schema/identity gates and lifecycle integrity checks still apply.
 const tailObservations = new WeakMap<Database, {
   path: string;
   revision: string;

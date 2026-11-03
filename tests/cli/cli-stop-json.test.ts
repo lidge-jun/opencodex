@@ -464,6 +464,20 @@ describe("approval-bound stop", () => {
       () => null, BOUND_STOP_MANAGER, stop);
     expect(untracked.summary.detail).toBe("the tracked runtime record could not be verified");
 
+    // The same umbrella refusal now names which tracked-record check failed, so a
+    // stale or missing record reads differently from an unreadable or foreign process.
+    const absentRecord = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
+      () => ({ untracked: "the recorded PID file is absent" }), BOUND_STOP_MANAGER, stop);
+    expect(absentRecord.summary).toMatchObject({ outcome: "approval-changed", exitCode: 1,
+      detail: "the tracked runtime record could not be verified (the recorded PID file is absent)" });
+    expect(absentRecord.summary.message).toContain("the recorded PID file is absent");
+
+    const foreignPid = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
+      () => ({ untracked: "the recorded process does not match the expected start command" }),
+      BOUND_STOP_MANAGER, stop);
+    expect(foreignPid.summary.detail)
+      .toBe("the tracked runtime record could not be verified (the recorded process does not match the expected start command)");
+
     const managerGone = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
       TRACKED_STOP_TARGET, () => ({ kind: "unknown" as const, reason: "CIM read failed" }), stop);
     expect(managerGone.summary.detail).toBe("the service manager could not be re-verified (CIM read failed)");

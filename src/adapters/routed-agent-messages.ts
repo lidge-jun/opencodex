@@ -1,3 +1,5 @@
+import { hasItemProvenance, isHistoricalItem, REPLAY_HISTORICAL_ITEM } from "../responses/item-provenance";
+
 /**
  * `agent_message` is Codex's private multi-agent input item: it exists only in the ChatGPT
  * Codex backend's schema. Codex replays every sub-agent reply in the history it sends, so
@@ -36,6 +38,7 @@ export function normalizeRoutedAgentMessages(
     changed = true;
     return {
       type: "message", role: "user",
+      ...(hasItemProvenance(message) ? { [REPLAY_HISTORICAL_ITEM]: isHistoricalItem(message) } : {}),
       content: [
         ...(Object.keys(identities).length ? [{ type: "input_text", text: `Agent message ${JSON.stringify(identities)}` }] : []),
         ...content,

@@ -40,6 +40,121 @@ function assertParents(path: string): void {
     if (p === parse(p).root) break;
   }
 }
+/** Watch classification for one parent directory, per basenames seen there. */
+export type WatchEntry = {
+  /**
+   * Basenames that are coverage targets themselves: a file whose bytes are scanned or a
+   * directory whose whole listing is checked. Every event on these is coverage-relevant
+   * -- an in-place content change reconciles exactly like a rename, even when the scan
+   * vector ends up identical, because the advance is what proves the observation ran.
+   */
+  names: Set<string>;
+  /**
+   * Basenames watched only as ancestors of a deeper target, paired with the identity
+   * recorded at install. A "rename" always reconciles: a replacement is the signal these
+   * entries exist to catch. A "change" reconciles too unless the entry re-identifies as
+   * the same real directory -- on Windows a directory entry reports "change" whenever a
+   * child is added or removed, so this observer's own local-credentials.json save would
+   * otherwise re-arm the same reconcile forever. null means the ancestor could not be
+   * identified at install, and an unverifiable ancestor reconciles on any event.
+   */
+  ancestors: Map<string, { dev: bigint; ino: bigint } | null>;
+  /**
+   * Identity of each target name at install (watchEntryIdentity). An unmatched 8.3 short
+   * name is resolved against these: it reconciles when a target here changed or when the
+   * alias is a target. Absent means the entry is treated as unresolvable and reconciles.
+   */
+  targetIdentities?: Map<string, string>;
+};
+const CREDENTIAL_TMP_NAME = /^(auth|config|codex-accounts)\.json\.ocx\./i;
+/**
+ * Watcher names are compared the way a case-insensitive volume resolves them. Windows and
+ * default macOS volumes report a notification under the spelling the writer used, so a
+ * credential created as AUTH.JSON reaches the watcher under that name while the scan reads
+ * it as auth.json. Folding can only add reconciles on a case-sensitive volume, never drop one.
+ */
+function foldWatchName(name: string): string {
+  return name.toLowerCase().replace(/[. ]+$/, "");
+}
+/**
+ * An 8.3 short name (AUTH~1.JSO, OPENC~1) cannot be mapped back to its long name by
+ * spelling; it is resolved by identity instead (see shortNameAction).
+ */
+const SHORT_NAME_ALIAS = /~\d/;
+/** "<dev>:<ino>", "absent", or "unreadable" for one entry of a watched parent. */
+export function watchEntryIdentity(parent: string, child: string): string {
+  try {
+    const stat = lstatSync(join(parent, child), { bigint: true });
+    return `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+}
+/**
+ * Windows may report either name of an entry that has both, and a removed entry's short
+ * name can no longer be looked up. Such an event is coverage-relevant when a target or
+ * ancestor in this parent no longer has its install identity, or when the alias resolves to
+ * a target; a change that resolves to a tracked ancestor is that ancestor's tick. Anything
+ * else -- this observer's own metadata save under a short spelling -- changed no target.
+ */
+function shortNameAction(parent: string, entry: WatchEntry, event: string, name: string): WatchEventAction {
+  const recorded = entry.targetIdentities;
+  if (!recorded) return "reconcile";
+  const resolved = watchEntryIdentity(parent, name);
+  if (resolved === "unreadable") return "reconcile";
+  for (const [target, identity] of recorded) {
+    const now = watchEntryIdentity(parent, target);
+    if (now === "unreadable" || now !== identity) return "reconcile";
+    if (resolved !== "absent" && resolved === now) return "reconcile";
+  }
+  let aliasOfAncestor = false;
+  for (const [ancestorName, identity] of entry.ancestors) {
+    const now = ancestorIdentity(parent, ancestorName);
+    if (identity === null || now === null || now.dev !== identity.dev || now.ino !== identity.ino) return "reconcile";
+    if (resolved === `${identity.dev}:${identity.ino}`) aliasOfAncestor = true;
+  }
+  return aliasOfAncestor && event !== "change" ? "reconcile" : "ignore";
+}
+function foldedLookup<T>(keys: Iterable<T>, key: (item: T) => string, folded: string): T | undefined {
+  for (const item of keys) if (foldWatchName(key(item)) === folded) return item;
+  return undefined;
+}
+function ancestorIdentity(parent: string, child: string): { dev: bigint; ino: bigint } | null {
+  try {
+    const stat = lstatSync(join(parent, child), { bigint: true });
+    return stat.isDirectory() && !stat.isSymbolicLink() ? { dev: stat.dev, ino: stat.ino } : null;
+  } catch { return null; }
+}
+type WatchEventAction = "fail" | "reconcile" | "ignore";
+/**
+ * The single (parent, event, name) decision behind the observation watchers, exported so
+ * tests can pin every branch without timing-dependent filesystem notifications.
+ */
+export function credentialWatchEventAction(
+  parent: string, entry: WatchEntry, event: string, name: string | null,
+): WatchEventAction {
+  if (name === null) return "fail";
+  const folded = foldWatchName(name);
+  if (foldedLookup(entry.names, n => n, folded) !== undefined) return "reconcile";
+  const match = foldedLookup(entry.ancestors.entries(), ([n]) => n, folded);
+  // A known ancestor whose real name merely looks like write residue or a short name
+  // (C:\config.json.ocx.home, C:\ocx~1) goes through the identity check below.
+  if (match === undefined) {
+    if (CREDENTIAL_TMP_NAME.test(name)) return "reconcile";
+    return SHORT_NAME_ALIAS.test(name) ? shortNameAction(parent, entry, event, name) : "ignore";
+  }
+  const ancestor = match[1];
+  // Renames (create/delete/move, including a same-identity rename) are structural and
+  // always reconcile; only "change" may be child-list noise from a same-identity dir.
+  if (event !== "change" || ancestor === null) return "reconcile";
+  try {
+    const stat = lstatSync(join(parent, name), { bigint: true });
+    if (stat.isDirectory() && !stat.isSymbolicLink() && stat.dev === ancestor.dev && stat.ino === ancestor.ino) {
+      return "ignore";
+    }
+  } catch { /* an ancestor that cannot be re-identified cannot prove the tick is noise */ }
+  return "reconcile";
+}
 export function scanLocalCredentials(accounts: readonly string[] = []): { count: number; vector: string; targets: string[] } {
   const home = getConfigDir();
   const codex = getCodexHome();
@@ -166,6 +281,10 @@ export function scanLocalCredentials(accounts: readonly string[] = []): { count:
   const profiles = countLocalNativeProfileSlots(vault, homeId);
   if (profiles.active && !main) throw new Error("Active native profile has no readable auth");
   count += main + profiles.inactive;
+  // The whole listing is verified below, so the directory itself is a coverage target:
+  // an unknown create/delete must reach a watcher even when the child's own name is not.
+  targets.add(shared);
+  assertParents(shared);
   if (exists(shared)) {
     if (!lstatSync(shared).isDirectory() || lstatSync(shared).isSymbolicLink()) throw new Error("Unsafe native vault");
     const expected = new Set([`${homeId}.vault.json`, `${homeId}.stages.json`]);
@@ -223,23 +342,28 @@ export function startLocalCredentialObservation(): { stop(): void; reconcile(): 
     }
   };
   const install = (targets: string[]) => {
-    const watched = new Map<string, Set<string>>();
+    const watched = new Map<string, WatchEntry>();
     for (const target of targets) {
+      let leaf = true;
       for (let path = target; dirname(path) !== path; path = dirname(path)) {
         const parent = dirname(path);
         if (!exists(parent)) continue;
         assertParents(path);
-        const names = watched.get(parent) ?? new Set<string>();
-        names.add(path.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
-        watched.set(parent, names);
+        const entry = watched.get(parent) ?? { names: new Set<string>(), ancestors: new Map(), targetIdentities: new Map<string, string>() };
+        const child = path.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1));
+        if (leaf) { entry.names.add(child); entry.targetIdentities?.set(child, watchEntryIdentity(parent, child)); }
+        else if (!entry.ancestors.has(child)) entry.ancestors.set(child, ancestorIdentity(parent, child));
+        watched.set(parent, entry);
+        leaf = false;
       }
     }
     const next: FSWatcher[] = [];
     try {
-      for (const [parent, names] of watched) {
-        const watcher = watch(parent, { persistent: false }, (_event, name) => {
-          if (name === null) { fail(); return; }
-          if (names.has(String(name)) || /^(auth|config|codex-accounts)\.json\.ocx\./.test(String(name))) reconcile();
+      for (const [parent, entry] of watched) {
+        const watcher = watch(parent, { persistent: false }, (event, name) => {
+          const action = credentialWatchEventAction(parent, entry, event, name === null ? null : String(name));
+          if (action === "fail") fail();
+          else if (action === "reconcile") reconcile();
         });
         watcher.on("error", fail);
         next.push(watcher);

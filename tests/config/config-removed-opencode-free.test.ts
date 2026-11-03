@@ -440,6 +440,7 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
   const home = createTempHome("ocx-recovery-overlap-");
   const ready = home.path("publisher-ready");
   const release = home.path("publisher-release");
+  const exhausted = home.path("recheck-budget-spent");
   const backup = `${getConfigPath()}.pre-opencode-free-removal.bak`;
   const module = pathToFileURL(repoPath("src/config.ts")).href;
   const bytes = Buffer.from(JSON.stringify({ ...getDefaultConfig(), providers: { "opencode-free": {} } }));
@@ -452,10 +453,19 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
         paused = true; real.writeFileSync(${JSON.stringify(ready)}, 'ready');
         const until = Date.now() + 20000;
         while (!real.existsSync(${JSON.stringify(release)})) {
-          if (Date.now() >= until) throw new Error('publisher release timed out');
+          // Exit, not throw: backupOriginal would catch a throw from linkSync and let the case pass.
+          if (Date.now() >= until) process.exit(2);
           Bun.sleepSync(5);
         }
-        Bun.sleepSync(${delay});
+        // The long case publishes only once the overlapping load has spent its whole recheck budget.
+        // A fixed sleep raced the rechecks on loaded runners (dev batch 40824593871, macOS).
+        if (${delay} === 500) {
+          const spent = Date.now() + 20000;
+          while (!real.existsSync(${JSON.stringify(exhausted)})) {
+            if (Date.now() >= spent) process.exit(3);
+            Bun.sleepSync(5);
+          }
+        } else Bun.sleepSync(${delay});
       }
     }})); const { loadConfig } = await import(${JSON.stringify(module)});
     if (loadConfig().providers['opencode-free']) throw new Error('retired provider retained');`;
@@ -475,7 +485,9 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
         sleep(ms);
       }; const { loadConfig } = await import(${JSON.stringify(module)});
       if (loadConfig().providers['opencode-free']) throw new Error('retired provider retained');
-      if (retries === 0 || (${delay} === 500 && retries !== 9)) throw new Error('overlap schedule missed');`;
+      if (retries === 0 || (${delay} === 500 && retries !== 9)) throw new Error('overlap schedule missed');
+      // Release the publisher only after every recheck observed the held original.
+      fs.writeFileSync(${JSON.stringify(exhausted)}, 'spent');`;
     second = Bun.spawn([process.execPath, "--eval", secondScript], { env: { ...process.env }, stdout: "ignore", stderr: "pipe" });
     expect(await second.exited).toBe(0);
     writeFileSync(release, "release");

@@ -20,6 +20,17 @@ and `tests/responses/responses-combo-exhausted-error.test.ts`.
 
 ## Buffered required-tool contract
 
+Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
+for well-formed mandatory `tool_choice` selectors, including direct hosted/MCP choices and required allowed-tools lists. MCP's optional name may be null; an invalid name or server label still abstains. Normal and
+recovery picks share the check, resolving the inbound wire's static model policy and actual Responses
+transport URL; malformed and unknown selectors retain their ordinary error path. The next target
+receives the original selector, and an all-Meta exhaustion names the constraint before any send.
+The child parser accepts `tool_search`, `computer_use` and `image_gen` as recognized hosted choices.
+Its raw body preserves the selector; existing destination compatibility, including routed private
+tool-search lowering, still applies after parsing. Chat translation maps a direct `tool_search`
+choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none, including the resolved model's auto-only tool-choice policy; exhaustion reports the tool-choice constraint. Eligibility resolves synthetic Fast/effort selectors before model policy, matching child request preparation while preserving exact configured IDs.
+Registered OpenAI API virtual models resolve to their wire model before adapter and auto-only policy checks, using the same registry resolver as child normalization. Other providers and unregistered IDs remain literal. Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
+
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native
 `openai-responses` JSON children with explicit required or named function/custom choices.
@@ -128,9 +139,9 @@ accepted stream lifetime, cancellation, and exactly-once attached-lease release.
 Plain admission leases without controller binding do not register or unregister a ladder controller.
 Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
 also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
-Hop warnings in `src/server/responses/core-combo.ts` include only parsed upstream code/message,
-redacted before whitespace flattening and bounded to 200 characters; native Messages source warnings use only status, and unparsed bodies stay out.
-`tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
+Hop warnings in `src/server/responses/core-combo.ts` name the status and the closed condition from
+`classifyUpstreamCondition` ([proxy-owned error detail](../data-planes/error-detail.md)); upstream codes,
+messages and bodies stay out. `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
 
 A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.
 

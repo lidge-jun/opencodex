@@ -1,10 +1,19 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
 import { webSearchPairFromItem } from "../../src/claude/outbound";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import * as openAiSidecar from "../../src/providers/openai-sidecar";
+import * as mainAdmission from "../../src/codex/native-main-admission";
+import * as mainAccount from "../../src/codex/main-account";
+import { CodexAuthContextError, codexPoolAffinityKey } from "../../src/codex/auth-context";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { updateAccountQuota, clearAccountQuota } from "../../src/codex/quota";
+import { bindThreadAffinity, CODEX_THREAD_AFFINITY_IDLE_TTL_MS } from "../../src/codex/routing/thread-affinity";
+import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex/routing";
+import { getNativeMainProfileRequestCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -68,10 +77,11 @@ async function claudeTurn(
   frames: Record<string, unknown>[],
   target: "anth" | "gpt" = "anth",
   messages: unknown[] = [{ role: "user", content: "What did Bun release? https://bun.sh/blog" }],
-  { stream = true, direct = false }: { stream?: boolean; direct?: boolean } = {},
+  { stream = true, direct = false, native = false, searchBackend, searchTool = WEB_SEARCH, pool = false, directSearch = false, requestHeaders = {}, signal, onUpstream, lease }: { stream?: boolean; direct?: boolean; native?: boolean; searchBackend?: { backend: "exa"; exaApiKey: string }; searchTool?: typeof WEB_SEARCH & { allowed_domains?: string[] }; pool?: boolean; directSearch?: boolean; requestHeaders?: Record<string, string>; signal?: AbortSignal; onUpstream?: () => void; lease?: ReturnType<typeof tryAdmitTurn> } = {},
 ): Promise<{ wire: Record<string, unknown>; clientSse: string }> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
+    onUpstream?.();
     wires.push(String(init?.body));
     if (target === "gpt") {
       return new Response(`data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
@@ -81,12 +91,14 @@ async function claudeTurn(
   }) as typeof globalThis.fetch;
   const config = {
     port: 0, defaultProvider: "anth",
+    ...(pool ? { codexAccounts: [{ id: "fixture-a", email: "a@example.test", isMain: false }, { id: "fixture-b", email: "b@example.test", isMain: false }], activeCodexAccountId: "fixture-b" } : {}),
     claudeCode: { nativePassthrough: false },
-    webSearchSidecar: { enabled: false },
-    ...(direct ? { protocols: { rollout: { directEncoders: true } } } : {}),
+    ...(searchBackend ? { webSearchSidecar: searchBackend } : native ? {} : { webSearchSidecar: { enabled: false } }),
+    ...(direct || native ? { protocols: { rollout: { directEncoders: direct, managedMessagesNative: native } } } : {}),
     providers: {
       anth: { adapter: "anthropic", baseUrl, authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch },
       gpt: { adapter: "openai-chat", baseUrl: "https://gpt.invalid/v1", authMode: "key", apiKey: "sk-fixture", models: ["g"], fetch },
+      ...(pool ? { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: directSearch ? "direct" : "pool" } } : {}),
     },
     combos: { waterfall: { strategy: "failover", targets: target === "anth"
       ? [{ provider: "anth", model: MODEL }, { provider: "gpt", model: "g" }]
@@ -94,13 +106,13 @@ async function claudeTurn(
   } as unknown as OcxConfig;
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...requestHeaders }, signal,
     body: JSON.stringify({
-      model: direct ? `anth/${MODEL}` : "combo/waterfall", max_tokens: 64, stream,
-      tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }, WEB_SEARCH, WEB_FETCH],
+      model: direct || native ? `anth/${MODEL}` : "combo/waterfall", max_tokens: 64, stream,
+      tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }, searchTool, WEB_FETCH],
       messages,
     }),
-  }), config, { model: "", provider: "" });
+  }), config, { model: "", provider: "" }, lease ? { requestId: "fixture", start: Date.now(), turnAdmissionLease: lease } : undefined);
   expect(response.status).toBe(200);
   const clientSse = await response.text();
   expect(wires).toHaveLength(1);
@@ -112,6 +124,138 @@ function clientFrames(text: string): Record<string, unknown>[] {
 }
 
 describe("translated Claude lane carries typed web tools to Anthropic", () => {
+  for (const expired of [false, true]) {
+    test(`real pool resolves an ${expired ? "expired" : "available"} affinity binding`, async () => {
+      clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota();
+      for (const id of ["fixture-a", "fixture-b"]) {
+        saveCodexAccountCredential(id, { accessToken: `access-${id}`, refreshToken: `refresh-${id}`, expiresAt: Date.now() + 3_600_000, chatgptAccountId: `account-${id}` });
+        updateAccountQuota(id, 10, 10);
+      }
+      const requestHeaders = { "session-id": `real-${expired}`, "thread-id": "child", "x-codex-parent-thread-id": "parent" };
+      const key = codexPoolAffinityKey(new Headers(requestHeaders))!;
+      bindThreadAffinity(key, "fixture-a", Date.now() - (expired ? CODEX_THREAD_AFFINITY_IDLE_TTL_MS + 1 : 0));
+      const realResolver = openAiSidecar.resolveFirstUsableOpenAiSidecar;
+      let observed: string | undefined;
+      const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async (...args) => {
+        const selected = await realResolver(...args);
+        if (!observed) observed = selected?.authContext.accountId ?? undefined;
+        return selected;
+      });
+      const network = spyOn(globalThis, "fetch").mockImplementation(async () => { throw new Error("unexpected pool network request"); });
+      try {
+        const { wire } = await claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, requestHeaders });
+        expect(observed).toBe(expired ? undefined : "fixture-a");
+        expect((wire.tools as Record<string, unknown>[]).some(t => t.type === WEB_SEARCH.type)).toBe(expired);
+        expect(network).not.toHaveBeenCalled();
+      } finally { network.mockRestore(); resolver.mockRestore(); clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); }
+    });
+  }
+  for (const available of [true, false]) {
+    test(`pool probe uses the pinned affinity when ${available ? "available" : "unavailable"}`, async () => {
+      const requestHeaders = { "session-id": "fixture-session", "thread-id": "fixture-child", "x-codex-parent-thread-id": "fixture-parent", authorization: "Bearer client-secret" };
+      const expectedHeaders = new Headers(requestHeaders); expectedHeaders.delete("authorization");
+      const key = codexPoolAffinityKey(expectedHeaders);
+      const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async (candidates, headers) => {
+        expect(codexPoolAffinityKey(headers)).toBe(key);
+        expect(headers.get("authorization")).toBeNull();
+        return available ? { ...candidates[0]!, authContext: { kind: "main", accountId: null }, headers } : undefined;
+      });
+      try {
+        const { wire } = await claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, requestHeaders });
+        expect((wire.tools as Record<string, unknown>[]).some(t => t.type === WEB_SEARCH.type)).toBe(!available);
+      } finally { resolver.mockRestore(); }
+    });
+  }
+
+  test("pool probe forwards cancellation to account resolution", async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async (_candidates, _headers, _config, options) => {
+      seenSignal = options?.signal;
+      controller.abort();
+      options?.signal?.throwIfAborted();
+      return undefined;
+    });
+    try {
+      await expect(claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, signal: controller.signal })).rejects.toThrow();
+      expect(seenSignal?.aborted).toBe(true);
+    } finally { resolver.mockRestore(); }
+  });
+
+  test("cancellation wrapped by a credential refresh error still ends the request", async () => {
+    const controller = new AbortController();
+    let sends = 0;
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async () => {
+      controller.abort();
+      throw new CodexAuthContextError("fixture-account", controller.signal.reason);
+    });
+    try {
+      await expect(claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, signal: controller.signal, onUpstream: () => { sends++; } })).rejects.toThrow();
+      expect(sends).toBe(0);
+    } finally { resolver.mockRestore(); }
+  });
+
+  test("cancellation after account selection releases its probe lease", async () => {
+    const controller = new AbortController();
+    let released = 0;
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async (candidates, headers) => {
+      controller.abort();
+      return { ...candidates[0]!, authContext: { kind: "main", accountId: null }, headers, releaseProbeLease: () => { released++; } };
+    });
+    try {
+      await expect(claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, signal: controller.signal })).rejects.toThrow();
+      expect(released).toBe(1);
+    } finally { resolver.mockRestore(); }
+  });
+
+  test("a pool probe releases its selected main claim when resolution ends", async () => {
+    const lease = tryAdmitTurn(); expect(lease).not.toBeNull();
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async (_candidates, _headers, _config, options) => {
+      const selection = options?.beginCodexAccountSelection?.();
+      expect(selection?.claimMainProfile()).toBe(true);
+      selection?.release();
+      throw new Error("fixture probe ended");
+    });
+    const claim = spyOn(mainAdmission, "tryClaimNativeMainProfileForTurn");
+    try {
+      await expect(claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, lease })).rejects.toThrow("fixture probe ended");
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+      expect(claim).not.toHaveBeenCalled();
+    } finally { claim.mockRestore(); resolver.mockRestore(); lease?.release(); }
+  });
+
+  test("a direct probe releases its main claim after the token read", async () => {
+    const lease = tryAdmitTurn(); expect(lease).not.toBeNull();
+    const token = spyOn(mainAccount, "getMainAccountToken").mockReturnValue(null);
+    try {
+      await claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, directSearch: true, lease,
+        onUpstream: () => expect(getNativeMainProfileRequestCount()).toBe(0) });
+      expect(token).toHaveBeenCalledTimes(1);
+    } finally { token.mockRestore(); lease?.release(); }
+  });
+
+  test("a pool miss with possible main auth conservatively stays on the bridge", async () => {
+    const lease = tryAdmitTurn(); expect(lease).not.toBeNull();
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockResolvedValue(undefined);
+    const token = spyOn(mainAccount, "getMainAccountToken").mockReturnValue({ accessToken: "fixture-token", chatgptAccountId: "fixture-account" });
+    try {
+      const { wire } = await claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, lease });
+      expect((wire.tools as Record<string, unknown>[]).some(t => t.type === WEB_SEARCH.type)).toBe(false);
+    } finally { token.mockRestore(); resolver.mockRestore(); lease?.release(); }
+  });
+  test("native compatible upstream receives search and returns its result without a sidecar", async () => {
+    const searchTool = { ...WEB_SEARCH, allowed_domains: ["bun.sh"] };
+    const { wire, clientSse } = await claudeTurn("https://compat.example.com", SEARCH_TURN, "anth", undefined, { native: true, searchTool });
+    expect(wire.tools).toContainEqual(searchTool);
+    expect(clientSse).toContain('"type":"web_search_tool_result"');
+    expect(clientSse).toContain("Bun blog");
+  });
+  test("an available sidecar keeps the compatible route on the bridge", async () => {
+    const { wire } = await claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined,
+      { native: true, searchBackend: { backend: "exa", exaApiKey: "fixture" } });
+    expect(wire.tools).not.toContainEqual(WEB_SEARCH);
+    expect((wire.tools as Record<string, unknown>[]).map(tool => tool.name)).toContain("web_search");
+  });
   test("api.anthropic.com receives web_search and web_fetch as declared", async () => {
     const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN);
     const tools = wire.tools as Record<string, unknown>[];

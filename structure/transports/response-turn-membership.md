@@ -36,3 +36,5 @@ retry and queued rebuilds through `src/server/responses/adapter-dispatch.ts` and
 `src/server/responses/request-transport.ts`; missing metadata keeps earlier tool delivery off.
 This structural mechanism does not alter supplier bodies, reasoning effort, retry policy,
 settlement or provider-opaque replay scope.
+
+The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).

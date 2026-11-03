@@ -1,6 +1,12 @@
+import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
+import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
+import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
+import { parseSyntheticRowId } from "../fast-row";
+import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
@@ -49,14 +55,13 @@ import {
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
-import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
-import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
+import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
@@ -533,10 +538,31 @@ export async function executeComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+  const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
+    if (!hasMandatoryToolChoice(body)) return true;
+    try {
+      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, config);
+      const route = routeConcreteModel(config, fastRow?.baseId ?? effortRow?.baseId ?? selector);
+      const modelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId;
+      const inboundWire = options.inboundWire ?? "responses";
+      const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
+        route.staticPolicy.effectiveAlias, inboundWire);
+      const provider = resolveWireProtocolOverride(route.providerName, modelId, route.provider, inboundWire, policy);
+      return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, modelId)
+        : provider.adapter !== "openai-responses" || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
+    } catch {
+      return true;
+    }
+  };
+  const onlyMuseToolIncompatible = (): boolean => {
+    const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
+    return enabled.length > 0 && enabled.every(target => !museToolEligible(target));
+  };
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
     && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    && museToolEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
@@ -651,6 +677,9 @@ export async function executeComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
+      if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
+        return comboUnavailableResponse(`No available targets for combo: ${comboId}; targets cannot preserve mandatory tool_choice`);
+      }
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
         : comboUnavailable(comboId, undefined,
@@ -668,6 +697,9 @@ export async function executeComboResponses(
     const protocolRefusal = protocolLanes?.refusal();
     if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
+    if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
+      return comboUnavailableResponse(`No available targets for combo: ${comboId}; targets cannot preserve mandatory tool_choice`);
+    }
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
       : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
@@ -1413,12 +1445,11 @@ export async function executeComboResponses(
       contextFailure = { childLog, response: formatErrorResponse(400, "invalid_request_error",
         failure.upstreamMessage ?? failure.classificationText, { code: "context_length_exceeded", classified: true }) };
     }
-    // Native Messages failures can echo client content; their hop warning uses only status.
-    // Other wires retain their parsed, redacted and bounded code/message diagnostic.
-    const failureReason = sanitizeLogMetadataString(
-      redactSecretString(options.protocolSource?.inbound === "messages" ? `Provider error ${response.status}` : [failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
-      200,
-    );
+    // A bare status made a revoked credential read as a provider outage. Log the classified
+    // condition (a closed member), never upstream-authored code or message text.
+    const failureReason = classifyUpstreamCondition({
+      status: failure.response.status, code: failure.upstreamCode, type: failure.upstreamType, message: failure.upstreamMessage,
+    });
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`
         + ` after ${Date.now() - started}ms${failureReason ? `: ${failureReason}` : ""}`,

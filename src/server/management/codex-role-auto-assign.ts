@@ -9,6 +9,8 @@ import { join } from "node:path";
 import type { OcxConfig } from "../../types";
 import type { CatalogModel } from "../../codex/catalog";
 import type { RoleModelCandidate } from "../../codex/role-auto-assign";
+import type { LoadCapability } from "../../codex/role-capability";
+import type { SizingDomain } from "../../codex/role-sizing";
 
 export interface RoleSizingCall {
   readonly model: string;
@@ -118,11 +120,13 @@ export async function proposeCodexRoleModels(options: {
   sizingModel?: string;
   fetchAllModels: (config: OcxConfig) => Promise<CatalogModel[]>;
   completeRoleSizing?: CompleteRoleSizing;
+  loadCapability?: LoadCapability;
 }) {
-  const [roles, sizing, assign, { readConfiguredDefaultModel }] = await Promise.all([
+  const [roles, sizing, assign, capability, { readConfiguredDefaultModel }] = await Promise.all([
     import("../../codex/agent-role-models"),
     import("../../codex/role-sizing"),
     import("../../codex/role-auto-assign"),
+    import("../../codex/role-capability"),
     import("../../codex/catalog/parsing"),
   ]);
   const sizingModel = resolveSizingModel(options.sizingModel, readConfiguredDefaultModel);
@@ -159,15 +163,55 @@ export async function proposeCodexRoleModels(options: {
     }
   }
 
-  const classified = assign.classifyRoleModelCandidates(
-    await roleModelCandidates(options.config, await options.fetchAllModels(options.config)),
-    options.config.codexRoleTiers,
-  );
+  const candidates = await roleModelCandidates(options.config, await options.fetchAllModels(options.config));
+  const classified = assign.classifyRoleModelCandidates(candidates, options.config.codexRoleTiers);
+  // Measured capability is a better tier signal than price, and its absence is not an error: a
+  // failed read leaves every role on price rank and says so.
+  const domains = new Set([...outcomes.values()].flatMap(outcome => "sizing" in outcome ? [outcome.sizing.domain] : []));
+  let table: import("../../codex/role-capability").CapabilityTable | null = null;
+  let capabilityError: string | null = null;
+  if (domains.size > 0) {
+    try {
+      table = await (options.loadCapability ?? capability.loadCapabilityTable)(options.config);
+    } catch {
+      capabilityError = "the measured capability source could not be read";
+    }
+  }
+  const classifiedByDomain = new Map<SizingDomain, ReturnType<typeof assign.classifyRoleModelCandidates>>();
+  for (const domain of domains) {
+    const scores = table?.domains[domain];
+    if (!scores) continue;
+    const measured = new Map(candidates.flatMap(candidate => {
+      const score = scores.get(capability.candidateModelKey(candidate.model));
+      return score === undefined ? [] : [[candidate.model, score] as const];
+    }));
+    classifiedByDomain.set(domain, assign.classifyRoleModelCandidates(candidates, options.config.codexRoleTiers, measured));
+  }
   return {
     sizingModel,
     sizingError,
-    proposals: assign.buildRoleProposals(roleRows, outcomes, classified),
+    proposals: assign.buildRoleProposals(roleRows, outcomes, classified, classifiedByDomain),
     candidates: classified.map(({ model, tier, tierSource, unitPrice }) => ({ model, tier, tierSource, unitPrice })),
+    capability: capabilityReport(table?.source ?? null, table, capabilityError, classifiedByDomain),
+  };
+}
+
+/** The attribution and per-domain tiers; raw scores only from a source whose terms allow it. */
+function capabilityReport(
+  source: import("../../codex/role-capability").CapabilitySource | null,
+  table: import("../../codex/role-capability").CapabilityTable | null,
+  error: string | null,
+  classifiedByDomain: ReadonlyMap<SizingDomain, ReturnType<typeof import("../../codex/role-auto-assign").classifyRoleModelCandidates>>,
+) {
+  return {
+    name: source?.name ?? null,
+    url: source?.url ?? null,
+    license: source?.license ?? null,
+    publishedAt: table?.publishedAt ?? null,
+    error: error ?? table?.fallbackReason ?? null,
+    domains: Object.fromEntries([...classifiedByDomain].map(([domain, list]) => [domain,
+      list.filter(candidate => candidate.tierSource === "measured")
+        .map(({ model, tier, score }) => (source?.redistributable ? { model, tier, score } : { model, tier }))])),
   };
 }
 

@@ -1,3 +1,6 @@
+import { classifyUpstreamCondition } from "../lib/upstream-condition";
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
+import { recordLocalFailureDetail, type FailureDetail } from "./request-log-failure-detail";
 /**
  * Anthropic Messages inbound (/v1/messages + /v1/messages/count_tokens) for Claude Code.
  *
@@ -7,6 +10,7 @@
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { resolveClaudeBridgePoolSession } from "./claude-bridge-pool-session";
 import {
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
@@ -32,6 +36,8 @@ import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/deskto
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
+import { captureAdmissionPolicy } from "./capture-admission-policy";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { declaredAnthropicServerTools, replayedAnthropicServerBlocks } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
@@ -47,7 +53,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { isClientClosedMessage, recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
-import { resolveClientRetryAfter } from "../lib/retry-after";
+import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
 import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
 import {
@@ -333,9 +339,10 @@ async function anthropicNativePassthrough(
   const finalize = createFinalRequestLog(logIds, logCtx).finish;
   // Locally generated diagnostics are fixed text plus validated guard limits. Runtime
   // fetch errors retain their existing client response but use a fixed stored reason.
-  const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string, storedReason = message) => {
+  const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string,
+    detail: FailureDetail, storedReason = message) => {
     const safeMessage = redactSecretString(message);
-    logCtx.upstreamError = storedReason.slice(0, 500);
+    recordLocalFailureDetail(logCtx, storedReason, detail);
     finalize(status, { closeReason });
     return anthropicErrorResponse(status, safeMessage, type);
   };
@@ -367,11 +374,11 @@ async function anthropicNativePassthrough(
     req.signal,
   );
   if (result.kind === "timeout") {
-    return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error");
+    return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error", { code: "header_timeout" });
   }
   if (result.kind === "error") {
     const err = result.error;
-    return fail(502, "non_stream", `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error", "anthropic passthrough failed: upstream connection error");
+    return fail(502, "non_stream", `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error", { code: "connect_failed" }, "anthropic passthrough failed: upstream connection error");
   }
   const upstream = result.upstream;
 
@@ -396,13 +403,15 @@ async function anthropicNativePassthrough(
   // idle/size bounds — headers are NOT yet sent here, so real statuses are available.
   const bodyResult = await readBoundedPassthroughBody(upstream, bodyGuard);
   if (bodyResult.kind === "client_cancel") {
-    return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error");
+    return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error", { code: "client_closed" });
   }
   if (bodyResult.kind === "stall") {
-    return fail(504, "body_stall", `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error");
+    return fail(504, "body_stall", `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error",
+      { code: "body_stall", value: bodyGuard.stallMs });
   }
   if (bodyResult.kind === "overflow") {
-    return fail(502, "body_overflow", `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error");
+    return fail(502, "body_overflow", `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error",
+      { code: "body_overflow", value: bodyGuard.maxBytes });
   }
   const text = bodyResult.text;
   if (upstream.ok) {
@@ -414,20 +423,25 @@ async function anthropicNativePassthrough(
     // Upstream text is untrusted: retain only a closed type vocabulary in history.
     // Bound parsing work independently of the larger response-relay body limit.
     const statusReason = `Provider error ${upstream.status}`;
-    logCtx.upstreamError = statusReason;
+    recordLocalFailureDetail(logCtx, statusReason, { code: "provider_error" }, { upstreamEvidence: true });
     if (text.length <= PASSTHROUGH_ERROR_DETAIL_MAX_CHARS) {
       try {
         const parsed: unknown = JSON.parse(text);
         if (isRec(parsed) && parsed.type === "error" && isRec(parsed.error)) {
           const upstreamType = parsed.error.type;
           const knownType = PASSTHROUGH_ERROR_TYPES.find(type => type === upstreamType);
-          if (knownType) logCtx.upstreamError = `${statusReason}: ${knownType}`;
+          if (knownType) {
+            recordLocalFailureDetail(logCtx, `${statusReason}: ${knownType}`, { code: "provider_error", type: knownType }, { upstreamEvidence: true });
+          }
+          // The condition is classified here from the upstream message; only the closed member is kept.
+          const upstreamMessage = typeof parsed.error.message === "string" ? parsed.error.message : undefined;
+          logCtx.upstreamCondition = classifyUpstreamCondition({ status: upstream.status, type: knownType, message: upstreamMessage });
         }
       } catch { /* Malformed errors keep the fixed status-only diagnostic. */ }
     }
   }
   finalize(upstream.status, { closeReason: "non_stream" });
-  const retryAfter = upstream.headers.get("retry-after");
+  const retryAfter = formatClientRetryAfter(upstream.headers.get("retry-after"));
   return new Response(text, {
     status: upstream.status,
     headers: { ...rateLimitHeaders, "Content-Type": contentType, ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
@@ -544,7 +558,10 @@ export async function handleClaudeMessages(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
+  logIds?: {
+    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
+    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  },
   requestPolicy: RequestPolicyView = config,
   ingress: ClaudeIngressOptions = {},
 ): Promise<Response> {
@@ -587,7 +604,10 @@ async function handleClaudeMessagesWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
+  logIds?: {
+    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
+    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  },
   requestPolicy: RequestPolicyView = config,
   ingress: ClaudeIngressOptions = {},
 ): Promise<Response> {
@@ -620,6 +640,8 @@ async function handleClaudeMessagesWithBudget(
   // Built only under the reject policy; the legacy default leaves this request untouched.
   let envelope: ProtocolEnvelope | undefined;
   let messagesFeatures: () => Iterable<ProtocolFeature> = () => [];
+  // The Advisor caller policy is the admitted snapshot: capture it before the first await (#7859).
+  const advisorAdmissionPolicy = logIds?.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, logIds?.admission);
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
@@ -967,6 +989,85 @@ async function handleClaudeMessagesWithBudget(
     ...(settledRoute?.provider.authMode === "oauth" && settledInstance
       ? { oauthFailoverQuorum: anthropicRoutingFor(settledInstance).hasAnthropicFailoverQuorum() } : {}),
   };
+  if (settledRoute && isRec(anthropicBody)
+    && nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector) === "bridge-only-policy"
+    && nativeMessagesDeclineReason(settledRoute, anthropicBody, config, { ...nativeSelector, webSearchBackendAvailable: false }) === undefined) {
+    const { parseRequest } = await import("../responses/parser");
+    const { planWebSearch, shouldResolveOpenAiWebSearchSidecar } = await import("../web-search");
+    const replayConfig = buildClaudeReplayConfig(config);
+    const parsed = parseRequest(internalBody);
+    let openAiSidecar: import("../providers/openai-sidecar").ResolvedOpenAiForwardSidecar | undefined;
+    if (shouldResolveOpenAiWebSearchSidecar(replayConfig, parsed, false)) {
+      const { listOpenAiForwardSidecarCandidates, captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar } = await import("../providers/openai-sidecar");
+      const candidates = listOpenAiForwardSidecarCandidates(replayConfig);
+      const headers = new Headers();
+      for (const name of FORWARD_HEADERS) {
+        if (name === "authorization" || name === "chatgpt-account-id") continue;
+        const value = req.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      const { codexAccountSelectionForTurn, tryAdmitTurn } = await import("./lifecycle");
+      // The probe owns its claim only until selection completes, not for the client turn.
+      const probeLease = logIds?.turnAdmissionLease && candidates.length ? tryAdmitTurn() : undefined;
+      const errors = await import("../codex/auth-context");
+      try {
+        req.signal.throwIfAborted();
+        if (logIds?.turnAdmissionLease && candidates.length && !probeLease) {
+          // No independent admission means availability is unknown; preserve the bridge.
+          nativeSelector.webSearchBackendAvailable = true;
+        } else {
+          if (candidates.some(candidate => candidate.accountMode === "direct") && probeLease) {
+            if (!tryClaimNativeMainProfileForTurn(probeLease)) {
+              nativeSelector.webSearchBackendAvailable = true;
+            } else {
+              const { getMainAccountToken } = await import("../codex/main-account");
+              const token = getMainAccountToken();
+              if (token) {
+                const auth = captureExplicitOpenAiCallerAuth(new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId }), replayConfig);
+                if (auth) { headers.set("authorization", auth.authorization); headers.set("chatgpt-account-id", auth.chatgptAccountId); }
+              }
+            }
+          }
+          openAiSidecar = await resolveFirstUsableOpenAiSidecar(candidates, headers, replayConfig, {
+            admission: logIds?.admission, codexAuthPolicy: config, signal: req.signal,
+            beginCodexAccountSelection: codexAccountSelectionForTurn(probeLease ?? undefined),
+          });
+          req.signal.throwIfAborted();
+          // The bridge can inject main auth into pool selection. Only a negative pool probe
+          // needs this extra read; an unavailable claim or present token leaves it uncertain.
+          if (!openAiSidecar && probeLease && candidates.some(candidate => candidate.accountMode === "pool")) {
+            if (!tryClaimNativeMainProfileForTurn(probeLease)) nativeSelector.webSearchBackendAvailable = true;
+            else {
+              const { getMainAccountToken } = await import("../codex/main-account");
+              if (getMainAccountToken()) nativeSelector.webSearchBackendAvailable = true;
+            }
+          }
+        }
+      } catch (err) {
+        // Refresh wraps cancellation in CodexAuthContextError; a cancelled request must not continue.
+        if (req.signal.aborted) {
+          openAiSidecar?.releaseProbeLease?.();
+          throw req.signal.reason ?? err;
+        }
+        if (err instanceof CodexInstallationIdUnavailableError) {
+          // An unavailable optional helper cannot displace an independent native route.
+          nativeSelector.webSearchBackendAvailable = false;
+        } else if (!(err instanceof errors.CodexPoolAuthenticationError) && !(err instanceof errors.CodexAuthContextError)
+          && !(err instanceof errors.CodexAccountCooldownError) && !(err instanceof errors.CodexThreadAffinityExpiredError)
+          && !(err instanceof errors.CodexMainProfileDrainingError)) {
+          openAiSidecar?.releaseProbeLease?.();
+          throw err;
+        } else if (probeLease && candidates.some(candidate => candidate.accountMode === "pool")) nativeSelector.webSearchBackendAvailable = true;
+      } finally { probeLease?.release(); }
+    }
+    try {
+      nativeSelector.webSearchBackendAvailable ??= !!planWebSearch(replayConfig, parsed, false, settledRoute.provider, settledRoute.modelId, openAiSidecar, {
+        admission: logIds?.admission, codexAuthPolicy: config, providerName: settledRoute.providerName,
+      });
+    } finally {
+      openAiSidecar?.releaseProbeLease?.();
+    }
+  }
   const nativeDecline = settledRoute && isRec(anthropicBody)
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
     : "rollout-disabled";
@@ -1095,6 +1196,9 @@ async function handleClaudeMessagesWithBudget(
     ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
     ?? metadataGoLane
     ?? getOrAllocateRequestSessionLane(req);
+  const claudeBridgePoolSession = resolveClaudeBridgePoolSession({
+    ingress: req.headers, replay: headers, metadataSessionId: claudeNativeSessionId, admission: logIds?.admission,
+  });
   let internalReq: Request;
   try {
     // The UTF-16 JSON string and the Request's UTF-8 body coexist until dispatch.
@@ -1146,6 +1250,7 @@ async function handleClaudeMessagesWithBudget(
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    advisorAdmissionPolicy,
     // The translated request never forwards the caller credential; resolve the principal first.
     replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
@@ -1172,6 +1277,7 @@ async function handleClaudeMessagesWithBudget(
       ? { tools: anthropicBody.tools, messages: anthropicBody.messages, tool_choice: anthropicBody.tool_choice } : undefined,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
+    ...(claudeBridgePoolSession ? { claudeBridgePoolSession } : {}),
     stripClaudeMainAuthForNoncanonicalForward: true,
     ...(trustedClaudeMainAuth ? { trustedClaudeMainAuth } : {}),
     // Claude's internal stored-main enrichment is not an original caller credential.
@@ -1242,7 +1348,8 @@ async function handleClaudeMessagesWithBudget(
       ? REPLAY_REFUSED_STATUS
       : nativeMainFence ? 503 : contextError ? 400 : transient ? 529 : response.status;
     const outHeaders = new Headers({ "Content-Type": "application/json" });
-    if (retryAfter) outHeaders.set("Retry-After", retryAfter);
+    const clientRetryAfter = formatClientRetryAfter(retryAfter);
+    if (clientRetryAfter) outHeaders.set("Retry-After", clientRetryAfter);
     else if (transient) outHeaders.set("Retry-After", "2");
     if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
     const out = new Response(JSON.stringify(anthropicErrorBody(

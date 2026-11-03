@@ -20,6 +20,17 @@ export interface GuardedStopSnapshot {
   manager: Exclude<GuardedManagerTarget, { kind: "unknown" }>;
 }
 
+/**
+ * What the tracked-record check can report: the verified target, null when the
+ * caller cannot name a cause (the pre-diagnostics shape), or the fixed cause of
+ * the single check that failed. The cause is a fixed sentence fragment from the
+ * inspection probe -- it carries no path, command line, stderr, or token.
+ */
+export type TrackedRuntimeCheck =
+  | { pid: number; port: number; hostname: string }
+  | { untracked: string }
+  | null;
+
 function sameGuardedManager(
   expected: GuardedStopSnapshot["manager"],
   current: GuardedManagerTarget,
@@ -117,7 +128,7 @@ export function managerStillActive(
 export async function runApprovedStop(
   expected: StopApproval,
   read: () => Promise<ResolveJson | null>,
-  tracked: () => { pid: number; port: number; hostname: string } | null,
+  tracked: () => TrackedRuntimeCheck,
   managerTarget: () => GuardedManagerTarget,
   stop: (snapshot: GuardedStopSnapshot) => Promise<StopOutcome>,
 ): Promise<StopOutcome> {
@@ -130,6 +141,9 @@ export async function runApprovedStop(
     const mismatch = stopApprovalMismatch(expected, now);
     if (mismatch !== null) return approvalChanged(mismatch);
     if (target === null) return approvalChanged("the tracked runtime record could not be verified");
+    if ("untracked" in target) {
+      return approvalChanged(`the tracked runtime record could not be verified (${target.untracked})`);
+    }
     if (target.pid !== expected.pid || target.port !== expected.port
       || target.hostname !== expected.hostname) {
       return approvalChanged("the tracked runtime record changed");

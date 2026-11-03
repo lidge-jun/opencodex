@@ -41,7 +41,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Responses request compatibility
 
-`src/providers/xai-transport.ts` recognizes the exact HTTPS hosts `api.x.ai`, `us.api.x.ai` and `cli-chat-proxy.grok.com` on the standard port as xAI Responses destinations. The Responses passthrough's `stripXaiUnsupportedInclude` removes only the rejected `output.encrypted_content` include entry, omits `include` when nothing remains, and preserves other entries and other destinations. `tests/providers/xai/xai-responses-adjacency.test.ts` covers the global, US regional and non-xAI request bodies; `tests/providers/xai/xai-transport.test.ts` rejects lookalikes, HTTP and nonstandard ports.
+`src/providers/xai-transport.ts` recognizes the exact HTTPS hosts `api.x.ai`, `us.api.x.ai` and `cli-chat-proxy.grok.com` on the standard port as xAI Responses destinations. The Responses passthrough's `stripUnsupportedOutputInclude` removes only the rejected `output.encrypted_content` include entry, omits `include` when nothing remains, and preserves other entries. The same exact-entry normalization applies to Meta at `api.meta.ai`; unrelated destinations remain unchanged. `tests/providers/xai/xai-responses-adjacency.test.ts` covers the global, US regional and non-xAI request bodies; `tests/providers/xai/xai-transport.test.ts` rejects lookalikes, HTTP and nonstandard ports.
 
 ### Reasoning-model sampling parameters
 

@@ -79,6 +79,12 @@ export function buildIndexFile(buildPath: string, reason: string, revision: Usag
       expected: revision,
       endOffset: Number(revision.size),
     });
+    // Validate before publication while still off the serving thread. The
+    // published handle can then be trusted until its periodic worker check.
+    const check = build.query("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+    if (check?.quick_check !== "ok") {
+      throw Object.assign(new Error("rebuilt history index failed integrity check"), { code: "SQLITE_CORRUPT" });
+    }
     // The serving thread opens the published file in WAL mode; switching here
     // keeps that first open from rewriting the database header.
     build.exec("PRAGMA journal_mode = WAL");

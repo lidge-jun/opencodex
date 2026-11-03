@@ -301,6 +301,96 @@ describe("routeModel decode (proxy layer)", () => {
     expect(route.modelId).toBe("vendor/m-2");
   });
 
+  test("modelDisplayNames keys decode a provider-qualified slug with a cold live cache", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "other",
+      providers: {
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.com/v1",
+          apiKey: "k",
+          modelDisplayNames: { "vendor/m-3": "Vendor M3" },
+        },
+      },
+    };
+    const route = routeModel(config, "other/vendor-m-3");
+    expect(route.providerName).toBe("other");
+    expect(route.modelId).toBe("vendor/m-3");
+  });
+
+  test("a stale modelDisplayNames key does not shadow a configured id", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "other",
+      providers: {
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.com/v1",
+          apiKey: "k",
+          models: ["a-b"],
+          modelDisplayNames: { "a/b": "Stale A/B" },
+        },
+      },
+    };
+    expect(routeModel(config, "other/a-b").modelId).toBe("a-b");
+  });
+
+  test("a stale modelDisplayNames key does not shadow a retained id", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "other",
+      providers: {
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.com/v1",
+          apiKey: "k",
+          retainModels: ["a-b"],
+          modelDisplayNames: { "a/b": "Stale A/B" },
+        },
+      },
+    };
+    expect(routeModel(config, "other/a-b").modelId).toBe("a-b");
+  });
+
+  test("an encoded slash-valued retained id wins over a stale display-name key", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "other",
+      providers: {
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.com/v1",
+          apiKey: "k",
+          retainModels: ["a/b"],
+          modelDisplayNames: { "a-b": "Stale A-B" },
+        },
+      },
+    };
+    expect(routeModel(config, "other/a-b").modelId).toBe("a/b");
+    config.providers.other!.retainModels = ["x/y-z", "x-y/z"];
+    config.providers.other!.modelDisplayNames = { "x/y-z": "Stale" };
+    expect(routeModel(config, "other/x-y-z").modelId).toBe("x-y-z");
+  });
+
+  test("a stale modelDisplayNames key does not break an existing default alias", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "other",
+      providers: {
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.com/v1",
+          apiKey: "k",
+          defaultAliases: true,
+          models: ["vendor/claude-opus-5"],
+          modelDisplayNames: { "vendor/claude-opus-5-old": "Stale Opus" },
+        },
+      },
+    };
+    expect(routeModel(config, "other/opus").modelId).toBe("vendor/claude-opus-5");
+  });
+
   test("knownModelIdsForProvider unions config, registry, and hint-map ids", () => {
     const ids = knownModelIdsForProvider("zenmux", zenmuxConfig().providers.zenmux!);
     expect(ids).toContain("moonshotai/kimi-k3-free");

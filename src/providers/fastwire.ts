@@ -1,3 +1,4 @@
+import { boundedServiceTier } from "../lib/response-service-tier";
 import type {
   AttemptTierOutcome,
   FastWire,
@@ -361,7 +362,7 @@ export function createAdapterTierMetadata(
     return {
       outcome,
       observeResponseServiceTier(value: unknown) {
-        const sanitized = sanitizeLogMetadataString(value);
+        const sanitized = boundedServiceTier(value);
         if (sanitized) outcome.responseServiceTier = sanitized;
       },
       markResponseUnparseable() {},
@@ -413,7 +414,7 @@ export function createAdapterTierMetadata(
         }
         return;
       }
-      const sanitized = sanitizeLogMetadataString(value);
+      const sanitized = boundedServiceTier(value);
       if (sanitized) outcome.responseServiceTier = sanitized;
       if (!responseCanConfirmFast) return;
       if (canonicalFromWire(context.fastWire, value) === "priority") {

@@ -1,4 +1,5 @@
 import { isPlainObject as isRecord } from "./openai-responses/internal";
+import { hasItemProvenance, isHistoricalItem, tagHistoricalInputItems } from "../responses/item-provenance";
 
 function toolKey(tool: Record<string, unknown>): string | undefined {
   if (typeof tool.type !== "string" || !tool.type) return undefined;
@@ -8,8 +9,8 @@ function toolKey(tool: Record<string, unknown>): string | undefined {
 
 /**
  * Zed's OpenAI Responses schema accepts message and call items, not Codex's private
- * additional_tools wrapper. Drop every wrapper. Promote only wrappers at or after the
- * replayed prefix: earlier ones are history, not the current turn's tool catalog.
+ * additional_tools wrapper. Drop every wrapper. Item provenance owns current-turn
+ * membership; a numeric prefix is accepted only for input not yet tagged.
  * A non-array tools field is left untouched so a malformed catalog is not replaced
  * by a partial promotion.
  */
@@ -17,16 +18,15 @@ export function liftZedAdditionalTools(providerRequest: Record<string, unknown>,
   if (!Array.isArray(providerRequest.input)) return;
   if (providerRequest.tools !== undefined && !Array.isArray(providerRequest.tools)) return;
 
-  const currentTurnStart = Number.isFinite(replayPrefixLength)
-    ? Math.min(providerRequest.input.length, Math.max(0, Math.trunc(replayPrefixLength)))
-    : 0;
+  const taggedInput = providerRequest.input.some(hasItemProvenance) ? providerRequest.input
+    : tagHistoricalInputItems(providerRequest.input, Number.isFinite(replayPrefixLength) ? replayPrefixLength : 0);
   const input: unknown[] = [];
   const promoted: unknown[] = [];
   let changed = false;
-  for (const [index, item] of providerRequest.input.entries()) {
+  for (const item of taggedInput) {
     if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
       changed = true;
-      if (index >= currentTurnStart) promoted.push(...item.tools);
+      if (!isHistoricalItem(item)) promoted.push(...item.tools);
       continue;
     }
     input.push(item);

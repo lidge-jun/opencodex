@@ -354,12 +354,7 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
           : item,
       );
     }
-    if (zedProvider === "open_ai") {
-      // Codex carries this turn's client tools in a private additional_tools input item.
-      // Zed rejects that variant, so promote the current turn and drop every wrapper
-      // before the built-in tool filter runs.
-      liftZedAdditionalTools(providerRequest, parsed._replayPrefixLen ?? 0);
-    }
+    // OpenAI wrappers were promoted before delegation; serialized input has no provenance tags.
     if (zedProvider === "open_ai" && Array.isArray(providerRequest.tools)) {
       // Zed's Responses decoder supports function/custom tools, not Codex's built-in web_search.
       const supported = (tool: unknown) => isRecord(tool) && (tool.type === "function" || tool.type === "custom");

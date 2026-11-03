@@ -243,7 +243,8 @@ describe("native Messages candidates in a combo", () => {
     expect(response.status).toBe(529);
     expect(text).toContain(echo);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.upstreamError).toBe("Provider stream failed (503)");
+    expect(rows[0]!.errorCode).toBe("server_is_overloaded");
+    expect(JSON.stringify(rows[0])).not.toContain(echo);
     expect(JSON.stringify(warnings)).not.toContain(echo);
     expect(seen).toHaveLength(1);
   });

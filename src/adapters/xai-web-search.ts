@@ -2,6 +2,7 @@ import type { OcxProviderConfig } from "../types";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
 import { isOpenCodeGoResponsesUrl } from "./opencode-go-additional-tools";
+import { hasItemProvenance, isHistoricalItem } from "../responses/item-provenance";
 
 const CODEX_WEB_SEARCH_TOOL = "web_search";
 const CODEX_WEB_SEARCH_PREVIEW_TOOL = "web_search_preview";
@@ -190,8 +191,8 @@ export function normalizeXaiResponsesWebSearch(
   const xaiDestination = isXaiResponsesDestination(provider);
   if (!xaiDestination && !isOpenCodeGoGrokResponses(target?.modelId, target?.responseUrl)) return body;
   // On Go, a wrapper emptied here stays in place: Go promotion (opencode-go-additional-tools.ts)
-  // removes every wrapper before the wire and splits them into history and current turn by
-  // index against _replayPrefixLen, so deleting one would shift the current turn into history.
+  // removes every wrapper before the wire. Retain positions for callers with untagged input;
+  // transformed adapter input carries per-item historical/live provenance instead.
   const keepEmptiedWrappers = !xaiDestination;
 
   let next: Record<string, unknown> = body;
@@ -264,7 +265,9 @@ export function injectXaiResponsesXSearch(
 
   const input = Array.isArray(body.input) ? body.input : undefined;
   const inputStart = input ? currentInputStart(input.length, replayPrefixLength) : 0;
-  const currentInput = input?.slice(inputStart) ?? [];
+  const currentInput = input?.some(hasItemProvenance)
+    ? input.filter(item => !isHistoricalItem(item))
+    : input?.slice(inputStart) ?? [];
   const currentXSearchDeclared = hasToolType(body.tools, XAI_SEARCH_TOOL)
     || currentInput.some(item =>
       isPlainObject(item)

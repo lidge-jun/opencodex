@@ -40,6 +40,7 @@
 import { isIP } from "node:net";
 import { effectiveLoopbackListenerPort, isLoopbackHostname, isWildcardHostname, shouldInjectApiAuthHeader } from "../codex/loopback-target";
 import { probeHostname } from "../server/proxy-liveness";
+import { resolveDataPlaneAdmissionSecret } from "../server/auth-cors";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "./service-secrets";
 import type { OcxConfig } from "../types";
 
@@ -150,8 +151,16 @@ export function localAdmissionToken(
   config: Pick<OcxConfig, "apiKeys"> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
+  return localAdmissionTokenCandidates(config, env)[0];
+}
+
+function localAdmissionTokenCandidates(
+  config: Pick<OcxConfig, "apiKeys"> | undefined,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const candidates: string[] = [];
   const envToken = env.OPENCODEX_API_AUTH_TOKEN?.trim();
-  if (envToken) return envToken;
+  if (envToken) candidates.push(envToken);
   const lookup = env.OCX_API_TOKEN_FILE?.trim()
     ? env
     : { ...env, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
@@ -160,9 +169,29 @@ export function localAdmissionToken(
   // deliberately and pass through verbatim; a path, by contrast, can be pointed at or replaced
   // by something that is not a credential at all, and sending that as one leaks file contents
   // into a request header. Configured keys are never checked, so no existing key can be broken.
-  if (fileToken && ADMISSION_TOKEN_SHAPE.test(fileToken)) return fileToken;
+  if (fileToken && ADMISSION_TOKEN_SHAPE.test(fileToken)) candidates.push(fileToken);
   const configured = config?.apiKeys?.find(entry => entry.key.trim().length > 0)?.key.trim();
-  return configured || undefined;
+  if (configured) candidates.push(configured);
+  return candidates;
+}
+
+/**
+ * The credential an in-process self-fetch (Advisor, routed helpers) presents to `destination`.
+ *
+ * A destination that demands admission gets the `localAdmissionToken` ladder unchanged. One that
+ * does not still receives the first ladder credential this data plane recognizes, because Chat
+ * applies that key's limits to an internal hop a loopback listener admitted without reading it
+ * (#7894). An unrecognized one, such as a hub client key a loopback bind deliberately left out of
+ * its admission credentials, is not sent: Chat refuses any credential it cannot resolve.
+ */
+export function selfFetchAdmissionToken(
+  config: Pick<OcxConfig, "apiKeys"> | undefined,
+  destination: Pick<LocalInferenceDestination, "requiresAdmissionToken">,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const candidates = localAdmissionTokenCandidates(config, env);
+  if (destination.requiresAdmissionToken) return candidates[0];
+  return candidates.find(token => resolveDataPlaneAdmissionSecret(token, config ?? {}) !== null);
 }
 
 /** An admission credential is an opaque printable token — never JSON, a path, or multi-line. */

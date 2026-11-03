@@ -140,6 +140,14 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
+allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
+only a fragment containing a newline triggers splitting of the accumulated record. Complete
+records and the remaining residual retain their independent size checks and existing reservation
+order, including CRLF and EOF handling. The fatal streaming decoder emits complete code points,
+so fragment counts remain exact across split UTF-8 reads. `tests/providers/ollama/ollama-native-scaling.test.ts`
+checks linear measurement and splitting work, framing equivalence, invalid UTF-8 and cancellation.
+
 `src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
 and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
 gates subsequent socket input even when the decoder would accept more coded bytes.
@@ -224,6 +232,12 @@ tool completion with rewritten arguments.
 
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
+The provider-opt-in tracker in `src/server/responses-snapshot-repair.ts` caches each open item's
+UTF-8 text size and final code unit. It measures only incoming deltas, corrects split surrogate
+pairs even across empty deltas, replaces the count for authoritative text snapshots, and refunds
+the cached count on item closure. Per-item and aggregate open-text caps remain 8 MiB; crossing
+either cap releases state and disables lifecycle reconstruction. `tests/responses/responses-snapshot-scaling.test.ts`
+checks the linear measurement budget, Unicode boundaries, replacement, closure and cap refusal.
 Serialized request and buffered-response observations use byte counts without measurement arrays.
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.

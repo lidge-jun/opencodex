@@ -11,6 +11,7 @@ import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
 import { reconcileQuotaRecovery, sweepExpiredQuotaRecovery } from "../codex/quota-401-recovery";
 import { bindUpstreamRequestCompressionConfig } from "../server/responses/request-compression";
+import { bindWorkflowBudgetConfig } from "./workflow-budget-config";
 import {
   listLiveCodexAccountIds,
   reconcileCodexRoutingHealth,
@@ -82,6 +83,7 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
   bindUpstreamRequestCompressionConfig(config);
+  bindWorkflowBudgetConfig(config);
   notifyLiveConfigObservers(config);
 }
 

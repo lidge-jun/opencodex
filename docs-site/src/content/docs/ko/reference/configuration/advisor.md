@@ -60,6 +60,10 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 
 설정된 어드바이저 프로바이더는 워커의 프로바이더와 다를 수 있습니다.
 
+상담은 호출자에게서 캡처한 API 키의 모델 범위, 유료 combo 동의, 디바이스 fallback 제한과 Advisor 자체 승인 키의 호스트 제한을 모두 따릅니다. 승인 키는 설정된 경우 `OPENCODEX_API_AUTH_TOKEN` 또는 이 프록시가 받아들이는 서비스 토큰 파일이고, 그렇지 않으면 첫 번째로 구성된 API 키입니다. 키 순서는 이 마지막 경우에만 의미가 있습니다. Advisor 모델에 접근할 수 있는 키를 맨 앞에 두지 않으면 모든 상담을 사용할 수 없습니다. 환경 토큰이나 서비스 토큰이 설정되어 있으면 그 토큰이 상담을 결정합니다. 이 규칙은 combo 선택, 중첩 판정 모델, 재시도에도 적용됩니다. 규칙을 충족하지 못한 상담은 worker에게 사용 불가 안내를 반환합니다.
+
+예를 들어 `allowMeteredComboTargets: false`인 `laptop` 키는 Advisor를 통해 종량제 combo 대상에 비용을 쓸 수 없고, `fallback.devices.laptop.provider: false`는 Advisor의 프로바이더 fallback 홉도 막습니다. 키가 없는 loopback 호출자는 여전히 combo의 `allowMeteredTargets: true` 옵트인이 필요합니다. 두 키가 모두 `allowMeteredComboTargets: true`를 설정하고 combo가 `allowMeteredTargets: true`를 설정하면, 공개 바인드의 loopback 리스너를 거치더라도 Advisor가 종량제 대상을 사용할 수 있습니다. 서버는 본문 용량을 기다리거나 본문을 읽기 전, 요청을 인증할 때 호출자 정책을 캡처합니다. 이후 키나 fallback을 편집해도 그 상담의 범위는 넓어지지 않습니다. 라우팅된 비전 도우미, compact 요청과 그 판정 모델, WebSocket 턴 안의 모든 후보 재시도에도 똑같이 적용됩니다. 새 WebSocket 턴은 각자 자신의 정책을 캡처합니다.
+
 OpenCodex는 프로바이더 API 키, Authorization 헤더, OAuth 토큰, 백엔드 전용 설정 비밀, 프로세스 환경, 숨겨진 사고 과정을 그 프롬프트에 넣지 않습니다. 암호화된 프로바이더 사유 추론을 복호해 전달하지도 않습니다. **작업 내용의 비밀은 일반적으로 제거되지 않습니다.** 작업에 붙여 넣은 키, 도구가 읽은 파일 속의 비밀, 도구나 로그가 출력한 토큰은 전송될 수 있습니다. OpenCodex는 범용 DLP를 실행하지 않습니다.
 
 ## 권한

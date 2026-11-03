@@ -3,7 +3,7 @@ import {
   CODEX_UNKNOWN_USAGE_SCORE,
 } from "../quota";
 import { isThirtyDayOnlyCodexPlan } from "../plan";
-import { hasSpendableCodexCredits, isTerminalShortWindow, type CodexSpendableCredits } from "../quota-types";
+import { hasElapsedShortWindow, hasSpendableCodexCredits, isTerminalShortWindow, type CodexSpendableCredits } from "../quota-types";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeGrant } from "./thread-affinity";
 import type { MainQuotaDispatch } from "../main-account-cache";
@@ -136,7 +136,8 @@ export function computeCodexUsageScore(quota: {
       ? (allowCredits && hasSpendableCodexCredits(quota, now)) ? CODEX_EXHAUSTED_USAGE_PERCENT - 1 : CODEX_EXHAUSTED_USAGE_PERCENT
       : CODEX_UNKNOWN_USAGE_SCORE;
   }
-  const values = finite(quota.shortPercent) ? [...knownLong, quota.shortPercent] : knownLong;
+  const values = finite(quota.shortPercent) && !hasElapsedShortWindow(quota.shortResetAt, now)
+    ? [...knownLong, quota.shortPercent] : knownLong;
   const score = Math.max(...values);
   // Keep included-capacity accounts ahead of a paid overage account, but do not
   // classify the latter as exhausted solely from its subscription percentages.

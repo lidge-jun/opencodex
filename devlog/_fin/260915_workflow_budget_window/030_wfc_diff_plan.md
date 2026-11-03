@@ -96,6 +96,13 @@ declared `deferred-verb` in the route registry against this document, which is
 what keeps them out of the undeclared-route ratchet without pretending the gap
 does not exist.
 
+The later configurable-ceilings change also defers the live CLI counterpart of
+`PUT /api/workflow-budget/settings` against this document. Its management API
+updates the running policy; local `ocx config set/unset workflowBudget...`
+edits disk configuration and requires a proxy restart for live convergence.
+`GET /api/workflow-budget/settings` is a `local-transport` exemption because
+`ocx config get` can read the same configuration block locally.
+
 ## Verification posture
 
 Local suite, typecheck, install and build: NOT RUN, by standing instruction.

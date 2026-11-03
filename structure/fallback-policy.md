@@ -40,6 +40,11 @@ Device identity comes from admission only: a `configured` admission's key id, pl
 id whose `apiKeyId` matches it in the link store. The store is read only when `devices` is non-empty
 and is cached for five seconds. Loopback and unkeyed requests have no device scope.
 
+Advisor children retain the host admission and additionally enforce frozen caller policy and
+device ids at every `guardFallbackHop` boundary. Both must permit the hop; caller refusal uses
+the caller's captured device identity. The [Advisor policy contract](advisor.md#cross-provider-consultation)
+owns capture, capability authentication and child propagation.
+
 ## Sites
 
 | Site | Hop point | Reactive status | Proactive |

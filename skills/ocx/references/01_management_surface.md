@@ -26,11 +26,11 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 14 |
-| [providers-models](01_surface_providers-models.md) | 49 |
+| [providers-models](01_surface_providers-models.md) | 50 |
 | [accounts](01_surface_accounts.md) | 42 |
-| [agents-routing](01_surface_agents-routing.md) | 67 |
+| [agents-routing](01_surface_agents-routing.md) | 68 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 98 |
+| [observe-system](01_surface_observe-system.md) | 99 |
 | [access-remote](01_surface_access-remote.md) | 33 |
 | [lab](01_surface_lab.md) | 21 |
 
@@ -126,6 +126,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx connect rotate`
 
 [State-changing task](01_surface_access-remote.md#ocx-connect-rotate)
+
+### `ocx update`
+
+[State-changing task](01_surface_observe-system.md#ocx-update)
 
 ### `ocx capabilities`
 
@@ -415,6 +419,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_providers-models.md#ocx-provider-selected)
 
+### `ocx provider import-cc-switch`
+
+[State-changing task](01_surface_providers-models.md#ocx-provider-import-cc-switch)
+
 ### `ocx models list`
 
 [Read-oriented task](01_surface_providers-models.md#ocx-models-list)
@@ -666,6 +674,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx message send`
 
 [State-changing task](01_surface_agents-routing.md#ocx-message-send)
+
+### `ocx message mcp`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-mcp)
 
 ### `ocx advisor`
 
@@ -1509,6 +1521,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 365
-- of those, state-changing: 223
+- declared capabilities: 368
+- of those, state-changing: 226
 - head-resolved invocations: 2

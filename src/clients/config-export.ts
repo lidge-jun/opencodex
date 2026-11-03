@@ -906,6 +906,8 @@ interface PiExportOptions {
    * states it rather than leaving each user to hand-edit a block the next export rewrites.
    */
   foldDeveloperRole?: boolean;
+  /** Provider dialect; omitted writes `PI_API_DIALECT`. */
+  api?: "openai-completions" | "openai-responses";
 }
 
 export interface PiGeneratedConfig {
@@ -1085,7 +1087,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     providers: {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
-        api: PI_API_DIALECT,
+        api: options.api ?? PI_API_DIALECT,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         ...(Object.keys(compat).length > 0 ? { compat } : {}),
         models,
@@ -1391,10 +1393,19 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * are consistent; passing it on only one would make `ocx export --client omo`
  * emit a `compat` block while enable and refresh wrote a file without it, and
  * the two would drift apart at the first refresh.
+ *
+ * The same rule covers the opt-in `omoClientExport.api` dialect (#7431): both paths read it from
+ * the live config, so a refresh keeps the Responses dialect instead of reverting it to Chat.
  */
 function buildOmoContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+  const doc = buildPiClientConfig(ctx, omoExportOptions(ctx));
   return singleFragment("omo", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function omoExportOptions(ctx: ExportContext): PiExportOptions {
+  return ctx.config?.omoClientExport?.api === "openai-responses"
+    ? { ...PI_EXPORT_OPTIONS, api: "openai-responses" }
+    : PI_EXPORT_OPTIONS;
 }
 
 /** Cline's shared SDK store; command-local --config must be mirrored by the env override. */
@@ -1652,7 +1663,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => omoConfigPath(env),
     apiKeyEnv: "",
     exportHint: "omo reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    build: ctx => buildPiClientConfig(ctx, omoExportOptions(ctx)),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildOmoContribution,

@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * ProviderOverview — 2-column layout: left (CONNECTION + Auth summary) / right
  * (STATS + Notes). Phase 030 of workspace design parity.
@@ -18,6 +19,7 @@ import ProviderCurrentQuota from "./ProviderCurrentQuota";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import ProviderSponsor from "./ProviderSponsor";
 import ProviderCompletionTest, { type CompletionProbeStatus } from "./ProviderCompletionTest";
+import { useProviderProbeState, type ProviderProbeController } from "./use-provider-probe-state";
 
 type ConnectionTestResult = {
   applicable?: boolean;
@@ -36,8 +38,8 @@ type ConnectionTestState = {
 
 export default function ProviderOverview({
   item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
-  apiBase, connectionIdentity, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
-  modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenModelsTab, onOpenModels, onOpenConnect,
+  apiBase, connectionIdentity, probeController, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
+  modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenAccounts, onOpenModelsTab, onOpenModels, onOpenConnect,
   onEditSettings, onViewUsage, onUpdateProvider,
   onCreateJevAuto,
   onReauthenticate, onCancelLogin, reauthBusy = false,
@@ -52,6 +54,7 @@ export default function ProviderOverview({
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean; needsReauth?: boolean };
   apiBase?: string;
+  probeController?: ProviderProbeController;
   availableModels?: string[];
   selectedModels?: string[];
   modelRows?: ModelRow[] | null;
@@ -59,6 +62,7 @@ export default function ProviderOverview({
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
+  onOpenAccounts?: () => void;
   onOpenModelsTab?: () => void;
   onOpenModels?: () => void;
   onOpenConnect?: () => void;
@@ -89,22 +93,9 @@ export default function ProviderOverview({
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
-  const connectionProbeKey = JSON.stringify([
-    apiBase ?? null,
-    item.name,
-    item.adapter,
-    item.baseUrl,
-    item.authMode ?? null,
-    item.apiKeyTransport ?? null,
-    item.liveModels ?? null,
-    item.disabled === true,
-    item.hasApiKey === true,
-    item.hasHeaders === true,
-    item.allowPrivateNetwork === true,
-    item.keyOptional === true,
-    item.activeNeedsReauth === true,
-    connectionIdentity ?? null,
-  ]);
+  const fallbackProbeController = useProviderProbeState(item, apiBase, connectionIdentity, availableModels);
+  const activeProbe = probeController ?? fallbackProbeController;
+  const { connectionProbeKey, completionModels, selectedModel: probeSelectedModel, completionProbe, reverifyModel } = activeProbe;
   const [connectionTest, setConnectionTest] = useState<ConnectionTestState | null>(null);
   const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
   const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
@@ -115,32 +106,6 @@ export default function ProviderOverview({
       ...(item.defaultModel ? [item.defaultModel] : []),
     ]),
   ];
-  const completionModels = [
-    ...new Set([
-      ...(item.models ?? []),
-      ...availableModels,
-      ...(item.defaultModel ? [item.defaultModel] : []),
-    ]),
-  ];
-  const [seenProbeKey, setSeenProbeKey] = useState(connectionProbeKey);
-  const [probeEpoch, setProbeEpoch] = useState(0);
-  const [completionProbe, setCompletionProbe] = useState<{
-    epoch: number;
-    model: string;
-    status: CompletionProbeStatus;
-  } | null>(null);
-  if (seenProbeKey !== connectionProbeKey) {
-    setSeenProbeKey(connectionProbeKey);
-    setProbeEpoch(epoch => epoch + 1);
-    if (completionProbe !== null) setCompletionProbe(null);
-  } else if (
-    completionProbe !== null
-    && (completionProbe.epoch !== probeEpoch
-      || (completionProbe.model !== "" && !completionModels.includes(completionProbe.model)))
-  ) {
-    setProbeEpoch(epoch => epoch + 1);
-    setCompletionProbe(null);
-  }
 
   useEffect(() => {
     return () => {
@@ -268,6 +233,7 @@ export default function ProviderOverview({
                 ? t("pws.firstResponse.modelsConfigured", { count: configuredModels.length || availableModels.length })
                 : t("pws.firstResponse.modelsEmpty");
   const probeStepState: CompletionProbeStatus = completionProbe?.status ?? "untested";
+  const reverifyPending = probeStepState === "untested" && reverifyModel !== null;
   const probeStepText = probeStepState === "testing"
     ? t("pws.testing")
     : probeStepState === "ok"
@@ -276,8 +242,12 @@ export default function ProviderOverview({
         ? t("pws.firstResponse.probeFailed", { model: completionProbe?.model ?? "" })
         : probeStepState === "not-applicable"
           ? t("pws.completion.notApplicable")
-          : t("pws.firstResponse.probeUntested");
+          : reverifyPending
+            ? t("pws.firstResponse.probeReverify", { model: reverifyModel })
+            : t("pws.firstResponse.probeUntested");
+  const displayEmail = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? undefined : oauthEmail;
   const openModelsAction = onOpenModelsTab ?? onOpenModels;
+  const fixCredentialsAction = onOpenAccounts ?? onEditSettings;
 
   return (
     <>
@@ -302,7 +272,7 @@ export default function ProviderOverview({
           </div>
           <div className="pws-kv-row">
             <dt>{t("pws.cell.auth")}</dt>
-            <dd>{oauthEmail ? `${authModeLabel(item, t)} · ${oauthEmail}` : authModeLabel(item, t)}</dd>
+            <dd>{displayEmail ? `${authModeLabel(item, t)} · ${displayEmail}` : authModeLabel(item, t)}</dd>
           </div>
           <div className="pws-kv-row">
             <dt>{t("modal.defaultModel")}</dt>
@@ -347,17 +317,31 @@ export default function ProviderOverview({
               </button>
             )}
           </div>
-          <div className="pws-first-response-row" data-first-response-step="probe" data-step-state={probeStepState}>
+          <div
+            className="pws-first-response-row"
+            data-first-response-step="probe"
+            data-step-state={probeStepState}
+            {...(reverifyPending ? { "data-reverify-pending": "true" } : {})}
+          >
             <span className="pws-first-response-label">{t("pws.firstResponse.stepProbe")}</span>
             <span className={
               probeStepState === "ok"
                 ? "pws-status-ok"
-                : probeStepState === "failed"
+                : probeStepState === "failed" || reverifyPending
                   ? "pws-status-warn"
                   : "muted"
             }>
               {probeStepText}
             </span>
+          </div>
+          <div className="pws-first-response-row" data-first-response-step="disconnect" data-step-state="info">
+            <span className="pws-first-response-label">{t("pws.firstResponse.stepDisconnect")}</span>
+            <span className="muted">{t("pws.firstResponse.disconnectNote", { provider: item.name })}</span>
+            {onOpenConnect && (
+              <button type="button" className="link-btn" onClick={onOpenConnect}>
+                {t("pws.firstResponse.openConnect")}
+              </button>
+            )}
           </div>
         </div>
         {apiBase !== undefined && (
@@ -379,11 +363,35 @@ export default function ProviderOverview({
                 {connectionText}
               </span>
             )}
+            {connectionResult && connectionState === "failed" && fixCredentialsAction && (
+              <button
+                type="button"
+                className="link-btn"
+                data-connection-recovery-action="fix-connection"
+                onClick={fixCredentialsAction}
+              >
+                {t(onOpenAccounts ? "pws.completion.recovery.fixAuth" : "pws.completion.recovery.fixSettings")}
+              </button>
+            )}
           </div>
         )}
-        {apiBase !== undefined && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
-          models={completionModels}
-          onStatusChange={next => setCompletionProbe({ epoch: probeEpoch, ...next })} />}
+        {apiBase !== undefined && (
+          <ProviderCompletionTest
+            key={item.name}
+            apiBase={apiBase}
+            provider={item.name}
+            probeKey={connectionProbeKey}
+            models={completionModels}
+            selectedModel={probeSelectedModel}
+            onSelectedModelChange={activeProbe.selectModel}
+            initialResult={completionProbe?.result ?? null}
+            initialError={completionProbe?.error ?? null}
+            onStatusChange={activeProbe.reportStatus}
+            onFixCredentials={fixCredentialsAction}
+            onFixSettings={onEditSettings}
+            onFixModels={openModelsAction}
+          />
+        )}
         {onEditSettings && (
           <button type="button" className="link-btn pws-edit-settings-link" onClick={onEditSettings}>
             {t("pws.editSettings")}
@@ -438,8 +446,8 @@ export default function ProviderOverview({
               {item.authMode === "forward"
                 ? t("pws.passthrough")
                 : item.authMode === "oauth"
-                  ? (oauthEmail
-                    ? t("pws.loggedInAs", { email: oauthEmail })
+                  ? (displayEmail
+                    ? t("pws.loggedInAs", { email: displayEmail })
                     : oauth?.loggedIn
                       ? t("pws.loggedInTitle")
                       : t("pws.notLoggedIn"))

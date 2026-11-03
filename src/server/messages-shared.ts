@@ -29,6 +29,7 @@ import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { AnthropicRequestError, isRec, type Rec } from "../claude/inbound-records";
 import type { RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
+import { recordLocalFailureDetail } from "./request-log-failure-detail";
 import type { OcxConfig } from "../types";
 
 export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; cacheCreation1hInputTokens?: number } | undefined {
@@ -113,7 +114,31 @@ export function tapAnthropicSseForLog(
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let buffer = "";
+  let frameParts: string[] = [];
+  let pendingParts: string[] = [];
+  let pendingChars = 0;
+  let heldCr = false;
+  let heldLf = false;
+  const appendPart = (part: string) => {
+    if (!part) return;
+    pendingParts.push(part);
+    pendingChars += part.length;
+    // Coalesce tiny transport fragments: a one-byte feed must not retain one array
+    // entry per byte for the entire event. Each character is joined at most twice.
+    if (pendingChars >= 4096) {
+      frameParts.push(pendingParts.join(""));
+      pendingParts = [];
+      pendingChars = 0;
+    }
+  };
+  const takeFrame = () => {
+    if (pendingParts.length) frameParts.push(pendingParts.join(""));
+    const frame = frameParts.join("");
+    frameParts = [];
+    pendingParts = [];
+    pendingChars = 0;
+    return frame;
+  };
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
@@ -165,17 +190,29 @@ export function tapAnthropicSseForLog(
     }
   };
   const inspect = (chunk: Uint8Array) => {
-    buffer += decoder.decode(chunk, { stream: true });
-    // SSE lines may end in CRLF, LF or CR. Normalize the inspection copy to LF (the forwarded
-    // bytes are untouched), holding a trailing CR until the next chunk shows whether an LF
-    // follows it, so a CRLF split across chunks stays one line ending.
-    const heldCr = buffer.endsWith("\r");
-    buffer = (heldCr ? buffer.slice(0, -1) : buffer).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
+    // Normalize and scan only new text. Keep an unfinished frame in fragments so a long
+    // SSE event arriving in small chunks is never flattened or rescanned on each read.
+    let text = (heldCr ? "\r" : "") + decoder.decode(chunk, { stream: true });
+    heldCr = text.endsWith("\r");
+    text = (heldCr ? text.slice(0, -1) : text).replace(/\r\n?/g, "\n");
+    let start = 0;
+    if (text && heldLf) {
+      heldLf = false;
+      if (text[0] === "\n") {
+        inspectFrame(takeFrame());
+        start = 1;
+      } else appendPart("\n");
+    }
     let sep: number;
-    while ((sep = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      inspectFrame(frame);
+    while ((sep = text.indexOf("\n\n", start)) !== -1) {
+      appendPart(text.slice(start, sep));
+      inspectFrame(takeFrame());
+      start = sep + 2;
+    }
+    if (start < text.length) {
+      heldLf = text.endsWith("\n");
+      const end = text.length - (heldLf ? 1 : 0);
+      appendPart(text.slice(start, end));
     }
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
@@ -184,14 +221,18 @@ export function tapAnthropicSseForLog(
   // client has not seen a blank line after, so the caller restores one. tailClean: nothing but
   // comments or a ping is left undelimited, so no message event was cut off.
   const flushTail = (): { terminalInTail: boolean; tailClean: boolean } => {
-    // At EOF a held CR is a line ending, so it can complete a frame the client already has.
-    let tail = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
-    buffer = "";
+    // Rebuild the unscanned text in wire order (fragments, held LF, held CR). At EOF a held CR is
+    // a line ending, so it can complete a frame the client already has.
+    const rest = (takeFrame() + (heldLf ? "\n" : "") + (heldCr ? "\r" : "") + decoder.decode()).replace(/\r\n?/g, "\n");
+    heldCr = false;
+    heldLf = false;
+    let start = 0;
     let sep: number;
-    while ((sep = tail.indexOf("\n\n")) !== -1) {
-      inspectFrame(tail.slice(0, sep));
-      tail = tail.slice(sep + 2);
+    while ((sep = rest.indexOf("\n\n", start)) !== -1) {
+      inspectFrame(rest.slice(start, sep));
+      start = sep + 2;
     }
+    const tail = rest.slice(start);
     const terminalBefore = terminalSeen;
     if (tail) inspectFrame(tail, false);
     return {
@@ -236,7 +277,8 @@ export function tapAnthropicSseForLog(
       // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
       // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
       // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
-      logCtx.upstreamError = message.slice(0, 500);
+      recordLocalFailureDetail(logCtx, message, closeReason === "body_stall"
+        ? { code: "body_stall", value: guard?.stallMs ?? 0 } : { code: "body_overflow", value: guard?.maxBytes ?? 0 });
       finalize(502, { terminalStatus: "incomplete", closeReason });
       closeWithErrorFrame(errType, message);
     }
@@ -320,7 +362,7 @@ export function tapAnthropicSseForLog(
           // reset (below), so the client never reads a partial answer as a finished message.
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
-          logCtx.upstreamError = failure;
+          recordLocalFailureDetail(logCtx, failure, { code: lastDeliveredStop === "error" ? "stream_error_stop" : "stream_ended_early" });
           if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
           finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
           closeWithErrorFrame("api_error", failure);
@@ -381,6 +423,8 @@ export function tapAnthropicSseForLog(
         const message = redactSecretString(`anthropic passthrough upstream stream failed: ${err instanceof Error ? err.message : String(err)}`);
         logCtx.transportPhase = "mid_stream";
         logCtx.terminalSource = "synthetic";
+        // The runtime error text stays internal; the row keeps the fixed sentence only.
+        recordLocalFailureDetail(logCtx, "anthropic passthrough upstream stream failed", { code: "stream_failed" });
         logCtx.upstreamError = message.slice(0, 500);
         if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         finalize(502, { terminalStatus: "failed", closeReason: "terminal" });

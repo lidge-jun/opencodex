@@ -159,6 +159,7 @@ budget until emitted, discarded, or cancelled; replay collectors are released af
 retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
 progress from an answer and therefore still require validation. Normal private completion
 and real tool calls need no completion retry.
+The retry snapshots cloneable request fields without top-level runtime callbacks, leaving the original request intact.
 
 A turn can carry a real tool call and the private completion call together, in either order.
 The turn then continues through the real tools: the parser drops the completion call, ends the

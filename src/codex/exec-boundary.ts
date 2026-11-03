@@ -20,8 +20,9 @@ import {
  * known-Codex-bundle classifier, and — when the lexical or canonical path sits
  * inside a ChatGPT.app or Codex.app bundle at any location — checked by the shared
  * signature/ownership policy before the same canonical target is returned for
- * execution. Anything else, including binaries inside third-party app bundles,
- * is passed through to the shared launcher unchanged.
+ * execution. CLI handoffs additionally classify any enclosing lexical or canonical .app,
+ * independent of bundle name or identifier. Other callers retain the known-app
+ * policy; non-bundle executables pass through to the shared launcher unchanged.
  *
  * The check is one-shot per invocation and deliberately not memoized:
  * directory-service group membership, signature state, and directory-entry
@@ -53,6 +54,10 @@ export interface CodexExecBoundaryDeps {
   executable?: (path: string) => boolean;
   /** Canonicalizer; returns null when the path cannot be resolved. */
   realpath?: (path: string) => string | null;
+  /** CLI handoffs verify any enclosing app, without trusting mutable bundle identity metadata. */
+  verifyAnyAppBundle?: boolean;
+  /** Discovered Desktop bundle identity, retained by its generated launcher across respawns. */
+  expectedBundleRoot?: string;
   macBundleTrustReason?: (bundleRoot: string, binary: string) => string | null;
 }
 
@@ -113,21 +118,35 @@ function resolveDarwinExecPath(command: string, deps: CodexExecBoundaryDeps): { 
 
 /**
  * Canonical (bundleRoot, binary) pair when the resolved path classifies into a
- * known Codex desktop bundle, else null. The pair is always consistent:
+ * known Codex desktop bundle (or any enclosing app for CLI handoffs), else null. The pair is always consistent:
  * both halves are canonicalized together so a symlinked HOME or a PATH alias
  * cannot split the containment check, and a bundle member that cannot be
  * canonicalized refuses rather than escaping the known-bundle classification.
  */
 function darwinBundleTarget(resolved: string, deps: CodexExecBoundaryDeps): { bundle: string; binary: string } | null {
   const realpath = deps.realpath ?? realpathOrNull;
-  const bundle = macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
-  if (!bundle) return null;
+  if (deps.expectedBundleRoot !== undefined && !posix.isAbsolute(deps.expectedBundleRoot)) {
+    throw new CodexExecTrustError("the recorded app bundle must be an absolute path");
+  }
   const binary = realpath(resolved);
+  const enclosingApp = (path: string) => /^(.*?\/[^/]*\.app)(?:\/|$)/i.exec(path)?.[1];
+  const lexicalBundle = deps.verifyAnyAppBundle && deps.expectedBundleRoot === undefined ? enclosingApp(resolved) : undefined;
+  // Verify the outer canonical app for nested layouts, but retain lexical containment.
+  const enclosing = deps.verifyAnyAppBundle && binary !== null ? enclosingApp(binary) : undefined;
+  const bundle = deps.expectedBundleRoot ?? enclosing ?? lexicalBundle ?? macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
+  if (!bundle) return null;
   if (binary === null) throw new CodexExecTrustError("cannot canonicalize the app-bundle exec target");
   const canonicalBundle = realpath(bundle);
   if (canonicalBundle === null) throw new CodexExecTrustError("cannot canonicalize the app bundle");
   if (!binary.startsWith(canonicalBundle + "/Contents/")) {
     throw new CodexExecTrustError("the app-bundle exec target is outside bundle Contents");
+  }
+  if (lexicalBundle && lexicalBundle !== bundle) {
+    const canonicalLexicalBundle = realpath(lexicalBundle);
+    if (canonicalLexicalBundle === null) throw new CodexExecTrustError("cannot canonicalize the app bundle");
+    if (!binary.startsWith(canonicalLexicalBundle + "/Contents/")) {
+      throw new CodexExecTrustError("the app-bundle exec target is outside bundle Contents");
+    }
   }
   return { bundle: canonicalBundle, binary };
 }
@@ -144,6 +163,7 @@ export function validatedCodexExecTarget(
   deps: CodexExecBoundaryDeps = {},
 ): ValidatedCodexExecTarget {
   if ((deps.platform ?? process.platform) !== "darwin") {
+    if (deps.expectedBundleRoot !== undefined) throw new CodexExecTrustError("recorded app bundles require macOS verification");
     return { invocation: codexExecInvocation(command, args, deps.platform ?? process.platform, { env: deps.env, exists: deps.exists }), macAppBundle: false };
   }
   const resolved = resolveDarwinExecPath(command, deps);
@@ -164,6 +184,7 @@ export async function validatedCodexExecTargetAsync(
 ): Promise<ValidatedCodexExecTarget> {
   deps.signal?.throwIfAborted();
   if ((deps.platform ?? process.platform) !== "darwin") {
+    if (deps.expectedBundleRoot !== undefined) throw new CodexExecTrustError("recorded app bundles require macOS verification");
     return { invocation: codexExecInvocation(command, args, deps.platform ?? process.platform, { env: deps.env, exists: deps.exists }), macAppBundle: false };
   }
   const resolved = resolveDarwinExecPath(command, deps);

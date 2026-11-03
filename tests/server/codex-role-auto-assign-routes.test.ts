@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCatalogNativeSlugs, type CatalogModel } from "../../src/codex/catalog";
+import { ARTIFICIAL_ANALYSIS_SOURCE, type LoadCapability } from "../../src/codex/role-capability";
 import { ROLE_SIZING_SYSTEM_PROMPT } from "../../src/codex/role-sizing";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { RoleSizingCall } from "../../src/server/management/codex-role-auto-assign";
@@ -70,6 +71,7 @@ const deps = {
     calls.push(call);
     return answer;
   },
+  loadCodexRoleCapability: (async () => ({ source: null, publishedAt: null, domains: {} })) as LoadCapability,
 };
 
 async function call(path: string, init?: RequestInit) {
@@ -84,6 +86,57 @@ function snapshot(): Record<string, string> {
 }
 
 describe("POST /api/codex-agent-roles/auto-assign", () => {
+  test("Artificial Analysis success produces measured tiers without exposing scores", async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = Object.assign(async (input: string | URL | globalThis.Request) => {
+      urls.push(String(input));
+      return Response.json({ data: [
+        { name: "small", evaluations: { artificial_analysis_coding_index: 66 } },
+        { name: "big", evaluations: { artificial_analysis_coding_index: 58 } },
+      ] });
+    }, { preconnect: originalFetch.preconnect }) as typeof fetch;
+    answer = { text: JSON.stringify({ roles: { explorer: { ...sized("frontier", "glance"), domain: "coding" } } }) };
+    try {
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+        new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+        { ...config, codexRoleTiers: undefined, codexRoleCapability: { artificialAnalysis: { apiKey: "aa-success-route-fixture" } } },
+        { ...deps, loadCodexRoleCapability: undefined },
+      );
+      const body = await response!.json();
+      expect(urls).toEqual(["https://artificialanalysis.ai/api/v2/data/llms/models"]);
+      expect(body.capability.name).toBe("Artificial Analysis");
+      expect(body.capability.domains.coding).toEqual([{ model: "stub/small", tier: expect.any(String) }, { model: "stub/big", tier: expect.any(String) }]);
+      expect(body.proposals.find((row: { role: string }) => row.role === "explorer")).toMatchObject({ tierSource: "measured", proposedModel: "stub/small" });
+    } finally { globalThis.fetch = originalFetch; }
+  });
+  test.each([false, true])("disabled benchmarks retain proposals and report unavailability (Artificial Analysis configured: %s)", async withAnalysis => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = Object.assign(async (input: string | URL | globalThis.Request) => {
+      requests.push(String(input));
+      return new Response("fixture failure", { status: 401 });
+    }, { preconnect: originalFetch.preconnect }) as typeof fetch;
+    try {
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+        new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+        { ...config, codexRoleCapability: withAnalysis ? { artificialAnalysis: { apiKey: "route-consent-fixture" } } : undefined },
+        { ...deps, loadCodexRoleCapability: undefined },
+      );
+      expect(response!.status).toBe(200);
+      const body = await response!.json();
+      expect(requests).toEqual(withAnalysis ? ["https://artificialanalysis.ai/api/v2/data/llms/models"] : []);
+      expect(body.capability.error).toBe(withAnalysis ? "Artificial Analysis could not be read" : "benchmark data was unavailable: no Artificial Analysis key is configured");
+      expect(body.capability).toMatchObject({ name: null, url: null, license: null, publishedAt: null });
+      expect(body.capability.domains).toEqual({});
+      expect(body.proposals.find((row: { role: string }) => row.role === "explorer")).toMatchObject({ status: "proposed", proposedModel: "stub/small" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("proposes a model and effort per role through one sizing call and writes nothing", async () => {
     const before = snapshot();
     const result = await call("/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" });
@@ -99,6 +152,41 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     expect(byRole.explorer).toMatchObject({ status: "proposed", model: "stub/big", effort: "high", proposedModel: "stub/small", proposedEffort: "low", tier: "fast" });
     expect(byRole.worker).toMatchObject({ status: "proposed", proposedModel: "stub/big", proposedEffort: "xhigh", tier: "frontier" });
     expect(byRole.bare.status).toBe("unsized");
+  });
+
+  test("tiers a role by its domain's measured scores, and an unreadable source leaves price rank in charge", async () => {
+    const pricedConfig = { ...config, codexRoleTiers: undefined } as unknown as OcxConfig;
+    answer = { text: JSON.stringify({ roles: { explorer: { ...sized("frontier", "glance"), domain: "coding" } } }) };
+    const post = async (loadCodexRoleCapability: typeof deps.loadCodexRoleCapability) => {
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+        new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+        pricedConfig,
+        { ...deps, loadCodexRoleCapability },
+      );
+      return await response!.json() as Record<string, any>;
+    };
+    const measured = await post(async () => ({
+      source: ARTIFICIAL_ANALYSIS_SOURCE,
+      publishedAt: null,
+      domains: { coding: new Map([["small", 1550], ["big", 1450]]) },
+    }));
+    const explorer = (measured.proposals as any[]).find(p => p.role === "explorer");
+    expect(explorer).toMatchObject({ domain: "coding", proposedModel: "stub/small", tierSource: "measured" });
+    expect(measured.capability).toMatchObject({ name: "Artificial Analysis", publishedAt: null, error: null });
+    expect(measured.capability.domains.coding[0].score).toBeUndefined();
+    const licensed = await post(async () => ({
+      source: ARTIFICIAL_ANALYSIS_SOURCE,
+      publishedAt: null,
+      domains: { coding: new Map([["small", 66], ["big", 58]]) },
+    }));
+    expect(licensed.capability).toMatchObject({ name: "Artificial Analysis", url: "https://artificialanalysis.ai" });
+    expect(licensed.capability.domains.coding[0]).toEqual({ model: "stub/small", tier: expect.any(String) });
+    expect(licensed.capability.redistributable).toBeUndefined();
+    const failed = await post(async () => { throw new Error("offline at /home/secret"); });
+    expect(failed.capability.error).toBe("the measured capability source could not be read");
+    expect(JSON.stringify(failed)).not.toContain("/home/secret");
+    expect((failed.proposals as any[]).find(p => p.role === "explorer").tierSource).not.toBe("measured");
   });
 
   test("a routed model that declares no levels takes the ladder and default Codex shows for it", async () => {

@@ -3,7 +3,7 @@ import { providerDecisionWindows } from "../quota-decision-publication";
 import type { DecisionQuotaWindow } from "../quota-decision-snapshot";
 import { createHash } from "node:crypto";
 import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
-import { withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
 import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-cache";
 import { codexPlanKey } from "../../codex/plan";
 import { resolveProviderApiKey } from "../key-store";
@@ -154,16 +154,28 @@ export function hasCodexPoolProvider(config: OcxConfig): boolean {
   ));
 }
 
-function quotaSignatureValue(quota: CodexCapacityQuota | null): unknown {
+/**
+ * Signature of one pool account's presentation state. Every proxied Codex response restamps the
+ * observation, so a raw `updatedAt` in the key stopped the report cache from ever committing
+ * while traffic flowed (#7956). The key carries the fresh/stale verdict aggregation derives
+ * from it instead; value changes and freshness transitions still miss the cache. A displayed
+ * window `updatedAt` can therefore lag a restamp by up to the report cache TTL. The exception is
+ * an exhausted short window without a reset: its `shortObservedAt` alone decides whether it
+ * still blocks, over a window as short as that TTL, so that clock stays in the key.
+ */
+function quotaSignatureValue(quota: CodexCapacityQuota | null, now: number): unknown {
   if (!quota) return null;
+  const resetless = !(typeof quota.fiveHourResetAt === "number" && quota.fiveHourResetAt > 0);
+  const observationDecides = resetless && (quota.fiveHourPercent ?? 0) >= CODEX_EXHAUSTED_USAGE_PERCENT;
   return {
     fiveHourPercent: quota.fiveHourPercent,
     fiveHourResetAt: quota.fiveHourResetAt,
+    ...(observationDecides ? { shortObservedAt: quota.shortObservedAt } : {}),
     weeklyPercent: quota.weeklyPercent,
     weeklyResetAt: quota.weeklyResetAt,
     monthlyPercent: quota.monthlyPercent,
     monthlyResetAt: quota.monthlyResetAt,
-    updatedAt: quota.updatedAt,
+    fresh: Number.isFinite(quota.updatedAt) && now - quota.updatedAt <= CODEX_CAPACITY_MAX_QUOTA_AGE_MS,
     customWindows: [...(quota.customWindows ?? [])]
       .map(window => ({ label: window.label, percent: window.percent, resetAt: window.resetAt }))
       .sort((a, b) => a.label.localeCompare(b.label)),
@@ -204,13 +216,14 @@ export function cacheKeyWithAggregationState(
     try {
       const activeId = effectiveCodexAuthAccountId(config);
       const snapshot = await (prefetchedSnapshot ?? listCodexAuthAccountsSnapshot(config, false));
+      const now = Date.now();
       const rows = snapshot.accounts.map(account => ({
         isMain: account.isMain,
         active: account.id === activeId,
         plan: codexPlanKey(account.plan) ?? null,
         paused: account.paused,
         needsReauth: account.needsReauth === true,
-        quota: quotaSignatureValue(providerQuotaFromCodexQuota(account.quota)),
+        quota: quotaSignatureValue(providerQuotaFromCodexQuota(account.quota), now),
       }));
       const canonicalRows = rows.map(row => JSON.stringify(row)).sort();
       const digest = createHash("sha256").update(JSON.stringify(canonicalRows)).digest("hex").slice(0, 24);

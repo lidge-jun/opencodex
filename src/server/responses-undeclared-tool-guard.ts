@@ -1,4 +1,5 @@
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
+import { hasItemProvenance, isHistoricalItem } from "../responses/item-provenance";
 import {
   collectAmbiguousDottedAliases,
   dottedAliasIsUnambiguous,
@@ -136,6 +137,9 @@ export function currentTurnWireToolCatalogBody(
   replayPrefixLength: number | undefined,
 ): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  if (body.input.some(hasItemProvenance)) {
+    return { ...body, input: body.input.filter(item => !isHistoricalItem(item)) };
+  }
   if (typeof replayPrefixLength !== "number" || !Number.isFinite(replayPrefixLength)) return body;
   const start = Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength)));
   if (start === 0) return body;
