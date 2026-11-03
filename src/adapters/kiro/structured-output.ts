@@ -1,6 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../types";
 import { KIRO_STRUCTURED_OUTPUT_TOOL_NAME } from "../kiro-constants";
 import { sanitizeKiroSchema } from "../kiro-tools";
+import { assertKiroStrictSchemaSupported, kiroStrictSchemaProblem, rewriteKiroWrappedRefs } from "./structured-output-schema";
 
 /**
  * Structured output on Kiro, emulated through a private terminal tool.
@@ -15,12 +16,16 @@ import { sanitizeKiroSchema } from "../kiro-tools";
  * structured-output turn advertises one tool whose input schema IS the caller's format, tells the
  * model to answer by calling it, and relays the call's input as the assistant's text. The promise
  * is unchanged: the client receives JSON that parsed and passed the checks below, or an error —
- * never prose. Those checks are deliberately light (root type and the root's `required` keys); full
- * JSON Schema validation is not attempted, the same position the Cursor prompt fallback takes.
+ * never prose. A non-strict format gets light checks (root type and the root's `required` keys),
+ * the same position the Cursor prompt fallback takes. A `strict: true` format is validated against
+ * the whole schema (structured-output-schema.ts), and a strict schema that validator cannot enforce
+ * is refused before sending.
  */
 export interface KiroStructuredOutputSpec {
   /** The caller's schema exactly as sent; absent when only "a JSON object" was requested. */
   schema?: Record<string, unknown>;
+  /** True when the caller asked for `strict: true`, so the value must conform to the whole schema. */
+  strict?: boolean;
   /** The tool input schema actually advertised: sanitized, and wrapped when `wrapped` is true. */
   toolSchema: Record<string, unknown>;
   /**
@@ -64,13 +69,17 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
   };
   const schema = format?.type === "json_schema" && isRecord(format.schema) ? format.schema : undefined;
   if (!schema) return { toolSchema: { type: "object" }, wrapped: false, ...meta };
+  const strict = format?.type === "json_schema" && format.strict === true;
+  if (strict) assertKiroStrictSchemaSupported(schema);
+  const contract = { schema, ...(strict ? { strict } : {}) };
   const sanitized = sanitizeKiroSchema(schema) as JsonRecord;
-  if (isPlainObjectRoot(schema)) return { schema, toolSchema: sanitized, wrapped: false, ...meta };
+  if (isPlainObjectRoot(schema)) return { ...contract, toolSchema: sanitized, wrapped: false, ...meta };
   // `#/$defs/...` references resolve against the document root, which is now the wrapper. Hoist the
-  // definitions with them so a referenced schema still resolves after it moves under `value`.
-  const { $defs, definitions, ...inner } = sanitized;
+  // definitions with them so a referenced schema still resolves after it moves under `value`, and
+  // re-point `#` and other root-relative references at `#/properties/value`, the original root.
+  const { $defs, definitions, ...inner } = rewriteKiroWrappedRefs(sanitized) as JsonRecord;
   return {
-    schema,
+    ...contract,
     wrapped: true,
     toolSchema: {
       type: "object",
@@ -183,6 +192,7 @@ function admittedRootTypes(schema: JsonRecord): string[] {
 
 /** The first reason `value` breaks the light contract, or undefined when it passes. */
 function structuredValueProblem(spec: KiroStructuredOutputSpec, value: unknown): string | undefined {
+  if (spec.strict && spec.schema) return kiroStrictSchemaProblem(spec.schema, value);
   const types = spec.schema ? admittedRootTypes(spec.schema) : ["object"];
   if (types.length > 0 && !types.some(type => matchesJsonType(value, type))) {
     return `expected a JSON ${types.join(" or ")} at the root`;

@@ -154,17 +154,24 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
 
 - The tool's input schema is the caller's schema, sanitized like every Kiro tool schema. A root that
   is not a plain `type: "object"` (array, scalar, root `anyOf`/`oneOf`/`allOf`/`$ref`) is wrapped
-  as `{value: <schema>}` with `$defs`/`definitions` hoisted, rather than flattened the way
+  as `{value: <schema>}` with `$defs`/`definitions` hoisted and every other local `$ref` (`#`,
+  `#/items`, ...) re-pointed under `#/properties/value`, rather than flattened the way
   `src/adapters/kiro-tools.ts` flattens ordinary argument schemas. `json_object` advertises
-  `{type: "object"}`.
+  `{type: "object"}`. Sanitization copies `const`, `enum`, `default` and `examples` verbatim,
+  because they hold data whose keys only look like keywords.
 - It replaces `codex_kiro_final_answer` as the terminal channel and forces completion mode
   `required` even on a tool-free turn. Client tools are still advertised ahead of it; a tool-free
   turn carries no tool-catalog nudge. The prose contract restates the caller's unsanitized schema
   when it fits the injected-instruction budget, and is otherwise sent without it.
 - The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
   call. The direct form relays the model's bytes; the wrapped form relays `JSON.stringify(value)`.
-  Validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
-  root's `required` keys are present. Full JSON Schema validation is not attempted.
+  Without `strict: true`, validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
+  root's `required` keys are present. With `strict: true`, `src/adapters/kiro/structured-output-schema.ts`
+  validates the whole value against the original schema: `type` (including type arrays), `properties`,
+  `required`, `additionalProperties`, `enum`, `const`, `items`, `anyOf`, local `$ref` with
+  `$defs`/`definitions`, and string length, pattern, numeric and array-length bounds. A strict
+  schema with any other assertion keyword (`format`, `oneOf`, `allOf`, `not`, tuple `items`, a
+  remote `$ref`, ...) is refused before anything is sent, as structured output was before emulation.
 - A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
   JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, or a tool
   input that fails validation (including truncated JSON), takes the one bounded `text_fallback` retry with a structured-output

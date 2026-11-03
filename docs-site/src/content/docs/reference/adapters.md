@@ -514,8 +514,11 @@ MiMo model Command Code serves.
   that tool's input as the response text. A plain-text reply that is already the requested JSON is
   accepted as is. Any other reply gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
   with an `invalid_kiro_structured_output` error. A caller expecting JSON never receives prose.
-  The check covers JSON syntax, the root type and the root's required properties, not every
-  schema keyword.
+  Without `strict: true` the check covers JSON syntax, the root type and the root's required
+  properties. With `strict: true` the whole value is checked against the schema (types, properties,
+  required, additionalProperties, enum, const, items, anyOf, local `$ref`, and length, pattern and
+  range bounds); a strict schema that uses any other assertion keyword, such as `format` or
+  `oneOf`, is refused before the request is sent.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
   Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a
