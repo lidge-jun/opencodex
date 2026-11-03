@@ -26,6 +26,14 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
   return codexInstallationIdForAccount(chatgptAccountId);
 }
 
+/**
+ * Rewrites the `installation_id` inside Codex turn metadata while preserving all other fields.
+ *
+ * Structure contract: the returned JSON is ASCII-safe — every non-ASCII code unit is
+ * escaped as `\\uXXXX`. Both consumers of rewritten turn metadata (the
+ * `x-codex-turn-metadata` HTTP header and the embedded `client_metadata` value)
+ * receive this ASCII-safe form, so header setters never see literal Unicode.
+ */
 export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAccountId: string): string {
   if (!chatgptAccountId.trim()) throw new CodexInstallationIdUnavailableError();
   // A size bound must refuse the Pool send, never bypass identity projection.
