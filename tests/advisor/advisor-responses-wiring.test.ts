@@ -145,7 +145,7 @@ function stubExaSearch() {
   }) as typeof fetch;
 }
 
-function workerRequest(input: unknown, threadId?: string, stream = true, tools?: unknown[]) {
+function workerRequest(input: unknown, threadId?: string, stream = true, tools?: unknown[], toolChoice?: unknown) {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
@@ -155,7 +155,11 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
       // Codex sends `thread-id`; it is the ledger's conversation identity.
       ...(threadId ? { "thread-id": threadId } : {}),
     },
-    body: JSON.stringify({ model: "worker/deepseek-v4", input, stream, ...(tools ? { tools } : {}) }),
+    body: JSON.stringify({
+      model: "worker/deepseek-v4", input, stream,
+      ...(tools ? { tools } : {}),
+      ...(toolChoice ? { tool_choice: toolChoice } : {}),
+    }),
   });
 }
 
@@ -373,6 +377,70 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(body).not.toContain("call_adv_1");
   });
 
+  test("web-search tool choice cannot be widened to Advisor", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const chatRequests: string[] = [];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([advisorCallFrames], workerBodies),
+    );
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+
+    const response = await handleResponses(workerRequest(
+      "Search without consulting the expert", undefined, true, [{ type: "web_search" }],
+      { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] },
+    ), config, logCtx);
+    const body = await response.text();
+
+    expect(workerBodies).toHaveLength(1);
+    const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
+    expect(dispatched.tools?.map(tool => tool.function?.name)).toEqual(["web_search"]);
+    expect(chatRequests).toHaveLength(0);
+    expect(body).toContain("undeclared_tool_call");
+    expect(body).not.toContain("call_adv_1");
+    expect(body).not.toContain("response.completed");
+  });
+
+  test.each([true, false])("client advisor passthrough respects the effective choice: allowed=%s", async allowed => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const config = advisorConfig(undefined, workerProviderFetch([advisorCallFrames], workerBodies));
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    const response = await handleResponses(workerRequest("Use available tools", undefined, true, [
+      { type: "web_search" }, { type: "function", name: "advisor", parameters: { type: "object" } },
+    ], allowed ? "auto" : { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] }), config, logCtx);
+    const body = await response.text();
+    expect(workerBodies).toHaveLength(1);
+    if (allowed) {
+      expect(body).toContain("call_adv_1");
+      expect(body).not.toContain("undeclared_tool_call");
+    } else {
+      expect(body).toContain("undeclared_tool_call");
+      expect(body).not.toContain("call_adv_1");
+      expect(body).not.toContain("response.completed");
+    }
+  });
+
+  test.each(["complete", "incomplete", "unterminated"])("scanner refuses an unauthorized advisor atomically: %s", shape => {
+    const usage = { inputTokens: 11, outputTokens: 3 };
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "private-advisor-id", name: "advisor" },
+      { type: "tool_call_delta", arguments: '{"question":"private-question"}' },
+      ...(shape === "unterminated" ? [] : [{ type: "tool_call_end" as const, ...(shape === "incomplete" ? { incomplete: true } : {}) }]),
+      { type: "done", stopReason: "tool_calls", usage },
+    ];
+    const split = scanEventsForWebSearch(events);
+    expect(split.calls).toEqual([]);
+    expect(split.hasRealToolCall).toBe(false);
+    expect(split.hasMalformedToolCall).toBe(false);
+    expect(split.passthrough).toHaveLength(1);
+    expect(split.passthrough[0]).toMatchObject({ type: "error", code: "undeclared_tool_call", usage });
+    expect(JSON.stringify(split.passthrough)).not.toContain("private-advisor-id");
+    expect(JSON.stringify(split.passthrough)).not.toContain("private-question");
+  });
+
   test("web_search and advisor calls are fulfilled in worker order without leaking advisor", async () => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
@@ -440,7 +508,7 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(body).not.toContain("call_adv_mixed");
   });
 
-  test("advisor remains bounded while web-search owns repeated continuations", async () => {
+  test.each([false, true])("advisor remains bounded while web-search owns repeated continuations (allowlist=%s)", async allowlist => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
     const chatRequests: string[] = [];
@@ -451,11 +519,20 @@ describe("advisor responses wiring (end-to-end)", () => {
     config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
     loopbackInterceptor(config, { chatRequests });
 
-    const response = await handleResponses(workerRequest("Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }]), config, logCtx);
+    const response = await handleResponses(workerRequest(
+      "Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }],
+      allowlist ? { type: "allowed_tools", mode: "required", tools: [
+        { type: "function", name: "advisor" }, { type: "web_search" },
+      ] } : undefined,
+    ), config, logCtx);
     const body = await response.text();
+    const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
+    expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("web_search");
+    expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("advisor");
     expect(body).toContain("advisor_continuation_limit");
     expect(workerBodies).toHaveLength(5);
-    expect(chatRequests.length).toBeLessThanOrEqual(3);
+    // The repeated fixture question is deduplicated by the real Advisor runtime.
+    expect(chatRequests).toHaveLength(1);
   });
 
   test("scanner drops incomplete and unterminated advisor calls", () => {

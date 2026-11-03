@@ -904,9 +904,9 @@ describe("owned Pi/Aside catalogs follow filtered model selections", () => {
 });
 
 test("the direct ocx sync command refreshes owned clients including OpenCode and Kilo and server-owned Aside", async () => {
-  const src = await Bun.file(new URL("../../src/cli/dispatch.ts", import.meta.url)).text();
-  const start = src.indexOf("sync: async deps =>");
-  const command = src.slice(start, src.indexOf("v2: async deps =>", start));
+  const src = await Bun.file(new URL("../../src/cli/sync-command.ts", import.meta.url)).text();
+  const start = src.indexOf("export async function runSyncCommand");
+  const command = src.slice(start, src.indexOf("async function handleConnectedSyncCatalogWrite", start));
   expect(command).toContain("refreshOwnedCatalogIntegrations");
   // Command Code joined this fan-out with its integration: a sync must refresh its
   // provider block too, or the client keeps a stale catalog until the next apply.
