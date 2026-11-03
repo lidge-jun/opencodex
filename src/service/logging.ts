@@ -126,8 +126,10 @@ export function startServiceLogging(
     restore.push(() => { console[method] = original; });
   }
   // Rotation creates the .1/.2 files, so every rotation registers them first. Once recorded this
-  // is one stat, and it still sees an uninstall tombstone written after logging started; a refusal
-  // (uninstall in progress, busy ownership lock) skips this rotation and retries next tick.
+  // is one stat, and it still sees an uninstall tombstone written after logging started. A thrown
+  // refusal (uninstall in progress, busy ownership lock) skips this rotation and retries next tick.
+  // A `false` result still rotates: a home without ownership metadata has nothing to register, and
+  // on a full manifest the unrecorded generations are reported by uninstall as residual paths.
   const rotate = () => {
     try {
       for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);

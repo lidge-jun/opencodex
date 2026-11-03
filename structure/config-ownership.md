@@ -18,7 +18,10 @@ because it records its own database through `recordOwnedConfigPath`.
   the file this process last saw under the lock; any other process's write, including a tombstone,
   sends it through the locked check.
 - SQLite's own busy wait is off: a lock still held after a 50 ms bounded retry throws
-  `ConfigOwnershipLockError` and nothing is written, so a paused holder cannot stall the event loop.
+  `ConfigOwnershipLockError` and nothing is written, so a paused holder cannot stall the event loop. A
+  path the manifest already lists is still accepted while the lock is busy: the manifest is replaced
+  atomically, so an unlocked read is a consistent version, and the path is refused only when that
+  version carries an uninstall tombstone. Only a new path needs the lock.
 - A registration that would push the manifest past 1,024 paths, or past the 64 KiB metadata limit
   less room for the tombstone, records nothing and warns once, so the manifest always stays one
   uninstall accepts. Writers keep working, and uninstall reports such files as residual paths. A
@@ -39,8 +42,10 @@ then deletes the manifest and owner marker under the lock and removes the lock f
   the snapshot and removed, or refused. One that arrives after the metadata is gone while the root
   still holds other files records nothing, and its file is reported as a residual path if it exists
   when uninstall lists what remains (a file created after that point is not seen by that run). One
-  that arrives after the root itself is removed creates a new root with new metadata and records its
-  path there.
+  that arrives when the root is missing or empty creates new metadata and records its path there.
+  Before deleting the metadata, uninstall re-reads the manifest under the lock; a path recorded after
+  its snapshot (two uninstalls at once, one inside its teardown scope) keeps the manifest, and the run
+  reports it as partial so a rerun removes it.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
   keep refusing, and the next `ocx uninstall` finishes from the same manifest. The rerun's own cleanup
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this
@@ -51,9 +56,11 @@ then deletes the manifest and owner marker under the lock and removes the lock f
   order, so a root holding only the owner marker is always a stopped uninstall, never a home being
   created. If uninstall stops after deleting the manifest (a crash, or a lock
   file Windows keeps because another process holds it open), a rerun that finds only a valid owner
-  marker and lock files removes them and the root. With the owner marker present it also removes top-level
-  names every manifest starts with, which the rerun's own cleanup (the config mutation lock) can
-  recreate first. Any other file next to them is still refused.
+  marker and lock files removes them and the root. Before deleting the manifest, uninstall rewrites the owner
+  marker with `uninstallSnapshotRemovedAt`; only a marker carrying it lets a rerun also remove
+  top-level names every manifest starts with, which the rerun's own cleanup (the config mutation
+  lock) can recreate first. A home whose manifest is missing for any other reason keeps them and is
+  refused. Any other file next to them is still refused.
 - Callers that create a file only after registering it skip that file on a refusal: the restart
   handoff log is not opened, and service log rotation registers its generations before every
   rotation, so a tombstone written while the service runs stops it.
