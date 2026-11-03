@@ -9,6 +9,7 @@
  * post-transition bytes is what keeps the committed file from re-enabling the
  * flag the reconcile just turned off.
  */
+import { existsSync, readFileSync } from "node:fs";
 import { websocketsEnabled } from "../../config";
 import {
   HISTORY_RELABEL_STANDS_DOWN,
@@ -22,7 +23,7 @@ import {
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
-import { CODEX_CONFIG_PATH, resolveCodexStateDbPath } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
 import type { CodexWriteCandidate } from "../write-coordination";
@@ -35,6 +36,7 @@ import {
   ensureFastModeFeature,
   ensureRootWebSearchDisabled,
   normalizeServiceTier,
+  preserveUnmanagedProfileKeys,
   removeProfileSection,
   setRootModelCatalogPath,
   setRootModelProvider,
@@ -71,6 +73,11 @@ export interface CodexInjectionPlanOk {
   content: string;
   /** The exact string about to replace the profile file. */
   profileContent: string;
+  /**
+   * The profile bytes `profileContent` preserved keys from (null when absent).
+   * Re-checked under the write lock so an edit landing meanwhile is not overwritten.
+   */
+  profileSource: string | null;
   /** The resolved catalog path, never the raw option. */
   catalogPath: string | null;
   providerTableMode: boolean;
@@ -323,12 +330,16 @@ export function deriveCodexInjectionPlan(
     managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
   }
 
-  const profileContent = buildProfileFileForTarget(
-    routingTarget,
-    catalogPath,
-    websocketsForRoutingTarget(config, routingTarget),
-    config?.fastMode,
-    config?.codexProviderDisplayName,
+  const profileSource = readCodexProfileSource();
+  const profileContent = preserveUnmanagedProfileKeys(
+    profileSource,
+    buildProfileFileForTarget(
+      routingTarget,
+      catalogPath,
+      websocketsForRoutingTarget(config, routingTarget),
+      config?.fastMode,
+      config?.codexProviderDisplayName,
+    ),
   );
   content = applyEol(content, eol);
 
@@ -395,6 +406,7 @@ export function deriveCodexInjectionPlan(
     baselineContent,
     content,
     profileContent,
+    profileSource,
     catalogPath,
     providerTableMode,
     keepRootOverrideAlongsideTable,
@@ -413,4 +425,19 @@ export function deriveCodexInjectionPlan(
       catalogPath,
     },
   };
+}
+
+
+/**
+ * Current profile bytes, or null when absent. Read directly: a profile removed between an
+ * existence check and the read is simply absent. If it reappears before the write lock, the
+ * lock-time comparison refuses retryably; other read errors propagate.
+ */
+export function readCodexProfileSource(): string | null {
+  try {
+    return readFileSync(CODEX_PROFILE_PATH, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
 }
