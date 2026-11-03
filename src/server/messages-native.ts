@@ -56,6 +56,7 @@ import {
   isNonReplayableResponse,
   isReplayRefusalResponse,
   isTransientUpstreamStatus,
+  markResponseNonReplayable,
   prepareSameTarget429Wait,
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
@@ -219,8 +220,8 @@ export function createNativeMessagesComboSource(input: Omit<HandleNativeMessages
   };
 }
 
-/** Relay an upstream body unchanged, recording first output on its first non-empty chunk. */
-function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void): ReadableStream<Uint8Array> {
+/** Relay an upstream body unchanged, recording first output on its first non-empty chunk once `ready`. */
+function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void, ready = () => true): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let seen = false;
   return new ReadableStream<Uint8Array>({
@@ -230,7 +231,7 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
         controller.close();
         return;
       }
-      if (!seen && value.byteLength > 0) {
+      if (!seen && value.byteLength > 0 && ready()) {
         seen = true;
         onFirst();
       }
@@ -407,11 +408,19 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       attempt.usage = usage;
     }
   };
+  // A combo child whose preflight accepted has committed: a later failure must not replay,
+  // even when no content frame (and so no first output) was seen.
+  let committed = false;
   const fail = (status: number, message: string, type?: string, code?: string): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
-    return anthropicErrorResponse(status, safeMessage, type, code);
+    const response = anthropicErrorResponse(status, safeMessage, type, code);
+    if (committed) markResponseNonReplayable(response);
+    return response;
   };
+  // After preflight, first output waits for a content frame the log tap has seen.
+  const watchFirstOutput = (body: ReadableStream<Uint8Array>) => onFirstOutput
+    ? observeFirstChunk(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
       const response = fail(429, error.message, "rate_limit_error");
@@ -985,8 +994,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         try {
           const preflight = await preflightNativeMessagesResponse(delivered, logCtx, translatorBudget);
           if (preflight.kind === "failed") { bindUsage(logCtx.usage); return preflight.response; }
-          delivered = preflight.response;
-          onFirstOutput?.();
+          delivered = new Response(watchFirstOutput(preflight.response.body!), { status: preflight.response.status, headers: preflight.response.headers });
         } catch (error) {
           cleanupAbort(); releaseStreamTurn(); upstream.abort();
           if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
@@ -1010,8 +1018,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           finishLog(preflight.response.status, logCtx.upstreamError);
           return preflight.response;
         }
-        tapped = preflight.response.body!;
-        onFirstOutput?.();
+        committed = true;
+        tapped = watchFirstOutput(preflight.response.body!);
       }
       const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget);
       cleanupAbort();

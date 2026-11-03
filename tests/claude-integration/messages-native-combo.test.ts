@@ -366,6 +366,23 @@ describe("native Messages candidates in a combo", () => {
       expect(seen[0]!.body).toEqual({ ...source, model: "claude-sonnet-4-6", stream: true });
     } finally { await server.stop(true); }
   });
+  for (const streaming of [true, false]) test(`first output waits for a content frame (${streaming ? "stream" : "fold"})`, async () => {
+    const empty = frame("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 0 } }) + frame("message_stop");
+    answer = () => stream(prelude + empty);
+    const silent = await send({ stream: streaming });
+    expect(silent.rows[0]!.firstOutputMs).toBeUndefined();
+    expect(silent.rows[0]!.attempts![0]!.firstOutputMs).toBeUndefined();
+    answer = () => stream(prelude + textStart + textDelta + terminal);
+    const spoken = await send({ stream: streaming });
+    expect(spoken.rows[0]!.firstOutputMs).toBeNumber();
+    expect(spoken.rows[0]!.attempts![0]!.firstOutputMs).toBeNumber();
+  });
+  test("a fold committed by a non-content frame still never replays", async () => {
+    answer = () => stream(prelude + frame("fixture_unknown") + refusal);
+    const { text } = await send({ stream: false });
+    expect(text).toContain("fixture overloaded");
+    expect(seen).toHaveLength(1);
+  });
   test("native disabled keeps existing translated path", async () => {
     const { response } = await send({ config: config(false) });
     expect(response.status).toBe(200);
