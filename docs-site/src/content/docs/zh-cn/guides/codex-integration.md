@@ -124,6 +124,13 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 在 loopback 情况下，它包含可在自动注入被移除后手动合并的 root keys；在非 loopback 情况下，
 它包含专用 provider 形式。外部 provider 模式会保持这个 profile 不变。
 
+重新生成这个文件时，会保留 OpenCodex 不管理的普通 root keys，所以你添加的 `stream_idle_timeout_ms` 或
+`stream_max_retries` 这类设置在下一次注入后仍然存在。保留的赋值按原样复制，包括跨多行的值和 64 位整数，
+并放在第一个表之前。表内的键以及 `a.b = 1` 这样的点分 root key 不会保留。发生冲突时总是以 OpenCodex
+为准：它拥有的 root keys（`model_provider`、`model_catalog_json`、`openai_base_url`）会按当前路由模式
+重写；与 profile 写入的表同名的 root key（例如 profile 写入 `[features]` 时的内联 `features = { ... }`）
+会被丢弃。如果在注入等待写锁期间文件发生变化，注入会以可重试的错误停止，并保留你的修改。
+
 :::caution
 像 `openai_base_url`、`model_provider` 和 `model_catalog_json` 这样的 root keys **必须** 位于第一个
 `[table]` 头之前。注入器会保证这一点，移除自己留下的陈旧/重复副本，并且绝不会覆盖用户拥有的 root

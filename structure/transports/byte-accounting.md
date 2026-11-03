@@ -75,11 +75,14 @@ only. It copies no request content and adds no bytes to the upstream wire; see t
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
-`JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
+the byte length of `JSON.stringify(parsed)`: numeric normalization can make it larger than the input
+text. `src/server/json-serialized-bytes.ts` computes that length with an iterative walk, so a valid
+body nested deeper than the call stack is measured instead of throwing during accounting. These
 observations retain the existing ownership and release lifecycle and do not consume the translator's
 hard byte cap. Per-body limits, parsing, compression, and reader error envelopes are unchanged.
 `tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
-normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
+normalization, UTF-8 counting without encoded copies, release after malformed or optional empty input,
+and serialized-length parity with `JSON.stringify` including nesting it cannot walk.
 
 The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
@@ -105,7 +108,7 @@ discarding active leases or FIFO waiters; lowering capacity cannot erase outstan
 checks, before any request body is read. Default and smaller allowances do not consume this budget.
 Missing or small Content-Length and compressed wire bodies do not reduce the upload reservation.
 After successful bounded JSON parsing, the reader reduces it to the largest observed wire/decoded
-size, including normalized JSON bytes when the existing translator measurement is enabled.
+size, including normalized JSON bytes whether or not the route uses a translator budget.
 This reduction never exceeds the original allowance. The measured charge remains live;
 parsing never frees the whole lease.
 An already-aborted request or explicitly oversized declaration keeps the existing abort/413 path.
@@ -139,6 +142,14 @@ It does not bound state beyond the HTTP lifetime or change default-cap concurren
 envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` covers FIFO/accounting.
 
 ## Stream-buffer accounting
+
+Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
+its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
+removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps
+the previous charge owned until `finally` releases it, without releasing other owners' bytes.
+The turn limit and transport-read accounting remain in force. `tests/providers/command-code-buffer-budget.test.ts`
+covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
+one-byte overflow, another retained owner, consumer return and upstream cancellation.
 
 Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
 allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
