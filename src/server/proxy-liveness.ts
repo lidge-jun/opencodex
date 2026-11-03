@@ -55,7 +55,9 @@ export type EndpointLiveness = "live" | "dead" | "unknown";
  * immediately. Any bind error (EADDRINUSE, EADDRNOTAVAIL, EACCES) answers false, so an address
  * we cannot bind stays "unknown" and startup keeps refusing.
  */
-export function canBindAddress(hostname: string, port: number, timeoutMs = 1_500): Promise<boolean> {
+const BIND_PROOF_TIMEOUT_MS = 1_500;
+
+export function canBindAddress(hostname: string, port: number, timeoutMs = BIND_PROOF_TIMEOUT_MS): Promise<boolean> {
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) return Promise.resolve(false);
   return new Promise<boolean>(resolve => {
     const server = createServer();
@@ -87,9 +89,10 @@ export interface LivenessIo {
   loopbackAvailabilityFn?: typeof loopbackFamilyAvailability;
   /**
    * Test seam for the bind proof (see `canBindAddress`): whether `hostname:port` can be bound by
-   * this process right now, which proves no process owns that address.
+   * this process right now, which proves no process owns that address. `hostname` is the raw
+   * socket address (IPv6 unbracketed) and `timeoutMs` the remaining discovery budget.
    */
-  bindProofFn?: (hostname: string, port: number) => Promise<boolean>;
+  bindProofFn?: (hostname: string, port: number, timeoutMs: number) => Promise<boolean>;
   readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
@@ -553,6 +556,17 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   const budgetExhausted = (): boolean =>
     deadlineAt !== undefined && nowFn() >= deadlineAt;
   const expired = (): null => { observer?.endpoint("unknown"); return null; };
+  // The proof stays inside the discovery deadline: it is skipped once the budget is spent, its
+  // own timeout is capped by what remains, and a proof that finishes past the deadline is
+  // discarded, so an exhausted discovery still answers "unknown". A socket takes the raw
+  // address, never the bracketed URL spelling `probeHostname` composes for IPv6.
+  const bindProof = async (hostname: string, port: number): Promise<boolean> => {
+    const remainingMs = deadlineAt === undefined ? BIND_PROOF_TIMEOUT_MS : Math.min(BIND_PROOF_TIMEOUT_MS, deadlineAt - nowFn());
+    if (remainingMs <= 0) return false;
+    const socketHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    const bound = await (io.bindProofFn ?? canBindAddress)(socketHost, port, remainingMs);
+    return bound && !budgetExhausted();
+  };
   const probe = async (port: number, opts: { hostname?: string; expectedPid?: number }) => {
     // Missing/blank means an actual loopback bind, not a later config's bind scope.
     const bindHostname = opts.hostname?.trim() || "127.0.0.1";
@@ -563,7 +577,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
       let verdict: EndpointLiveness | undefined;
       const identity = await proxyIdentityAtObserved(port, opts, probeIo, observer ? (r => { verdict = r; }) : undefined);
       if (observer && !identity && verdict !== undefined) {
-        if (verdict === "unknown" && await (io.bindProofFn ?? canBindAddress)(probeHostname(opts.hostname), port)) verdict = "dead";
+        if (verdict === "unknown" && await bindProof(hostname, port)) verdict = "dead";
         observer.endpoint(verdict);
       }
       return identity ? { ...identity, hostname: bindHostname,
