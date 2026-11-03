@@ -102,10 +102,19 @@ type Visited = Set<string>;
  * root, since a sticky directory still lets a link's owner replace it. A link target's `..` is taken
  * from the physical directory reached so far, as the kernel does. Stops at the first missing entry.
  */
-function walkTrusted(start: string, parts: readonly string[], euid: number, depth: number, visited: Visited): Walk {
+function walkTrusted(
+  start: string,
+  parts: readonly string[],
+  euid: number,
+  depth: number,
+  visited: Visited,
+  /** The last component may be a regular file: a link in the tree can name a file. */
+  finalMayBeFile = false,
+): Walk {
   let current = start;
-  for (const part of parts) {
-    if (part === "" || part === ".") continue;
+  const meaningful = parts.filter(part => part !== "" && part !== ".");
+  for (const [index, part] of meaningful.entries()) {
+    const last = index === meaningful.length - 1;
     if (part === "..") { current = dirname(current); continue; }
     const next = join(current, part);
     let entry: Stats;
@@ -119,9 +128,15 @@ function walkTrusted(start: string, parts: readonly string[], euid: number, dept
       if (depth >= MAX_LINK_DEPTH || (entry.uid !== euid && entry.uid !== 0)) throw new OwnedPathRedirectedError();
       visited.add(next);
       const target = readlinkSync(next);
-      const walked = walkTrusted(isAbsolute(target) ? parse(target).root : current, target.split(sep), euid, depth + 1, visited);
+      const walked = walkTrusted(
+        isAbsolute(target) ? parse(target).root : current, target.split(sep), euid, depth + 1, visited, finalMayBeFile && last,
+      );
       if (!walked.complete) return walked;
       current = walked.path;
+      continue;
+    }
+    if (finalMayBeFile && last && entry.isFile()) {
+      current = next;
       continue;
     }
     if (!entry.isDirectory() || !posixTrustedAncestor(entry, euid)) throw new OwnedPathRedirectedError();
@@ -382,7 +397,7 @@ function onlyThisAccountCanChange(configDir: string): boolean {
   // link that leaves the root on the way back into it is refused as well.
   const tree = rootTree(rootPath, link => {
     const linkVisited: Visited = new Set();
-    const walked = walkTrusted(dirname(link), [basename(link)], euid, 0, linkVisited);
+    const walked = walkTrusted(dirname(link), [basename(link)], euid, 0, linkVisited, true);
     return walked.complete ? { path: walked.path, visited: [...linkVisited] } : null;
   });
   if (tree === null) return false;

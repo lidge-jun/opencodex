@@ -190,6 +190,14 @@ describe("owned path removal stays inside the config root", () => {
       unlinkSync(join(dir, "alias"));
       symlinkSync(dir, join(dir, "self"), "dir");
       expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+      // So is a link to a regular file in the tree, directly or through another link.
+      writeFileSync(join(dir, "inner", "target.txt"), "owned");
+      symlinkSync(join(dir, "inner", "target.txt"), join(dir, "file-alias"), "file");
+      symlinkSync(join(dir, "file-alias"), join(dir, "file-alias-2"), "file");
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+      // A path that continues past a file never resolves, and is refused.
+      symlinkSync(join(dir, "inner", "target.txt", "x"), join(dir, "past-file"), "file");
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
     } finally {
       chmodSync(shared, 0o700);
       removeTreeWithRetry(parent);
