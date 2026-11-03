@@ -286,7 +286,9 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(response.status).toBe(503);
     expect(Number(response.headers.get("retry-after"))).toBeGreaterThanOrEqual(119);
     expect(Number(response.headers.get("retry-after"))).toBeLessThanOrEqual(120);
-    expect(await response.text()).toContain("No available targets for combo: fan");
+    const body = await response.text();
+    expect(body).toContain("No available targets for combo");
+    expect(body).not.toContain("No available targets for combo: fan");
   });
 
   test("a target cooled earlier by a 502 does not replace the fallback's 401", async () => {
@@ -356,7 +358,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(logCtx.attempts).toHaveLength(2);
   });
 
-  test("the hop warning names the upstream refusal on one redacted line", async () => {
+  test("the hop warning names the classified condition, never the upstream text", async () => {
     const key = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     globalThis.fetch = (async () => Response.json(
       { error: { code: "invalid_api_key", message: `Incorrect API key provided: ${key}.\nRotate it.` } },
@@ -365,15 +367,16 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
-      expect(line).toMatch(/failed with 401 after \d+ms: invalid_api_key: Incorrect API key provided: .* Rotate it\.$/);
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
+      expect(line).toMatch(/failed with 401 after \d+ms: auth_failed$/);
       expect(line).not.toContain(key);
+      expect(line).not.toContain("Incorrect API key");
     } finally {
       warn.mockRestore();
     }
   });
 
-  test("the hop warning redacts credential framing before flattening parsed codes", async () => {
+  test("the hop warning never prints a parsed upstream code", async () => {
     const credential = "synthetic-multipart-credential";
     globalThis.fetch = (async () => Response.json({ error: {
       code: `name="authorization"\r\n\r\n${credential}`,
@@ -382,11 +385,25 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
       expect(line).toBeDefined();
       expect(line!.includes(credential)).toBe(false);
-      expect(line).toContain("[REDACTED]");
-      expect(line).not.toMatch(/[\r\n]/);
+      expect(line).toMatch(/failed with 502 after \d+ms: upstream_failed$/);
+      expect(line).not.toContain("upstream refused");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("the hop warning classifies from the structured error type", async () => {
+    globalThis.fetch = (async () => Response.json(
+      { error: { type: "insufficient_quota", message: "generic" } },
+      { status: 429 },
+    )) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
+      expect(line).toMatch(/failed with 429 after \d+ms: billing_exhausted$/);
+      expect(line).not.toContain("generic");
     } finally { warn.mockRestore(); }
   });
 
@@ -395,8 +412,9 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await loggedCombo(config, { model: "", provider: "" });
-      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
-      expect(line).toMatch(/failed with 502 after \d+ms$/);
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("target 1 (primary) failed with"));
+      expect(line).toMatch(/failed with 502 after \d+ms: upstream_failed$/);
+      expect(line).not.toContain("session=abc123");
     } finally {
       warn.mockRestore();
     }
@@ -445,6 +463,6 @@ describe("zero-attempt combo refusal names why each target was excluded", () => 
     expect(response.status).toBe(503);
     const { error } = await response.json() as { error: { code: string; message: string } };
     expect(error.code).toBe("combo_unavailable");
-    expect(error.message).toMatch(/^No available targets for combo: all \(gone\/model-gone: provider missing; off\/model-off: provider disabled; spent\/model-spent: quota exhausted; cooling\/model-cooling: cooldown 4[12]s; metered\/model-metered: ineligible for this request\)$/);
+    expect(error.message).toMatch(/^No available targets for combo \(5 targets; target 1 \(gone\): provider missing; target 2 \(off\): provider disabled; target 3 \(spent\): quota exhausted; target 4 \(cooling\): cooldown; target 5 \(metered\): ineligible for this request\)$/);
   });
 });

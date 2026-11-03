@@ -240,7 +240,7 @@ test("a JEV combo whose only allowlist is unsupported names that target in its 5
   }), f.config, { model: "", provider: "" }, {});
   expect(response.status).toBe(503);
   expect(((await response.json()) as { error: { message: string } }).error.message)
-    .toBe("No available targets for combo: auto (a/m: ineligible for this request)");
+    .toBe("No available targets for combo (1 target; target 1 (a): ineligible for this request)");
   expect(f.inference.bodies).toHaveLength(0);
 });
 

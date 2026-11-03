@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../lib/client-retry-after";
 import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 /** Native history/notes JSON relay. No interpretation of encrypted tool arguments or retries. */
@@ -185,7 +186,10 @@ async function relayContextHistory(
     if (result.oversized) return formatErrorResponse(502, "upstream_error", "Context response exceeded 16 MiB");
     const outputHeaders = new Headers();
     for (const key of RESPONSE_HEADERS) {
-      const value = response.headers.get(key); if (value !== null) outputHeaders.set(key, value);
+      const raw = response.headers.get(key);
+      // Retry advice leaves as an integer this proxy formats, never the upstream bytes.
+      const value = key === "retry-after" ? formatClientRetryAfter(raw) ?? null : raw;
+      if (value !== null) outputHeaders.set(key, value);
     }
     // A context 403 is not evidence that the model credential is invalid. Don't mutate pool
     // health/quota or retry writes; preserve the real upstream result for the caller.

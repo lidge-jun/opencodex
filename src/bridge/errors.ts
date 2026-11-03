@@ -6,6 +6,7 @@ import {
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
 } from "../lib/upstream-retry";
+import { formatClientRetryAfter } from "../lib/client-retry-after";
 import {
   adapterFailureFromMessage,
   classifyError,
@@ -32,6 +33,12 @@ export function upstreamCodeForComboFailure(response: Response, bodyCode: string
   return bodyCode === "insufficient_quota" && formattedQuotaSources.has(response)
     ? formattedQuotaSources.get(response) ?? undefined
     : bodyCode;
+}
+
+/** Preserve formatted quota-code provenance when lifecycle helpers rebuild a response. */
+export function carryFormattedQuotaSource(source: Response, target: Response): Response {
+  if (formattedQuotaSources.has(source)) formattedQuotaSources.set(target, formattedQuotaSources.get(source)!);
+  return target;
 }
 
 export function formatErrorResponse(
@@ -93,7 +100,8 @@ export function formatErrorResponse(
     : error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503
       : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
   const headers = new Headers({ "Content-Type": "application/json" });
-  const retryAfter = options?.retryAfter?.trim();
+  // Re-emitted as an integer this proxy formats; the incoming text is never echoed.
+  const retryAfter = formatClientRetryAfter(options?.retryAfter);
   if (error.code !== CYBER_POLICY_ERROR_CODE
     && !replayBlocked
     && retryAfter
@@ -155,6 +163,7 @@ export function formatUsageLimitReachedResponse(message: string, resetsAtMs: num
     ...(resetsAtMs !== null ? { resets_at: Math.ceil(resetsAtMs / 1000) } : {}),
   };
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (retryAfterSeconds !== null) headers.set("Retry-After", String(retryAfterSeconds));
+  const advice = retryAfterSeconds !== null ? formatClientRetryAfter(retryAfterSeconds) : undefined;
+  if (advice !== undefined) headers.set("Retry-After", advice);
   return new Response(JSON.stringify({ error }), { status: 429, headers });
 }
