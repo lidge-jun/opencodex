@@ -29,8 +29,8 @@ test("offline: the dot goes neutral", () => {
   expect(dotClass({ online: false })).not.toContain("bg-success");
 });
 
-test("stopping: the dot goes neutral even while online", () => {
-  expect(dotClass({ online: true, stopping: true })).toContain("bg-fg-subtle");
+test("stopping: the dot is a red brake light, never green", () => {
+  expect(dotClass({ online: true, stopping: true })).toContain("bg-danger");
   expect(dotClass({ online: true, stopping: true })).not.toContain("bg-success");
 });
 

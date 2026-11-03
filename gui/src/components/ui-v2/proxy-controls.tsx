@@ -31,13 +31,15 @@ interface ProxyControlsProps {
 }
 
 /*
- * Design system v2 proxy status, as one sidebar row: a static status dot, the title and how
- * long it has been up, then one slot lever (proxy-lever.tsx) that reloads Codex models at its
- * middle notch and stops the proxy at the bottom. No panel, beam or pulse: the row reads like the
- * navigation above it. While the lever is hovered or pulled, the status line says what letting go
- * will do (red for the stop). While either action runs the status line says so, and the lever's handle
- * flashes green for a moment when a reload settles. The status word stays available to assistive
- * tech and as the row's tooltip.
+ * Design system v2 proxy status, as one sidebar row: a status dot, the title and how long it has
+ * been up, then one slot lever (proxy-lever.tsx) that reloads Codex models at its middle notch and
+ * stops the proxy at the bottom. While the lever is hovered or pulled, the status line says what
+ * letting go will do (red for the stop). Each action has its own feel once it starts: a stop
+ * brakes like a train (the row lurches and rocks back, the dot turns into a red brake light, the
+ * status word slides in and pulls up, and the rails under the row slow to a standstill); a reload
+ * runs a band of sky light across the row, shines its status word and charges the lever's slot,
+ * and the handle flashes green when it settles. The status word stays available to assistive tech
+ * and as the row's tooltip.
  */
 export function ProxyControls({
   label,
@@ -68,10 +70,16 @@ export function ProxyControls({
     : leverText[preview];
 
   return (
-    <div className={cn("ui-v2 flex h-8 items-center gap-[9px] px-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
-      {/* The dot sits in the same 16px slot as the globe and GitHub marks below, so every label starts on one line. */}
+    <div className={cn("ui-v2 relative flex h-8 items-center gap-[9px] overflow-hidden px-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
+      {/* Each animation plays once when its state begins: a reload runs a band of sky light across
+          the row; a stop lurches the row and slows the rails under it to a halt. */}
+      {restarting && !stopping && <span className="ocx-sweep" aria-hidden />}
+      {stopping && <span className="ocx-rails" aria-hidden />}
+      <span className={cn("flex min-w-0 flex-1 items-center gap-[9px]", stopping && "ocx-halt")}>
+      {/* The dot sits in the same 16px slot as the globe and GitHub marks below, so every label starts
+          on one line. While the proxy stops it is a brake light. */}
       <span className="grid size-4 shrink-0 place-items-center" aria-hidden>
-        <span className={cn("size-2 rounded-full", live ? "bg-success" : "bg-fg-subtle")} />
+        <span className={cn("size-2 rounded-full transition-colors duration-300", stopping ? "bg-danger" : live ? "bg-success" : "bg-fg-subtle")} />
       </span>
       {previewText !== null ? (
         <span aria-hidden className={cn(
@@ -83,12 +91,15 @@ export function ProxyControls({
           <span className="shrink-0 font-medium text-fg">{label}</span>
           <span className="sr-only">{status}</span>
           {/* A reload in flight shines sky so it is noticed; everything else stays quiet. */}
-          <span className={cn("min-w-0 truncate text-xs tabular-nums", restarting && !stopping ? "ocx-shine font-medium" : "text-fg-subtle")}
+          <span className={cn("min-w-0 truncate text-xs tabular-nums",
+            stopping ? "font-medium text-danger" : restarting ? "ocx-shine font-medium" : "text-fg-subtle")}
             aria-hidden={!busy && !!detail ? undefined : true}>
-            {busy ? status : detail ?? statusLabel}
+            {/* The stopping word pulls into its own clipped box, so it never slides over the title. */}
+            {stopping ? <span className="ocx-brake">{status}</span> : busy ? status : detail ?? statusLabel}
           </span>
         </span>
       )}
+      </span>
       {session && (
         <TrayButton onClick={session.onClick} disabled={session.busy}
           label={session.busy ? session.busyLabel : session.label} title={session.label}>

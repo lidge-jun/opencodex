@@ -29,6 +29,13 @@ const RESTART = 0.3;
 const STOP = 0.82;
 
 type Zone = "rest" | "restart" | "stop";
+// How the handle travels into each resting place: the stop is a heavy throw that slams past the
+// bottom and settles, the reload a spring into the notch, the way back up a quick return.
+const THROW: Record<Zone, string> = {
+  stop: "340ms cubic-bezier(0.7, 0, 0.25, 1.6)",
+  restart: "320ms cubic-bezier(0.34, 1.7, 0.64, 1)",
+  rest: "260ms cubic-bezier(0.34, 1.4, 0.64, 1)",
+};
 /** What the row should say about the lever: hovered or focused, or the zone a release would fire. */
 export type LeverPreview = "hover" | Zone | null;
 const zoneOf = (pos: number): Zone => (pos >= STOP ? "stop" : pos >= RESTART ? "restart" : "rest");
@@ -64,7 +71,8 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
     void Promise.resolve(onStop()).finally(() => setPulled(false));
   };
   const restart = () => {
-    if (!down && !restarting) onRestart();
+    if (down || restarting) return;
+    onRestart();
   };
   const release = (at: number) => {
     const target = zoneOf(at);
@@ -139,8 +147,8 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
         "disabled:pointer-events-none disabled:opacity-60",
       )}
     >
-      {/* The slot, with a notch mark at each of the three stops. */}
-      <span className="pointer-events-none absolute top-[4px] h-5 w-[5px] rounded-full bg-line-strong" aria-hidden />
+      {/* The slot, with a notch mark at each of the three stops. It charges sky while a reload runs. */}
+      <span className={cn("pointer-events-none absolute top-[4px] h-5 w-[5px] rounded-full bg-line-strong", restarting && "ocx-charge")} aria-hidden />
       {[0, 0.5, 1].map(at => (
         <span key={at} className="pointer-events-none absolute left-[21px] h-px w-[3px] bg-line-strong" style={{ top: 7 + at * TRAVEL }} aria-hidden />
       ))}
@@ -150,10 +158,11 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
         className={cn(
           "pointer-events-none absolute top-[5px] h-[5px] w-3 rounded-[2px] shadow-sm",
           zone === "stop" ? "bg-danger" : zone === "restart" ? "bg-highlight" : settled ? "bg-success" : "bg-fg-muted group-hover:bg-fg",
+          restarting && drag === null && "shadow-[0_0_0_3px_var(--ocx-highlight-soft)]",
         )}
         style={{
           transform: `translateY(${pos * TRAVEL}px)`,
-          transition: drag === null ? "transform 240ms cubic-bezier(0.34, 1.4, 0.64, 1), background-color 150ms" : "background-color 150ms",
+          transition: drag !== null ? "background-color 150ms" : `transform ${THROW[zone]}, background-color 150ms, box-shadow 200ms`,
         }}
       />
     </button>

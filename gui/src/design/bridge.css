@@ -280,6 +280,61 @@
 @media (prefers-reduced-motion: reduce) {
   .ocx-shine { animation: none; background: none; -webkit-text-fill-color: currentColor; }
 }
+/* Proxy lever motion. Stop is a train braking: the row lurches forward and rocks back
+   (.ocx-halt), the status word slides in and pulls up (.ocx-brake), and dashes under the row run
+   and slow to a standstill (.ocx-rails). Reload is a charge: a band of sky light crosses the row
+   once (.ocx-sweep) and the lever's slot glows while it runs (.ocx-charge). */
+.ocx-halt { animation: ocx-halt 520ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes ocx-halt {
+  0% { transform: translateX(0); }
+  22% { transform: translateX(5px); }
+  52% { transform: translateX(-2px); }
+  78% { transform: translateX(0.75px); }
+  100% { transform: translateX(0); }
+}
+.ocx-brake { display: inline-block; animation: ocx-brake 1100ms cubic-bezier(0.12, 0.9, 0.25, 1) both; }
+@keyframes ocx-brake {
+  0% { transform: translateX(-28px); opacity: 0.15; filter: blur(2px); }
+  70% { transform: translateX(2px); opacity: 1; filter: blur(0); }
+  85% { transform: translateX(-0.75px); }
+  100% { transform: translateX(0); }
+}
+.ocx-rails {
+  position: absolute;
+  inset: auto 10px 2px 35px;
+  height: 1px;
+  pointer-events: none;
+  background: repeating-linear-gradient(90deg, color-mix(in oklab, var(--ocx-danger) 55%, transparent) 0 6px, transparent 6px 12px);
+  animation: ocx-rails 1400ms cubic-bezier(0.1, 0.75, 0.3, 1) forwards;
+}
+@keyframes ocx-rails {
+  from { background-position: 96px 0; opacity: 1; }
+  to { background-position: 0 0; opacity: 0.35; }
+}
+.ocx-sweep {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--ocx-highlight-soft) 35%, color-mix(in oklab, var(--ocx-highlight) 32%, transparent) 50%, var(--ocx-highlight-soft) 65%, transparent);
+  animation: ocx-sweep 700ms cubic-bezier(0.3, 0, 0.2, 1) forwards;
+}
+@keyframes ocx-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(240%); }
+}
+.ocx-charge {
+  background: linear-gradient(0deg, var(--ocx-highlight-soft), color-mix(in oklab, var(--ocx-highlight) 55%, transparent) 50%, var(--ocx-highlight-soft)) 0 0 / 100% 250%;
+  animation: ocx-charge 1200ms linear infinite;
+}
+@keyframes ocx-charge {
+  from { background-position: 0 100%; }
+  to { background-position: 0 -150%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.ocx-halt, .ocx-brake, .ocx-rails, .ocx-sweep, .ocx-charge) { animation: none; }
+  .ocx-sweep { display: none; }
+}
 .sidebar-pref-row > .lang-toggle { flex: 1 1 auto; min-width: 0; }
 .sidebar-github-row > .sidebar-github-link { flex: 0 0 auto; padding-right: 3px; }
 /* one line beside "GitHub": a long prerelease id ellipsizes, and the tooltip holds it whole */
