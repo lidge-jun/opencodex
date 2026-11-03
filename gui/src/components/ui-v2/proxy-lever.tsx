@@ -17,6 +17,8 @@ interface ProxyLeverProps {
   onRestart: () => void;
   /** May resolve after a confirmation; the handle rises again unless `stopping` is set by then. */
   onStop: () => void | Promise<unknown>;
+  /** Told when the lever is hovered or focused, which zone a drag is in, and when that ends. */
+  onPreview?: (preview: LeverPreview) => void;
 }
 
 // Handle travel in px inside the slot, and how far the pointer moves for the full throw.
@@ -27,6 +29,8 @@ const RESTART = 0.3;
 const STOP = 0.82;
 
 type Zone = "rest" | "restart" | "stop";
+/** What the row should say about the lever: hovered or focused, or the zone a release would fire. */
+export type LeverPreview = "hover" | Zone | null;
 const zoneOf = (pos: number): Zone => (pos >= STOP ? "stop" : pos >= RESTART ? "restart" : "rest");
 
 /*
@@ -37,11 +41,17 @@ const zoneOf = (pos: number): Zone => (pos >= STOP ? "stop" : pos >= RESTART ? "
  * harmless one; End (or a full drag) is the stop. While dragging, the handle takes the colour of
  * the action it will fire on release.
  */
-export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled = false, stopping, onRestart, onStop }: ProxyLeverProps) {
+export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled = false, stopping, onRestart, onStop, onPreview }: ProxyLeverProps) {
   const [pulled, setPulled] = useState(false);
   const [drag, setDrag] = useState<number | null>(null);
   const start = useRef<{ y: number; from: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
+  const shown = useRef<LeverPreview>(null);
+  const preview = (next: LeverPreview) => {
+    if (shown.current === next) return;
+    shown.current = next;
+    onPreview?.(next);
+  };
 
   const down = stopping || pulled;
   const rest = down ? 1 : restarting ? 0.5 : 0;
@@ -72,7 +82,10 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
     if (!from) return;
     const dy = event.clientY - from.y;
     if (Math.abs(dy) > 3) from.moved = true;
-    if (from.moved) setDrag(Math.min(1, Math.max(from.from, from.from + dy / DRAG)));
+    if (!from.moved) return;
+    const at = Math.min(1, Math.max(from.from, from.from + dy / DRAG));
+    setDrag(at);
+    preview(zoneOf(at));
   };
   const onPointerUp = () => {
     const from = start.current;
@@ -81,6 +94,7 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
     suppressClick.current = true;
     const at = drag ?? from.from;
     setDrag(null);
+    preview(null);
     release(at);
   };
   const onClick = () => {
@@ -113,7 +127,11 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => { start.current = null; setDrag(null); }}
+      onPointerCancel={() => { start.current = null; setDrag(null); preview(null); }}
+      onPointerEnter={() => { if (!start.current) preview("hover"); }}
+      onPointerLeave={() => { if (!start.current) preview(null); }}
+      onFocus={() => preview("hover")}
+      onBlur={() => preview(null)}
       className={cn(
         "group relative inline-flex h-[var(--ocx-control-h-sm)] w-7 shrink-0 cursor-grab touch-none justify-center rounded-[6px] bg-transparent",
         "transition-[background-color] duration-150 ease-soft hover:bg-accent-soft active:cursor-grabbing",

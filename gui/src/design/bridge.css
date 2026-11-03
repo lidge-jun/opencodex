@@ -253,7 +253,6 @@
   padding-top: 8px;
   border-top: 1px solid var(--ocx-line);
 }
-.sidebar-foot > .ui-v2:first-child { margin-bottom: 2px; }
 .sidebar-foot :is(.lang-toggle, .sidebar-github-link) { min-height: 32px; padding: 0 8px 0 10px; font-size: 13px; color: var(--ocx-fg-muted); }
 .sidebar-foot :is(.lang-toggle, .sidebar-github-link):hover { color: var(--ocx-fg); }
 .sidebar-foot :is(.lang-toggle, .sidebar-github-link) svg { width: 16px; height: 16px; }

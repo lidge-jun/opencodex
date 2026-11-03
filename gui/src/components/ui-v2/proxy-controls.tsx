@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconX } from "../../icons";
-import { ProxyLever } from "./proxy-lever";
+import { ProxyLever, type LeverPreview } from "./proxy-lever";
 import { cn } from "@/lib/utils";
 
 interface ProxyControlsProps {
@@ -18,6 +18,8 @@ interface ProxyControlsProps {
   restartingLabel: string;
   /** How far to pull the lever for each action; the lever's tooltip and accessible description. */
   leverHint: string;
+  /** What the status line says while the lever is hovered or pulled: the release outcome per zone. */
+  leverText: { hover: string; cancel: string; restart: string; stop: string };
   stopping: boolean;
   restarting: boolean;
   /** May return the stop's promise so the lever can rise again if the confirmation is declined. */
@@ -32,7 +34,8 @@ interface ProxyControlsProps {
  * Design system v2 proxy status, as one sidebar row: a static status dot, the title and how
  * long it has been up, then one slot lever (proxy-lever.tsx) that reloads Codex models at its
  * middle notch and stops the proxy at the bottom. No panel, beam or pulse: the row reads like the
- * navigation above it. While either action runs the status line says so, and the lever's handle
+ * navigation above it. While the lever is hovered or pulled, the status line says what letting go
+ * will do (red for the stop). While either action runs the status line says so, and the lever's handle
  * flashes green for a moment when a reload settles. The status word stays available to assistive
  * tech and as the row's tooltip.
  */
@@ -46,6 +49,7 @@ export function ProxyControls({
   restartLabel,
   restartingLabel,
   leverHint,
+  leverText,
   stopping,
   restarting,
   onStop,
@@ -57,17 +61,32 @@ export function ProxyControls({
   const live = online && !stopping;
   const status = stopping ? stoppingLabel : restarting ? restartingLabel : statusLabel;
   const busy = stopping || restarting;
+  const [preview, setPreview] = useState<LeverPreview>(null);
+  const previewText = busy || preview === null ? null
+    : preview === "hover" ? leverText.hover
+    : preview === "rest" ? leverText.cancel
+    : leverText[preview];
 
   return (
-    <div className={cn("ui-v2 flex h-[var(--ocx-control-h)] items-center gap-2 pr-1 pl-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
-      <span className={cn("size-2 shrink-0 rounded-full", live ? "bg-success" : "bg-fg-subtle")} aria-hidden />
-      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-5">
-        <span className="shrink-0 font-medium text-fg">{label}</span>
-        <span className="sr-only">{status}</span>
-        <span className="min-w-0 truncate text-xs text-fg-subtle tabular-nums" aria-hidden={!busy && !!detail ? undefined : true}>
-          {busy ? status : detail ?? statusLabel}
-        </span>
+    <div className={cn("ui-v2 flex h-8 items-center gap-[9px] px-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
+      {/* The dot sits in the same 16px slot as the globe and GitHub marks below, so every label starts on one line. */}
+      <span className="grid size-4 shrink-0 place-items-center" aria-hidden>
+        <span className={cn("size-2 rounded-full", live ? "bg-success" : "bg-fg-subtle")} />
       </span>
+      {previewText !== null ? (
+        <span aria-hidden className={cn(
+          "min-w-0 flex-1 truncate text-[13px] leading-5",
+          preview === "stop" ? "font-medium text-danger" : preview === "restart" ? "font-medium text-fg" : "text-fg-muted",
+        )}>{previewText}</span>
+      ) : (
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-5">
+          <span className="shrink-0 font-medium text-fg">{label}</span>
+          <span className="sr-only">{status}</span>
+          <span className="min-w-0 truncate text-xs text-fg-subtle tabular-nums" aria-hidden={!busy && !!detail ? undefined : true}>
+            {busy ? status : detail ?? statusLabel}
+          </span>
+        </span>
+      )}
       {session && (
         <TrayButton onClick={session.onClick} disabled={session.busy}
           label={session.busy ? session.busyLabel : session.label} title={session.label}>
@@ -75,7 +94,7 @@ export function ProxyControls({
         </TrayButton>
       )}
       <ProxyLever restartLabel={restarting ? restartingLabel : restartLabel} stopLabel={stopping ? stoppingLabel : stopLabel}
-        hint={leverHint} restarting={restarting} settled={done} stopping={stopping} onRestart={onRestart} onStop={onStop} />
+        hint={leverHint} restarting={restarting} settled={done} stopping={stopping} onRestart={onRestart} onStop={onStop} onPreview={setPreview} />
     </div>
   );
 }

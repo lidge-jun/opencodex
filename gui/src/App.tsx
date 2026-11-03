@@ -547,6 +547,12 @@ export default function App() {
             restartLabel={t("dash.codexRestart")}
             restartingLabel={t("dash.codexRestarting")}
             leverHint={t("shellV2.leverHint", { restart: t("dash.codexRestart"), stop: t(targets.connected ? "connection.disconnect" : "dash.stop") })}
+            leverText={{
+              hover: t("shellV2.leverHover"),
+              cancel: t("shellV2.leverCancel"),
+              restart: t("shellV2.leverRelease", { action: t("shellV2.leverReload") }),
+              stop: t("shellV2.leverRelease", { action: targets.connected ? t("connection.disconnect") : t("shellV2.leverStop") }),
+            }}
             stopping={stopping}
             restarting={codexRestarting}
             onStop={handleStop}

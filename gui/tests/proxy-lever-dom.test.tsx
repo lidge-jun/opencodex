@@ -26,7 +26,8 @@ async function withLever(exercise: (ui: { lever: HTMLButtonElement; win: Window;
     await act(async () => {
       root!.render(
         <ProxyLever restartLabel="Reload" stopLabel="Stop" hint="Pull halfway: Reload. Pull all the way down: Stop."
-          restarting={false} stopping={false} onRestart={() => calls.push("restart")} onStop={() => { calls.push("stop"); }} />,
+          restarting={false} stopping={false} onRestart={() => calls.push("restart")} onStop={() => { calls.push("stop"); }}
+          onPreview={preview => calls.push(`preview:${preview}`)} />,
       );
     });
     await exercise({ lever: container.querySelector("button")!, win, calls });
@@ -55,27 +56,41 @@ async function pull(lever: HTMLButtonElement, win: Window, dy: number) {
 test("a short pull springs back and fires nothing", async () => {
   await withLever(async ({ lever, win, calls }) => {
     await pull(lever, win, 5);
-    expect(calls).toEqual([]);
+    expect(actions(calls)).toEqual([]);
   });
 });
 
 test("pulling to the middle notch reloads; pulling to the bottom stops", async () => {
   await withLever(async ({ lever, win, calls }) => {
     await pull(lever, win, 13);
-    expect(calls).toEqual(["restart"]);
+    expect(actions(calls)).toEqual(["restart"]);
     await pull(lever, win, 40);
-    expect(calls).toEqual(["restart", "stop"]);
+    expect(actions(calls)).toEqual(["restart", "stop"]);
   });
 });
 
 test("a click takes the harmless notch; End is the stop", async () => {
   await withLever(async ({ lever, win, calls }) => {
     await act(async () => { lever.click(); });
-    expect(calls).toEqual(["restart"]);
+    expect(actions(calls)).toEqual(["restart"]);
     const end = new win.KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
     await act(async () => { lever.dispatchEvent(end as unknown as Event); });
     expect(end.defaultPrevented).toBe(true);
-    expect(calls).toEqual(["restart", "stop"]);
+    expect(actions(calls)).toEqual(["restart", "stop"]);
     expect(lever.getAttribute("aria-description")).toContain("Pull halfway");
+  });
+});
+
+function actions(calls: string[]): string[] {
+  return calls.filter(call => !call.startsWith("preview:"));
+}
+
+test("while pulled, the lever reports the zone a release would fire, then clears", async () => {
+  await withLever(async ({ lever, win, calls }) => {
+    await pull(lever, win, 13);
+    expect(calls.filter(call => call.startsWith("preview:"))).toEqual(["preview:rest", "preview:restart", "preview:null"]);
+    calls.length = 0;
+    await pull(lever, win, 40);
+    expect(calls.filter(call => call.startsWith("preview:"))).toEqual(["preview:restart", "preview:stop", "preview:null"]);
   });
 });
