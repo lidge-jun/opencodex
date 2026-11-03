@@ -83,6 +83,7 @@ import {
   deriveCodexInjectionPlan,
   type CodexInjectionPlanContext,
   type CodexInjectionPlanOk,
+  readCodexProfileSource,
 } from "./inject/plan";
 
 export { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
@@ -379,9 +380,7 @@ async function injectCodexConfigImpl(
         && rootTomlString(nativeInput, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
     return !hasInjectedCodexRouting(nativeInput) && !looksInjectedByValue;
   };
-  const readCurrentProfile = (): string | null => existsSync(CODEX_PROFILE_PATH)
-    ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
-    : null;
+  const readCurrentProfile = readCodexProfileSource;
   const unverifiedJournalMessage = "Codex configuration was not written: the journal has no verified baseline for the current config/profile. Current files and the journal were preserved.";
   // When the reconcile will rewrite config.toml under the lock, the baseline it
   // must be journaled against does not exist yet — this check runs inside the

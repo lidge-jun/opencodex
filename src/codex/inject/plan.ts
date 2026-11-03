@@ -330,15 +330,7 @@ export function deriveCodexInjectionPlan(
     managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
   }
 
-  // Read directly: a profile removed between an existence check and the read is simply absent.
-  // If it reappears before the write lock, the lock-time comparison refuses retryably.
-  let profileSource: string | null;
-  try {
-    profileSource = readFileSync(CODEX_PROFILE_PATH, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    profileSource = null;
-  }
+  const profileSource = readCodexProfileSource();
   const profileContent = preserveUnmanagedProfileKeys(
     profileSource,
     buildProfileFileForTarget(
@@ -433,4 +425,19 @@ export function deriveCodexInjectionPlan(
       catalogPath,
     },
   };
+}
+
+
+/**
+ * Current profile bytes, or null when absent. Read directly: a profile removed between an
+ * existence check and the read is simply absent. If it reappears before the write lock, the
+ * lock-time comparison refuses retryably; other read errors propagate.
+ */
+export function readCodexProfileSource(): string | null {
+  try {
+    return readFileSync(CODEX_PROFILE_PATH, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
 }

@@ -178,6 +178,18 @@ describe("the injection plan", () => {
     } finally { exists.mockRestore(); }
   });
 
+  test("the shared profile reader used at plan and lock time treats only a missing file as absent", async () => {
+    const { readCodexProfileSource } = await import("../../src/codex/inject/plan");
+    rmSync(CODEX_PROFILE_PATH, { force: true });
+    expect(readCodexProfileSource()).toBeNull();
+    writeFileSync(CODEX_PROFILE_PATH, "stream_max_retries = 8\n");
+    expect(readCodexProfileSource()).toBe("stream_max_retries = 8\n");
+    rmSync(CODEX_PROFILE_PATH, { force: true });
+    mkdirSync(CODEX_PROFILE_PATH);
+    try { expect(readCodexProfileSource).toThrow(/EISDIR|directory/i); }
+    finally { rmSync(CODEX_PROFILE_PATH, { recursive: true, force: true }); }
+  });
+
   test("an unreadable profile other than a missing one still fails the plan", () => {
     mkdirSync(CODEX_PROFILE_PATH);
     try {
