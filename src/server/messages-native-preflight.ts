@@ -26,7 +26,8 @@ export async function preflightNativeMessagesResponse(
   const inspector = new BoundedSseFrameBuffer();
   const decoder = new TextDecoder();
   const inspectFrame = (block: Uint8Array) => {
-      if (committed || terminal || failure) return;
+      // A retryable failure keeps reading its chunk: later output in it still commits.
+      if (committed || terminal) return;
       const lines = decoder.decode(block).split(/\r\n|\r|\n/);
       const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null) ?? null;
       const data = lines.map(line => sseFieldValue(line, "data")).filter(value => value !== null).join("\n");

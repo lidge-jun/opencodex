@@ -82,3 +82,21 @@ for (const raw of [
     expect(await result.response.text()).toBe(raw + `event: error\ndata: ${refusal}\n\n`);
   });
 }
+
+const oneChunk = (raw: string) => new Response(new ReadableStream<Uint8Array>({
+  start(controller) { controller.enqueue(new TextEncoder().encode(raw)); controller.close(); },
+}), { headers: { "content-type": "text/event-stream" } });
+
+for (const [name, after, failed] of [
+  ["content after a retryable error commits", 'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n', false],
+  ["unknown event after a retryable error commits", 'event: fixture_unknown\ndata: {"type":"fixture_unknown"}\n\n', false],
+  ["ping and message_stop after a retryable error keep it replayable", 'event: ping\ndata: {"type":"ping"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n', true],
+] as const) {
+  test(`native combo preflight inspects frames after a retryable error in the same chunk: ${name}`, async () => {
+    const raw = prelude + `event: error\ndata: ${refusal}\n\n` + after;
+    const result = await preflightNativeMessagesResponse(oneChunk(raw), { model: "fixture", provider: "anth" }, createTestTranslatorBudget());
+    expect(result.kind).toBe(failed ? "failed" : "accepted");
+    if (!failed) expect(await result.response.text()).toBe(raw);
+    else await result.response.body?.cancel();
+  });
+}
