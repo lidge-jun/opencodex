@@ -267,6 +267,25 @@ describe("Codex metadata integrity", () => {
     // Non-JSON values pass through unchanged, so they keep the raw 32 KiB bound.
     expect(() => rewriteTurnMetadataInstallationId("x".repeat(32 * 1024 + 1), account)).toThrow(CodexInstallationIdUnavailableError);
   });
+  for (const value of ["漢字", "a\u007fb"]) test(`equal installation IDs escape ${JSON.stringify(value)}`, () => {
+    const account = accountA.chatgptAccountId;
+    const installation_id = deriveCodexAccountInstallationId(account, "caller");
+    const raw = JSON.stringify({ installation_id, value });
+    const once = rewriteTurnMetadataInstallationId(raw, account);
+    expect(once).toMatch(/^[\x20-\x7e]*$/);
+    expect(JSON.parse(once)).toEqual({ installation_id, value });
+    expect(rewriteTurnMetadataInstallationId(once, account)).toBe(once);
+  });
+  test("equal installation IDs use canonical and escaped size bounds", () => {
+    const account = accountA.chatgptAccountId;
+    const installation_id = deriveCodexAccountInstallationId(account, "caller");
+    const padded = ` ${" ".repeat(90_000)}${JSON.stringify({ installation_id })}`;
+    expect(rewriteTurnMetadataInstallationId(padded, account)).toBe(JSON.stringify({ installation_id }));
+    const oversized = JSON.stringify({ installation_id, pad: "a".repeat(32 * 1024) });
+    expect(() => rewriteTurnMetadataInstallationId(oversized, account)).toThrow(CodexInstallationIdUnavailableError);
+    const del = JSON.stringify({ installation_id, pad: "\u007f".repeat(20_000) });
+    expect(() => rewriteTurnMetadataInstallationId(del, account)).toThrow(CodexInstallationIdUnavailableError);
+  });
   test("Responses preserves caller User-Agent as a fallback in key and forward modes", async () => {
     for (const provider of [
       {

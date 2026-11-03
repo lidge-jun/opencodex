@@ -32,7 +32,7 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
 /**
  * Rewrites the `installation_id` inside Codex turn metadata while preserving all other fields.
  *
- * Structure contract: the returned JSON is printable ASCII — every code unit outside
+ * Structure contract: JSON with a nonblank string installation_id is returned as printable ASCII — every code unit outside
  * U+0020–U+007E is escaped (JSON.stringify already escapes U+0000–U+001F, with short forms
  * such as `\\n`; U+007F and above become `\\uXXXX` here). Both consumers of rewritten turn metadata (the
  * `x-codex-turn-metadata` HTTP header and the embedded `client_metadata` value)
@@ -41,6 +41,8 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
  * The 32 KiB bound applies to the canonical (unescaped UTF-8) rewritten JSON, and the escaped
  * result is capped at 96 KiB. Feeding an accepted result back in is therefore a no-op: it
  * parses to the same canonical JSON, so repeated isolation passes cannot refuse it.
+ * Invalid JSON, non-objects, and objects without a nonblank string installation_id pass
+ * through unchanged up to 32 KiB; their original bytes are not guaranteed header-safe.
  */
 export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAccountId: string): string {
   if (!chatgptAccountId.trim()) throw new CodexInstallationIdUnavailableError();
@@ -60,7 +62,6 @@ export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAc
   const nextId = deriveCodexAccountInstallationId(chatgptAccountId, record.installation_id);
   const canonical = JSON.stringify({ ...record, installation_id: nextId });
   if (Buffer.byteLength(canonical, "utf8") > MAX_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
-  if (nextId === record.installation_id) return rawMetadata;
   // Turn metadata is also sent as an HTTP header; DEL and non-ASCII are invalid field-value bytes.
   const escaped = canonical
     .replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);

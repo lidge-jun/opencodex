@@ -24,14 +24,16 @@ while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
-After the `installation_id` rewrite, the turn-metadata JSON escapes every code unit outside
+For an object with a nonblank string `installation_id`, including one already matching the selected
+identity, turn-metadata JSON is canonicalized and escapes every code unit outside
 printable ASCII: `JSON.stringify` escapes U+0000–U+001F (with short forms such as `\n` and
 `\t` where JSON defines them, `\uXXXX` otherwise), and U+007F and above become `\uXXXX`. The
 header stays a valid HTTP field value and JSON-decodes to the same metadata; the client-metadata
 copy uses the same form. Pool turn metadata is bounded to 32 KiB of canonical UTF-8, measured on
 the unescaped rewritten JSON, and the escaped output is capped at 96 KiB (escaping grows
 non-ASCII text at most threefold; DEL-heavy values past the cap are refused). Raw input above
-96 KiB is refused before parsing, and values passed through unchanged keep a 32 KiB raw bound.
+96 KiB is refused before parsing. Invalid JSON, non-objects, and objects without a nonblank string
+`installation_id` pass through unchanged up to 32 KiB raw and are not guaranteed header-safe.
 Because the bound is on canonical JSON, an accepted escaped value re-enters unchanged, so the
 Responses path can isolate it during auth materialization and again in the policy recheck.
 Larger values refuse the send with the same
