@@ -1156,8 +1156,10 @@ function kimiCounterUsed(row: Record<string, unknown>): { used: number; limit: n
   const used = toFiniteNumber(row.used);
   const remaining = toFiniteNumber(row.remaining);
   if ((used !== undefined && used < 0) || (remaining !== undefined && remaining > limit)) return undefined;
-  if (used !== undefined) return { used: Math.min(used, limit), limit };
-  return remaining === undefined ? undefined : { used: Math.min(limit - remaining, limit), limit };
+  // Either overage wins over any other counter: the window is used up.
+  if ((used !== undefined && used >= limit) || (remaining !== undefined && remaining <= 0)) return { used: limit, limit };
+  if (used !== undefined) return { used, limit };
+  return remaining === undefined ? undefined : { used: limit - remaining, limit };
 }
 
 /** Parse consumed usage, preferring valid counters, then a valid [0, 1] ratio, then direct percentages. */

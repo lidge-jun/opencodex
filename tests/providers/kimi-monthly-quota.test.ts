@@ -253,6 +253,17 @@ describe("Kimi monthly quota", () => {
     expect(reports[0]?.quota.monthlyPercent).toBe(100);
   });
 
+  test.each([
+    { name: "negative remaining beside a lower used", row: { limit: 100, used: 40, remaining: -50 } },
+    { name: "used overage beside a valid remaining", row: { limit: 100, used: 150, remaining: 60 } },
+  ])("either counter overage exhausts the window and the route: $name", async ({ row }) => {
+    mockUsage({ usages: { limit_month_total: row } });
+    const cfg = comboConfig();
+    const { reports } = await fetchProviderQuotaReports(cfg, true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(100);
+    expect(pickComboTarget(cfg, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
   test("drops a row whose only counters are invalid", async () => {
     mockUsage({ usages: { limit_month_total: { limit: 100, remaining: 200 }, limit_month_code: { used_ratio: 0.4 } } });
     const { reports } = await fetchProviderQuotaReports(config(), true);
