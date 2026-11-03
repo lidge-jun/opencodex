@@ -198,9 +198,11 @@ export function createComboProtocolLanes(input: {
     // The concrete selector, as the bridge child's body carries it; the wire model comes from
     // the route either way, and the pinned-effort lookup reads this.
     body.model = selector(target);
-    return (inbound === "messages"
+    if (inbound === "messages"
       ? nativeMessagesDeclineReason(route, body, config, { ...(source.inbound === "messages" ? source.selector : undefined), routeSelector: selector(target) }) === undefined
-      : isNativeChatRouteEligible(route, body, config)) ? body : undefined;
+      : isNativeChatRouteEligible(route, body, config)) return body;
+    envelope.releaseBody(body);
+    return undefined;
   };
 
   const verdicts = new Map<string, CandidateVerdict>();
@@ -225,7 +227,10 @@ export function createComboProtocolLanes(input: {
     }
     if (targetRoute) {
       const settled = settle(target, targetRoute);
-      const native = nativeBody(target, settled) !== undefined;
+      // Judging needs only the verdict; the dispatched child takes its own copy.
+      const judged = nativeBody(target, settled);
+      if (judged) envelope.releaseBody(judged);
+      const native = judged !== undefined;
       const upstream = native ? inbound : upstreamWireForAdapter((settled ?? targetRoute).provider.adapter);
       const checked = checkRepresentable({
         inbound,
@@ -241,7 +246,10 @@ export function createComboProtocolLanes(input: {
         }
       }
       // Under any policy: the source chose a native-only tool, so a translated child never runs it.
-      if (!native && inbound === "messages" && (nativeOnlyTool ??= declaresNativeOnlyTool(envelope.freshBody()))) {
+      if (!native && inbound === "messages" && (nativeOnlyTool ??= (() => {
+        const body = envelope.freshBody();
+        try { return declaresNativeOnlyTool(body); } finally { envelope.releaseBody(body); }
+      })())) {
         verdict.nativeOnly = true;
       }
     }

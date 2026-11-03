@@ -93,15 +93,15 @@ function upstream(fallbackStatus: number, fallbackMessage: string, primaryStatus
   return hosts;
 }
 
-// Exercise the real reject-policy eligibility path and native dispatch seam with a budget
-// for one selected target: its eligibility copy and dispatch copy, never an unused target.
+// Exercise the real reject-policy eligibility path and native dispatch seam with a budget for
+// one retained copy: eligibility releases its copy, so only the dispatched child's stays charged.
 async function nativeCombo(cfg = config, status = 200) {
   const nativeConfig: OcxConfig = {
     ...cfg,
     protocols: { unrepresentable: "reject", rollout: { nativeChatCombos: true } },
   };
   const chatBody = { model: "combo/fan", stream: false, n: 2, messages: [{ role: "user", content: "hello" }] };
-  const budget = createTranslatorBudget({ maxTurnBytes: 2 * jsonUtf8Bytes(chatBody) });
+  const budget = createTranslatorBudget({ maxTurnBytes: jsonUtf8Bytes(chatBody) });
   const envelope = createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget: budget });
   const copies: Record<string, unknown>[] = [];
   const dispatched: string[] = [];
@@ -237,7 +237,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(dispatched).toEqual(["fallback"]);
     expect(response.status).toBe(401);
     expect(response.headers.get("retry-after")).toBeNull();
-    // Only lazy eligibility for the cooled primary attempts a third charged body copy.
+    // Only lazy eligibility for the cooled primary attempts a second retained body copy.
     expect(overflows).toBe(1);
   });
 

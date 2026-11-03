@@ -383,6 +383,31 @@ describe("native Messages candidates in a combo", () => {
     expect(text).toContain("fixture overloaded");
     expect(seen).toHaveLength(1);
   });
+  test("judging candidates leaves only the dispatched native body copy charged", async () => {
+    const { createComboProtocolLanes } = await import("../../src/server/responses/core-combo-native");
+    const { routeConcreteModel } = await import("../../src/router");
+    const { createRequestExecutionBudget } = await import("../../src/lib/request-execution-budget");
+    const { jsonUtf8Bytes } = await import("../../src/lib/json-byte-size");
+    const settings = config();
+    settings.providers.anth!.models!.push("claude-haiku-4-5");
+    settings.providers.pinned = { ...settings.providers.anth!, models: ["claude-sonnet-4-6"], pinnedReasoningEffort: "low" };
+    const targets = [{ provider: "anth", model: "claude-sonnet-4-6" }, { provider: "anth", model: "claude-haiku-4-5" },
+      { provider: "pinned", model: "claude-sonnet-4-6" }, { provider: "backup", model: "fallback" }];
+    settings.combos!.waterfall!.targets = targets;
+    const translatorBudget = createTranslatorBudget();
+    const body = { ...source, stream: true };
+    const lanes = createComboProtocolLanes({
+      source: { inbound: "messages", envelope: createProtocolEnvelope({ inbound: "messages", body, translatorBudget }), dispatchNativeChild: async () => new Response() },
+      req: new Request("http://localhost/v1/messages"), config: settings, logCtx: { model: "", provider: "" },
+      admissionScope: undefined, comboId: "waterfall", targets,
+    })!;
+    for (const target of targets) expect(lanes.pickable(target)).toBe(true);
+    expect(translatorBudget.snapshot().currentBytes).toBe(0);
+    expect(lanes.nativeChild(targets[2]!, routeConcreteModel(settings, "pinned/claude-sonnet-4-6"), createRequestExecutionBudget())).toBeUndefined();
+    expect(translatorBudget.snapshot().currentBytes).toBe(0);
+    expect(lanes.nativeChild(targets[0]!, routeConcreteModel(settings, "anth/claude-sonnet-4-6"), createRequestExecutionBudget())).toBeDefined();
+    expect(translatorBudget.snapshot().currentBytes).toBe(jsonUtf8Bytes(body));
+  });
   test("native disabled keeps existing translated path", async () => {
     const { response } = await send({ config: config(false) });
     expect(response.status).toBe(200);
