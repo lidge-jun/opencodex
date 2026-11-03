@@ -218,3 +218,39 @@ describe("manifest limits and uninstall leftovers (#8093)", () => {
     expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(true);
   }));
 });
+
+describe("upgraded homes near the manifest byte limit (#8093)", () => {
+  test("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
+    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+    withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      // An older version could fill the manifest up to the limit with no tombstone reserve.
+      const base = manifest(dir);
+      const filler: string[] = [];
+      const size = () => Buffer.byteLength(JSON.stringify({ ...base, paths: [...base.paths, ...filler].sort() }, null, 2) + "\n");
+      while (size() < 64 * 1024 - 300) filler.push("f-" + String(filler.length).padStart(4, "0") + "-" + "x".repeat(200));
+      filler.push("z-" + "y".repeat(64 * 1024 - size() - 10));
+      while (size() > 64 * 1024) filler[filler.length - 1] = filler[filler.length - 1]!.slice(0, -1);
+      const nearLimit = JSON.stringify({ ...base, paths: [...base.paths, ...filler].sort() }, null, 2) + "\n";
+      expect(Buffer.byteLength(nearLimit)).toBeGreaterThan(64 * 1024 - 40);
+      expect(Buffer.byteLength(nearLimit)).toBeLessThanOrEqual(64 * 1024);
+      writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), nearLimit);
+      mkdirSync(join(dir, "artifacts"));
+      writeFileSync(join(dir, "artifacts", "image.png"), "png");
+      chmodSync(join(dir, "artifacts"), 0o500);
+      try {
+        expect(removeOwnedConfigState(dir).status).toBe("partial");
+      } finally { chmodSync(join(dir, "artifacts"), 0o700); }
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST)).length).toBeGreaterThan(64 * 1024);
+      expect(manifest(dir).uninstallStartedAt).toEqual(expect.any(Number));
+      expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+    }));
+
+  test("an untombstoned manifest over the limit is still rejected", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const base = manifest(dir);
+    const over = JSON.stringify({ ...base, paths: [...base.paths, "w".repeat(64 * 1024)] }, null, 2) + "\n";
+    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), over);
+    expect(removeOwnedConfigState(dir).status).toBe("refused");
+  }));
+});

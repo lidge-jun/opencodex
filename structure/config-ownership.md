@@ -20,7 +20,9 @@ because it records its own database through `recordOwnedConfigPath`.
 - A lock still busy after a two-second wait throws `ConfigOwnershipLockError`; nothing is written.
 - A registration that would push the manifest past 1,024 paths, or past the 64 KiB metadata limit
   less room for the tombstone, records nothing and warns once, so the manifest always stays one
-  uninstall accepts. Writers keep working, and uninstall reports such files as residual paths.
+  uninstall accepts. Writers keep working, and uninstall reports such files as residual paths. A
+  tombstoned manifest may use that reserve when it is read, so a home whose older manifest already
+  sits at the limit still resumes an interrupted uninstall; without a tombstone the limit is unchanged.
 - The lock file is created only while the owner marker exists, so a refused uninstall of a home
   without metadata leaves that home untouched. A holder that finds the metadata gone removes the
   lock file, and a waiter whose lock file was unlinked under it retries against the current path.

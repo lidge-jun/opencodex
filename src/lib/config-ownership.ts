@@ -179,13 +179,18 @@ function samePath(left: string, right: string): boolean {
     : left === right;
 }
 
-function readBoundedJson(path: string): unknown {
+function readBoundedJson(path: string, maxBytes = METADATA_MAX_BYTES): unknown {
+  return readBoundedJsonSized(path, maxBytes).value;
+}
+
+function readBoundedJsonSized(path: string, maxBytes: number): { value: unknown; size: number } {
   const metadata = lstatSync(path);
   if (!metadata.isFile() || metadata.isSymbolicLink()) {
     throw new Error("ownership metadata is not a regular file");
   }
-  if (metadata.size > METADATA_MAX_BYTES) throw new Error("ownership metadata is too large");
-  return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const bytes = readFileSync(path);
+  if (metadata.size > maxBytes || bytes.length > maxBytes) throw new Error("ownership metadata is too large");
+  return { value: JSON.parse(bytes.toString("utf8")) as unknown, size: bytes.length };
 }
 
 function isOwner(value: unknown): value is ConfigOwner {
@@ -246,7 +251,11 @@ function loadOwnership(configDir: string): { owner: ConfigOwner; manifest: Confi
   if (!existsSync(ownerPath) || !existsSync(manifestPath)) return null;
   try {
     const owner = readBoundedJson(ownerPath);
-    const manifest = readBoundedJson(manifestPath);
+    // A tombstoned manifest may use the reserve: a home written by an older version can hold a
+    // manifest up to the limit, and uninstall must still resume after adding its tombstone.
+    const read = readBoundedJsonSized(manifestPath, METADATA_MAX_BYTES + TOMBSTONE_RESERVE_BYTES);
+    const manifest = read.value;
+    if (isManifest(manifest) && manifest.uninstallStartedAt === undefined && read.size > METADATA_MAX_BYTES) return null;
     const root = canonicalRoot(configDir);
     if (
       !isOwner(owner)
