@@ -1197,7 +1197,7 @@
   "proxy-liveness-bind-scope.test.ts": "server",
   "system-restart-ownership.test.ts": "server",
   "proxy-liveness.test.ts": "server", "readyz-features.test.ts": "server", "served-by-header.test.ts": "server", "qoder-adapter.test.ts": "providers",
-  "qoder-live-models.test.ts": "providers", "qoder-mcp-server.test.ts": "providers", "qoder-scaffold-guard.test.ts": "providers",
+  "qoder-live-models.test.ts": "providers", "qoder-discovery-timeout.test.ts": "providers", "qoder-mcp-server.test.ts": "providers", "qoder-scaffold-guard.test.ts": "providers",
   "quota-401-recovery-runtime.test.ts": "usage", "quota-401-recovery.test.ts": "usage",
   "quota-bars-rows.test.ts": "gui", "quota-reset-account-key.test.ts": "usage",
   "quota-reset-core-boundary.test.ts": "usage", "quota-reset-detector.test.ts": "usage",

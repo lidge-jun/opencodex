@@ -215,7 +215,7 @@ data recorded under the previous pair.
 Entitlement-specific rosters (Qoder, Devin, Cursor, CodeBuddy) additionally bind their cache entry to an
 irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
-the previous credential's stale roster nor suppresses the next credential's first discovery.
+the previous credential's stale roster nor suppresses the next credential's first discovery. Qoder discovery runs once per credential and cache generation with a 30 s CLI bound, shared by the gather and the dashboard connection test, so a cache invalidation revokes a run in flight or just finished; the test stops waiting after 8 s and reports the provider as still discovering, and a late success still in the current generation drops in-flight aggregate gathers (one started before it may hold the old roster) and re-syncs the catalog through management convergence, retrying a busy or stale disposition; until a gather stores that run, it outranks a fresh cached roster and the failure cooldown, and the cached roster stays as the fallback if it is never stored (#8115).
 Selector decoding uses the same authority boundary through `getRoutingCached`: it resolves a
 credential only for a scoped entry, reads OAuth through the passive store observer, and rejects
 unavailable or changed authority. Successful API-key selection commits clear the cache and revoke

@@ -1220,7 +1220,7 @@ export interface DefaultModelExposureDeps {
  * data-plane admission on a non-loopback bind (`isApiAuthRequired`), and doctor deliberately
  * holds no data-plane key, so a remote-bound proxy always falls through to the catalog.
  */
-async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch): Promise<Set<string> | null> {
+async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch): Promise<Set<string> | null | "timeout"> {
   try {
     // directLocalHttpFetch never follows redirects and aborts past its byte cap, so the
     // unbounded-body and redirect cases are covered below the JSON parse, not by options here.
@@ -1245,8 +1245,10 @@ async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch
       }
     }
     return ids;
-  } catch {
-    return null;
+  } catch (error) {
+    // Past the deadline the proxy is usually still gathering, for example a provider CLI that is
+    // still listing models (#8115); the caller says so instead of implying a failed check.
+    return error instanceof Error && error.name === "TimeoutError" ? "timeout" : null;
   }
 }
 
@@ -1298,14 +1300,18 @@ export async function collectDefaultModelExposure(
   }
 
   const live = deps.live ?? null;
-  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? directLocalHttpFetch) : null;
+  const proxyRead = live ? await fetchExposedModelIds(live, deps.fetchFn ?? directLocalHttpFetch) : null;
+  const proxyIds = proxyRead === "timeout" ? null : proxyRead;
+  const stillGathering = proxyRead === "timeout"
+    ? ` (the running proxy was still gathering its model list after ${EXPOSED_MODELS_TIMEOUT_MS / 1000} s; a provider may still be discovering models)`
+    : "";
   const catalogIds = catalogExposedModelIds((deps.readCatalogModelsFn ?? defaultCatalogModels)());
   if (proxyIds === null && catalogIds === null) {
     return {
       status: "undeterminable",
       model,
       source: null,
-      detail: `could not read the exposed model set, so Codex \`model = "${model}"\` was not checked`,
+      detail: `could not read the exposed model set, so Codex \`model = "${model}"\` was not checked${stillGathering}`,
       action: "Start the proxy with 'ocx start', or run 'ocx sync' to write the Codex catalog, then re-run 'ocx doctor'",
     };
   }
@@ -1321,7 +1327,7 @@ export async function collectDefaultModelExposure(
       status: "exposed",
       model,
       source: matched,
-      detail: `Codex \`model = "${model}"\` is exposed by this install`,
+      detail: `Codex \`model = "${model}"\` is exposed by this install${matched === "catalog" ? stillGathering : ""}`,
     };
   }
   // Name only the surfaces that actually answered: claiming a check that did not happen is the
@@ -1334,7 +1340,7 @@ export async function collectDefaultModelExposure(
     status: "not_exposed",
     model,
     source,
-    detail: `Codex \`model = "${model}"\` is NOT exposed by this install (checked ${checked}), so every new Codex session starts on a model this proxy does not serve`,
+    detail: `Codex \`model = "${model}"\` is NOT exposed by this install (checked ${checked})${stillGathering}, so every new Codex session starts on a model this proxy does not serve`,
     action: "Expose that model (enable it in the dashboard or drop it from 'disabledModels') and run 'ocx sync', or pin an exposed id as 'model' in CODEX_HOME/config.toml",
   };
 }
