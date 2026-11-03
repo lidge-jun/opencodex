@@ -285,4 +285,23 @@ describe("Windows wrapper escaping", () => {
     // "!" stays literal only while delayed expansion is off, before any assignment.
     expect(script.indexOf("setlocal EnableExtensions DisableDelayedExpansion")).toBeLessThan(script.indexOf('set "CODEX_HOME='));
   });
+
+  test("the token file stays under the pinned OpenCodex home, not a profile variable", () => {
+    // The task may run with another USERPROFILE than the installing shell. OPENCODEX_HOME is
+    // written as a literal, so the token file must be too, or the two can name different profiles.
+    const profile = join(tmpdir(), "ocx-task-profile");
+    const previous = { profile: process.env.USERPROFILE, opencodex: process.env.OPENCODEX_HOME };
+    process.env.USERPROFILE = profile;
+    process.env.OPENCODEX_HOME = join(profile, ".opencodex");
+    try {
+      const script = withHomes(join(profile, ".codex"), join(profile, ".opencodex"), () => buildWindowsServiceScript());
+      expect(script).toContain(`set "OPENCODEX_HOME=${join(profile, ".opencodex")}"`);
+      expect(script).toContain(`set "OCX_API_TOKEN_FILE=${join(profile, ".opencodex", "service-api-token")}"`);
+      expect(script).not.toContain('set "OCX_API_TOKEN_FILE=%USERPROFILE%');
+    } finally {
+      if (previous.profile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previous.profile;
+      process.env.OPENCODEX_HOME = previous.opencodex;
+    }
+  });
 });

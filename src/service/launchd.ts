@@ -8,10 +8,10 @@ import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
-import { serviceApiTokenFilePath, serviceApiTokenFilePathIn } from "../lib/service-secrets";
+import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
-import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments } from "./definition";
+import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments, serviceApiTokenFileUnder } from "./definition";
 import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
@@ -177,7 +177,7 @@ function launchdServiceCommand(
 ): string {
   const { bun, cli } = cliEntry(runtime);
   // The token file lives under the pinned OpenCodex home, so it follows the homes too.
-  const tokenFile = serviceApiTokenFilePathIn(homes.opencodexHome);
+  const tokenFile = serviceApiTokenFileUnder(homes.opencodexHome);
   return `${pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome)} ${buildServiceShellCommand(bun, cli, port, tokenFile)}`;
 }
 
@@ -206,7 +206,7 @@ export function expectedLaunchdCommand(
   const state = deps.state === undefined ? readServiceInstallState() : deps.state;
   const homes = deps.homes ?? installedLaunchdHomes(state, deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")));
   const pinned = pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome);
-  const tokenFile = serviceApiTokenFilePathIn(homes.opencodexHome);
+  const tokenFile = serviceApiTokenFileUnder(homes.opencodexHome);
   if (state?.launcherPath) return `${pinned} ${buildServiceLauncherShellCommand(state.launcherPath, port, tokenFile)}`;
   const entry = deps.entry ?? cliEntry();
   return `${pinned} ${buildServiceShellCommand(entry.bun, entry.cli, port, tokenFile)}`;

@@ -91,7 +91,9 @@ export function buildWindowsServiceScript(
     windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
     windowsBatchSet("OPENCODEX_HOME", currentOpenCodexHome()),
     ...proxyEnv.map(({ name, value }) => windowsBatchSet(name, value)),
-    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
+    // Absolute like OPENCODEX_HOME above: a profile-variable form could read the token from
+    // another profile than the home the proxy is pinned to.
+    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath()),
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli ?? undefined, "path"),

@@ -7,10 +7,19 @@
  * route back through them (see `installedServiceListenPort` in `health.ts`, which
  * intentionally stays behind because it asks every backend).
  */
+import { basename, join } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { readClaudeInterceptProxyToken } from "../claude/intercept/proxy-auth";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { PROXY_ENV_KEYS } from "../lib/proxy-env";
+
+/**
+ * The service token file under one OpenCodex home, for a definition that pins that home.
+ * The file name comes from {@link serviceApiTokenFilePath}, which stays its only owner.
+ */
+export function serviceApiTokenFileUnder(opencodexHome: string): string {
+  return join(opencodexHome, basename(serviceApiTokenFilePath()));
+}
 
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
