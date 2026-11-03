@@ -134,7 +134,7 @@ function validatePeer(value: unknown, index: number): LinkPeerStatus {
   };
 }
 
-function validateStatus(value: unknown): LinkStatusPayload {
+export function validateStatus(value: unknown): LinkStatusPayload {
   if (!isRecord(value)) throw new Error("invalid link API response: status object");
   assertKeys(value, ["role", "listener", "links", "child"], ["local"], "status");
   if (value.role !== "standalone" && value.role !== "home" && value.role !== "child") {

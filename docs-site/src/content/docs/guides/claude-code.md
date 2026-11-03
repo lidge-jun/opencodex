@@ -69,6 +69,16 @@ response headers on streaming, JSON and upstream-error responses, so compatible 
 statusLine consumers can read the provider's quota observations. Missing observations are
 not filled with invented values. This relay does not change account selection or retry behavior.
 
+Usage reads support Ultra (formerly Max 20x). Pro, Max 5x and Team retain their measured
+five-hour and weekly meters whichever one is currently binding. An Ultra null five-hour limit
+leaves that meter absent unless Anthropic marks a finite session meter active. Current `limits`
+counters take precedence over legacy duplicates; shared usage can affect routing even when
+inactive, while only active model-specific weekly limits affect that model family.
+The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
+metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
+(the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
+failing the usage read. Claude account rows use ordinal labels and omit account IDs and emails.
+
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
 
@@ -78,9 +88,9 @@ session affinity and usage-aware new-session selection across those OAuth accoun
 to another account whether the pool is on or off, and the toggle does not switch that off; pause
 an account to keep it out of failover. For **new**
 sessions,
-`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
-lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
-`max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
+`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) keeps the active account until its usage in the window set by `quotaWindow`
+(`five-hour` by default, or `weekly` / `max-utilization`) reaches `autoSwitchThreshold`
+(default 80), then moves to the least-used account, preferring accounts still under their own threshold; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
 reauthentication, or threshold, then advances. It is **off by default** and experimental.
 
@@ -856,6 +866,11 @@ Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featu
   overwritten or pruned; your own agents are never touched.
 - Files are atomically synced per file (write + rename).
 - `enabled: false` or `injectAgents: false` prunes all verified-owned definitions.
+- Turning Claude Code off with the dashboard's integration toggle also prunes them right away
+  (best effort), so a native `claude` session started afterwards stops seeing proxy-only agents.
+  A file that cannot be deleted stays, and while a sibling OpenCodex instance owns
+  `~/.claude/agents` nothing is touched; turning it off again retries and also removes
+  definitions an older version left behind.
 - Successful CLI first-party saves and persisted Desktop first-party setup also attempt best-effort
   roster sync, including repeated setup to repair missing definitions. Refused setup and rollback
   do not sync agents. Turning first-party off alone does not disable agent registration.
@@ -1082,7 +1097,7 @@ on the schema to reject a malformed argument.
 **Error taxonomy:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-other 5xx `api_error`. `Retry-After` is preserved.
+other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date becomes the remaining seconds), capped at eight days.
 
 ## Prompt caching and token usage
 

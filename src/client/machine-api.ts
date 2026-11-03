@@ -1,5 +1,5 @@
 import { journalOwner } from "../codex/journal";
-import { diagnoseCodexShim, installCodexShim, uninstallCodexShim } from "../codex/shim";
+import { diagnoseCodexShim, installCodexShimAsync, uninstallCodexShimAsync } from "../codex/shim";
 import { readManagementJsonBody } from "../server/management/body";
 import type { OcxClientConnectionConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
@@ -130,7 +130,7 @@ export async function handleMachineApi(
       return Response.json({ error: "action must be install, repair, or uninstall" }, { status: 400 });
     }
     try {
-      const result = input.action === "uninstall" ? uninstallCodexShim() : installCodexShim();
+      const result = input.action === "uninstall" ? await uninstallCodexShimAsync() : await installCodexShimAsync();
       return Response.json({ success: true, action: input.action, result, shim: diagnoseCodexShim() });
     } catch (error) {
       return Response.json({ success: false, error: error instanceof Error ? error.message : "shim action failed" }, { status: 409 });

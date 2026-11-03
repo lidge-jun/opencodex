@@ -214,3 +214,15 @@ test("status validates stored plans for every provider without exposing private 
     expect("access" in row).toBe(false);
   }
 });
+
+for (const [tier, plan, label] of [["claude_max_20x", "max_20x", "Ultra"], ["ultra", "ultra", "Ultra"],
+  ["default_claude_pro", "pro", "Pro"], ["claude_future_42x", "claude_future_42x", "claude_future_42x"]]) {
+  test(`Anthropic management exposes a display-only subscription label for ${tier}`, async () => {
+    anthropicFetch({ rate_limit_tier: tier });
+    await saveCredential("anthropic", await refreshAnthropicToken("synthetic-refresh"));
+    const account = getLoginStatus("anthropic").accounts![0]!;
+    expect(account).toMatchObject({ plan, planLabel: label });
+    expect(account).not.toHaveProperty("anthropicIdentity");
+    expect(account).not.toHaveProperty("organization");
+  });
+}

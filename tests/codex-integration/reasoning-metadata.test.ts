@@ -322,7 +322,7 @@ describe("learned rung refusals", () => {
       provider: ZEN_GO, modelId: DEEPSEEK_FLASH, requested: "max", rejectionText: REJECTION_BODY,
     });
     expect(first).toEqual({ effort: "high", recorded: true });
-    metadata.flushReasoningSupportCache();
+    await metadata.flushReasoningSupportCache();
     const second = metadata.planReasoningEffortDowngrade({
       provider: ZEN_GO, modelId: DEEPSEEK_FLASH, requested: "max", rejectionText: REJECTION_BODY,
     });
@@ -400,5 +400,65 @@ describe("destination resolution", () => {
     expect(zenGo.publishedApi).toBeUndefined();
     expect(zenGo.confirmed).toBeUndefined();
     expect(zenGo.models).toBe(1);
+  });
+});
+
+describe("config-root ACL admission (#7815)", () => {
+  test("a refresh publishes its snapshot only after an in-flight config-root ACL flight settles", async () => {
+    const { metadata } = await load();
+    const home = process.env["OPENCODEX_HOME"]!;
+    const acl = await import("../../src/lib/windows-secret-acl");
+    const { setSyntheticWindowsPrincipalForTests } = await import("../../src/lib/windows-user-principal");
+    const { existsSync } = await import("node:fs");
+    const success = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    let entered!: () => void, release!: () => void, fetched!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const fetchedOnce = new Promise<void>(resolve => { fetched = resolve; });
+    const previousFetch = globalThis.fetch;
+    acl.resetHardenedStateForTests();
+    acl.setPlatformForTests("win32");
+    setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+    acl.setIcaclsRunnerForTests(() => success);
+    acl.setAsyncIcaclsRunnerForTests(async () => { entered(); await held; return success; });
+    try {
+      globalThis.fetch = (async () => { fetched(); return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+      const flight = acl.hardenSecretDirAsync(home, { required: false });
+      await started;
+      let refresh: Promise<unknown> | undefined;
+      try {
+        refresh = metadata.refreshReasoningMetadata({ force: true });
+        await fetchedOnce;
+        await new Promise(resolve => setImmediate(resolve));
+        expect(existsSync(join(home, "reasoning-metadata-cache.json"))).toBe(false);
+      } finally { release(); await flight; }
+      expect(await refresh).toMatchObject({ ok: true, reason: "refreshed" });
+      expect(existsSync(join(home, "reasoning-metadata-cache.json"))).toBe(true);
+    } finally {
+      globalThis.fetch = previousFetch;
+      acl.setAsyncIcaclsRunnerForTests(null);
+      acl.setIcaclsRunnerForTests(null);
+      acl.setPlatformForTests(null);
+      setSyntheticWindowsPrincipalForTests(null);
+      acl.resetHardenedStateForTests();
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
+  test("a joined refresh reports the shared failure instead of a coalesced success", async () => {
+    const { metadata } = await load();
+    const previousFetch = globalThis.fetch;
+    let reject!: (error: Error) => void;
+    try {
+      globalThis.fetch = (() => new Promise((_resolve, fail) => { reject = fail; })) as unknown as typeof fetch;
+      const first = metadata.refreshReasoningMetadata({ force: true });
+      const joined = metadata.refreshReasoningMetadata({ force: true });
+      reject(new Error("fixture refusal"));
+      expect(await first).toEqual({ ok: false, reason: "fixture refusal" });
+      expect(await joined).toEqual({ ok: false, reason: "fixture refusal" });
+    } finally {
+      globalThis.fetch = previousFetch;
+      metadata.resetReasoningMetadataCachesForTests();
+    }
   });
 });

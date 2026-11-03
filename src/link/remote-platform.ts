@@ -14,6 +14,7 @@ const SSH_TRANSPORT_FAILURE = 255;
 
 /** Remote argv that prints the kernel name; under cmd or PowerShell, `sh` itself is refused. */
 export const REMOTE_UNAME_ARGV: readonly string[] = ["sh", "-c", "uname -s 2>/dev/null", "ocx-platform"];
+const REMOTE_FRAMED_UNAME_ARGV: readonly string[] = ["sh", "-c", "printf 'ocx-platform:%s\\n' \"$(uname -s 2>/dev/null)\"", "ocx-platform"];
 
 /** Does this output come from cmd.exe or PowerShell refusing a POSIX command? */
 export function isWindowsShellRefusal(output: string): boolean {
@@ -63,4 +64,17 @@ export async function requireRemotePlatform(runner: Pick<SshRunner, "run">, alia
   const platform = classifyRemotePlatform(result);
   if (platform === "unknown") throw new Error("Remote platform could not be determined");
   return platform;
+}
+
+/** Fan-out ignores login-shell output and trusts only one framed uname line. */
+export async function requireRemotePlatformFramed(runner: Pick<SshRunner, "run">, alias: string, knownHostsFile: string): Promise<"posix" | "windows"> {
+  const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile }), { timeoutMs: 10_000 });
+  if (windows.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
+  if (windows.code === 0 && windows.stdout.split(/\r?\n/).some(line => line.trim() === "Windows_NT")) return "windows";
+  const result = await runner.run(buildExecArgv({ alias, knownHostsFile, argv: REMOTE_FRAMED_UNAME_ARGV }), { timeoutMs: 10_000 });
+  if (result.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
+  const frames = result.stdout.split(/\r?\n/).filter(line => line.startsWith("ocx-platform:"));
+  const name = frames.length === 1 ? frames[0]!.slice("ocx-platform:".length) : "";
+  if (result.code !== 0 || !POSIX_UNAME.test(name)) throw new Error("Remote platform could not be determined");
+  return WINDOWS_UNAME.test(name) ? "windows" : "posix";
 }

@@ -10,6 +10,7 @@ export function desktopHandoffExcluded(argv, env = process.env) {
   const args = argv.filter(arg => !arg.startsWith(PROOF_PREFIX));
   return env.OCX_NO_DESKTOP_HANDOFF === "1"
     || ["update", "uninstall", "remove"].includes(args[0])
+    || (args[0] === "capabilities" && args.includes("--contracts"))
     || (args[0] ?? "").startsWith("__")
     || isCodexCliUpdateInspectionArgv(["node", "ocx.mjs", ...args]);
 }
@@ -87,6 +88,15 @@ export function runDesktopCliHandoff(plan, launch, deps = {}) {
     let done = false;
     const finish = result => { if (done) return; done = true; clear(); resolveExit(result); };
     child.once("error", error => finish(spawnFailure(error)));
-    child.once("exit", (code, signal) => finish({ kind: "exit", code: code ?? 1, signal }));
+    let delegateError = false;
+    child.once("exit", (code, signal) => finish(delegateError ? { kind: "error", issue: "spawn-failed" } : { kind: "exit", code: code ?? 1, signal }));
+    if (child.pid && launch.onSpawn) {
+      try { launch.onSpawn(child.pid); }
+      catch (error) {
+        delegateError = true;
+        console.error(`opencodex: sync mutex delegate publication failed: ${error.message}`);
+        try { child.kill(); } catch (killError) { console.error(`opencodex: failed to stop sync child: ${killError.message}`); }
+      }
+    }
   });
 }

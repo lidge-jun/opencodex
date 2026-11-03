@@ -472,12 +472,13 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     // pointless until the refusal was CORS-wrapped, because without an allow-origin a browser
     // cannot read an exposed header either.
     // src/server/index.ts is a facade now. The runAdmittedHttpTurn call sites live in the
-    // serve-options leaf while the CORS-wrapped refusal stayed in the composition root, so
-    // read both. Reading the facade alone would find no call site and the "more than one
+    // serve-options leaf and the CORS-wrapped refusal in admitted-http-turn.ts, so read all
+    // three. Reading the facade alone would find no call site and the "more than one
     // surface" assertion would pass on an empty match array.
     const source = [
       await Bun.file(repoPath("src/server/index.ts")).text(),
       await Bun.file(repoPath("src/server/index/serve-options.ts")).text(),
+      await Bun.file(repoPath("src/server/admitted-http-turn.ts")).text(),
     ].join("\n");
     const callSites = source.match(/return runAdmittedHttpTurn\(/g) ?? [];
     const threaded = source.match(/, \{ requestId, start, logCtx \}\);/g) ?? [];
@@ -487,8 +488,8 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     expect(callSites.length - threaded.length).toBe(1);
     // The admission refusal goes through the decision-carrying wrapper, which forwards the
     // denial's own scope and ceiling. Forwarding `reason` alone would answer a token-ceiling
-    // refusal with a 429 that names no ceiling.
-    expect(source).toContain("withCors(workflowDecisionRefusalResponse(");
+    // refusal with a 429 that names no ceiling. A native ingress may reshape it (map) but not drop it.
+    expect(source).toMatch(/withCors\((?:map\()?workflowDecisionRefusalResponse\(/);
   });
 
   test("every refusal lands on the record with the counts that caused it", () => {

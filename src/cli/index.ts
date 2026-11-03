@@ -69,6 +69,7 @@ import {
   writePid,
   writeRuntimePort,
 } from "../config/process-state";
+import { describeTrackedRuntimeTarget } from "../config/tracked-runtime-inspection";
 import {
   claimPendingTeardown,
   isPendingTeardownAbandoned,
@@ -209,6 +210,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
@@ -605,6 +607,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
+        command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
@@ -780,7 +783,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   // one restart, because the toggle removed the fence and start wrote it back.
   if (shouldSyncGrokOnStart(config)) try {
     const { syncGrokConfig } = await import("../grok/sync");
-    const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    const r = await syncGrokConfig(port, config, {
+      ...(config.hostname ? { hostname: config.hostname } : {}),
+      admit: () => !shuttingDown && !cleaned && shouldSyncGrokOnStart(loadConfig()),
+    });
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!r.ok) console.error(`⚠️  ${r.message}`);
   } catch (err) {
@@ -1020,13 +1026,7 @@ async function handleStop(approval?: StopApproval) {
         try { return JSON.parse(lines[0]!) as ResolveJson; }
         catch { return null; }
       },
-      () => {
-        const pid = readPid();
-        const runtime = pid === null ? null : readRuntimePort(pid);
-        return pid && runtime?.port ? {
-          pid, port: runtime.port, hostname: runtime.hostname ?? "",
-        } : null;
-      },
+      describeTrackedRuntimeTarget,
       () => inspectGuardedManagerTarget(approval.pid, approval.port),
       snapshot => handleStopUnlocked(snapshot),
     );
@@ -1139,7 +1139,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
-  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig())) && !stoppingSibling && !connectedClientSkip;
+  // Client start never discharges a standalone update-handover receipt or reapplies routing.
+  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig()))
+    && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
@@ -1679,8 +1681,8 @@ async function handleUninstall() {
   });
 
   try {
-    const { uninstallCodexShim } = await import("../codex/shim");
-    const r = uninstallCodexShim();
+    const { uninstallCodexShimAsync } = await import("../codex/shim");
+    const r = await uninstallCodexShimAsync();
     console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
   } catch (err) {
     failures.push("Codex autostart shim removed");

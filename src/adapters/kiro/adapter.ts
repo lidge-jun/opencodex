@@ -297,7 +297,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       toolNameMap = built.nameMap;
       conversationId = built.conversationId;
       completionMode = built.completionMode;
-      requestSnapshot = structuredClone(parsed);
+      // Runtime callbacks belong to the original request, not the retry payload.
+      requestSnapshot = structuredClone(Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value !== "function"),
+      )) as OcxParsedRequest;
       firstRequestBodyBytes = Buffer.byteLength(built.request.body);
       requestAbortSignal = incoming?.abortSignal;
       return built.request;

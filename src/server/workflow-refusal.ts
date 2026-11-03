@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 import { sharedPoolContinuityDenial } from "../lib/spend-reservation-ledger";
 /**
  * The one place that knows how this proxy refuses a turn on its own workflow budget.
@@ -27,6 +28,7 @@ import {
   type WorkflowLane,
   type WorkflowSpendDenialDetail,
 } from "../lib/workflow-budget";
+import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
 
 /**
  * What a caller needs to hand over for the refusal to become a row on `/api/logs`.
@@ -97,7 +99,7 @@ export function workflowRefusalResponse(
   // Without this a browser dashboard cannot read the header at all: the data plane never sets
   // Access-Control-Expose-Headers, so a cross-origin reader sees only the CORS-safelisted ones.
   refusal.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
-  return refusal;
+  return markProxyError(refusal);
 }
 
 /** Render the approved conservative-overlay explanation after a dispatch reservation refuses. */
@@ -142,7 +144,7 @@ export function admitHttpWorkflowTurn(headers: Headers): WorkflowDecision | unde
   const lane: WorkflowLane = rootId !== undefined && threadId !== undefined && threadId !== rootId
     ? "worker"
     : "interactive";
-  return admitWorkflowTurn(rootId, lane, undefined, threadId);
+  return admitWorkflowTurn(rootId, lane, currentWorkflowBudgetPolicy(), threadId);
 }
 
 /**

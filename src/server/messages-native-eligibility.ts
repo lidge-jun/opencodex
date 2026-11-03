@@ -2,8 +2,8 @@
  * Whether a settled Messages route may take the managed native Messages lane (PF-08).
  *
  * PURE: reads the route, the body's structure and config, and nothing else. The Messages ingress,
- * `count_tokens` and the protocol planner (`src/protocols/plan-snapshot.ts`) all ask here, so a
- * preview, a count and the real send cannot disagree about the lane.
+ * `count_tokens` and the protocol planner (`src/protocols/plan-snapshot.ts`) all ask here;
+ * previews and counts remain conservative when runtime availability is unknown.
  */
 import { anthropicBodyElidesBlockedSkill } from "../claude/inbound";
 import { isClaudeWebSearchToolName } from "../claude/outbound";
@@ -48,6 +48,8 @@ export interface NativeMessagesSelector {
    * and judges OAuth from config alone.
    */
   oauthFailoverQuorum?: boolean;
+  /** Runtime sidecar plan availability; absent for config-only callers. */
+  webSearchBackendAvailable?: boolean;
 }
 
 type Rec = Record<string, unknown>;
@@ -59,8 +61,7 @@ function isRec(value: unknown): value is Rec {
  * Whether the bridge could hand this request to the web-search sidecar: a `web_search*` server
  * tool the tool choice does not exclude, with the sidecar not disabled in the Claude replay config
  * (`buildClaudeReplayConfig` merges `claudeCode.webSearchSidecar` over the global block). Whether
- * a backend credential then exists is decided at dispatch and is not read here, so this errs
- * toward the bridge, which is today's behavior for every such request.
+ * a backend credential exists is supplied separately by the sending ingress.
  */
 function webSearchSidecarMayEngage(body: Readonly<Rec>, config: OcxConfig): boolean {
   const sidecar = { ...config.webSearchSidecar, ...config.claudeCode?.webSearchSidecar };
@@ -89,7 +90,7 @@ function bridgeOnlyPolicyApplies(
 ): boolean {
   if (resolvePinnedEffort(route, selector.routeSelector, config) !== undefined) return true;
   if (anthropicBodyElidesBlockedSkill(body, selector.claudeCode ?? config.claudeCode)) return true;
-  return webSearchSidecarMayEngage(body, config);
+  return selector.webSearchBackendAvailable !== false && webSearchSidecarMayEngage(body, config);
 }
 
 /**

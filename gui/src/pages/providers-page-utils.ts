@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import type { AccountLoginRow, AccountLoginStatus } from "../components/provider-catalog/ProviderCatalog";
 import type { TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
@@ -34,6 +35,12 @@ export function buildAccountLoginStatus(
     for (const [name, prov] of Object.entries(config.providers)) {
       if (prov.authMode === "forward") accountLoginStatus[name] = codexStatus;
     }
+  }
+  for (const [name, status] of Object.entries(accountLoginStatus)) {
+    if (!isAnthropicInstanceId(name) || !anthropicInstanceRowShapeMatches(name, config.providers[name])) continue;
+    const publicStatus = { ...status };
+    delete publicStatus.email;
+    accountLoginStatus[name] = publicStatus;
   }
   return accountLoginStatus;
 }

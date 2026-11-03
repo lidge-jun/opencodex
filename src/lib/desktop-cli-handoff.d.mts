@@ -16,5 +16,5 @@ export function planDesktopCliHandoff(input?: {
   recordRead?: DesktopCliRecordRead; selfPaths?: (string | undefined)[];
 }, deps?: { stat?: typeof statSync; access?: typeof accessSync; realpath?: (path: string) => string }): DesktopCliHandoffPlan;
 export function runDesktopCliHandoff(plan: Extract<DesktopCliHandoffPlan, { kind: "handoff" }>, launch: {
-  argv: string[]; env: NodeJS.ProcessEnv; proof: string; context: string;
+  argv: string[]; env: NodeJS.ProcessEnv; proof: string; context: string; onSpawn?: (pid: number) => void;
 }, deps?: { spawn?: typeof spawn; lstat?: typeof lstatSync; parent?: Pick<NodeJS.Process, "on" | "removeListener">; platform?: NodeJS.Platform }): Promise<DesktopCliHandoffExit>;
