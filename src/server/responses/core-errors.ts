@@ -1,3 +1,4 @@
+import type { ComboExclusionReasons } from "../../combos/resolve";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
@@ -116,7 +117,7 @@ export function comboUnavailableResponse(
 }
 
 
-export function comboUnavailable(comboId: string, now = Date.now(), reasons = ""): Response {
+export function comboUnavailable(comboId: string, now = Date.now(), reasons?: ComboExclusionReasons): Response {
   return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
   });

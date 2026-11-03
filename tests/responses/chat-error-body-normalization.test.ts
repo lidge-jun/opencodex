@@ -878,3 +878,142 @@ for (const route of ["direct", "translated", "passthrough"] as const) test(`expl
   expect(failure.error.code).toBe("upstream_server_error");
   expect(failure.error.message).toBe(CLIENT_ERROR_CONTRACTS.stream_incomplete);
 });
+
+for (const stream of [false, true]) for (const slot of ["userinfo", "path", "query", "provider"] as const) {
+  test(`combo refusal bounds configured target ${slot}, stream=${stream}`, async () => {
+    const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../src/combos");
+    const { getRequestLogEntries } = await import("../../src/server/request-log");
+    clearComboSelectionState(); clearComboTargetCooldowns();
+    const model = slot === "userinfo" ? `https://${KEY}@provider.example/model` : slot === "query" ? `https://provider.example/model?key=${KEY}` : `https://provider.example/${KEY}`;
+    const provider = slot === "provider" ? `https://${KEY}@provider.example` : "missing";
+    const config: OcxConfig = { port: 0, providers: {}, combos: { bounded: { strategy: "failover", targets: [{ provider, model }] } } };
+    const requestId = crypto.randomUUID();
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "combo/bounded", stream, messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+    expect(response.status).toBe(503);
+    const text = await response.text(); const payload = JSON.parse(text);
+    expect(payload.error.type).toBe("server_error"); expect(payload.error.code).toBe("server_is_overloaded");
+    expect(text).not.toContain(KEY);
+    expect(payload.error.message).toContain("target 1");
+    const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
+    expect(rows).toHaveLength(1); expect(rows[0]!.status).toBe(503);
+    expect(JSON.stringify(rows)).not.toContain(KEY);
+    await assertPersistedRefusal(requestId, 503);
+  });
+}
+
+for (const stream of [false, true]) test(`Antigravity cached native model stays internal stream=${stream}`, async () => {
+  const { saveCredential, getAccountSet } = await import("../../src/oauth/store");
+  const { setCached, clearModelCache } = await import("../../src/codex/model-cache");
+  const { encodeRoutedModelId } = await import("../../src/providers/slug-codec");
+  const { recordAntigravityAccountRoster, clearAntigravityAccountRosters } = await import("../../src/providers/antigravity-account-roster");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const provider = "google-antigravity"; const native = `https://${KEY}@provider.example/${KEY}?key=${KEY}`;
+  await saveCredential(provider, { access: "synthetic-model-label", refresh: "synthetic-model-refresh", expires: Date.now() + 3_600_000, projectId: "synthetic-project", source: "oauth" });
+  const account = getAccountSet(provider)!.activeAccountId;
+  recordAntigravityAccountRoster(provider, account, [{ id: "other", wireModelId: "other" } as never]);
+  setCached(provider, [{ id: native } as never]);
+  const config: OcxConfig = { port: 0, defaultProvider: provider, providers: { [provider]: { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com", googleMode: "cloud-code-assist" } } };
+  const requestId = crypto.randomUUID();
+  try {
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `${provider}/${encodeRoutedModelId(native)}`, stream, messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+    expect(response.status).toBe(403); const text = await response.text(); const payload = JSON.parse(text);
+    expect(payload.error.type).toBe("permission_error"); expect(payload.error.code).toBe("permission_denied");
+    expect(text).not.toContain(KEY);
+    const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
+    expect(rows).toHaveLength(1); expect(rows[0]!.status).toBe(403); expect(JSON.stringify(rows)).not.toContain(KEY);
+    await assertPersistedRefusal(requestId, 403);
+  } finally { clearModelCache(provider); clearAntigravityAccountRosters(); }
+});
+
+test("input admission uses the original selector after memory routing", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const config: OcxConfig = { port: 0, defaultProvider: "gateway", providers: { gateway: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: "https://provider.example/v1", contextWindow: 16 } }, memoryModels: { extract: { model: `gateway/${KEY}` } } };
+  const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json", "x-codex-turn-metadata": JSON.stringify({ request_kind: "memory", thread_source: "memory_consolidation" }) }, body: JSON.stringify({ model: "gpt-5.6-luna", input: "a".repeat(4000) }) }), config, ctx);
+  expect(response.status).toBe(413);
+  const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text(); const payload = JSON.parse(text);
+  expect(payload.error.type).toBe("invalid_request_error"); expect(payload.error.code).toBe("input_admission_refused");
+  expect(text).not.toContain(KEY);
+  const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
+  expect(rows).toHaveLength(1); expect(rows[0]!.status).toBe(413); expect(JSON.stringify(rows)).not.toContain(KEY);
+  await assertPersistedRefusal(requestId, 413);
+});
+
+for (const child of [false, true]) test(`compaction scope denial keeps the original client selector child=${child}`, async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const config: OcxConfig = { port: 0, defaultProvider: "gateway", providers: { gateway: { adapter: "openai-responses", authMode: "key", apiKey: "synthetic", baseUrl: "https://provider.example/v1" } }, compactionRouting: { model: `gateway/${KEY}` } };
+  const requestId = crypto.randomUUID(); const ctx = { model: "", provider: "" };
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json", "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction", compaction: { trigger: "manual" } }) }, body: JSON.stringify({ model: child ? `gateway/${KEY}` : "gateway/client-model", input: [{ type: "compaction_trigger" }] }) }), config, ctx, { admissionScope: { providers: ["other"], models: [] }, ...(child ? { compactionRoutingOverride: { sourceModel: "gateway/client-model" } } : {}) });
+  expect(response.status).toBe(403);
+  const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text(); const payload = JSON.parse(text);
+  expect(payload.error.type).toBe("model_not_allowed_for_key"); expect(payload.error.code).toBeUndefined(); expect(payload.error.message).toContain("not allowed for this API key");
+  expect(text).not.toContain(KEY);
+  const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
+  expect(rows).toHaveLength(1); expect(rows[0]!.status).toBe(403); expect(JSON.stringify(rows)).not.toContain(KEY);
+  await assertPersistedRefusal(requestId, 403);
+});
+
+for (const surface of ["responses", "chat-buffered", "chat-stream"]) test(`Command Code rewritten plan model stays internal surface=${surface}`, async () => {
+  let wireModel: unknown;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) { wireModel = (await req.json() as { params: { model: unknown } }).params.model; return Response.json({ success: false, error: { code: "FORBIDDEN", message: "MODEL_NOT_IN_PLAN: fixture" } }, { status: 403 }); } });
+  try {
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: { adapter: "command-code", models: [KEY], defaultModel: KEY, authMode: "key", apiKey: "synthetic", baseUrl: `${upstream.url}`, allowPrivateNetwork: true } }, blockedModelRedirects: { "client-model": KEY } };
+    const { handleResponses } = await import("../../src/server/responses");
+    const handler = surface === "responses" ? handleResponses : handleChatCompletions;
+    const response = await handler(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture/client-model", stream: surface === "chat-stream", ...(surface === "responses" ? { input: "hi" } : { messages: [{ role: "user", content: "hi" }] }) }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(400); const text = await response.text(); const payload = JSON.parse(text);
+    expect(payload.error.type).toBe("invalid_request_error"); expect(payload.error.code).toBe(surface === "responses" ? "model_not_in_plan" : "invalid_request_error"); expect(text).toContain("MODEL_NOT_IN_PLAN");
+    expect(wireModel).toBe(KEY); expect(text).not.toContain(KEY);
+  } finally { await upstream.stop(true); }
+});
+
+test("Chat request read failures use a fixed local diagnostic", async () => {
+  const req = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: new ReadableStream({ start(controller) { controller.error(new Error(KEY)); } }), duplex: "half" } as RequestInit);
+  const response = await handleChatCompletions(req, { port: 0, providers: {} }, { model: "", provider: "" });
+  expect(response.status).toBe(400); const text = await response.text(); const payload = JSON.parse(text);
+  expect(payload.error.type).toBe("invalid_request_error"); expect(payload.error.code).toBeNull(); expect(payload.error.message).toBe("Invalid JSON body");
+  expect(text).not.toContain(KEY);
+});
+
+async function assertPersistedRefusal(requestId: string, status: number): Promise<void> {
+  const { readUsageEntries, resetUsageReadCacheForTests } = await import("../../src/usage/log");
+  resetUsageReadCacheForTests();
+  const row = readUsageEntries().find(entry => entry.requestId === requestId);
+  expect(row).toBeDefined(); expect(row!.status).toBe(status);
+  expect(JSON.stringify(row)).not.toContain(KEY);
+}
+
+for (const stream of [false, true]) test(`policy alias refusal uses the client selector stream=${stream}`, async () => {
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const config: OcxConfig = { port: 0, providers: { fixture: { adapter: "openai-chat", baseUrl: "https://provider.example/v1", disabled: true } }, routingProfiles: { [KEY]: { alias: "client-policy", candidates: [{ provider: "fixture", model: "model" }] } } };
+  const requestId = crypto.randomUUID();
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "client-policy", stream, messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+  expect(response.status).toBe(404); const text = await response.text(); const payload = JSON.parse(text);
+  expect(payload.error.type).toBe("invalid_request_error"); expect(payload.error.code).toBe("model_not_found"); expect(payload.error.message).toContain("No eligible candidates");
+  expect(text).not.toContain(KEY);
+  const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
+  expect(rows).toHaveLength(1); expect(rows[0]!.status).toBe(404); expect(JSON.stringify(rows)).not.toContain(KEY);
+  await assertPersistedRefusal(requestId, 404);
+});
+
+for (const slot of ["model", "provider"] as const) test(`scope refusals project late-bound log ${slot}`, async () => {
+  const { AdmissionModelDeniedError, admissionModelDeniedResponse } = await import("../../src/server/admission-model-scope");
+  const { responseWithDeferredRequestLog } = await import("../../src/server/relay");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const requestId = crypto.randomUUID();
+  const ctx = { model: slot === "model" ? KEY : "gpt-6", provider: slot === "provider" ? `https://${KEY}@provider.example/path` : "fixture", requestedModel: "client-selector", errorCode: "model_not_allowed_for_key" };
+  // Exercise runtime callers too: an unbranded label must never authorize copied text.
+  const failure = new AdmissionModelDeniedError("client-selector" as never, { providerName: "fixture", modelId: KEY });
+  const response = admissionModelDeniedResponse(failure, ctx);
+  expect(response.status).toBe(403);
+  const text = await responseWithDeferredRequestLog(response, requestId, Date.now(), ctx).text();
+  expect(JSON.parse(text).error.type).toBe("model_not_allowed_for_key"); expect(JSON.parse(text).error.code).toBeUndefined();
+  expect(text).not.toContain(KEY);
+  const row = getRequestLogEntries().find(row => row.requestId === requestId);
+  expect(row).toBeDefined(); expect(row!.status).toBe(403); expect(row!.errorCode).toBe("permission_denied");
+  expect(JSON.stringify(row)).not.toContain(KEY); await assertPersistedRefusal(requestId, 403);
+});

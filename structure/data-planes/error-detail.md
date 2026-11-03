@@ -184,8 +184,8 @@ the configured provider id themselves; unsupported-provider remediation applies 
 and retains the existing credential-pattern redaction on its derived label. These bounds also apply before request-log persistence.
 
 Proxy-authored local errors retain their legacy Chat message, type and code. The preflight
-transport, sidecar-auth and send-budget phase results in `src/server/responses/core-pipeline.ts`
-carry a process-local object identity; `src/server/responses/core-lifetime.ts` and the deferred
+transport and send-budget phase results in `src/server/responses/core-pipeline.ts`
+carry a process-local object identity. Sidecar-auth prepares state and does not return a Response; `src/server/responses/core-lifetime.ts` and the deferred
 log wrapper carry that identity through their owned response wrappers. Passthrough error
 rewrapping and the non-replayable projection carry existing ownership without granting it
 to an upstream response. The request-preparation
@@ -196,8 +196,23 @@ OAuth constructors in adapter and passthrough dispatch mark responses built from
 remediation formatter. Typed Codex auth, pacing, key-scope, workflow-budget, spend-storage and local Anthropic pool-refusal constructors
 mark their locally selected responses too; their arguments come from local policy classes and counters.
 Request decoding, cancellation, encrypted-task/replay compatibility and unavailable-combo constructors
-retain ownership too. Combo exclusion descriptions use configured targets, coarse proxy labels and
-numeric cooldowns; no provider diagnostic is interpolated into those local messages. No serialized flag, code or header mints identity.
+retain ownership too. Combo refusals omit combo aliases and model strings. They report the target count, target indices,
+provider labels validated by `providerErrorDestinationLabel`, and closed exclusion reasons.
+`clientFacingModelLabel` captures a same-request client selector before compaction, memory, shadow,
+redirect or cached-model resolution. Its opaque identity and strict 128-character identifier bound
+are required by scope, Antigravity and input-admission message builders; synthetic children carry
+the original label in process-local options. Chat routing-policy refusals also use that original label; an operator alias never supplies a
+profile id to the message or request row. Command Code plan refusals use fixed wording because
+the adapter request contains the resolved wire model. Local model refusals project their request
+rows to client or catalog model identities and validated provider ids, omitting an untrusted routing decision. Scope-refusal construction applies that bound to late guard and sidecar contexts too. No provider diagnostic
+is interpolated into those local messages. No serialized flag, code or header mints identity.
+The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
+`src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
+`src/lib/upstream-retry.ts` owns the retry constructors.
+`InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
+`UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
+only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
+stream, decompression and parse exceptions use `Invalid JSON body`.
 The undeclared-tool guard records its fixed sentence in a WeakMap keyed by the request's
 log context. `UNDECLARED_TOOL_CALL_MESSAGE` contains no tool name: the shared guard, native Messages,
 Responses bridge and passthrough refusals all emit `routed provider emitted undeclared client tool; only request-declared tools may be called`.

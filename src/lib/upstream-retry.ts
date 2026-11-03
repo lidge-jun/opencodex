@@ -217,7 +217,7 @@ export class SendBudgetExhaustedError extends Error {
  */
 export class InvalidSendBudgetError extends Error {
   constructor(value: unknown) {
-    super(`invalid upstream send budget: ${String(value)}`);
+    super(`invalid upstream send budget: ${typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : "invalid"}`);
     this.name = "InvalidSendBudgetError";
   }
 }
@@ -589,14 +589,13 @@ export class UpstreamRetryEvidenceError extends Error {
     /** True when a connection-reset retry already reached the origin. */
     public readonly resetSeen = false,
   ) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
     const kinds: string[] = [];
     if (transientStatuses.length > 0) kinds.push("transient 5xx response(s)");
     if (resetSeen) kinds.push("a credential-visible connection reset");
     super(
       kinds.length > 0
-        ? `upstream fetch failed after ${kinds.join(" and ")}: ${detail}`
-        : `upstream fetch failed: ${detail}`,
+        ? `upstream fetch failed after ${kinds.join(" and ")}`
+        : "upstream fetch failed",
       { cause },
     );
     this.name = "UpstreamRetryEvidenceError";

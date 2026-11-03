@@ -1,3 +1,4 @@
+import { clientFacingModelText, type ClientFacingModelLabel } from "../../lib/error-destination";
 /**
  * Pre-dispatch input admission (#1412).
  *
@@ -329,4 +330,14 @@ export function checkInputAdmission(
   if (ceiling === null) return { admitted: true, estimatedTokens: 0, ceiling: null };
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
   return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling };
+}
+
+export function inputAdmissionRefusalMessage(input: InputAdmissionResult, model: ClientFacingModelLabel): string {
+  return input.requiredOutputHeadroom !== undefined
+    ? `Estimated input (~${input.estimatedTokens} tokens) plus ${input.requiredOutputHeadroom} `
+      + `tokens of requested output headroom cannot fit the context window of ${clientFacingModelText(model)} `
+      + `(${input.ceiling} tokens).`
+    : `Estimated input (~${input.estimatedTokens} tokens) is far past the context window `
+      + `of ${clientFacingModelText(model)} (${input.ceiling} tokens). Start a new session or choose a `
+      + `model with a larger context window.`;
 }

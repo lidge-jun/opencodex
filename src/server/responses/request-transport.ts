@@ -1,3 +1,4 @@
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { SendBudgetExhaustedError, errorDestinationText, providerErrorDestinationLabel } from "../../lib/upstream-retry";
@@ -346,7 +347,7 @@ export async function prepareResponsesTransport(
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
-    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(error);
+    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(error, logCtx);
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = markProxyError(formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
       error.message));
@@ -1028,8 +1029,8 @@ export async function prepareResponsesTransport(
         // #7500: an Antigravity account whose own discovery omits the model is never sent to.
         // A usable listing (or not-yet-discovered) sibling replaces it, or the request is refused.
         const modelRoute = routeAntigravityModel(config, route.providerName,
-          proposedAccountId ?? oauthSelection?.accountId, route.modelId);
-        if (modelRoute.kind === "refuse") return markProxyError(formatErrorResponse(403, "permission_error", modelRoute.message));
+          proposedAccountId ?? oauthSelection?.accountId, route.modelId, undefined, requestState.inboundSelector);
+        if (modelRoute.kind === "refuse") { projectLocalModelRefusalLog(logCtx, requestState.inboundSelector); return markProxyError(formatErrorResponse(403, "permission_error", modelRoute.message)); }
         const routedAccountId = modelRoute.kind === "reroute" ? modelRoute.accountId : proposedAccountId;
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
@@ -1096,8 +1097,8 @@ export async function prepareResponsesTransport(
         }
         // Resolution fallbacks can still land on an omitting account; answer with the refusal
         // here, since the commit below would only report it as a changed selection.
-        const unlisted = antigravityModelRefusal(config, route.providerName, resolved.accountId, route.modelId);
-        if (unlisted) return markProxyError(formatErrorResponse(403, "permission_error", unlisted));
+        const unlisted = antigravityModelRefusal(config, route.providerName, resolved.accountId, route.modelId, undefined, requestState.inboundSelector);
+        if (unlisted) { projectLocalModelRefusalLog(logCtx, requestState.inboundSelector); return markProxyError(formatErrorResponse(403, "permission_error", unlisted)); }
         const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return markProxyError(formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request"));
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)

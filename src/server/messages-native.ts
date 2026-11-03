@@ -396,7 +396,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const toolScopeDenial = nativeMessagesToolScopeDenial(options.modelScope, route.providerName, requestedModel, body);
   if (toolScopeDenial) {
     finishLog(403, toolScopeDenial.message);
-    return admissionModelDeniedResponse(toolScopeDenial);
+    return admissionModelDeniedResponse(toolScopeDenial, logCtx);
   }
   let routeTarget: string;
   try { routeTarget = resolveAnthropicMessagesUrl(route.provider); }

@@ -680,7 +680,7 @@ export async function executeComboResponses(
         { parentThreadId: inboundClientThreadId },
       );
       if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
-        return comboUnavailableResponse(`No available targets for combo: ${comboId}; targets cannot preserve mandatory tool_choice`);
+        return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice");
       }
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
@@ -700,7 +700,7 @@ export async function executeComboResponses(
     if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
-      return comboUnavailableResponse(`No available targets for combo: ${comboId}; targets cannot preserve mandatory tool_choice`);
+      return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice");
     }
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
@@ -933,7 +933,7 @@ export async function executeComboResponses(
     }
     const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
     return remainingQuotaCooldownMs > 0
-      ? comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
+      ? comboUnavailableResponse("No available targets for combo", {
         retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
       }) : lastFailure;
   };

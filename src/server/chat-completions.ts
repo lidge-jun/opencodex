@@ -1,3 +1,5 @@
+import { projectLocalModelRefusalLog } from "./request-log-failure-detail";
+import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
 import { wasAccountAutoPaused } from "../lib/account-auto-pause-response";
 import { ownedChatErrorPayload, isProxyError, LOCAL_CHAT_ERROR_MESSAGES } from "../lib/client-error-body";
 import { ownedChatErrorResponse } from "../chat/outbound";
@@ -57,7 +59,7 @@ import {
   linkRequestSessionLane,
 } from "./request-log-conversation";
 import type { OcxConfig } from "../types";
-import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
+import { DecompressedBodyTooLargeError, UnsupportedContentEncodingError, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import {
   addFinalRequestLog,
   cacheDiagnosticsObserving,
@@ -113,12 +115,16 @@ type Rec = Record<string, unknown>;
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
+function routingPolicyRefusalMessage(kind: "unknown" | "unavailable", model: ClientFacingModelLabel): string {
+  return kind === "unknown" ? `Unknown routing policy: ${clientFacingModelText(model)}`
+    : `No eligible candidates for policy profile: ${clientFacingModelText(model)}`;
+}
 async function readChatBody(req: Request, budget: TranslatorBudget, maxBytes: number): Promise<unknown> {
   try {
     return await readJsonRequestBody(req, budget, maxBytes);
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) throw err;
-    throw new ChatCompletionsRequestError(err instanceof Error && err.message ? err.message : "Invalid JSON body");
+    throw new ChatCompletionsRequestError(err instanceof DecompressedBodyTooLargeError || err instanceof UnsupportedContentEncodingError ? err.message : "Invalid JSON body");
   }
 }
 
@@ -251,7 +257,7 @@ async function handleChatCompletionsWithBudget(
     );
     // Native Chat must check its own destination; translated xAI OAuth turns
     // preview the billed Fast lane before their final Responses scope check.
-    assertRouteAllowedByScope(inheritedAdmissionScope ?? resolveAdmissionModelScope(config, logIds?.admission), requestedModel, {
+    assertRouteAllowedByScope(inheritedAdmissionScope ?? resolveAdmissionModelScope(config, logIds?.admission), clientFacingModelLabel(requestedModel), {
       providerName: route.providerName,
       modelId: previewXaiOauthWireModel({ options: {
         serviceTier: typeof chatBody.service_tier === "string" ? chatBody.service_tier : undefined,
@@ -311,17 +317,21 @@ async function handleChatCompletionsWithBudget(
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
-      return admissionModelDeniedResponse(err);
+      return admissionModelDeniedResponse(err, logCtx);
     }
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
+      const clientModel = clientFacingModelLabel(requestedModel);
+      projectLocalModelRefusalLog(logCtx, clientModel);
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 404, { closeReason: "non_stream" });
-      return chatCompletionsErrorResponse(404, err.message, "invalid_request_error");
+      return chatCompletionsErrorResponse(404, routingPolicyRefusalMessage("unknown", clientModel), "invalid_request_error");
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       logCtx.routeDecision = err.trace;
+      const clientModel = clientFacingModelLabel(requestedModel);
+      projectLocalModelRefusalLog(logCtx, clientModel);
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 404, { closeReason: "non_stream" });
-      return chatCompletionsErrorResponse(404, err.message, "invalid_request_error");
+      return chatCompletionsErrorResponse(404, routingPolicyRefusalMessage("unavailable", clientModel), "invalid_request_error");
     }
     /* unknown model: let handleResponses shape the 404 */
   }
@@ -548,6 +558,7 @@ async function handleChatCompletionsWithBudget(
 
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
+    clientModelLabel: clientFacingModelLabel(requestedModel),
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
       && !isCanonicalOpenAiForwardProvider(settledRoute.provider)),

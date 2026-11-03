@@ -30,3 +30,18 @@ export function errorDestinationText(label: ErrorDestinationLabel): string {
   if (!owned) return fallback;
   return owned.kind === "origin" ? origin(owned.value) : providerId.test(owned.value) ? owned.value : fallback;
 }
+
+/** A client selector captured before any route or helper-model rewrite. */
+declare const clientModelBrand: unique symbol;
+export type ClientFacingModelLabel = { readonly [clientModelBrand]: true };
+const clientModels = new WeakMap<object, string>();
+const clientModelId = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*){0,3}$/;
+export function clientFacingModelLabel(requestedModel: unknown, placeholder: "requested" | "unnamed" = "requested"): ClientFacingModelLabel {
+  const label = Object.freeze({}) as ClientFacingModelLabel;
+  clientModels.set(label, typeof requestedModel === "string" && requestedModel.length <= 128
+    && clientModelId.test(requestedModel) ? requestedModel : placeholder === "unnamed" ? "(unnamed)" : "the requested model");
+  return label;
+}
+export function clientFacingModelText(label: ClientFacingModelLabel | undefined): string {
+  return label && clientModels.get(label) || "the requested model";
+}

@@ -2204,7 +2204,7 @@ describe("server combo failover 030 activation matrix", () => {
 
     const unavailable = await post(config);
     expect(unavailable.status).toBe(503);
-    expect(await unavailable.text()).toContain("No available targets for combo: free");
+    expect(await unavailable.text()).toContain("No available targets for combo");
     expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
   });
 

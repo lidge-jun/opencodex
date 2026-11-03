@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../../lib/error-destination";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
@@ -739,14 +740,14 @@ export async function handleResponsesCompact(
     // Routed xAI OAuth compaction must preview its Fast wire model here;
     // native compact keeps checking the destination it dispatches directly.
     const callerTier = (raw as Record<string, unknown>).service_tier;
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), compactRequestedModel, {
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), clientFacingModelLabel(compactRequestedModel), {
       providerName: route.providerName,
       modelId: previewXaiOauthWireModel({ options: {
         serviceTier: compactFastRow ? "priority" : typeof callerTier === "string" ? callerTier : undefined,
       } }, route, config, "responses"),
     });
   } catch (err) {
-    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so a failed compact policy request stays

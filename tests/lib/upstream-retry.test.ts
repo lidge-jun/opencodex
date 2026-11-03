@@ -814,3 +814,37 @@ for (const kind of ["unsupported", "login"] as const) test(`OAuth provider const
   expect(error.message).toBe(kind === "unsupported" ? "Unsupported OAuth provider in config: the provider" : "Not logged in to the provider. Run: ocx login the provider");
   expect(error.message).not.toContain(destinationSentinel);
 });
+
+for (const value of [destinationSentinel, { toString: () => destinationSentinel }, NaN, Infinity, -1]) {
+  test(`invalid send-budget diagnostic bounds ${typeof value}`, async () => {
+    const { InvalidSendBudgetError } = await import("../../src/lib/upstream-retry");
+    const error = new InvalidSendBudgetError(value);
+    expect(error).toBeInstanceOf(InvalidSendBudgetError);
+    expect(error.name).toBe("InvalidSendBudgetError");
+    expect(error.message).toBe("invalid upstream send budget: invalid");
+    expect(error.message).not.toContain(destinationSentinel);
+  });
+}
+for (const statuses of [[], [503]]) test(`retry evidence owns its diagnostic statuses=${statuses.length}`, async () => {
+  const { UpstreamRetryEvidenceError } = await import("../../src/lib/upstream-retry");
+  const cause = new Error(destinationSentinel);
+  const error = new UpstreamRetryEvidenceError(statuses, cause);
+  expect(error).toBeInstanceOf(UpstreamRetryEvidenceError);
+  expect(error.cause).toBe(cause);
+  expect(error.transientStatuses).toEqual(statuses);
+  expect(error.message).toBe(statuses.length ? "upstream fetch failed after transient 5xx response(s)" : "upstream fetch failed");
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+for (const [value, expected] of [["provider/model-v1", "provider/model-v1"], ["combo/fast", "combo/fast"],
+  [`https://${destinationSentinel}@provider.example/${destinationSentinel}?key=${destinationSentinel}`, "the requested model"],
+  ["a".repeat(129), "the requested model"], ["model\nmetadata", "the requested model"], ["", "the requested model"],
+  [{ toString: () => destinationSentinel }, "the requested model"]] as const) {
+  test(`client model label projects ${typeof value}, length=${typeof value === "string" ? value.length : 0}`, async () => {
+    const { clientFacingModelLabel, clientFacingModelText } = await import("../../src/lib/error-destination");
+    const label = clientFacingModelLabel(value);
+    expect(typeof label).toBe("object"); expect(Object.isFrozen(label)).toBe(true);
+    expect(clientFacingModelText(label)).toBe(expected);
+    expect(clientFacingModelText({} as never)).toBe("the requested model");
+  });
+}

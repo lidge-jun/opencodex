@@ -1,3 +1,6 @@
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { inputAdmissionRefusalMessage } from "./input-admission";
+import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
 import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
@@ -245,6 +248,11 @@ export async function prepareResponsesRequest(
     return decodeRequestErrorResponse(err, "responses");
   }
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
+  const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel
+    ?? (options.comboAttempt || options.policyFallbackCandidate || options.internalDecisionCall || options.memoryModelPhase
+      || options.visionDescribeTerminal || options.shadowCallIntercepted ? undefined
+      : body && typeof body === "object" ? (body as { model?: unknown }).model : undefined);
+  options.clientModelLabel ??= clientFacingModelLabel(originalSelector);
   redactHostedImageDisplayPaths(body);
   observeCacheDiagnosticInbound(
     logCtx,
@@ -649,7 +657,8 @@ export async function prepareResponsesRequest(
   // The selector the caller actually sent, captured before shadow interception
   // or a subagent fallback rewrites it, so a refusal names the client's own
   // request rather than a destination it never asked for.
-  const inboundSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
+  const inboundSelector = options.clientModelLabel;
+  const inboundRoutingSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
   const selectorTargetsSecondary = (selector: string): boolean => {
     const slash = selector.indexOf("/");
     if (slash <= 0) return false;
@@ -659,7 +668,7 @@ export async function prepareResponsesRequest(
     return qualifier === "anthropic2"
       || config.providers.anthropic2?.alias?.trim().toLowerCase() === qualifier.toLowerCase();
   };
-  const explicitlyRequestsSecondary = selectorTargetsSecondary(inboundSelector);
+  const explicitlyRequestsSecondary = selectorTargetsSecondary(inboundRoutingSelector);
   const secondaryProvider = config.providers.anthropic2;
   // Reserve an explicit B selector before an absent row can default-route it to A.
   // Combo parents have already dispatched above; concrete children retain their own target.
@@ -846,7 +855,7 @@ export async function prepareResponsesRequest(
     }
     const policyRefusal = policyCandidateRefusalResponse(err);
     if (policyRefusal) return policyRefusal;
-    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
     if (err instanceof NoAvailableComboTargetsError) {
       return comboUnavailable(err.comboId, undefined, err.reasons);
     }
@@ -1066,7 +1075,7 @@ export async function prepareResponsesRequest(
       } catch (err) {
         const policyRefusal = policyCandidateRefusalResponse(err);
         if (policyRefusal) return policyRefusal;
-        if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
+        if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
         if (err instanceof NoAvailableComboTargetsError) {
           return comboUnavailable(err.comboId, undefined, err.reasons);
         }
@@ -1288,7 +1297,7 @@ export async function prepareResponsesRequest(
             } catch (err) {
               const policyRefusal = policyCandidateRefusalResponse(err);
               if (policyRefusal) return policyRefusal;
-              if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
+              if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err, logCtx);
               if (err instanceof NoAvailableComboTargetsError) {
                 return comboUnavailable(err.comboId, undefined, err.reasons);
               }
@@ -1457,7 +1466,7 @@ export async function prepareResponsesRequest(
     ? route
     : { providerName: route.providerName, modelId: parsed._wireModelOverride };
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
-    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, scopedDestination));
+    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx);
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -1514,20 +1523,15 @@ export async function prepareResponsesRequest(
       // `context_length_exceeded` still stops, because retrying it elsewhere is guesswork.
       if (clientRequestedStream && !options.comboAttempt) {
         return streamingContextOverflowResponse(
-          parsed._responseModelId ?? parsed.modelId,
+          clientFacingModelText(inboundSelector),
           translatorBudget,
         );
       }
+      projectLocalModelRefusalLog(logCtx, inboundSelector);
       return markProxyError(formatErrorResponse(
         413,
         "input_admission_refused",
-        inputAdmission.requiredOutputHeadroom !== undefined
-          ? `Estimated input (~${inputAdmission.estimatedTokens} tokens) plus ${inputAdmission.requiredOutputHeadroom} `
-            + `tokens of requested output headroom cannot fit the context window of ${parsed.modelId} `
-            + `(${inputAdmission.ceiling} tokens).`
-          : `Estimated input (~${inputAdmission.estimatedTokens} tokens) is far past the context window `
-            + `of ${parsed.modelId} (${inputAdmission.ceiling} tokens). Start a new session or choose a `
-            + `model with a larger context window.`,
+        inputAdmissionRefusalMessage(inputAdmission, inboundSelector),
       ));
     }
   }

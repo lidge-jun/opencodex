@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../lib/error-destination";
 import { classifyUpstreamCondition } from "../lib/upstream-condition";
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { recordLocalFailureDetail, type FailureDetail } from "./request-log-failure-detail";
@@ -904,7 +905,7 @@ async function handleClaudeMessagesWithBudget(
     // the same billed Fast lane as their final Responses scope check.
     assertRouteAllowedByScope(
       resolveAdmissionModelScope(config, logIds?.admission),
-      String(internalBody.model ?? ""),
+      clientFacingModelLabel(requestedModel),
       { providerName: route.providerName, modelId: previewXaiOauthWireModel({ options: {
         serviceTier: typeof internalBody.service_tier === "string" ? internalBody.service_tier : undefined,
       } }, route, config, "anthropic") },
@@ -946,7 +947,7 @@ async function handleClaudeMessagesWithBudget(
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
-      return admissionModelDeniedResponse(err);
+      return admissionModelDeniedResponse(err, logCtx);
     }
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
@@ -1263,6 +1264,7 @@ async function handleClaudeMessagesWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    clientModelLabel: clientFacingModelLabel(requestedModel),
     ...(clientEncoder ? { clientEncoder } : {}),
     ...(directRoute && directPlan
       ? { directRequest: messagesDirectRequestOption(directPlan, anthropicBody, cc, translatorBudget) }

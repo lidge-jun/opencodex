@@ -248,7 +248,7 @@ export async function executeResponsesSidecars(
     if (!sidecarScopeDenial || response.ok) return undefined;
     void response.body?.cancel().catch(() => {});
     releaseSearchProbeLease();
-    return admissionModelDeniedResponse(sidecarScopeDenial);
+    return admissionModelDeniedResponse(sidecarScopeDenial, logCtx);
   };
   /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (

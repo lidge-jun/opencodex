@@ -1,3 +1,4 @@
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
@@ -57,16 +58,21 @@ export class UnknownComboError extends Error {
   }
 }
 
+declare const exclusionBrand: unique symbol;
+export type ComboExclusionReasons = string & { readonly [exclusionBrand]: true };
+
 export class NoAvailableComboTargetsError extends Error {
   readonly code = "combo_unavailable";
 
-  constructor(readonly comboId: string, readonly reasons = "") {
-    super(`No available targets for combo: ${comboId}${reasons ? ` (${reasons})` : ""}`);
+  constructor(readonly comboId: string, readonly reasons?: ComboExclusionReasons) {
+    super(`No available targets for combo${reasons ? ` (${reasons})` : ""}`);
     this.name = "NoAvailableComboTargetsError";
   }
 }
 
-function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): string | undefined {
+type ComboExclusionReason = "provider missing" | "provider disabled" | "quota exhausted" | "cooldown" | "ineligible for this request";
+
+function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): ComboExclusionReason | undefined {
   const provider = Object.hasOwn(config.providers, target.provider) ? config.providers[target.provider] : undefined;
   if (!provider) return "provider missing";
   if (provider.disabled === true) return "provider disabled";
@@ -93,18 +99,19 @@ export function comboTargetSkipTrigger(
 
 /**
  * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
- * configured provider/model and a coarse label are named, never account or request data.
+ * target index, validated provider label and a closed exclusion reason are named.
  */
 export function comboExclusionReasons(
   config: OcxConfig,
   comboId: string,
   eligible?: (target: NormalizedComboTarget) => boolean,
   now = Date.now(),
-): string {
-  return (getCombo(config, comboId)?.targets ?? []).flatMap(target => {
+): ComboExclusionReasons {
+  const targets = getCombo(config, comboId)?.targets ?? [];
+  const reasons = targets.flatMap((target, index) => {
     let reason = providerExclusionReason(config, target, now);
     const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
-    if (cooldown) reason = `cooldown ${Math.max(1, Math.ceil((cooldown.expiry - now) / 1000))}s`;
+    if (cooldown) reason = "cooldown";
     if (!reason && eligible) {
       try {
         if (!eligible(target)) reason = "ineligible for this request";
@@ -113,8 +120,9 @@ export function comboExclusionReasons(
         reason = "ineligible for this request";
       }
     }
-    return reason ? [`${targetKey(target)}: ${reason}`] : [];
+    return reason ? [`target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))}): ${reason}`] : [];
   }).join("; ");
+  return `${targets.length} target${targets.length === 1 ? "" : "s"}${reasons ? `; ${reasons}` : ""}` as ComboExclusionReasons;
 }
 
 /** Capture usable providers' quota cooldowns; request eligibility is deferred to exhaustion. */
