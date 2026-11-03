@@ -124,6 +124,8 @@ describe("serialized ownership manifest (#8093)", () => {
       expect(() => recordOwnedConfigPath(dir, join(dir, "seed"))).toThrow(ConfigUninstallInProgressError);
       expect(() => recordOwnedConfigPath(dir, join(dir, "artifacts"))).toThrow(ConfigUninstallInProgressError);
       expect(() => recordOwnedConfigPath(dir, join(dir, "late-local"))).toThrow(ConfigUninstallInProgressError);
+      // The refusal can reach logs, so it names no path.
+      try { recordOwnedConfigPath(dir, join(dir, "late-local")); } catch (error) { expect(String(error)).not.toContain(dir); }
       expect(await spawnChild(dir, "late").exited).toBe(3);
       expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(tombstoned);
 

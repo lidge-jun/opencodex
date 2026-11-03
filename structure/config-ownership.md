@@ -36,7 +36,8 @@ then deletes the manifest and owner marker under the lock and removes the lock f
 - A registration that acquires the lock after the tombstone throws
   `ConfigUninstallInProgressError` and writes nothing. A racing registration is therefore either in
   the snapshot and removed, or refused; one that arrives after the metadata is gone records nothing
-  and its file is reported as a residual path.
+  and its file is reported as a residual path if it exists when uninstall lists what remains (a file
+  created after that point is not seen by that run).
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
   keep refusing, and the next `ocx uninstall` finishes from the same manifest. Under the lock it also
   removes manifest temporary files a stopped write left behind.

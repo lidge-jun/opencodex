@@ -30,8 +30,9 @@ const OWNERSHIP_LOCK_WAIT_MS = 2_000;
 /** A registration found the uninstall tombstone and wrote nothing. */
 export class ConfigUninstallInProgressError extends Error {
   readonly code = "CONFIG_UNINSTALL_IN_PROGRESS";
-  constructor(configDir: string) {
-    super(`opencodex uninstall is in progress for ${configDir}; run \`ocx uninstall\` again to finish it before writing new state there.`);
+  constructor() {
+    // No path: this message can reach logs, and the config root can name the user.
+    super("opencodex uninstall is in progress for this config directory; run `ocx uninstall` again to finish it before writing new state there.");
     this.name = "ConfigUninstallInProgressError";
   }
 }
@@ -468,7 +469,7 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   const locked = withOwnershipLock(configDir, () => {
     const current = loadOwnership(configDir);
     if (!current) return null;
-    if (current.manifest.uninstallStartedAt !== undefined) throw new ConfigUninstallInProgressError(configDir);
+    if (current.manifest.uninstallStartedAt !== undefined) throw new ConfigUninstallInProgressError();
     if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true, identity: manifestIdentity(configDir) };
     const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
     // A manifest over either cap would fail validation and strand every recorded path. The byte
