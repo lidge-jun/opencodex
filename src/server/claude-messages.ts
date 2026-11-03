@@ -61,6 +61,7 @@ import {
   anthropicErrorBody,
   anthropicErrorResponse,
   collectAnthropicMessage,
+  isContextOverflowError,
   responsesJsonToAnthropicMessage,
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
@@ -1290,11 +1291,15 @@ async function handleClaudeMessagesWithBudget(
       const text = await response.text();
       try {
         const parsed = JSON.parse(text) as { error?: { message?: string; type?: string; code?: unknown } | string; message?: string };
-        contextError = typeof parsed?.error === "object" && parsed.error?.code === "context_length_exceeded";
         catalogRefusal = typeof parsed?.error === "object" && parsed.error?.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
         const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.message : undefined;
         const flat = typeof parsed?.error === "string" ? parsed.error : parsed?.message;
         message = nested || flat || (text ? `upstream error (${response.status}): ${text.slice(0, 400)}` : message);
+        const errorObject = typeof parsed?.error === "object" && parsed.error ? parsed.error : {};
+        // An uncoded overflow counts too (#8127); a rate-limit or credential status never does.
+        contextError = errorObject.code === "context_length_exceeded"
+          || (![401, 403, 429].includes(response.status) && Boolean(nested || flat)
+            && isContextOverflowError(errorObject, message));
       } catch {
         if (text) message = `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
@@ -1424,8 +1429,8 @@ async function handleClaudeMessagesWithBudget(
         "translation_buffer_limit",
       );
     }
-    if (error?.code === "context_length_exceeded") {
-      return anthropicErrorResponse(400, error.message ?? "upstream context limit exceeded", "invalid_request_error", error.code);
+    if (error && isContextOverflowError(error, typeof error.message === "string" ? error.message : "")) {
+      return anthropicErrorResponse(400, error.message ?? "upstream context limit exceeded", "invalid_request_error", "context_length_exceeded");
     }
     return anthropicErrorResponse(502, error?.message ?? "upstream request failed", "api_error");
   }
