@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { Database } from "bun:sqlite";
 import type { GenerationContext } from "./state-store-sweeper";
 import { renameAtomicFile } from "./windows-atomic-replace";
 
@@ -35,7 +36,9 @@ type ConfigUninstallManifest = ConfigOwner & {
 
 const METADATA_MAX_BYTES = 64 * 1024;
 const MANIFEST_MAX_PATHS = 1024;
+const OWNERSHIP_LOCK_PATHS = ["ownership-mutation.sqlite", "ownership-mutation.sqlite-journal"] as const;
 const INITIAL_OWNED_PATHS = [
+  ...OWNERSHIP_LOCK_PATHS,
   ".star-prompted",
   "artifacts",
   "auth.json",
@@ -298,13 +301,32 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   const ownership = ownershipCache.get(cacheKey);
   if (!ownership) return false;
   if (ownership.manifest.paths.includes(rel)) return true;
-  const manifest = {
-    ...ownership.manifest,
-    paths: [...ownership.manifest.paths, rel].sort(),
-  };
-  writeManifest(configDir, manifest);
-  ownershipCache.set(cacheKey, { owner: ownership.owner, manifest });
-  return true;
+  let database: Database | undefined;
+  try {
+    database = new Database(join(configDir, OWNERSHIP_LOCK_PATHS[0]), { create: true });
+    database.exec("PRAGMA busy_timeout = 1000; BEGIN IMMEDIATE");
+  } catch {
+    database?.close();
+    // Never write unlocked after the bounded wait: that can erase another writer's
+    // entry. Callers often ignore the boolean, so report the failed registration.
+    console.warn("Could not lock the config ownership manifest; a path was not recorded for uninstall.");
+    return false;
+  }
+  try {
+    const current = loadOwnership(configDir);
+    if (!current || current.owner.ownerId !== ownership.owner.ownerId) return false;
+    const paths = [...new Set([...current.manifest.paths, ...OWNERSHIP_LOCK_PATHS, rel])].sort();
+    if (paths.length > MANIFEST_MAX_PATHS) {
+      console.warn("Config ownership manifest is full; a path was not recorded for uninstall.");
+      return false;
+    }
+    const manifest = { ...current.manifest, paths };
+    writeManifest(configDir, manifest);
+    ownershipCache.set(cacheKey, { owner: current.owner, manifest });
+    return true;
+  } finally {
+    try { database.exec("ROLLBACK"); } finally { database.close(); }
+  }
 }
 
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
