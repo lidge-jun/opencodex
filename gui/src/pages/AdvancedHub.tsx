@@ -1,5 +1,6 @@
 import { useDeferredValue, useState } from "react";
 import { useT, type TKey } from "../i18n/shared";
+import { en } from "../i18n/en";
 import type { Page } from "../app-routing";
 import { IconActivity, IconBot, IconClaude, IconCodex, IconHardDrive, IconList, IconSearch, IconServer, IconShuffle, IconStar, IconTerminal } from "../icons";
 import { HubCard } from "@/components/ui-v2/hub-card";
@@ -18,8 +19,11 @@ interface Entry {
   id: string;
   title: TKey;
   when: TKey;
-  /** Product term used in docs and the CLI; a proper noun, so it is not translated. */
-  term: string;
+  /**
+   * The line under the title: a product name used in docs and the CLI, kept as is (`name`), or
+   * a descriptive phrase from the copy table (`key`).
+   */
+  term: { name: string } | { key: TKey };
   Icon: typeof IconBot;
   page: Page;
   subPath?: string;
@@ -30,32 +34,38 @@ interface Entry {
 }
 
 const ENTRIES: readonly Entry[] = [
-  { id: "subagents", title: "shellV2.advSubagents", when: "shellV2.advSubagentsWhen", term: "Subagents", Icon: IconBot, page: "subagents",
+  { id: "subagents", title: "shellV2.advSubagents", when: "shellV2.advSubagentsWhen", term: { name: "Subagents" }, Icon: IconBot, page: "subagents",
     finds: ["dash.injectionLabel", "dash.multiAgent"], words: ["delegation", "agents"] },
-  { id: "advisor", title: "shellV2.advAdvisor", when: "shellV2.advAdvisorWhen", term: "Advisor", Icon: IconStar, page: "advisor",
+  { id: "advisor", title: "shellV2.advAdvisor", when: "shellV2.advAdvisorWhen", term: { name: "Advisor" }, Icon: IconStar, page: "advisor",
     finds: ["nav.advisor", "advisor.policy", "proxyV2.consentTitle"], words: ["consult", "preflight"] },
-  { id: "proxy", title: "shellV2.advProxy", when: "shellV2.advProxyWhen", term: "Sidecars · Compaction · Memory", Icon: IconActivity, page: "dashboard",
+  { id: "proxy", title: "shellV2.advProxy", when: "shellV2.advProxyWhen", term: { key: "proxyV2.advTermProxy" }, Icon: IconActivity, page: "dashboard",
     finds: [
       "dash.webSearchSidecar", "dash.visionSidecar", "dash.shadowCallIntercept", "compactionRouting.title",
       "memoryModels.title", "fallback.title", "dash.syncModels", "dash.codexAutoStart", "dash.codexDesktopAuthless",
       "dash.effortCapLabel", "nativeReasoningRetention.title", "reasoningRetention.title", "dash.checkUpdate",
     ],
     words: ["web search", "vision", "shadow", "fallback", "reasoning", "update", "sync"] },
-  { id: "routing", title: "shellV2.advRouting", when: "shellV2.advRoutingWhen", term: "Routing profiles · Compatibility", Icon: IconShuffle, page: "models", subPath: "routing" },
-  { id: "prompt", title: "shellV2.advPrompt", when: "shellV2.advPromptWhen", term: "Prompt layers", Icon: IconTerminal, page: "codex-set", subPath: "prompt" },
-  { id: "claude", title: "shellV2.advClaude", when: "shellV2.advClaudeWhen", term: "Claude Code", Icon: IconClaude, page: "claude", subPath: "code" },
-  { id: "providers", title: "shellV2.advProviders", when: "shellV2.advProvidersWhen", term: "Request pacing · Key rotation", Icon: IconServer, page: "providers" },
-  { id: "storage", title: "shellV2.advStorage", when: "shellV2.advStorageWhen", term: "Storage · Log Guard", Icon: IconHardDrive, page: "storage" },
-  { id: "diagnostics", title: "shellV2.advDiagnostics", when: "shellV2.advDiagnosticsWhen", term: "Debug", Icon: IconList, page: "logs", subPath: "debug" },
-  { id: "desktop", title: "shellV2.advDesktopCompat", when: "shellV2.advDesktopCompatWhen", term: "Desktop compatibility", Icon: IconCodex, page: "codex-set", subPath: "desktop" },
+  { id: "routing", title: "shellV2.advRouting", when: "shellV2.advRoutingWhen", term: { key: "proxyV2.advTermRouting" }, Icon: IconShuffle, page: "models", subPath: "routing" },
+  { id: "prompt", title: "shellV2.advPrompt", when: "shellV2.advPromptWhen", term: { key: "proxyV2.advTermPrompt" }, Icon: IconTerminal, page: "codex-set", subPath: "prompt" },
+  { id: "claude", title: "shellV2.advClaude", when: "shellV2.advClaudeWhen", term: { name: "Claude Code" }, Icon: IconClaude, page: "claude", subPath: "code" },
+  { id: "providers", title: "shellV2.advProviders", when: "shellV2.advProvidersWhen", term: { key: "proxyV2.advTermProviders" }, Icon: IconServer, page: "providers" },
+  { id: "storage", title: "shellV2.advStorage", when: "shellV2.advStorageWhen", term: { key: "proxyV2.advTermStorage" }, Icon: IconHardDrive, page: "storage" },
+  { id: "diagnostics", title: "shellV2.advDiagnostics", when: "shellV2.advDiagnosticsWhen", term: { key: "logs.tabDebug" }, Icon: IconList, page: "logs", subPath: "debug" },
+  { id: "desktop", title: "shellV2.advDesktopCompat", when: "shellV2.advDesktopCompatWhen", term: { key: "proxyV2.advTermDesktop" }, Icon: IconCodex, page: "codex-set", subPath: "desktop" },
 ];
+
+/** The English term stays searchable in every language: it is what docs and the CLI say. */
+function englishTerm(entry: Entry): string {
+  return "name" in entry.term ? entry.term.name : en[entry.term.key];
+}
 
 export default function AdvancedHub({ navigate }: AdvancedHubProps) {
   const t = useT();
   const [query, setQuery] = useState("");
+  const termText = (entry: Entry) => "name" in entry.term ? entry.term.name : t(entry.term.key);
   const needle = useDeferredValue(query.trim().toLowerCase());
   const shown = ENTRIES.filter(entry => !needle
-    || [t(entry.title), t(entry.when), entry.term, ...(entry.finds ?? []).map(key => t(key)), ...(entry.words ?? [])]
+    || [t(entry.title), t(entry.when), termText(entry), englishTerm(entry), ...(entry.finds ?? []).map(key => t(key)), ...(entry.words ?? [])]
       .some(text => text.toLowerCase().includes(needle)));
 
   return (
@@ -89,7 +99,7 @@ export default function AdvancedHub({ navigate }: AdvancedHubProps) {
               key={entry.id}
               icon={<entry.Icon aria-hidden />}
               title={t(entry.title)}
-              term={entry.term}
+              term={termText(entry)}
               body={<><b className="font-medium text-fg">{t("shellV2.advancedWhen")}</b> · {t(entry.when)}</>}
               onOpen={() => navigate(entry.page, entry.subPath)}
               openLabel={t("shellV2.stepOpen")}
