@@ -10,12 +10,29 @@ export const POWERSHELL_ENCODED_MAX = 8_000;
 export function powershellArgv(script: string): string[] {
   // Module preparation otherwise writes a CLIXML progress record to stderr, which Home would see.
   const encoded = Buffer.from("$ProgressPreference='SilentlyContinue'\n" + script, "utf16le").toString("base64");
-  if (encoded.length > POWERSHELL_ENCODED_MAX) throw new Error("Remote PowerShell command exceeds the cmd.exe-compatible command-line budget");
+  if (encoded.length > POWERSHELL_ENCODED_MAX) throw new Error(`Remote PowerShell command exceeds the cmd.exe-compatible command-line budget (${encoded.length})`);
   return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded];
 }
 
 /** Exit status when the remote ocx cannot be contained; nothing ran. */
 export const WINDOWS_CONTAINMENT_EXIT = 126;
+
+const SCRIPT_PACKED_PREFIX = "$ocxPacked='";
+/**
+ * The whole script travels deflated and is inflated on the Child before anything in it exists,
+ * including Fail. A session that cannot inflate it (Constrained Language Mode blocks the stream
+ * types) must still exit 126, so only the inflate is guarded: Invoke-Expression stays outside the
+ * try, and the inflated script's own errors and exit status are never relabelled as containment.
+ */
+export function packedPowerShellArgv(script: string): string[] {
+  const bytes = deflateRawSync(Buffer.from(script, "utf8"), { level: 9 });
+  const packed = Array.from(bytes, byte => String.fromCharCode(byte + 256)).join("");
+  return powershellArgv(`${SCRIPT_PACKED_PREFIX}${packed}'\n` + String.raw`$ErrorActionPreference='Stop';try{$b=[byte[]]@($ocxPacked.ToCharArray()|%{[int]$_-256});$r=[IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new($b),[IO.Compression.CompressionMode]::Decompress));$s=$r.ReadToEnd()}catch{try{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.')}catch{$null=$_};exit ${WINDOWS_CONTAINMENT_EXIT}};Invoke-Expression $s`);
+}
+function unpackPowerShell(script: string): string {
+  const match = /\$ocxPacked='([^']+)'/.exec(script);
+  return match ? inflateRawSync(Buffer.from(Array.from(match[1]!, ch => ch.charCodeAt(0) - 256))).toString("utf8") : script;
+}
 
 /**
  * OcxJob, compiled on the Child with Add-Type, contains the remote ocx. Run creates the process
@@ -50,6 +67,12 @@ export const OCX_JOB_SOURCE = [
   "var q=Process.Start(new ProcessStartInfo(x,\"--version\"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true});",
   "q.StandardInput.Close();q.StandardOutput.ReadToEndAsync();q.StandardError.ReadToEndAsync();",
   "if(q.WaitForExit(10000))return q.ExitCode==0;q.Kill();}catch{return false;}return false;}",
+  "public static string V(string x){Process q=null;try{",
+  "q=Process.Start(new ProcessStartInfo(x,\"--version\"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true});q.StandardInput.Close();",
+  "var p=q;var read=System.Threading.Tasks.Task.Run(()=>{var b=new char[257];int n=0,k;while(n<257&&(k=p.StandardOutput.Read(b,n,257-n))>0)n+=k;return n>256?null:new string(b,0,n);});",
+  "System.Threading.Tasks.Task.Run(()=>{var b=new char[1024];while(p.StandardError.Read(b,0,b.Length)>0){} });",
+  "var clock=Stopwatch.StartNew();var done=System.Threading.Tasks.Task.Run(()=>p.WaitForExit());if(!read.Wait(10000)||read.Result==null||!done.Wait(Math.Max(0,10000-(int)clock.ElapsedMilliseconds))){q.Kill();q.WaitForExit();return null;}return q.ExitCode==0?read.Result:null;",
+  "}catch{try{if(q!=null&&!q.HasExited){q.Kill();q.WaitForExit();}}catch{return null;}return null;}finally{if(q!=null)q.Dispose();}}",
   "public static int Run(string x,string c){",
   "IntPtr z=IntPtr.Zero,j=z,l=z,v=z,h=z,t=z;bool listed=false,done=false;",
   "try{",
@@ -69,20 +92,21 @@ export const OCX_JOB_SOURCE = [
 ].join("\n");
 
 /**
- * The helper travels deflated so the whole command fits cmd.exe's line; PowerShell inflates it and
- * hands the text to Add-Type. It is never evaluated as PowerShell.
+ * The helper reaches Add-Type as a quoted literal inside the packed script; it is never evaluated
+ * as PowerShell.
  */
-const OCX_JOB_PACKED = deflateRawSync(Buffer.from(OCX_JOB_SOURCE, "utf8"), { level: 9 }).toString("base64");
-
 const NATIVE_PROCESS = String.raw`$ErrorActionPreference='Stop'
 function Fail{try{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.')}catch{$null=$_};exit 126}
-try{Add-Type ([IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('` + OCX_JOB_PACKED + String.raw`')),[IO.Compression.CompressionMode]::Decompress)).ReadToEnd())}catch{Fail}
+try{Add-Type '` + OCX_JOB_SOURCE.replaceAll("'", "''") + String.raw`'}catch{Fail}
 function Quote-Native([string]$v){'"'+[regex]::Replace([regex]::Replace($v,'(\\*)"','$1$1\"'),'(\\+)$','$1$1')+'"'}
 function Invoke-Native([string]$e,[string[]]$a){try{$c=[OcxJob]::Run($e,((@($e)+$a|%{Quote-Native $_}) -join ' '))}catch{Fail};exit $c}
 `;
 
 /** The packed helper a script carries, inflated; for tests that check the transport. */
 export function windowsScriptHelperSource(script: string): string | undefined {
+  script = unpackPowerShell(script);
+  const source = /try\{Add-Type '([\s\S]*?)'\}catch\{Fail\}/.exec(script);
+  if (source) return source[1]!.replaceAll("''", "'");
   const match = /FromBase64String\('([A-Za-z0-9+/=]+)'\)\),\[IO\.Compression\.CompressionMode\]::Decompress\)\)\.ReadToEnd\(\)/.exec(script);
   if (!match) return undefined;
   return inflateRawSync(Buffer.from(match[1]!, "base64")).toString("utf8");
@@ -103,6 +127,7 @@ function dataLine(value: { executable?: string; args: readonly string[] }): stri
  * undefined for any other script. Test fixtures decode with this, never with their own pattern.
  */
 export function windowsScriptData(script: string): { executable?: string; args: string[] } | undefined {
+  script = unpackPowerShell(script);
   const start = script.indexOf(DATA_OPEN);
   const end = start < 0 ? -1 : script.indexOf(DATA_CLOSE, start + DATA_OPEN.length);
   if (end < 0) return undefined;
@@ -112,20 +137,37 @@ export function windowsScriptData(script: string): { executable?: string; args: 
 }
 
 export function windowsNativeArgv(executable: string, args: readonly string[]): string[] {
-  return powershellArgv(NATIVE_PROCESS + dataLine({ executable, args }) + "Invoke-Native $d.executable @($d.args)\n");
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ executable, args }) + "Invoke-Native $d.executable @($d.args)\n");
 }
 
 /**
  * Desktop first, then the GOAT-managed current junction, then legacy and PATH candidates. Each
  * must answer --version within ten seconds; only the selected one runs the real command.
  */
-export function windowsOcxArgv(args: readonly string[]): string[] {
-  return powershellArgv(NATIVE_PROCESS + dataLine({ args }) + String.raw`$u=$env:USERPROFILE;$c=@("$u\.opencodex-desktop\bin\ocx.exe","$u\.local\share\goat\opencodex\current\ocx.exe","$u\.local\bin\ocx.exe")
+const OCX_CANDIDATES = String.raw`$u=$env:USERPROFILE;$c=@("$u\.opencodex-desktop\bin\ocx.exe","$u\.local\share\goat\opencodex\current\ocx.exe","$u\.local\bin\ocx.exe")
 if($env:LOCALAPPDATA){$c+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
 if($env:ProgramFiles){$c+="$env:ProgramFiles\OpenCodex\ocx.exe"}
 $c+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
+`;
+export function windowsOcxArgv(args: readonly string[]): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`
 foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x)){Invoke-Native $x @($d.args)}}
 [Console]::Error.WriteLine('No runnable ocx.exe found; install the Windows standalone archive.');exit 127
+`);
+}
+
+export function windowsPinnedSyncArgv(linkId: string): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json"] }) + OCX_CANDIDATES + String.raw`
+foreach($x in ($c|select -Unique)){
+ if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
+ $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
+ if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
+ $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@('2','93','0');$cmp=0
+ for($i=0;$i -lt 3;$i++){if($a[$i].Length -ne $b[$i].Length){$cmp=$a[$i].Length-$b[$i].Length;break};$cmp=[string]::CompareOrdinal($a[$i],$b[$i]);if($cmp -ne 0){break}}
+ if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('ocx-fanout:child-ocx-lacks-expect-link');exit 121}
+ [Console]::Error.WriteLine('ocx-fanout:selected:'+$v);[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
+};exit 127
 `);
 }
 

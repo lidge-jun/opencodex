@@ -1,3 +1,4 @@
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
@@ -57,16 +58,31 @@ export class UnknownComboError extends Error {
   }
 }
 
+declare const exclusionBrand: unique symbol;
+/** Service diagnostics name configured positions and validated providers only. */
+export function comboLogLabel(config: OcxConfig, comboId: string): string {
+  const index = Object.keys(config.combos ?? {}).indexOf(comboId);
+  return index < 0 ? "combo" : `combo ${index + 1}`;
+}
+export function comboTargetLogLabel(config: OcxConfig, comboId: string, target: OcxComboTarget): string {
+  const index = getCombo(config, comboId)?.targets.findIndex(item => targetKey(item) === targetKey(target)) ?? -1;
+  return `target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))})`;
+}
+
+export type ComboExclusionReasons = string & { readonly [exclusionBrand]: true };
+
 export class NoAvailableComboTargetsError extends Error {
   readonly code = "combo_unavailable";
 
-  constructor(readonly comboId: string, readonly reasons = "") {
-    super(`No available targets for combo: ${comboId}${reasons ? ` (${reasons})` : ""}`);
+  constructor(readonly comboId: string, readonly reasons?: ComboExclusionReasons) {
+    super(`No available targets for combo${reasons ? ` (${reasons})` : ""}`);
     this.name = "NoAvailableComboTargetsError";
   }
 }
 
-function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): string | undefined {
+type ComboExclusionReason = "provider missing" | "provider disabled" | "quota exhausted" | "cooldown" | "ineligible for this request";
+
+function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): ComboExclusionReason | undefined {
   const provider = Object.hasOwn(config.providers, target.provider) ? config.providers[target.provider] : undefined;
   if (!provider) return "provider missing";
   if (provider.disabled === true) return "provider disabled";
@@ -93,18 +109,19 @@ export function comboTargetSkipTrigger(
 
 /**
  * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
- * configured provider/model and a coarse label are named, never account or request data.
+ * target index, validated provider label and a closed exclusion reason are named.
  */
 export function comboExclusionReasons(
   config: OcxConfig,
   comboId: string,
   eligible?: (target: NormalizedComboTarget) => boolean,
   now = Date.now(),
-): string {
-  return (getCombo(config, comboId)?.targets ?? []).flatMap(target => {
+): ComboExclusionReasons {
+  const targets = getCombo(config, comboId)?.targets ?? [];
+  const reasons = targets.flatMap((target, index) => {
     let reason = providerExclusionReason(config, target, now);
     const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
-    if (cooldown) reason = `cooldown ${Math.max(1, Math.ceil((cooldown.expiry - now) / 1000))}s`;
+    if (cooldown) reason = "cooldown";
     if (!reason && eligible) {
       try {
         if (!eligible(target)) reason = "ineligible for this request";
@@ -113,8 +130,9 @@ export function comboExclusionReasons(
         reason = "ineligible for this request";
       }
     }
-    return reason ? [`${targetKey(target)}: ${reason}`] : [];
+    return reason ? [`target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))}): ${reason}`] : [];
   }).join("; ");
+  return `${targets.length} target${targets.length === 1 ? "" : "s"}${reasons ? `; ${reasons}` : ""}` as ComboExclusionReasons;
 }
 
 /** Capture usable providers' quota cooldowns; request eligibility is deferred to exhaustion. */
@@ -324,7 +342,7 @@ function reserveAllCooledTargets(
   const next = state ?? { successes: 0, currentWeights: new Map<string, number>(), successfulUses: new Map<string, number>() };
   next.lastCooldownReprobeAt = now;
   selectionState.set(comboId, next);
-  console.warn(`[combo] ${comboId}: reserving all-cooled targets for one request; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
+  console.warn(`[combo] ${comboLogLabel(config, comboId)}: reserving all-cooled targets for one request; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
   return reserved;
 }
 
@@ -624,7 +642,7 @@ export async function pickComboTargetWithWait(
     const normalDelay = soonest === undefined ? undefined : soonest.expiry - now;
     if (normalDelay !== undefined && normalDelay <= options.waitForCooldownMs) {
       console.warn(
-        `[combo] ${comboId}: deferring last resort, waiting ${normalDelay}ms for ${targetKey(soonest!.target)}`,
+        `[combo] ${comboLogLabel(config, comboId)}: deferring last resort, waiting ${normalDelay}ms for ${comboTargetLogLabel(config, comboId, soonest!.target)}`,
       );
       try {
         await (options.sleep ?? sleepWithAbort)(normalDelay, options.abortSignal);
@@ -677,7 +695,7 @@ export async function pickComboTargetWithWait(
   // Its target preserves configured order for ties.
   const target = earliest.target;
   console.warn(
-    `[combo] ${comboId}: all targets cooling, waiting ${delay}ms for ${targetKey(target)}`,
+    `[combo] ${comboLogLabel(config, comboId)}: all targets cooling, waiting ${delay}ms for ${comboTargetLogLabel(config, comboId, target)}`,
   );
   try {
     await (options.sleep ?? sleepWithAbort)(delay, options.abortSignal);

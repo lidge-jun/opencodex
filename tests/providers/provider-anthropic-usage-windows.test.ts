@@ -7,7 +7,7 @@ import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-ident
 import { providerQuotaWindows } from "../../src/quota-pool/assemble";
 import { pooledWindows } from "../../src/quota-pool/pooled";
 import { anthropicResetGrantBlocker, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
-import { inactiveSessionUsage, legacyMax20xUsage, noResetGrant, ultraUsage, weeklyReset } from "../fixtures/anthropic-usage-shapes";
+import { inactiveSessionUsage, maxTeamInactiveWeeklyUsage, maxTeamInactiveSessionUsage, legacyMax20xUsage, noResetGrant, ultraUsage, weeklyReset } from "../fixtures/anthropic-usage-shapes";
 
 const originalFetch = globalThis.fetch;
 const now = Date.parse("2026-10-31T14:00:00Z");
@@ -40,11 +40,11 @@ test("Ultra null 5h and inactive Fable publish only the weekly window", async ()
   expect(providerQuotaWindows(quota!, "measured", now).map(row => row.id)).toEqual(["weekly"]);
 });
 
-test("inactive session evidence suppresses the legacy zero session bucket", async () => {
+test("R3 inactive session retains the zero session meter", async () => {
   const quota = await parse(inactiveSessionUsage);
-  expect(quota?.fiveHourPercent).toBeUndefined();
+  expect(quota?.fiveHourPercent).toBe(0);
   expect(quota?.fiveHourResetAt).toBeUndefined();
-  expect(rawAnthropicUsageWindows(inactiveSessionUsage, now).map(row => row.window)).toEqual(["weekly"]);
+  expect(rawAnthropicUsageWindows(inactiveSessionUsage, now).map(row => row.window)).toEqual(["5h", "weekly"]);
 });
 
 test("limits weekly_all works with missing five_hour and no legacy seven_day", async () => {
@@ -86,12 +86,54 @@ test("unknown limit kinds/families do not discard shared usage or claim complete
   expect(hasAnthropicFamilyEnumeration(quota!)).toBe(false);
 });
 
-test("inactive or malformed authoritative limits never revive stale legacy exhaustion", async () => {
-  for (const is_active of [false, "unknown"]) {
-    const body = { seven_day: { utilization: 100 }, limits: [{ kind: "weekly_all", is_active, percent: 0 }] };
-    expect((await parse(body))?.weeklyPercent).toBeUndefined();
-    expect(rawAnthropicUsageWindows(body, now)).toEqual([]);
-  }
+for (const flag of [false, "unknown"]) test(`R4 shared weekly flag ${flag} uses authoritative data`, async () => {
+  const body = { seven_day: { utilization: 100 }, limits: [{ kind: "weekly_all", is_active: flag, percent: 0 }] };
+  const quota = await parse(body);
+  expect(quota?.weeklyPercent).toBe(0);
+  expect(rawAnthropicUsageWindows(body, now).map(row => row.percent)).toEqual([0]);
+  expect(hasAnthropicFamilyEnumeration(quota!)).toBe(flag === false);
+});
+
+test("R1 inactive weekly retains both shared projections", async () => {
+  const quota = await parse(maxTeamInactiveWeeklyUsage);
+  expect(quota).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 55, weeklyResetAt: Date.parse(weeklyReset) });
+  expect(rawAnthropicUsageWindows(maxTeamInactiveWeeklyUsage, now).map(row => row.window)).toEqual(["5h", "weekly"]);
+  expect(providerQuotaWindows(quota!, "measured", now).map(row => row.id)).toEqual(["5h", "weekly"]);
+});
+test("R2 inactive session retains its measured usage", async () => {
+  const quota = await parse(maxTeamInactiveSessionUsage);
+  expect(quota).toMatchObject({ fiveHourPercent: 40, fiveHourResetAt: Date.parse(weeklyReset), weeklyPercent: 56 });
+});
+test("R5 Ultra null five_hour and missing session flag has no 5h meter", async () => {
+  const quota = await parse({ five_hour: null, limits: [{ kind: "session", percent: 7 }] });
+  expect(quota?.fiveHourPercent).toBeUndefined();
+});
+for (const legacy of [undefined, { utilization: 99 }]) test(`R6 malformed inactive shared row clears enumeration legacy=${!!legacy}`, async () => {
+  const quota = await parse({ seven_day: legacy, limits: [{ kind: "session", is_active: true, percent: 1 }, { kind: "weekly_all", is_active: false, percent: "x" }] });
+  expect(quota?.weeklyPercent).toBeUndefined();
+  expect(hasAnthropicFamilyEnumeration(quota!)).toBe(false);
+});
+test("G0 Ultra explicit active session establishes a 5h meter", async () => {
+  expect((await parse({ five_hour: null, limits: [{ kind: "session", is_active: true, percent: 7 }] }))?.fiveHourPercent).toBe(7);
+});
+for (const flag of [false, "unknown"]) test(`G1 Ultra null session flag ${flag} has no meter`, async () => {
+  expect((await parse({ five_hour: null, limits: [{ kind: "session", is_active: flag, percent: 7 }] }))?.fiveHourPercent).toBeUndefined();
+});
+for (const percent of [undefined, "x"]) test(`G2 malformed active shared ${percent} suppresses legacy`, async () => {
+  const body = { five_hour: { utilization: 1 }, seven_day: { utilization: 100 }, limits: [{ kind: "weekly_all", is_active: true, percent }] };
+  const quota = await parse(body);
+  expect(quota?.weeklyPercent).toBeUndefined();
+  expect(rawAnthropicUsageWindows(body, now).map(row => row.window)).toEqual(["5h"]);
+  expect(hasAnthropicFamilyEnumeration(quota!)).toBe(false);
+});
+for (const malformedFirst of [true, false]) test(`G3 duplicate shared first malformed=${malformedFirst}`, async () => {
+  const valid = { kind: "weekly_all", is_active: true, percent: 42 };
+  const malformed = { kind: "weekly_all", is_active: true, percent: "x" };
+  const body = { five_hour: { utilization: 1 }, seven_day: { utilization: 100 }, limits: malformedFirst ? [malformed, valid] : [valid, malformed] };
+  const quota = await parse(body);
+  expect(quota?.weeklyPercent).toBe(malformedFirst ? undefined : 42);
+  expect(rawAnthropicUsageWindows(body, now).filter(row => row.window === "weekly").map(row => row.percent)).toEqual(malformedFirst ? [] : [42]);
+  expect(hasAnthropicFamilyEnumeration(quota!)).toBe(false);
 });
 
 test("raw decision windows retain invalid reset evidence instead of display normalization", () => {

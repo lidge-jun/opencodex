@@ -1,3 +1,4 @@
+import { markProxyError, isProxyError } from "../../lib/client-error-body";
 /**
  * AdapterEvent -> client wire, without the internal Responses SSE (PF-09).
  *
@@ -525,6 +526,7 @@ export function encodeAdapterEventStream(
       reportUsage: false,
       durable: false,
     };
+    markProxyError(terminal);
     runBeforeTerminalSync(terminal);
     try {
       writer.terminal(terminal);
@@ -766,6 +768,7 @@ export function encodeAdapterEventStream(
               reportUsage: true,
               durable: true,
             };
+            if (isProxyError(event)) markProxyError(terminal);
             break;
           }
           case "error": {
@@ -845,6 +848,7 @@ export function encodeAdapterEventStream(
         reportUsage: true,
         durable: true,
       };
+      markProxyError(terminal);
       try {
         if (!await deliverTerminalGuarded(terminal)) return;
       } catch { /* see the catch path above */ }
