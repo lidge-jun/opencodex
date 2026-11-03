@@ -88,13 +88,13 @@ export function buildWindowsServiceScript(
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     windowsBatchSet("PATH", path, "pathList"),
     windowsBatchSet("CODEX_HOME", currentWindowsServiceCodexHome()),
-    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
+    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows")),
     windowsBatchSet("OPENCODEX_HOME", currentOpenCodexHome()),
     ...proxyEnv.map(({ name, value }) => windowsBatchSet(name, value)),
-    // Absolute like OPENCODEX_HOME above: a profile-variable form could read the token from
-    // another profile than the home the proxy is pinned to.
+    // Absolute like the homes above: a profile-variable form could read the token, or write
+    // the log, under another profile than the home the proxy is pinned to.
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath()),
-    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
+    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath()),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli ?? undefined, "path"),
     // Standalone executables have no npm package tree; recovery is "replace the executable", so no OCX_PKG_DIR/restore_backup wiring.
