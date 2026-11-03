@@ -176,12 +176,14 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
     `additionalProperties` (boolean or schema), single-schema `items`, `enum`, `const`, `anyOf`.
     A `const` or `enum` literal that contains a number is refused: the request arrives parsed, so
     `1.0000000000000001` is already `1`, and exact equality could accept a value the caller excluded.
-  - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition;
+  - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition; the
+    fragment is percent-decoded before its segments are read, so an encoded `/` is a separator;
     `$defs`/`definitions` only at the root. Root-relative references (`#`, `#/properties/...`),
     references into annotations (`#/default`), remote references, and a cycle of `$ref`/`anyOf`
     edges that consumes none of the value are refused. Recursion through properties or items is allowed.
     A `$ref` beside an assertion keyword is refused, because drafts disagree on whether those
-    siblings apply; annotations and root `$defs`/`definitions` beside it are fine.
+    siblings apply; annotations and root `$defs`/`definitions` beside it are fine. A `$id` below the
+    root (a new resource that references would resolve against) and `$anchor`/`$dynamicAnchor` are refused.
   - `minLength`, `maxLength`, `minItems`, `maxItems` as non-negative safe integers.
   - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` must be a safe integer or a
     non-integer with at most 15 significant digits. This is a heuristic: a bound written with more
@@ -197,8 +199,9 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   depth limit of 128 schema levels spans references, `anyOf` branches, properties and items; the
   reader stops at 512 levels of nesting. A value that needs more is non-conforming (it takes the
   bounded retry like any invalid answer), so a recursive `anyOf` cannot branch exponentially and a
-  deep value cannot exhaust the stack. `const`/`enum` comparisons are charged to the same budget,
-  long strings in proportion to their length. Preparation is bounded too: a schema with more than
+  deep value cannot exhaust the stack. `const`/`enum` comparisons, each pass over a `required`
+  list or an object's entries, and string length checks are charged to the same budget, long strings
+  in proportion to their length. Preparation is bounded too: a schema with more than
   10,000 nodes, or more than 10,000 JSON values across its `const`/`enum` literals, is refused, and
   the reference-cycle check is linear in nodes and edges. Validation problems and refusals are fixed
   categories: they never quote a path, a property name, or a schema key outside the JSON Schema

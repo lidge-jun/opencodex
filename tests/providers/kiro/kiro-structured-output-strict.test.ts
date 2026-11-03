@@ -344,3 +344,64 @@ describe("Kiro schema sanitization keeps a __proto__ property", () => {
     expect(JSON.stringify(out)).toContain('"properties":{"__proto__":{"type":"string"}}');
   });
 });
+
+describe("Kiro strict budget covers every per-node loop", () => {
+  test("a long required list re-checked through failing anyOf branches stays within the budget", () => {
+    const required = Array.from({ length: 5_000 }, (_, i) => "k" + i);
+    const schema = {
+      type: "object",
+      properties: { a: { anyOf: Array.from({ length: 2_000 }, () => ({ $ref: "#/$defs/obj" })) } },
+      $defs: { obj: { type: "object", required: [...required.slice(1), "missing"] } },
+    };
+    const raw = JSON.stringify({ a: Object.fromEntries(required.map(key => [key, 1])) });
+    const document = readKiroJson(raw)!;
+    const started = performance.now();
+    const result = validateKiroStrictValue(schema, document.value, document.nodes);
+    expect(result.problem).toContain("needs more work than strict validation allows");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("a percent-encoded separator in $ref is a pointer segment, not part of a definition name", () => {
+    const schema = {
+      type: "object",
+      properties: { v: { $ref: "#/$defs/a%2Fproperties%2Fb" } },
+      $defs: { a: { type: "object", properties: { b: { type: "string" } } }, "a/properties/b": { type: "number" } },
+    };
+    expect(() => kiroStructuredOutputSpec(request(schema))).toThrow(REFUSED + ' "$ref" cannot be enforced');
+    const named = { type: "object", properties: { v: { $ref: "#/$defs/x~1y" } }, $defs: { "x/y": { type: "number" } } };
+    const spec = kiroStructuredOutputSpec(request(named))!;
+    expect(parseKiroStructuredToolInput(spec, '{"v":1}')).toEqual({ json: '{"v":1}' });
+    expect(parseKiroStructuredToolInput(spec, '{"v":"s"}')).toEqual({ error: FAIL + ": expected a JSON number" });
+  });
+});
+
+describe("Kiro strict repeated string work and resource identifiers", () => {
+  test("a long string re-checked by many length-constrained branches stays fast and bounded", () => {
+    const schema = { type: "object", properties: { s: { anyOf: Array.from({ length: 9_000 }, () => ({ maxLength: 0 })) } } };
+    const raw = JSON.stringify({ s: "x".repeat(1_000_000) });
+    const document = readKiroJson(raw)!;
+    const started = performance.now();
+    const result = validateKiroStrictValue(schema, document.value, document.nodes);
+    expect(result.problem).toBeDefined();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("branches without a length constraint never walk the string", () => {
+    const schema = { type: "object", properties: { s: { anyOf: [...Array.from({ length: 9_000 }, () => ({ type: "number" })), { type: "string" }] } } };
+    const raw = JSON.stringify({ s: "x".repeat(1_000_000) });
+    const document = readKiroJson(raw)!;
+    const started = performance.now();
+    expect(validateKiroStrictValue(schema, document.value, document.nodes).problem).toBeUndefined();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("a nested $id or an anchor is refused; a root $id is kept", () => {
+    const defs = { $defs: { x: { type: "string" } } };
+    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { a: { $id: "https://example.com/inner", type: "string" } }, ...defs })))
+      .toThrow(REFUSED + ' "$id" cannot be enforced');
+    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { a: { $anchor: "here", type: "string" } } })))
+      .toThrow(REFUSED + ' "$anchor" cannot be enforced');
+    expect(() => kiroStructuredOutputSpec(request({ $id: "https://example.com/root", type: "object", properties: { a: { $ref: "#/$defs/x" } }, ...defs })))
+      .not.toThrow();
+  });
+});

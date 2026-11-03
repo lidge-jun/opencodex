@@ -63,7 +63,7 @@ const MAX_LITERAL_NODES = 10_000;
 
 const KNOWN_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const ANNOTATIONS = new Set([
-  "title", "description", "default", "examples", "$schema", "$id", "$comment", "deprecated", "readOnly", "writeOnly",
+  "title", "description", "default", "examples", "$schema", "$comment", "deprecated", "readOnly", "writeOnly",
 ]);
 const COUNTS = ["minLength", "maxLength", "minItems", "maxItems"] as const;
 const BOUNDS = ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"] as const;
@@ -104,7 +104,7 @@ function isRecord(value: unknown): value is JsonRecord {
 const NAMEABLE_KEYWORDS = new Set([
   "schema", "type", "properties", "required", "additionalProperties", "items", "enum", "const", "anyOf",
   "oneOf", "allOf", "not", "if", "then", "else", "$ref", "$defs", "definitions", "$anchor", "$dynamicRef",
-  "$dynamicAnchor", "$recursiveRef", "$recursiveAnchor", "multipleOf", "pattern", "patternProperties",
+  "$dynamicAnchor", "$id", "$recursiveRef", "$recursiveAnchor", "multipleOf", "pattern", "patternProperties",
   "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "minItems",
   "maxItems", "minProperties", "maxProperties", "uniqueItems", "contains", "minContains", "maxContains",
   "prefixItems", "additionalItems", "unevaluatedItems", "unevaluatedProperties", "propertyNames",
@@ -173,14 +173,18 @@ function prepare(schema: JsonRecord): PreparedSchema {
   };
 
   const resolve = (ref: unknown): StrictNode => {
-    const match = typeof ref === "string" ? REF.exec(ref) : null;
-    if (!match) throw new Unsupported("$ref");
-    let name: string;
+    if (typeof ref !== "string") throw new Unsupported("$ref");
+    // Percent-decode the whole fragment before reading pointer segments: an encoded "/" is a
+    // segment separator, so `#/$defs/a%2Fb` points into definition `a`, which is outside the subset.
+    let decoded: string;
     try {
-      name = decodeURIComponent(match[2]!).replaceAll("~1", "/").replaceAll("~0", "~");
+      decoded = decodeURIComponent(ref);
     } catch {
       throw new Unsupported("$ref");
     }
+    const match = REF.exec(decoded);
+    if (!match) throw new Unsupported("$ref");
+    const name = match[2]!.replaceAll("~1", "/").replaceAll("~0", "~");
     const target = definitions.get(`${match[1]}/${name}`);
     if (!target) throw new Unsupported("$ref");
     return target;
@@ -205,6 +209,14 @@ function prepare(schema: JsonRecord): PreparedSchema {
         case "definitions":
           if (!root) throw new Unsupported(key);
           break;
+        // A nested `$id` starts a new resource that `#/...` references would resolve against, and
+        // anchors name targets this resolver does not follow; only a root `$id` (same document) is kept.
+        case "$id":
+          if (!root) throw new Unsupported(key);
+          break;
+        case "$anchor":
+        case "$dynamicAnchor":
+          throw new Unsupported(key);
         case "type": {
           const types = Array.isArray(arg) ? arg : [arg];
           if (types.length === 0 || !types.every(t => typeof t === "string" && KNOWN_TYPES.has(t))) throw new Unsupported(key);
@@ -347,10 +359,23 @@ function literalEquals(literal: unknown, value: KiroJsonValue, charge: (cost: nu
     case "object": {
       if (!isRecord(literal)) return false;
       const keys = Object.keys(literal);
+      charge(keys.length);
       return keys.length === value.entries.size
         && keys.every(key => value.entries.has(key) && literalEquals(literal[key], value.entries.get(key)!, charge));
     }
   }
+}
+
+/** Code points in a string value, counted once per value however many nodes check its length. */
+const codePointLengths = new WeakMap<KiroJsonValue, number>();
+function codePointLength(value: KiroJsonValue & { kind: "string" }): number {
+  let length = codePointLengths.get(value);
+  if (length === undefined) {
+    length = 0;
+    for (const _ of value.value) length += 1;
+    codePointLengths.set(value, length);
+  }
+  return length;
 }
 
 class OverBudget extends Error {
@@ -396,9 +421,14 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
       return "matched no anyOf branch";
     }
     if (value.kind === "string") {
-      const length = [...value.value].length;
-      if (node.minLength !== undefined && length < node.minLength) return "a string is shorter than minLength";
-      if (node.maxLength !== undefined && length > node.maxLength) return "a string is longer than maxLength";
+      if (node.minLength !== undefined || node.maxLength !== undefined) {
+        // Counting code points walks the string, so repeated checks of one long string are charged,
+        // and only a node with a length constraint counts at all.
+        spend(Math.floor(value.value.length / 256));
+        const length = codePointLength(value);
+        if (node.minLength !== undefined && length < node.minLength) return "a string is shorter than minLength";
+        if (node.maxLength !== undefined && length > node.maxLength) return "a string is longer than maxLength";
+      }
     }
     if (value.kind === "number") {
       const number = kiroDecimal(value.lexeme);
@@ -418,7 +448,11 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
       }
     }
     if (value.kind === "object") {
+      // Each pass over `required` and over the entries is charged, so a failing anyOf that re-checks
+      // one large object or one long `required` list stays within the budget.
+      spend(node.required?.length ?? 0);
       if (node.required?.some(key => !value.entries.has(key))) return "an object is missing a required property";
+      spend(value.entries.size);
       for (const [key, child] of value.entries) {
         const declared = node.properties?.get(key);
         if (!declared && node.closed) return "an object has a property the schema does not allow";

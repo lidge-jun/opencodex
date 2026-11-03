@@ -524,7 +524,7 @@ MiMo model Command Code serves.
   - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root. References such
     as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
     reach a property or item are refused, and so is a `$ref` with an assertion keyword beside it
-    (drafts disagree on whether such siblings apply).
+    (drafts disagree on whether such siblings apply), a `$id` below the root, and `$anchor`.
   - `minLength`, `maxLength`, `minItems` and `maxItems` as non-negative integers.
   - `minimum`, `maximum`, `exclusiveMinimum` and `exclusiveMaximum` as safe integers or decimals
     with at most 15 significant digits. The model's numbers are compared exactly as written. This is
@@ -535,7 +535,8 @@ MiMo model Command Code serves.
     `strict: true` they are accepted and left to the light checks above.
 
   Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
-  levels deep), including `const`/`enum` comparisons. An answer that needs more counts as not
+  levels deep), including `const`/`enum` comparisons and every pass over `required` lists, object
+  entries and long strings. An answer that needs more counts as not
   matching the format. A strict schema with more than 10,000 nodes, or more than 10,000 values in
   its `const`/`enum` literals, is refused. Error messages name the failed check only, never a
   property name or path from the answer or the schema.
