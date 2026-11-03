@@ -139,13 +139,25 @@ const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
 /**
  * Wording that asserts the request itself is over a size limit. Narrower than
  * CONTEXT_OVERFLOW_TEXT_RE on purpose: without a code, a message that only mentions the context
- * window (for example a configuration failure) must not make Claude Code compact.
+ * window (for example a configuration failure or a validation error) must not make Claude Code
+ * compact. Quoted values are removed first, a stated maximum counts only when the stated request
+ * is larger, and a negated verdict ("does not exceed") never counts.
  */
-// A stated maximum counts only beside a stated request size, and quoted text (a field value or a
-// tool name) never counts, so a validation error that merely mentions the limit stays itself.
-const DEFINITE_OVERFLOW_TEXT_RE = /(?<!['"`])\b(?:prompt|input) is too long\b(?!['"`])|maximum context length is \d+[^]{0,200}?\b(?:resulted in|you requested|requested) \d+ tokens|\b(?:input|prompt|request|messages?|conversation)\b[^.\n]{0,60}\bexceed(?:s|ed)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
-/** A quoted value inside a message (a field, enum or tool name); an apostrophe inside a word does not open one. */
-const QUOTED_SPAN_RE = /(?<!\w)(['"`])[^'"`\n]{1,200}\1(?!\w)/g;
+const TOO_LONG_TEXT_RE = /\b(?:prompt|input) is too long\b/i;
+const STATED_COUNTS_RE = /maximum context length is (\d+)[^]{0,200}?\b(?:resulted in|you requested|requested) (\d+) tokens/i;
+const EXCEEDS_TEXT_RE = /\b(?:input|prompt|request|messages?|conversation)\b([^.\n]{0,60})\bexceed(?:s|ed)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
+const NEGATION_RE = /\b(?:not|never|no)\b|n['\u2019]t\b/i;
+/** A quoted value inside a message (a field, enum or tool name), ASCII or typographic; an apostrophe inside a word does not open one. */
+const QUOTED_SPAN_RE = /(?<!\w)(['"`])[^'"`\n]{1,200}\1(?!\w)|\u2018[^\u2019\n]{1,200}\u2019|\u201c[^\u201d\n]{1,200}\u201d/g;
+
+function assertsOverflow(message: string): boolean {
+  const text = message.replace(QUOTED_SPAN_RE, " ");
+  if (TOO_LONG_TEXT_RE.test(text)) return true;
+  const counts = STATED_COUNTS_RE.exec(text);
+  if (counts && Number(counts[2]) > Number(counts[1])) return true;
+  const exceeds = EXCEEDS_TEXT_RE.exec(text);
+  return exceeds !== null && !NEGATION_RE.test(exceeds[1] ?? "");
+}
 
 /**
  * Whether a translated refusal is an oversized-input refusal. A coded context_length_exceeded
@@ -162,7 +174,7 @@ export function isContextOverflowError(error: { type?: unknown; code?: unknown }
   if (typeof error.type === "string" && NON_OVERFLOW_ERROR_TYPES.has(error.type)) return false;
   const status = (error as { status?: unknown }).status;
   if (typeof status === "number" && NON_OVERFLOW_STATUSES.has(status)) return false;
-  return DEFINITE_OVERFLOW_TEXT_RE.test(message.replace(QUOTED_SPAN_RE, " ")) && !isThroughputLimitText(message);
+  return assertsOverflow(message) && !isThroughputLimitText(message);
 }
 
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
