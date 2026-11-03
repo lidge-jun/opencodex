@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
@@ -248,7 +248,9 @@ for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
 for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, { releaseFirst: false, hold: "home" }, { releaseFirst: true, hold: "catalog" }, { releaseFirst: false, hold: "lock" }] as const) {
   test(`a separate sync ${releaseFirst ? "finishes before" : "cannot commit after"} signal restoration (${hold})`, async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-link-sync-stop-"));
-    const home = join(root, "ocx"), codex = join(root, "codex");
+    // Sync records the canonical catalog path (/private/var on macOS) and backup lookup hashes the
+    // spelling, so the fixture must create its native backup under the same spelling.
+    const home = join(root, "ocx"), codex = join(realpathSync(root), "codex");
     const children: Array<{ child: ReturnType<typeof Bun.spawn>; drained: Promise<unknown> }> = [];
     const spawn = (file: string, options: unknown) => {
       const child = Bun.spawn([process.execPath, fixturePath(file)], {
@@ -273,7 +275,7 @@ for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, 
       connection: readFileSync(join(home, "config.json"), "utf8"),
       token: readFileSync(join(home, "service-api-token"), "utf8"),
     });
-    const timer = setTimeout(() => { for (const { child } of children) if (child.exitCode === null) child.kill(); }, 35_000);
+    const timer = setTimeout(() => { for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL"); }, 35_000);
     try {
       const runtime = spawn("client-link-stop-runner.ts", { mode: "runtime", externalSignal: true, holdShutdown: true });
       await waitFor("ready");
@@ -321,7 +323,8 @@ for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, 
       }
     } finally {
       clearTimeout(timer);
-      for (const { child } of children) { if (child.exitCode === null) child.kill(); await child.exited; }
+      // A child parked on a held release ignores another SIGTERM; kill it so a failed assertion surfaces.
+      for (const { child } of children) { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
       await Promise.all(children.map(value => value.drained));
       removeTreeWithRetry(root);
     }
