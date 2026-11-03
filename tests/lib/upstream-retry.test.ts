@@ -321,6 +321,40 @@ describe("retryBackoffDelayMs", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
+  test("a 5xx context-overflow verdict is returned without a resend (#8127)", async () => {
+    silenceWarn();
+    for (const body of [
+      JSON.stringify({ error: { type: "server_error", message: "Your input exceeds the context window of this model" } }),
+      "Your input exceeds the context window of this model",
+    ]) {
+      const upstream = new Response(body, { status: 500 });
+      const mock = mockDoFetch([upstream, new Response("duplicate"), new Response("duplicate")]);
+      const response = await fetchWithTransientRetry(mock.doFetch);
+      expect(response).toBe(upstream);
+      expect(await response.text()).toBe(body);
+      expect(mock.calls).toHaveLength(1);
+    }
+  });
+
+  test("a 5xx body that never ends does not stall the overflow check (#8127)", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([new Response(new ReadableStream(), { status: 503 }), new Response("ok")]);
+    const response = await fetchWithTransientRetry(mock.doFetch);
+    expect(response.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a 5xx throttle worded as too many tokens is still retried (#8127)", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([
+      new Response(JSON.stringify({ error: { message: "Too many tokens, please wait before trying again." } }), { status: 500 }),
+      new Response("ok"),
+    ]);
+    const response = await fetchWithTransientRetry(mock.doFetch);
+    expect(response.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
   test("an instruction inside the wait deadline is still honoured before retrying (#4546)", async () => {
     silenceWarn();
     const limited = new Response("overloaded", {

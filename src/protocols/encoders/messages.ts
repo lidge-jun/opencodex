@@ -28,6 +28,7 @@ import {
   boundedReasoningIdentity,
   collectAnthropicMessage,
   isClaudeWebSearchToolName,
+  isContextOverflowError,
   messageSnapshot,
   sanitizeWebSearchInput,
   sseFrame,
@@ -389,8 +390,9 @@ function createAnthropicMessageWriter(
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
       const deterministic = error.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
+      // Same overflow verdict as the translated stream, so an uncoded refusal compacts here too (#8127).
       fail(anthropicFailedStatus(error, message), message, !deterministic,
-        deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined);
+        deterministic ? error.code as string : isContextOverflowError(error, message) ? "context_length_exceeded" : undefined);
     },
     overflow() {
       fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");

@@ -354,6 +354,20 @@ describe("direct Messages fold matches bridge + collector (non-stream)", () => {
     } });
   });
 
+  // #8127: the direct encoder gives an uncoded overflow the same code as the translated stream.
+  test.each([[undefined, undefined], ["server_error", "upstream_server_error"]] as const)(
+    "uncoded overflow (type %s, code %s) becomes a prompt-too-long 400",
+    async (errorType, code) => {
+      const message = "Your input exceeds the context window of this model";
+      const events: AdapterEvent[] = [{ type: "error", errorType, code, message, retryable: false }];
+      const error = { type: "invalid_request_error", code: "context_length_exceeded", message: `prompt is too long: ${message}` };
+      expect(await expectStreamParity(events)).toEqual([{ event: "error", data: { type: "error", error } }]);
+      const response = await foldAnthropicMessage(replay(events), directOptions());
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ type: "error", error });
+    },
+  );
+
   for (const [name, scenario] of Object.entries(SCENARIOS)) {
     test(name, async () => {
       await expectFoldParity(scenario.events, scenario.options);

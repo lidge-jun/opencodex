@@ -88,7 +88,12 @@ async function translatedErrorFrame(error: Record<string, unknown>) {
 }
 
 describe("translated Responses stream", () => {
-  test.each([{ message: OVERFLOW }, { type: "server_error", code: "server_error", message: OVERFLOW }])(
+  test.each([
+    { message: OVERFLOW },
+    { type: "server_error", code: "server_error", message: OVERFLOW },
+    // The shared classifier's code for every 5xx is generic, not a specific cause.
+    { type: "server_error", code: "upstream_server_error", message: OVERFLOW },
+  ])(
     "an uncoded or server_error overflow ends in a prompt-too-long 400 frame: %j", async error => {
       const frame = await translatedErrorFrame(error);
       expect(frame).toMatchObject({ type: "invalid_request_error", code: "context_length_exceeded" });
@@ -139,6 +144,20 @@ describe("translated Messages route end to end", () => {
     expect(error).toMatchObject({ type: "invalid_request_error", code: "context_length_exceeded" });
     expect(seesPromptTooLong(error.message)).toBe(true);
     expect(response.headers.get("retry-after")).toBeNull();
+  });
+
+  test("a plain-text 500 overflow answers 400 with the upstream text", async () => {
+    const { response, text } = await send(() => new Response(OVERFLOW, { status: 500 }));
+    expect(response.status).toBe(400);
+    const error = JSON.parse(text).error;
+    expect(error).toMatchObject({ type: "invalid_request_error", code: "context_length_exceeded" });
+    expect(error.message).toContain(OVERFLOW);
+    expect(error.message).not.toContain("upstream error (500)");
+  });
+
+  test("a plain-text 500 that is not an overflow keeps its retryable class", async () => {
+    const { response } = await send(() => new Response("bad gateway", { status: 500 }));
+    expect(response.status).toBe(529);
   });
 
   test("a 429 that mentions the context window stays a rate limit", async () => {
