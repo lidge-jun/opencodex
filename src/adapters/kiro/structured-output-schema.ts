@@ -184,6 +184,8 @@ function prepare(schema: JsonRecord): PreparedSchema {
     }
     const match = REF.exec(decoded);
     if (!match) throw new Unsupported("$ref");
+    // JSON Pointer defines only `~0` and `~1`; any other `~` makes the pointer invalid.
+    if (/~(?![01])/.test(match[2]!)) throw new Unsupported("$ref");
     const name = match[2]!.replaceAll("~1", "/").replaceAll("~0", "~");
     const target = definitions.get(`${match[1]}/${name}`);
     if (!target) throw new Unsupported("$ref");
@@ -534,6 +536,7 @@ function movedRef(ref: string): string {
   let decoded = ref;
   try { decoded = decodeURIComponent(ref); } catch { /* an undecodable pointer is judged as written */ }
   if (decoded !== "#" && !decoded.startsWith("#/")) return ref;
-  if (decoded.startsWith("#/$defs/") || decoded.startsWith("#/definitions/")) return ref;
+  // The definition containers themselves, and anything under them, stay at the wrapper root.
+  if (["#/$defs", "#/definitions"].some(container => decoded === container || decoded.startsWith(`${container}/`))) return ref;
   return `#/properties/value${ref.slice(1)}`;
 }

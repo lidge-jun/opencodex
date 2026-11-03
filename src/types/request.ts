@@ -181,6 +181,13 @@ export interface OcxParsedRequest {
    */
   _structuredOutput?: boolean;
   /**
+   * True for a Claude Messages `output_config.format` json_schema. Anthropic promises an answer
+   * that conforms to that schema, whatever `strict` the Responses translation states for
+   * OpenAI-compatible destinations, so an emulating adapter (Kiro) holds it to full conformance.
+   * Process-local; never forwarded.
+   */
+  _structuredOutputConformance?: boolean;
+  /**
    * True when the input carried `{type:"compaction_trigger"}` — Codex remote compaction v2 asking
    * this turn to produce a `{type:"compaction"}` output item. Routed adapters can't natively;
    * the server runs the model as a summarizer and the bridge emits a synthetic compaction item

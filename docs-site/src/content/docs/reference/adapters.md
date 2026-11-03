@@ -521,7 +521,8 @@ MiMo model Command Code serves.
     `const` and `anyOf`. A `const` or `enum` value that contains a number is refused: the proxy
     receives the request already parsed, so a number such as `1.0000000000000001` arrives as `1`
     and an exact match could accept a value the caller excluded.
-  - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root. References such
+  - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root, with `~0` and
+    `~1` as the only JSON Pointer escapes. References such
     as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
     reach a property or item are refused, and so is a `$ref` with an assertion keyword beside it
     (drafts disagree on whether such siblings apply), a `$id` below the root, and `$anchor`.
@@ -541,6 +542,10 @@ MiMo model Command Code serves.
   matching the format. A strict schema with more than 10,000 nodes, or more than 10,000 values in
   its `const`/`enum` literals, is refused. Error messages name the failed check only, never a
   property name or path from the answer or the schema.
+  A Messages `output_config.format` schema always gets the `strict: true` checks, even when it
+  has optional properties and is therefore forwarded to OpenAI-compatible destinations without
+  `strict`: Anthropic promises an answer that conforms to the schema. A Messages schema outside
+  this subset is refused before the request is sent.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
   Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a

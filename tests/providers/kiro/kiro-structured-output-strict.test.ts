@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { sanitizeKiroSchema } from "../../../src/adapters/kiro-tools";
-import { kiroStructuredOutputSpec, parseKiroStructuredText, parseKiroStructuredToolInput } from "../../../src/adapters/kiro/structured-output";
+import { kiroStructuredOutputSpec, kiroStructuredStopFailure, parseKiroStructuredText, parseKiroStructuredToolInput } from "../../../src/adapters/kiro/structured-output";
 import { kiroDecimal, readKiroJson } from "../../../src/adapters/kiro/structured-output-json";
 import { validateKiroStrictValue } from "../../../src/adapters/kiro/structured-output-schema";
 import { parseRequest } from "../../../src/responses/parser";
@@ -474,5 +474,41 @@ describe("Kiro decimal and wrapped reference edges", () => {
     }, false))!;
     const tool = spec.toolSchema as { properties: { value: { items: { properties: { y: { $ref: string } } } } } };
     expect(tool.properties.value.items.properties.y.$ref).toBe("#/properties/x");
+  });
+
+  test("an exponent millions of digits long saturates, and bounds still judge the number correctly", () => {
+    const huge = "1e" + "9".repeat(2_000_000);
+    expect(kiroDecimal(huge).exponent).toBe(10n ** 15n + 1n);
+    expect(kiroDecimal("-1e-" + "9".repeat(2_000_000)).exponent).toBe(1n - 10n ** 15n);
+    const over = readKiroJson(huge)!;
+    expect(validateKiroStrictValue({ type: "number", maximum: 100 }, over.value, over.nodes).problem).toBeDefined();
+    expect(validateKiroStrictValue({ type: "integer" }, over.value, over.nodes).problem).toBeUndefined();
+    const tiny = readKiroJson("1e-" + "9".repeat(2_000_000))!;
+    expect(validateKiroStrictValue({ type: "number", minimum: 0, maximum: 1 }, tiny.value, tiny.nodes).problem).toBeUndefined();
+    expect(validateKiroStrictValue({ type: "integer" }, tiny.value, tiny.nodes).problem).toBeDefined();
+  }, 30_000);
+
+  test("wrapping keeps references to the definition containers themselves at the wrapper root", () => {
+    for (const ref of ["#/$defs", "#/%24defs", "#/definitions", "#%2F%24defs"]) {
+      const spec = kiroStructuredOutputSpec(request({ type: "array", items: { $ref: ref }, $defs: { not: false } }, false))!;
+      const tool = spec.toolSchema as { properties: { value: { items: { $ref: string } } } };
+      expect(tool.properties.value.items.$ref).toBe(ref);
+    }
+  });
+
+  test("a strict $ref with a JSON Pointer escape other than ~0 or ~1 is refused", () => {
+    const schema = (ref: string, name: string) => ({
+      type: "object", properties: { a: { $ref: ref } }, required: ["a"], additionalProperties: false, $defs: { [name]: { type: "string" } },
+    });
+    expect(() => kiroStructuredOutputSpec(request(schema("#/$defs/a~2b", "a~2b")))).toThrow(REFUSED + ' "$ref" cannot be enforced');
+    expect(() => kiroStructuredOutputSpec(request(schema("#/$defs/a~", "a~")))).toThrow(REFUSED + ' "$ref" cannot be enforced');
+    expect(kiroStructuredOutputSpec(request(schema("#/$defs/a~0b", "a~b")))?.strict).toBe(true);
+  });
+
+  test("a retry stop diagnostic names only stop reasons Kiro documents", () => {
+    expect(kiroStructuredStopFailure("MAX_TOKENS")).toContain("stopped with MAX_TOKENS");
+    const unknown = kiroStructuredStopFailure("UPSTREAM_SUPPLIED_TEXT");
+    expect(unknown).not.toContain("UPSTREAM_SUPPLIED_TEXT");
+    expect(unknown).toContain("stopped before a complete answer");
   });
 });

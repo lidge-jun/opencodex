@@ -210,3 +210,46 @@ describe("Kiro structured output through public server endpoints", () => {
     });
   });
 });
+
+// An optional property is legal to Anthropic but not to OpenAI strict mode, so the Messages
+// translation states `strict: false`. Anthropic still promises a conforming answer, so Kiro must
+// validate the whole value rather than only its root type.
+const optionalTitleSchema = { type: "object", properties: { title: { type: "string" } }, additionalProperties: false };
+const optionalTitleRequest = () => ({
+  ...t3TitleRequest(false),
+  output_config: { format: { type: "json_schema", schema: optionalTitleSchema } },
+});
+
+describe("Kiro holds a Messages schema to full conformance", () => {
+  test("a private-tool answer with a wrongly typed optional property is retried, then refused", async () => {
+    await withProxy([structuredFrames({ title: 42 }), structuredFrames({ title: 43 }, "structured-2")], async (url, requests) => {
+      const response = await post(url, "/v1/messages", optionalTitleRequest());
+      const wire = await response.text();
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(wire).toContain("structured output");
+      expect(wire).not.toContain("42");
+      expect(wire).not.toContain("43");
+      expect(requests).toHaveLength(2);
+    });
+  });
+
+  test("a text answer with a wrongly typed optional property is retried, then refused", async () => {
+    await withProxy([[textFrame('{"title":42}')], [textFrame('{"title":43}')]], async (url, requests) => {
+      const response = await post(url, "/v1/messages", optionalTitleRequest());
+      const wire = await response.text();
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(wire).not.toContain('"title":42');
+      expect(wire).not.toContain('"title":43');
+      expect(requests).toHaveLength(2);
+    });
+  });
+
+  test("a conforming answer that omits the optional property is returned", async () => {
+    await withProxy([[textFrame("{}")]], async url => {
+      const response = await post(url, "/v1/messages", optionalTitleRequest());
+      expect(response.status).toBe(200);
+      const json = await response.json() as { content: Array<{ type: string; text?: string }> };
+      expect(JSON.parse(json.content[0]!.text!)).toEqual({});
+    });
+  });
+});

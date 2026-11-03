@@ -120,6 +120,23 @@ export interface KiroDecimal {
 
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
 
+/**
+ * Largest exponent magnitude kept exactly. A model-written exponent can be millions of digits long,
+ * and converting it to a bigint costs more than linear time, so a longer one saturates here. No
+ * lexeme within the answer size limits has as many digits, so a saturated value still compares,
+ * and tests as an integer, exactly as its true value would against any schema bound.
+ */
+const EXPONENT_LIMIT = 10n ** 15n;
+
+/** The exponent text as a bigint, saturated at {@link EXPONENT_LIMIT}; linear in its length. */
+function boundedExponent(exp: string): bigint {
+  const negative = exp.startsWith("-");
+  let start = exp.startsWith("-") || exp.startsWith("+") ? 1 : 0;
+  while (start < exp.length - 1 && exp.charCodeAt(start) === 48) start += 1;
+  const magnitude = exp.length - start > 15 ? EXPONENT_LIMIT : BigInt(exp.slice(start));
+  return negative ? -magnitude : magnitude;
+}
+
 /** The exact value of a JSON number lexeme (or of `String(n)` for a finite double). */
 export function kiroDecimal(lexeme: string): KiroDecimal {
   const match = DECIMAL.exec(lexeme);
@@ -134,7 +151,7 @@ export function kiroDecimal(lexeme: string): KiroDecimal {
   return {
     sign: minus ? -1 : 1,
     digits: all.slice(lead, end),
-    exponent: BigInt(whole.length - lead) + BigInt(exp),
+    exponent: BigInt(whole.length - lead) + boundedExponent(exp),
   };
 }
 

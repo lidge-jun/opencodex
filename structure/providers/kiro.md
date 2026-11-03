@@ -173,11 +173,15 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   value exactly and in bounded work. A strict format whose schema is missing or not a JSON object
   (such as `false`) is refused. Anything outside this subset is refused before anything is sent,
   with the same refusal structured output had before emulation:
+  (A Messages `output_config.format` schema counts as strict regardless of the `strict` its
+  Responses translation states: `src/server/responses/request-prepare.ts` sets the process-local
+  `_structuredOutputConformance` for Anthropic inbound requests.)
   - `type` (a known type or a non-empty array of them) with no repeated type, `properties`, `required`,
     `additionalProperties` (boolean or schema), single-schema `items`, `enum`, `const`, `anyOf`.
     A `const` or `enum` literal that contains a number is refused: the request arrives parsed, so
     `1.0000000000000001` is already `1`, and exact equality could accept a value the caller excluded.
-  - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition; the
+  - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition, with no
+    JSON Pointer escape other than `~0`/`~1`; the
     fragment is percent-decoded before its segments are read, so an encoded `/` is a separator;
     `$defs`/`definitions` only at the root. Root-relative references (`#`, `#/properties/...`),
     references into annotations (`#/default`), remote references, and a cycle of `$ref`/`anyOf`

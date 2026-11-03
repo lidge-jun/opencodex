@@ -69,7 +69,8 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
     ...(format?.type === "json_schema" && format.description ? { description: format.description } : {}),
   };
   const schema = format?.type === "json_schema" && isRecord(format.schema) ? format.schema : undefined;
-  const strict = format?.type === "json_schema" && format.strict === true;
+  // A Messages schema is a conformance promise even when its translation states `strict: false`.
+  const strict = format?.type === "json_schema" && (format.strict === true || parsed._structuredOutputConformance === true);
   // A strict format promises conformance to its schema; without an object schema (absent, or a
   // boolean such as `false`) there is nothing this emulation can enforce, so it is refused.
   if (!schema && strict) {
@@ -328,9 +329,19 @@ export const KIRO_STRUCTURED_TEXT_FAILURE = `${FAILURE_PREFIX}: the model answer
 /** Message for a bounded retry that ended without text, a tool call, or a structured answer. */
 export const KIRO_STRUCTURED_EMPTY_FAILURE = `${FAILURE_PREFIX}: the bounded retry produced no answer`;
 
-/** Message for a bounded retry whose text was cut by a stop that does not end a finished answer. */
+/** Stop reasons Kiro documents; only these are named in a diagnostic. */
+const KNOWN_STOP_REASONS = new Set([
+  "MAX_TOKENS", "MODEL_CONTEXT_WINDOW_EXCEEDED", "MALFORMED_TOOL_USE", "MALFORMED_MODEL_OUTPUT",
+  "TOOL_USE", "CONTENT_FILTERED", "GUARDRAIL_INTERVENED",
+]);
+
+/**
+ * Message for a bounded retry whose text was cut by a stop that does not end a finished answer. The
+ * stop reason comes from upstream, so an unrecognized one is not echoed.
+ */
 export function kiroStructuredStopFailure(normalizedStopReason: string): string {
-  return `${FAILURE_PREFIX}: the bounded retry stopped with ${normalizedStopReason} before a complete answer`;
+  const stop = KNOWN_STOP_REASONS.has(normalizedStopReason) ? ` with ${normalizedStopReason}` : "";
+  return `${FAILURE_PREFIX}: the bounded retry stopped${stop} before a complete answer`;
 }
 
 /**
