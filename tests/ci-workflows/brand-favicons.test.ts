@@ -152,6 +152,11 @@ describe("brand favicons", () => {
     const failures: string[] = [];
     for (const output of pngs.keys()) {
       const { width, height, pixels } = decode(readFileSync(repoPath(output)));
+      // No backdrop tile: the corners stay transparent so the tab strip shows through.
+      const corners = [0, (width - 1) * 4, (height - 1) * width * 4, (height * width - 1) * 4];
+      for (const at of corners) {
+        if (pixels[at + 3] !== 0) failures.push(output + ": corner alpha " + pixels[at + 3]);
+      }
       // Composite onto a white tab strip and count pixels that differ from it enough to read at
       // tab size. A white mark (the old bug) or an empty canvas both fail here.
       let ink = 0;
