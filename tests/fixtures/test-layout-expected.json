@@ -1092,7 +1092,7 @@
   "oauth-tos-warning.test.ts": "gui", "oauth-upsert-preserves-api-key.test.ts": "oauth",
   "ocx-launcher-runtime.test.ts": "cli", "ocx-launcher-fixture-trust.test.ts": "cli", "ocx-launcher-source.test.ts": "cli",
   "ocx-launcher-desktop-handoff.test.ts": "cli", "cli-path-diagnostics.test.ts": "cli",
-  "ocx-run.test.ts": "cli", "ollama-native-parser.test.ts": "providers/ollama",
+  "ocx-run.test.ts": "cli", "ollama-native-parser.test.ts": "providers/ollama", "ollama-native-cached-usage.test.ts": "providers/ollama",
   "ollama-native-reasoning-wire.test.ts": "providers/ollama",
   "ollama-native-scaling.test.ts": "providers/ollama",
   "ollama-native-structured-output.test.ts": "providers/ollama", "ollama-native-v4.test.ts": "providers/ollama",
