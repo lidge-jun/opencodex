@@ -102,6 +102,52 @@ before the tombstone can still create its file afterwards; see the last item bel
   removes whatever is at a listed name when it gets there, and a resumed run does the same; it keeps
   no per-file identity.
 
+## Removal stays inside the root
+
+`removeOwnedConfigState` resolves the config root to its realpath once, at the start, and every later
+step of the run (the lock, metadata, temp files, entries and the final rmdir) uses that canonical
+path; residual paths are reported in the spelling the caller passed. A root reached through an
+aliased ancestor, such as macOS `/var` for `/private/var`, therefore still works, and a root that is
+itself a link is refused as before. `src/lib/config-ownership-removal.ts` resolves every manifest
+entry from that root. Immediately before
+each unlink, directory listing and rmdir it lstats every directory from the root down to the entry's
+parent. Each must be a real directory, not a symlink, junction or other reparse point, and the
+root must still resolve to itself while the parent's realpath stays inside it (names are not compared
+as strings, so a case- or normalization-insensitive volume may store them in another spelling). An entry that fails stays in
+place and is reported as the residual path; the run ends partial with the tombstone kept, so a rerun
+resumes once the directory is fixed. A link on the way to an entry, or a lookup that fails for any
+reason other than absence, is reported the same way. Links are never followed, even toward a location inside the
+root. A final-component link is unlinked itself, never its target. Inside an owned directory every
+child repeats the check, and so does the final rmdir.
+
+An elevated uninstall (effective uid 0 on POSIX; an elevated token on Windows) runs only when the
+directories it touches belong to the running account alone. A Windows token the native probe cannot
+read (Bun cannot run `bun:ffi` on ARM64) is checked as elevated, and a refusal then says that
+elevation could not be determined.
+The config path as given, which the teardown steps before the remover use, must resolve only through
+directories no other account can change and links owned by the running account or root, following
+each link target the way the kernel does; on Windows it may contain no link at all. A root that does
+not exist yet needs its nearest existing directory closed to every other account. Then the canonical
+root and its ancestors, each recorded parent directory, and every directory inside a recorded
+directory are checked. On POSIX the root and those
+directories must be owned by the effective uid with no group or other write bit, and each ancestor
+must be owned by it or by root and not shared-writable unless sticky; on macOS no listed directory
+or link, including every one the walk of the given path passed, may carry an ACL allow entry. On
+Windows they are read with the `write-private` and
+`trusted-ancestry` policies of `src/lib/windows-owner-acl.ts` in one pass (above 16 paths its
+synchronous reader takes them over stdin). Otherwise the run is refused as a whole. `ocx uninstall`
+checks this before its first teardown step; the remover checks it again before it takes the lock,
+which a refusal there never creates, and once more under the lock before the tombstone, which a
+refusal there never writes. During an elevated POSIX run every directory the removal passes through
+is held to the same owner and mode rule.
+
+Each check describes the filesystem at the moment it runs. Bun and Node expose no
+directory-handle-relative unlink, so the guarantee does not extend to a concurrent change made by the
+same account between a check and the removal that follows it.
+
 `tests/config/config-ownership-concurrent-record.test.ts` covers concurrent registrations, a
 registration racing uninstall, the tombstone refusal for cached paths, a rerun after an interrupted
 uninstall or a leftover lock file, the busy lock, a home without metadata, and log rotation.
+`tests/config/config-ownership-removal.test.ts` and `tests/config/config-ownership-uninstall.test.ts`
+cover linked and dangling parents, unreadable entries, a directory replaced after it is listed,
+final-component links, aliased roots, and the elevated refusal.

@@ -14,6 +14,7 @@ import { Database } from "bun:sqlite";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GenerationContext } from "./state-store-sweeper";
 import { renameAtomicFile } from "./windows-atomic-replace";
+import { elevatedRemovalRefusal, ownedEntryPresent, removeOwnedEntry, uninstallRunsElevated } from "./config-ownership-removal";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
@@ -256,15 +257,6 @@ function isManifest(value: unknown): value is ConfigUninstallManifest {
 
 function canonicalRoot(configDir: string): string {
   return realpathSync.native(resolve(configDir));
-}
-
-function isWithinRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (
-    rel !== ".."
-    && !rel.startsWith(`..${sep}`)
-    && !isAbsolute(rel)
-  );
 }
 
 function manifestRelativePath(configDir: string, candidatePath: string): string | null {
@@ -520,27 +512,6 @@ function removeEmptyLockSidecars(configDir: string): void {
   }
 }
 
-function removeOwnedEntry(root: string, path: string): void {
-  const entry = lstatSync(path);
-  if (entry.isSymbolicLink()) {
-    unlinkSync(path);
-    return;
-  }
-  if (!entry.isDirectory()) {
-    unlinkSync(path);
-    return;
-  }
-
-  const realDirectory = realpathSync.native(path);
-  if (!isWithinRoot(root, realDirectory)) {
-    throw new Error(`owned directory resolves outside the config root: ${path}`);
-  }
-  for (const name of readdirSync(path)) {
-    removeOwnedEntry(root, join(path, name));
-  }
-  rmdirSync(path);
-}
-
 /** Initialize only an empty or already-owned root; do not claim a candidate path. */
 export function initializeConfigOwnership(configDir: string): boolean {
   const cacheKey = ownershipCacheKey(configDir);
@@ -781,6 +752,23 @@ function removeIdleLockFiles(configDir: string): "removed" | "busy" {
   return "removed";
 }
 
+/** The elevated-run check over the manifest as read without the lock; null when not elevated. */
+function privilegeCheck(configDir: string): { refusal: string | null; paths: string[] } | null {
+  if (!uninstallRunsElevated()) return null;
+  if (!existsSync(configDir)) return { refusal: elevatedRemovalRefusal(configDir, []), paths: [] };
+  const paths = (loadOwnershipForUninstall(configDir)?.manifest.paths ?? [])
+    .filter(rel => manifestRelativePath(configDir, join(configDir, ...rel.split("/"))) === rel);
+  return { refusal: elevatedRemovalRefusal(configDir, paths), paths };
+}
+
+/**
+ * Read-only check `ocx uninstall` runs before its first teardown step: the reason an elevated run
+ * must not touch this home, or null. The remover repeats it before taking the lock.
+ */
+export function uninstallPrivilegeRefusal(configDir: string): string | null {
+  return privilegeCheck(configDir)?.refusal ?? null;
+}
+
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
   ownershipCache.delete(ownershipCacheKey(configDir));
   lockedManifestIdentity.delete(ownershipCacheKey(configDir));
@@ -793,6 +781,30 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       residualPaths: [configDir],
     };
   }
+  // Everything below works on the canonical root, resolved once here, so no later step goes back
+  // through the spelling the caller passed. Residual paths are reported in that spelling.
+  let canonical: string;
+  try {
+    canonical = canonicalRoot(configDir);
+  } catch {
+    return { status: "refused", reason: "config ownership root is not a real directory", residualPaths: [configDir] };
+  }
+  const result = removeCanonicalOwnedConfigState(canonical);
+  return { ...result, residualPaths: result.residualPaths.map(path => callerSpelling(path, canonical, configDir)) };
+}
+
+function callerSpelling(path: string, canonical: string, configDir: string): string {
+  if (path === canonical) return configDir;
+  const rel = relative(canonical, path);
+  return rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) ? join(configDir, rel) : path;
+}
+
+function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult {
+  ownershipCache.delete(ownershipCacheKey(configDir));
+  lockedManifestIdentity.delete(ownershipCacheKey(configDir));
+  // Before the lock exists or anything is written, so a refused elevated run changes nothing.
+  const privilege = privilegeCheck(configDir);
+  if (privilege?.refusal) return { status: "refused", reason: privilege.refusal, residualPaths: [configDir] };
   if (!loadOwnershipForUninstall(configDir)) {
     // A finished uninstall whose lock file could not be unlinked (Windows keeps a file another
     // process holds open) leaves only lock files. They are removed once no process holds the lock.
@@ -836,17 +848,23 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
           return { status: "refused", reason: "config ownership manifest contains an unsafe path", residualPaths: [configDir] };
         }
       }
+      // Checked again under the lock and before the tombstone: the manifest, ownership, modes and the
+      // tree may all have changed since the unlocked check.
+      const lockedRefusal = privilege ? elevatedRemovalRefusal(configDir, ownership.manifest.paths) : null;
+      if (lockedRefusal) return { status: "refused", reason: lockedRefusal, residualPaths: [configDir] };
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
       removeAbandonedMetadataTemps(configDir, ownership.owner);
       const rootPath = canonicalRoot(configDir);
+      const elevatedUid = process.platform !== "win32" && uninstallRunsElevated() ? process.geteuid?.() : undefined;
       for (const rel of ownership.manifest.paths) {
-        const path = join(configDir, ...rel.split("/"));
-        // lstat, not existsSync: a listed symlink whose target is gone is still ours to unlink.
-        try { lstatSync(path); } catch { continue; }
+        const parts = rel.split("/");
+        const path = join(configDir, ...parts);
         try {
-          removeOwnedEntry(rootPath, path);
+          // lstat-based: a listed symlink whose target is gone is still ours to unlink, and a link on
+          // the way to an entry is reported rather than read as absence.
+          if (ownedEntryPresent(rootPath, parts)) removeOwnedEntry(rootPath, parts, { elevatedUid });
         } catch (error) {
           return {
             status: "partial",

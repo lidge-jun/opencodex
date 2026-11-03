@@ -339,6 +339,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/bounded-body.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/lib/client-error-body.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/client-retry-after.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/config-ownership-removal.ts` | [`config-ownership.md`](config-ownership.md) |
 | `src/lib/config-ownership.ts` | [`config-ownership.md`](config-ownership.md)<br>[`providers/codex-pool-affinity.md`](providers/codex-pool-affinity.md) |
 | `src/lib/decision-quota-sink.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/lib/error-destination.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
