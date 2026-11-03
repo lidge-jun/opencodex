@@ -963,7 +963,8 @@ for every client and discovers models from the authenticated
 key. The seeded models are `deepseek-v4-1-flash` (the default), `glm-5.3`, `glm-5.3-flash`, `kimi-k3`
 and `grok-4.7`; `glm-5.3` is text only, so images for it go to the vision sidecar. `kimi-k3` accepts
 only its own sampling values, so the preset does not forward `temperature` or `top_p` to it. The
-gateway has no Responses, Anthropic Messages, embeddings or image endpoints. cheapaimodel's
+preset sends every request through Chat Completions, the one interface every catalog model supports;
+it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
 [terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
 requests sent to this service.
 

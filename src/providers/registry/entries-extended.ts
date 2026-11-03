@@ -1326,8 +1326,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
     // https://cheapaimodel.ai/docs/api/create-chat-completion and
     // https://cheapaimodel.ai/docs/api/list-models. GET /v1/models answers 401 without a valid key,
-    // so the default discovery URL doubles as key validation. The gateway serves Chat Completions
-    // only (no Responses or Anthropic Messages), so every inbound stays on Chat. Context windows and
+    // so the default discovery URL doubles as key validation. Chat Completions is the one interface
+    // every catalog model supports, so every inbound stays on Chat and the preset does not use the
+    // gateway's Responses or Anthropic Messages endpoints. Context windows and
     // input modalities are from the live catalog at https://cheapaimodel.ai/models. kimi-k3 rejects
     // any temperature other than 0.6 or 1 and rejects top_p 0.9 and 1.0, so both are dropped for it.
     // deepseek-v4-1-flash takes reasoning_effort none, low, high and max, and an omitted effort runs
