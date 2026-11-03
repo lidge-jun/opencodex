@@ -384,7 +384,7 @@ report is additive.
 
 When opencodex owns routing, it also writes `$CODEX_HOME/opencodex.config.toml` as an explicit profile
 target. Codex config uses `service_tier = "fast"` and `[features].fast_mode = true`;
-catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value. Provider `responseTierAuthoritative` is an optional strict boolean validated by `src/config/schema/leaf-validators.ts`; it changes response evidence only, as defined in the [response-tier observation contract](transports/responses.md#response-tier-observation-authority).
+catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value. Provider `responseTierAuthoritative` is an optional strict boolean validated by `src/config/schema/leaf-validators.ts`; it changes response evidence only, as defined in the [response-tier observation contract](transports/responses.md#response-tier-observation-authority). Regenerating that profile (`preserveUnmanagedProfileKeys` in `src/codex/inject/config-toml.ts`) carries the previous profile's plain root assignments forward as their original source text, above the first table. Nothing is decoded and reserialized, so a 64-bit integer Bun cannot represent survives. The generated profile wins every collision: keys in `MANAGED_PROFILE_ROOT_KEYS` are never carried, even when the active template omits them, and a carried key named like the first segment of a generated table (`features`, `model_providers`) is dropped, because TOML forbids defining a table twice. Table bodies and dotted root keys are not carried. The injector re-reads the profile under the write lock and refuses retryably when it differs from the bytes the plan carried from (`tests/codex-integration/codex-profile-preservation.test.ts`). That refusal leaves the profile untouched. After a later failure, rollback reverts the profile only when this injection published it and the file still holds exactly those bytes, so an edit another writer landed survives (the `profilePublish` argument of `restoreCodexPreImages`); config and journal roll back as before.
 
 ## Provider output defaults
 
@@ -468,7 +468,7 @@ root-bound owner marker and an uninstall manifest before its first atomic config
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
-remain in place and make the command report a partial uninstall with their exact paths. Paths recorded after home creation are each also written as a private record file under `.opencodex-uninstall.d/`, named by the hash of the path and published by atomic rename, so two processes that share a home cannot erase each other's entry by rewriting the manifest from a stale cache (#8093). The manifest is rewritten as the union of disk state for older readers; uninstall reads manifest and records together, fails closed on a record this module did not write, and never writes through a linked record directory.
+remain in place and make the command report a partial uninstall with their exact paths.
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
 includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
