@@ -344,4 +344,35 @@ describe("non-citation directive spans pass through (#6039)", () => {
     expect(mention.deltas).toBe("quoted &lt;oai-mem-citation> prose");
     expect(mention.done).toBe(mention.deltas);
   });
+
+  test("a held candidate block is charged to the translator budget and released at close", async () => {
+    const body = "MEMORY.md:1-2|note=[x]\n".repeat(150);
+    const candidate = `<oai-mem-citation>\n<citation_entries>\n${body}`;
+    const pieces: string[] = [];
+    for (let at = 0; at < candidate.length; at += 500) pieces.push(candidate.slice(at, at + 500));
+    const peak = async (text: string[]) => {
+      const budget = createTestTranslatorBudget();
+      await new Response(bridgeToResponsesSSE(
+        replay(textEvents(text)), "internal/model", undefined, undefined, undefined, undefined, 2_000,
+        { translatorBudget: budget, enforceDeclaredToolNames: false },
+      )).text();
+      return budget.snapshot();
+    };
+    const held = await peak(pieces);
+    // Same bytes and newlines, but not a tag, so nothing is held.
+    const free = await peak(pieces.map(piece => piece.replace("<oai-mem-citation>", "<oai-mem-citatioX>")));
+    // The never-closed candidate is held whole, so the bridge's high-water mark carries it ...
+    expect(held.highWaterBytes).toBeGreaterThanOrEqual(free.highWaterBytes + Buffer.byteLength(candidate) / 2);
+    // ... and everything is released once the message closes.
+    // (The escaped `&lt;` adds a few bytes to the retained text, nothing more.)
+    expect(Math.abs(held.currentBytes - free.currentBytes)).toBeLessThanOrEqual(16);
+  });
+
+  test("an oversized candidate stops being held and is escaped like the final text", () => {
+    const huge = `<oai-mem-citation>\n<citation_entries>\n${"y".repeat(40_000)}`;
+    const escaper = createMemoryCitationEscaper();
+    const out = [...huge.match(/[\s\S]{1,4000}/g)!].map(piece => escaper.push(piece)).join("");
+    expect(Buffer.byteLength(escaper.pending())).toBeLessThanOrEqual(16_384 + 4_000);
+    expect(out + escapeMemoryCitationMentions(escaper.pending())).toBe(escapeMemoryCitationMentions(huge));
+  });
 });

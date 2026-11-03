@@ -338,7 +338,19 @@ export function encodeAdapterEventStream(
   };
 
   // Item state, ported from bridgeToResponsesSSE.
-  let currentMsg: { phase?: OcxMessagePhase; citationFilter: CitationMarkerFilter; memoryCitationEscaper: MemoryCitationEscaper } | null = null;
+  let currentMsg: {
+    phase?: OcxMessagePhase;
+    citationFilter: CitationMarkerFilter;
+    memoryCitationEscaper: MemoryCitationEscaper;
+    /** Bytes the escaper currently holds, charged to the translator budget. */
+    heldBytes: number;
+  } | null = null;
+  const syncHeldCitationBytes = (msg: NonNullable<typeof currentMsg>, held: string) => {
+    const next = Buffer.byteLength(held);
+    if (next > msg.heldBytes) budget.chargeRetained(next - msg.heldBytes, { kind: "live_transient" });
+    else if (next < msg.heldBytes) budget.releaseRetained(msg.heldBytes - next, { kind: "live_transient" });
+    msg.heldBytes = next;
+  };
   let currentReasoning: { itemId: string } | null = null;
   let currentRawReasoning: { itemId: string } | null = null;
   let pendingSignature: string | undefined;
@@ -368,6 +380,7 @@ export function encodeAdapterEventStream(
     // block's closing tag is neither split nor re-escaped.
     const tail = (trailing ? currentMsg.memoryCitationEscaper.push(trailing) : "")
       + escapeMemoryCitationMentions(currentMsg.memoryCitationEscaper.pending());
+    syncHeldCitationBytes(currentMsg, "");
     if (tail) writer.text(tail);
     writer.messageDone();
     currentMsg = null;
@@ -613,6 +626,7 @@ export function encodeAdapterEventStream(
               currentMsg = {
                 citationFilter: createCitationMarkerFilter(),
                 memoryCitationEscaper: createMemoryCitationEscaper(),
+                heldBytes: 0,
                 ...(event.phase ? { phase: event.phase } : {}),
               };
             }
@@ -621,6 +635,7 @@ export function encodeAdapterEventStream(
             // between the first opening tag and the last closing one, which reads as a truncated
             // answer. Escape it here, while it streams.
             const escaped = visible ? currentMsg.memoryCitationEscaper.push(visible) : "";
+            syncHeldCitationBytes(currentMsg, currentMsg.memoryCitationEscaper.pending());
             if (escaped) writer.text(escaped);
             break;
           }

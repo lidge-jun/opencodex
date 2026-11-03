@@ -382,6 +382,8 @@ export function bridgeToResponsesSSE(
         text: StringChunks;
         citationFilter: CitationMarkerFilter;
         memoryCitationEscaper: MemoryCitationEscaper;
+        /** Bytes the escaper currently holds, charged to the translator budget. */
+        heldBytes: number;
         phase?: OcxMessagePhase;
       } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: StringChunks } | null = null;
@@ -519,6 +521,7 @@ export function bridgeToResponsesSSE(
         // against the accumulated text so a real block's trailing close tag survives.
         const heldTail = currentMsg.memoryCitationEscaper.pending();
         const resolvedTail = heldTail ? escapeMemoryCitationMentions(heldTail) : "";
+        currentMsg.heldBytes = replaceRetainedString(currentMsg.heldBytes, "", "live_transient");
         const finalDelta = escapedTrailing + resolvedTail;
         if (finalDelta) {
           emit("response.output_text.delta", {
@@ -961,6 +964,7 @@ export function bridgeToResponsesSSE(
                   itemId, outputIndex, text: emptyChunks(),
                   citationFilter: createCitationMarkerFilter(),
                   memoryCitationEscaper: createMemoryCitationEscaper(),
+                  heldBytes: 0,
                   ...(event.phase ? { phase: event.phase } : {}),
                 };
               }
@@ -979,6 +983,8 @@ export function bridgeToResponsesSSE(
               // delta, so it uses the streaming escaper: a tag arrives split across deltas, and a
               // whole-string match inside a single delta would miss it.
               const emitted = visible ? currentMsg.memoryCitationEscaper.push(visible) : "";
+              currentMsg.heldBytes = replaceRetainedString(
+                currentMsg.heldBytes, currentMsg.memoryCitationEscaper.pending(), "live_transient");
               if (emitted) {
                 emit("response.output_text.delta", {
                   item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,

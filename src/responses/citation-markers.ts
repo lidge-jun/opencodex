@@ -86,8 +86,11 @@ const MEMORY_CITATION_BODY = /<citation_entries>[\s\S]*<\/citation_entries>[\s\S
 /** First element of a real block's body, used to decide from a short lookahead. */
 const MEMORY_CITATION_BODY_OPEN = "<citation_entries>";
 
-/** Longest candidate block the streaming escaper holds while waiting for its closing tag. */
-const MAX_MEMORY_CITATION_HOLD = 65_536;
+/**
+ * Longest candidate block the streaming escaper holds while waiting for its closing tag. Callers
+ * charge the held bytes to their translator budget (`live_transient`) as the hold grows.
+ */
+const MAX_MEMORY_CITATION_HOLD = 16_384;
 
 /**
  * Whether the text right after an opening tag still could begin a real block.
