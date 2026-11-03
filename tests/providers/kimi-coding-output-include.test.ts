@@ -39,6 +39,11 @@ describe("Kimi Code Responses include normalization (#8075)", () => {
     expect(wire(["output.encrypted_content"])).not.toHaveProperty("include");
   });
 
+  test("removes every duplicate output.encrypted_content", () => {
+    expect(wire(["output.encrypted_content", "reasoning.encrypted_content", "output.encrypted_content"]).include)
+      .toEqual(["reasoning.encrypted_content"]);
+  });
+
   test("an absent or already-supported include list is unchanged", () => {
     expect(wire(undefined)).not.toHaveProperty("include");
     expect(wire(["reasoning.encrypted_content"]).include).toEqual(["reasoning.encrypted_content"]);
