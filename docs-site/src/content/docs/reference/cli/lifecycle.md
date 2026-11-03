@@ -505,7 +505,7 @@ of deleting anything.
 Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
 installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
 and pending history migration. The **Native main refresh** section reads admission status from the
-running proxy's authenticated native-profile doctor endpoint, so a separately launched `ocx doctor`
+running proxy's authenticated, read-only native-main admission endpoint, so a separately launched `ocx doctor`
 reports the service's `foreign-ownership` or other fence reason; if the proxy cannot be queried it
 reports admission as unavailable. The Codex app-home targeting section also detects the narrow
 Windows Orca runtime-home mismatch and explains service migration when applicable. Paths shown by

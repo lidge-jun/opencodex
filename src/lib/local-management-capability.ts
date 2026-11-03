@@ -20,7 +20,7 @@ export const LOCAL_MANAGEMENT_READ_PATHS = {
   providerQuotas: "/api/provider-quotas",
   usageTimeline: "/api/usage/timeline",
   stop: "/api/stop",
-  nativeProfileDoctor: "/api/native-main-profiles/doctor",
+  nativeMainAdmission: "/api/native-main-profiles/admission",
 } as const;
 
 export type LocalManagementReadPath =
@@ -54,7 +54,7 @@ function isLocalManagementReadPath(path: string): path is LocalManagementReadPat
     || path === LOCAL_MANAGEMENT_READ_PATHS.providerQuotas
     || path === LOCAL_MANAGEMENT_READ_PATHS.usageTimeline
     || path === LOCAL_MANAGEMENT_READ_PATHS.stop
-    || path === LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor;
+    || path === LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission;
 }
 
 function localReadCapabilityPayload(

@@ -430,7 +430,7 @@ describe("doctor", () => {
 });
 
 describe("live native-main admission in doctor", () => {
-  test("reports the fenced proxy's result through its attested doctor response", async () => {
+  test("reports the fenced proxy's result through its attested admission response", async () => {
     // The doctor caller's own startup gate is normally ready. The fenced verdict must come
     // from the distinct service process identified by this live target, never that local gate.
     const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
@@ -448,7 +448,7 @@ describe("live native-main admission in doctor", () => {
           secret,
           requestHeaders.get(LOCAL_MANAGEMENT_NONCE_HEADER),
           "GET",
-          LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor,
+          LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission,
           4242,
           10100,
           Number(requestHeaders.get(LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER)),
@@ -456,13 +456,10 @@ describe("live native-main admission in doctor", () => {
           now,
         )).toBe(true);
         return Response.json({
-          error: "Another OpenCodex process owns the physical native-main login.",
-          code: "NATIVE_MAIN_OWNER_BUSY",
-          retryable: true,
           admissionStatus: "blocked",
           admissionBlockReason: "foreign-ownership",
         }, {
-          status: 503,
+          status: 200,
           headers: {
             [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)!,
           },
@@ -474,9 +471,9 @@ describe("live native-main admission in doctor", () => {
     expect(formatNativeMainAdmissionLines(report).join("\n")).toContain("reason: foreign-ownership");
   });
 
-  test("surfaces admission fields the doctor endpoint attaches to a non-503 error", async () => {
-    // The endpoint adds admissionStatus/admissionBlockReason to every NativeProfileError
-    // status, so a 409 storage or home-change error still carries the proxy's fence reason.
+  test("reports an error status as unavailable, including an older proxy without the route", async () => {
+    // The admission route always answers 200 from the gate snapshot. Any other status, such
+    // as 404 from a proxy that predates the route, is not a verdict about admission.
     const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
     const secret = "A".repeat(43);
     const nonce = "B".repeat(43);
@@ -489,12 +486,10 @@ describe("live native-main admission in doctor", () => {
         headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)! },
       })) as unknown as typeof fetch,
     });
-    const error = { error: "The canonical native-main home changed unexpectedly.", code: "CODEX_HOME_UNAVAILABLE", retryable: false };
-
-    const blocked = await read(409, { ...error, admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" });
-    expect(blocked).toEqual({ status: "blocked", reason: "foreign-ownership" });
-    expect(formatNativeMainAdmissionLines(blocked).join("\n")).toContain("reason: foreign-ownership");
-    expect(await read(409, error)).toEqual({ status: "unavailable", reason: "http 409" });
+    expect(await read(404, { error: "Not found" })).toEqual({ status: "unavailable", reason: "http 404" });
+    const fenced = await read(503, { admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" });
+    expect(fenced).toEqual({ status: "unavailable", reason: "http 503" });
+    expect(formatNativeMainAdmissionLines(fenced)).toEqual(["  --  native-main admission unavailable from the running proxy"]);
   });
 
   test("reports a healthy ready proxy as no admission warning", async () => {
@@ -538,7 +533,7 @@ describe("live native-main admission in doctor", () => {
       `  const nonce = request.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER);`,
       `  const proof = nonce ? createLocalAttestationProof(secret, nonce, process.pid, server.port) : null;`,
       `  const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;`,
-      `  if (url.pathname === LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor) return Response.json({ error: "owner fenced", code: "NATIVE_MAIN_OWNER_BUSY", retryable: true, admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" }, { status: 503, headers });`,
+      `  if (url.pathname === LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission) return Response.json({ admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" }, { status: 200, headers });`,
       `  if (url.pathname === LOCAL_MANAGEMENT_READ_PATHS.systemMemory) return Response.json({}, { status: 401, headers });`,
       `  return Response.json({}, { status: 404, headers });`,
       `} });`,

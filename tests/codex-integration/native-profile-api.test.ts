@@ -27,6 +27,23 @@ afterEach(() => {
 });
 
 describe("native main profile management API", () => {
+  test("admission reads only the startup gate and never reaches the profile manager", async () => {
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    // Every manager access throws: the route must not construct, sweep or read profiles.
+    const manager = new Proxy({}, { get: () => { throw new Error("admission must not touch the profile manager"); } }) as NativeProfileManager;
+    const request = new Request("http://localhost/api/native-main-profiles/admission");
+    try {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toEqual({ admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" });
+    } finally {
+      await fence.release();
+    }
+    const released = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const body = await released?.json() as Record<string, unknown>;
+    expect(Object.keys(body).every(key => key === "admissionStatus" || key === "admissionBlockReason")).toBe(true);
+  });
+
   test("profile doctor reports when native-main admission is fenced", async () => {
     const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
     const manager = { doctor: async () => ({ recoveryPending: false }) } as unknown as NativeProfileManager;

@@ -109,9 +109,10 @@ function isNativeMainAdmissionBlockReason(value: unknown): value is NativeMainAd
  * Read native-main admission from the running proxy, never this doctor process.
  *
  * A separate `ocx doctor` run has its own process-global gate, usually `ready`, while the
- * proxy answering native traffic can be fenced. The management doctor endpoint carries the
- * proxy’s own admissionStatus; the bound read stays on the existing short-lived, path-signed
- * capability rather than exposing the admin token to doctor.
+ * proxy answering native traffic can be fenced. The proxy's side-effect-free admission
+ * endpoint carries its own admissionStatus; the bound read stays on the existing short-lived,
+ * path-signed capability rather than exposing the admin token to doctor. An older proxy
+ * without that route answers 404, which is reported as unavailable.
  */
 export async function fetchNativeMainAdmission(
   target: LiveProxy,
@@ -119,20 +120,16 @@ export async function fetchNativeMainAdmission(
 ): Promise<NativeMainAdmissionReport> {
   const read = await fetchBoundLocalManagementRead(
     target,
-    LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor,
+    LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission,
     { timeoutMs: 4_000, ...deps, requireResponseProof: true },
   );
   if (read.kind !== "response") return { status: "unavailable", reason: read.reason };
   if (read.response.status === 401 || read.response.status === 403) return { status: "unavailable", reason: "unauthorized" };
-  // The endpoint attaches its admission fields to every NativeProfileError status (an
-  // owner-guard 503, a storage or home-change 409, ...). Read any authenticated error body;
-  // only one without admission fields is reported as an unavailable HTTP status.
-  const httpUnavailable = { status: "unavailable", reason: `http ${read.response.status}` } as const;
+  if (!read.response.ok) return { status: "unavailable", reason: `http ${read.response.status}` };
   let payload: unknown;
-  try { payload = await read.response.json(); } catch { return read.response.ok ? { status: "unavailable", reason: "malformed" } : httpUnavailable; }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return read.response.ok ? { status: "unavailable", reason: "malformed" } : httpUnavailable;
+  try { payload = await read.response.json(); } catch { return { status: "unavailable", reason: "malformed" }; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { status: "unavailable", reason: "malformed" };
   const row = payload as Record<string, unknown>;
-  if (!read.response.ok && row.admissionStatus === undefined) return httpUnavailable;
   if (row.admissionStatus !== "ready" && row.admissionStatus !== "blocked") return { status: "unavailable", reason: "malformed" };
   if (row.admissionStatus === "ready") return { status: "ready" };
   if (!isNativeMainAdmissionBlockReason(row.admissionBlockReason)) return { status: "unavailable", reason: "malformed" };

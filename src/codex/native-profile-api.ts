@@ -148,6 +148,12 @@ export async function handleNativeProfileAPI(
   deps: NativeProfileApiDeps = {},
 ): Promise<Response | null> {
   if (!url.pathname.startsWith("/api/native-main-profiles")) return null;
+  // Admission is read from this process's startup gate only. It constructs no manager and runs
+  // no doctor sweep, so the single-use local read capability `ocx doctor` holds can reach it
+  // without reaching staging cleanup, profile ids or filesystem paths.
+  if (url.pathname === "/api/native-main-profiles/admission" && req.method === "GET") {
+    return jsonResponse(admissionFields(), 200, req, config);
+  }
   try {
     const manager = deps.manager ?? new NativeProfileManager();
     if (url.pathname === "/api/native-main-profiles" && req.method === "GET") {
