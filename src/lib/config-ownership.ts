@@ -188,8 +188,11 @@ function readBoundedJsonSized(path: string, maxBytes: number): { value: unknown;
   if (!metadata.isFile() || metadata.isSymbolicLink()) {
     throw new Error("ownership metadata is not a regular file");
   }
+  // Size first, so an oversized file is refused before it is read; the read is rechecked for a
+  // file that grew in between.
+  if (metadata.size > maxBytes) throw new Error("ownership metadata is too large");
   const bytes = readFileSync(path);
-  if (metadata.size > maxBytes || bytes.length > maxBytes) throw new Error("ownership metadata is too large");
+  if (bytes.length > maxBytes) throw new Error("ownership metadata is too large");
   return { value: JSON.parse(bytes.toString("utf8")) as unknown, size: bytes.length };
 }
 
