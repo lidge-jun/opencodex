@@ -5,10 +5,20 @@ import { startClientRuntimeUnderOwnershipLease } from "../../src/cli/client-star
 import { recoverStartStateUnderOwnershipLease } from "../../src/cli/start-owner-fence";
 import { serviceChildOwnershipDecisionForClassifiedChild } from "../../src/service/service-child-ownership";
 import type { ServiceOwnershipResolution } from "../../src/service/state";
+import { clientRuntimeRecord } from "../../src/client/runtime";
+import { currentServingCommand } from "../../src/config/serving-runtimes";
 
 class StayOut extends Error {}
 
 describe("connected-client start ownership fence", () => {
+  test("published connected-client identity retains the current serving command", () => {
+    expect(clientRuntimeRecord(123, 12345).command).toEqual(currentServingCommand());
+  });
+  test("ordinary start publishes its serving command alongside the attestation secret", () => {
+    const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
+    const record = cli.slice(cli.indexOf("writeRuntime: bound =>"), cli.indexOf("stopBound: bound =>"));
+    expect(record).toContain("command: currentServingCommand()");
+  });
   test("a desktop claim committed at recovery lease acquisition skips sibling marking and journal reconciliation", async () => {
     let ownership: ServiceOwnershipResolution = { kind: "none", revision: 0 };
     expect(serviceChildOwnershipDecisionForClassifiedChild(true, () => ownership)).toEqual({ kind: "proceed" });

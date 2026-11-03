@@ -5,6 +5,7 @@ import { forgetMainAccountUsage, observeMainAccountUsage, type FreshWindow } fro
 import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
+import { withConfigDirHardeningSettled } from "../config/paths";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
 import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
@@ -42,6 +43,12 @@ let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
+/** The latest admitted snapshot write; settles even when admission times out. */
+let persistWrite: Promise<void> = Promise.resolve();
+/** Bumped by a full clear so a fired callback still waiting for ACL admission writes nothing. */
+let persistGeneration = 0;
+/** Test seam: wait for a fired persistence callback's admitted write. */
+export function settleQuotaPersistenceForTests(): Promise<void> { return persistWrite; }
 
 const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
 /**
@@ -800,7 +807,12 @@ function schedulePersistAccountQuotas(): void {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     persistStartedAt = null;
-    try {
+    // Admitted after an overlapping optional config-root ACL flight (#7815); the snapshot is
+    // taken inside the callback, and a timed-out admission skips this best-effort write.
+    const dir = getConfigDir();
+    const generation = persistGeneration;
+    persistWrite = withConfigDirHardeningSettled(dir, () => {
+      if (generation !== persistGeneration) return;
       const quotas: Record<string, StoredAccountQuota> = {};
       for (const [accountId, quota] of accountQuota.entries()) {
         quotas[accountId] = quota;
@@ -811,10 +823,10 @@ function schedulePersistAccountQuotas(): void {
         ...(mainPolicyQuota ? { mainPolicyQuota } : {}),
         history: quotaHistory.serialize(),
       };
-      atomicWriteFile(join(getConfigDir(), QUOTA_CACHE_FILENAME), `${JSON.stringify(body)}\n`);
-    } catch {
+      atomicWriteFile(join(dir, QUOTA_CACHE_FILENAME), `${JSON.stringify(body)}\n`);
+    }).catch(() => {
       // Best-effort persistence only.
-    }
+    });
   }, delay);
 }
 
@@ -890,6 +902,7 @@ export function clearAccountQuota(accountId?: string): void {
     persistTimer = null;
   }
   persistStartedAt = null;
+  persistGeneration += 1;
   try {
     const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
     if (existsSync(path)) unlinkSync(path);

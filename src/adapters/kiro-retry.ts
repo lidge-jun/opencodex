@@ -6,7 +6,7 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { parseRetryAfterMs } from "../combos";
 import {
-  SendBudgetExhaustedError,
+  SendBudgetExhaustedError, errorDestinationLabel,
   abortError,
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
@@ -184,7 +184,7 @@ async function fetchWithResetRecovery(
       });
       destinationRebased = false;
       if (decision && !decision.allowed) {
-        throw new SendBudgetExhaustedError(destination);
+        throw new SendBudgetExhaustedError(errorDestinationLabel(destination));
       }
       // Reported after admission and before dispatch, so a refused send is never counted and an
       // admitted one is counted exactly once whichever way the fetch below settles.
@@ -202,7 +202,7 @@ async function fetchWithResetRecovery(
         }, timeoutMs, ctx.abortSignal, ctx.stream, (async (input, init) => {
           try {
             const run = async (): Promise<Response> => {
-              if (permit && !permit.use()) throw new SendBudgetExhaustedError(destination);
+              if (permit && !permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(destination));
               notePhysicalSend(attempt > 0);
               return (executor.unpacedFetch ?? executor)(input, init);
             };

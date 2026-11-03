@@ -157,7 +157,11 @@ La section **OAuth reliability** indique si le stockage des identifiants est acc
 
 ## Synchronisation du catalogue
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+Sur un Home Remote Link, après la validation et l’enregistrement d’un catalogue à jour, `ocx sync` synchronise aussi les Enfants liés admissibles. `--local-only` désactive cette propagation. `--json` produit un seul document `ocx.sync.fanout/1` contenant le résultat du Home et l’état de chaque Enfant ; un Enfant ignoré indique la raison. Le code de sortie non nul du Home est renvoyé sans modification. Si le Home réussit, un Enfant en échec ou en délai dépassé, ou un registre de liens illisible, entraîne le code de sortie 6 ; sinon, la commande se termine avec le code 0, y compris lorsque des Enfants sont ignorés. En mode texte, le registre illisible produit un message sans chemin. Le code 7 est réservé à une mise à jour en cours. Si la synchronisation du Home lève une erreur en mode JSON, stdout conserve un seul document et stderr fournit un diagnostic assaini.
+
+La propagation ne demande jamais le redémarrage de l’application Codex ni d’un app-server sur un Enfant. Pour cela, utilisez GOAT ou exécutez `ocx sync --restart-codex` sur l’Enfant. La synchronisation épinglée de l’Enfant peut néanmoins redémarrer son propre runtime client OpenCodex après l’application de réglages Home modifiés. Si le Home interrompt son processus SSH local après un délai dépassé, une synchronisation distante déjà lancée peut continuer sur l’Enfant.
 
 > **Enfant Remote Link :** `ocx sync` applique aussi les réglages Codex du Home et, si le runtime client a démarré avant cette application, le redémarre même sans option de redémarrage. Si le redémarrage échoue, l'ancien runtime continue de servir et la commande se termine avec un code non nul. Les champs correspondants de `ocx status --json` et `ocx link status --json` sont décrits dans [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (en anglais).
 

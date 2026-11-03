@@ -1,3 +1,4 @@
+import { UNDECLARED_TOOL_CALL_MESSAGE, isProxyError, rememberProxyIncomplete, carryProxyIncompleteContext } from "../lib/client-error-body";
 import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
@@ -76,6 +77,7 @@ export function bridgeToResponsesSSE(
   heartbeatMs = 2_000,
   options?: MaxOutputCompletionOptions & {
     responseId?: string;
+    proxyErrorContext?: object;
     /** Trusted structural grouping only; never provider state or execution authority. */
     outputItemIds?: { next(kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call"): string };
 
@@ -165,6 +167,7 @@ export function bridgeToResponsesSSE(
     };
   },
 ): ReadableStream<Uint8Array> {
+  const proxyIncompleteContext = options?.proxyErrorContext ?? {};
   const replayCacheScope = options?.replayCacheScope;
   const maxOutputCompletion = createMaxOutputCompletion(options);
   const outputItemId = (kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call", prefix: string): string =>
@@ -1092,7 +1095,7 @@ export function bridgeToResponsesSSE(
                 const failure = responseError(
                   502,
                   "upstream_error",
-                  `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
+                  UNDECLARED_TOOL_CALL_MESSAGE,
                 );
                 emit("response.failed", {
                   response: {
@@ -1330,6 +1333,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "incomplete": {
+              if (isProxyError(event) && event.reason === "adapter_eof") rememberProxyIncomplete(proxyIncompleteContext, "adapter_eof");
               if (currentMsg) closeCurrentMessage();
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
@@ -1470,6 +1474,7 @@ export function bridgeToResponsesSSE(
         })) return;
         options?.onUsage?.(undefined);
         await awaitThoughtSignatureDurability();
+        rememberProxyIncomplete(proxyIncompleteContext, "adapter_eof");
         emit("response.incomplete", {
           response: {
             ...responseSnapshot("incomplete", finishedItems),
@@ -1526,6 +1531,7 @@ export function bridgeToResponsesSSE(
             // barrier is not awaited on the stall-timeout kill path. The in-memory store is
             // already updated; only a crash between here and the queued write loses it,
             // which is the pre-#1926 status quo for an already-abnormal termination.
+            rememberProxyIncomplete(proxyIncompleteContext, "upstream_stall_timeout");
             emit("response.incomplete", {
               response: {
                 ...responseSnapshot("incomplete", finishedItems),
@@ -1558,7 +1564,7 @@ export function bridgeToResponsesSSE(
         }, heartbeatMs);
       };
 
-  return new ReadableStream<Uint8Array>({
+  return carryProxyIncompleteContext(proxyIncompleteContext, new ReadableStream<Uint8Array>({
     start(streamController) {
       controller = streamController;
       startStream();
@@ -1577,5 +1583,5 @@ export function bridgeToResponsesSSE(
         releasePendingWebSources();
         disposeOwnedBudget();
       },
-    });
+    }));
   }

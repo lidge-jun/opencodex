@@ -1078,7 +1078,7 @@ describe("headless GUI parity CLI", () => {
         { role: "vague", model: null, status: "unsized", reason: "no JSON" },
       ],
     };
-    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true });
+    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true, batch: "suggest-batch" });
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     let output = "";
     try {
@@ -1094,7 +1094,7 @@ describe("headless GUI parity CLI", () => {
       { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: { model: "a/sizer" } },
       { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} },
       { path: "/api/codex-agent-roles/explorer", method: "PUT", body: { model: "a/small", effort: "low" } },
-      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid" } },
+      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid", batch: "suggest-batch" } },
     ]);
     expect(output).not.toMatch(/[\x07\x1b]/);
     expect(output).toContain("Use \\x1b]52;c;cG9pc29uZWQ=\\x07 carefully.");

@@ -19,7 +19,7 @@ test("transport rejects remote URLs and unsupported platforms without opening a 
 });
 
 test("importing the unactivated subsystem allocates no listener, timer, child or socket", async () => {
-  const modules = ["types", "budget", "socket", "rpc", "discovery", "envelope", "input", "send"].map(name => repoPath("src", "messaging", `${name}.ts`));
+  const modules = ["types", "budget", "socket", "rpc", "discovery", "envelope", "input", "send", "mcp-queue-rpc", "mcp-queue-tools", "mcp-queue-server"].map(name => repoPath("src", "messaging", `${name}.ts`));
   const script = `
     const forbidden = () => { throw new Error("unexpected messaging resource allocation"); };
     globalThis.setTimeout = forbidden;
@@ -35,7 +35,7 @@ test("importing the unactivated subsystem allocates no listener, timer, child or
 
 test("messaging activation is command-local, never on an ordinary proxy startup path", async () => {
   // Native parser inventory, not graph completeness: catches static/dynamic literal imports.
-  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts", "src/cli/message-remote-args.ts", "src/cli/message-remote-command.ts"]);
+  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts", "src/cli/message-remote-args.ts", "src/cli/message-remote-command.ts", "src/cli/message-mcp-command.ts"]);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   for await (const scanned of new Bun.Glob("src/**/*.{ts,mts}").scan({ cwd: repoPath() })) {
     const path = scanned.replaceAll("\\", "/"); // Bun.Glob yields native separators on Windows.

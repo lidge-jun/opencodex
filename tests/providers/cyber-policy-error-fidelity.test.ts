@@ -11,6 +11,7 @@ import {
   adapterFailureFromMessage,
   classifyError,
   CYBER_POLICY_ERROR_CODE,
+  CYBER_POLICY_FALLBACK_MESSAGE,
   httpStatusFromTerminalError,
 } from "../../src/lib/errors";
 import { formatPassthroughUpstreamError } from "../../src/server/responses/passthrough-error";
@@ -448,7 +449,7 @@ describe("cyber_policy error fidelity", () => {
     expect(errorFrame?.data.error).toMatchObject({
       code: CYBER_POLICY_ERROR_CODE,
       type: "invalid_request_error",
-      message: REDACTED_CYBER_MESSAGE,
+      message: CYBER_POLICY_FALLBACK_MESSAGE,
     });
     expect(JSON.stringify(errorFrame?.data)).not.toContain("cybersecret123456");
   });
