@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import ComboWorkspace from "../src/components/ComboWorkspace";
@@ -160,7 +160,7 @@ test("JEV target effort checkboxes persist an exact non-empty subset and reset f
 
   function Harness() {
     const [targets, setTargets] = useState(observed);
-    observed = targets;
+    useEffect(() => { observed = targets; }, [targets]);
     return (
       <LanguageProvider>
         <TargetEditor

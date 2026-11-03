@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { ColumnsMenu } from "../src/components/v2-logs/columns-menu";
 
@@ -20,7 +20,7 @@ async function withMenu(exercise: (ui: { container: HTMLElement; win: Window; vi
     document.body.append(container);
     function Harness() {
       const [visible, setVisible] = useState(current);
-      current = visible;
+      useEffect(() => { current = visible; }, [visible]);
       return (
         <ColumnsMenu<Key>
           options={[{ key: "effort", label: "Effort" }, { key: "cost", label: "Cost" }]}

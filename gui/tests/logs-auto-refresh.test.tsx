@@ -990,7 +990,7 @@ test("Logs: append, empty delta, mutation reset and legacy fallback keep the com
     await changeLogSelect(container, "Model", "gpt-test");
     step = 3;
     await advanceSilentRefresh();
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("gpt-test");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("gpt-test");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     step = 4;
     await advanceSilentRefresh();
@@ -998,7 +998,7 @@ test("Logs: append, empty delta, mutation reset and legacy fallback keep the com
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     expectTableLoaded(container, "gpt-mutated");
     expect(container.textContent).toContain("987");
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("");
     step = 5;
     await advanceSilentRefresh();
     expect(visibleRequestIds(container)).toEqual(["req-2"]);
@@ -1232,7 +1232,7 @@ test("Logs: switching apiBase clears the old proxy anchor for a legacy envelope"
     await changeLogSelect(container, "Time", "15m");
     expect(visibleRequestIds(container)).toEqual(["proxy-a"]);
     await renderLogsAt(root, "http://proxy-b");
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Time\"]'))).toBe("15m");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Time"]'))).toBe("15m");
     expect(visibleRequestIds(container)).toEqual(["legacy-fresh"]);
   } finally {
     try {
@@ -1297,8 +1297,8 @@ test("Logs: a late body from an aborted old apiBase cannot poison the new proxy 
     await act(async () => { container.querySelector<HTMLInputElement>(".logs-auto-refresh input")!.click(); });
     await advanceSilentRefresh();
     expect(urls.at(-1)).toContain("cursor=cursor-b");
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("gpt-test");
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Provider\"]'))).toBe("openai");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("gpt-test");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Provider"]'))).toBe("openai");
     monotonic += 30_000;
     await act(async () => { jest.advanceTimersByTime(30_000); });
     await flushMicrotasks();
@@ -1427,9 +1427,9 @@ test("Logs: a pending refresh reconciles the user's latest selection rather than
       ], "replaced", true));
     });
     await flushMicrotasks();
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("MODEL-B");
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Provider\"]'))).toBe("XAI");
-    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Status\"]'))).toBe("errors");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("MODEL-B");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Provider"]'))).toBe("XAI");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Status"]'))).toBe("errors");
     expect(visibleRequestIds(container)).toEqual(["current"]);
   } finally {
     await act(async () => { root.unmount(); });

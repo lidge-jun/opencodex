@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
@@ -97,7 +97,9 @@ test("an aborted Storage fetch must not clear loading while its replacement is i
 
   function Harness() {
     const [apiBase, setApiBase] = useState("http://old");
-    (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
+    useEffect(() => {
+      (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
+    }, []);
     return (
       <LanguageProvider>
         <Storage apiBase={apiBase} />

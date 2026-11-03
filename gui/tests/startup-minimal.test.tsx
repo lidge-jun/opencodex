@@ -79,7 +79,7 @@ beforeEach(() => {
         return response({ ok: true });
       }
       if (path === "/api/startup-health") return response(desktop ? {
-        ...health(desktopViable ? "protected" : "at-risk"), protection: desktopViable ? "desktop" : "none", serviceInstalled: false, serviceViable: false,
+        ...health(desktopViable ? "protected" : "at-risk"), protection: desktopViable ? "desktop" : "none", serviceViable: false,
         shimInstalled: brokenStarters, shimHealthy: false, serviceInstalled: brokenStarters, serviceStale: brokenStarters,
         ...(activationPending ? { shimActivationPending: true } : {}),
         diagnosticStale: staleReading,
