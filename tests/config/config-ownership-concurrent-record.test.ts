@@ -147,6 +147,20 @@ describe("serialized ownership manifest (#8093)", () => {
     expect(existsSync(dir)).toBe(false);
   }));
 
+  test.each([
+    ["a sidecar name alone", { "-journal": "user data" }],
+    ["a lock file holding data", { "": "user data" }],
+    ["an empty lock next to a sidecar holding data", { "": "", "-journal": "user data" }],
+    ["an empty sidecar without the lock file", { "-wal": "" }],
+  ] as const)("a home without metadata is refused untouched when it holds %s", (_label, files) => withHome(dir => {
+    mkdirSync(dir);
+    for (const [suffix, content] of Object.entries(files)) writeFileSync(join(dir, CONFIG_OWNERSHIP_LOCK + suffix), content);
+    expect(removeOwnedConfigState(dir).status).toBe("refused");
+    for (const [suffix, content] of Object.entries(files)) {
+      expect(readFileSync(join(dir, CONFIG_OWNERSHIP_LOCK + suffix), "utf8")).toBe(content);
+    }
+  })());
+
   test("a registration that cannot get the lock fails without writing", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");

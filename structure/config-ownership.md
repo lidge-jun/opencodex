@@ -76,9 +76,11 @@ file afterwards; see the last item below.)
   after deleting the owner marker leaves the tombstoned manifest, which still holds the owner id,
   the root and the exact snapshot: the rerun resumes from it and removes only the paths it lists. A
   name every new manifest starts with but this one omits is never removed. A home with an owner
-  marker and no manifest is refused untouched. A root holding only lock files (Windows keeps a file
-  another process holds open) is cleared once the lock can be taken; while it is held the rerun is
-  refused.
+  marker and no manifest is refused untouched. A root holding nothing but the empty lock file and
+  empty lock sidecars (Windows keeps a file another process holds open; the lock never writes data)
+  is cleared once the lock can be taken, and refused while it is held. Without ownership metadata,
+  any lock-named file that holds data, a sidecar without the lock file, or any other file makes the
+  home refused untouched.
 - Callers that create a file only after registering it skip that file on a refusal: the restart
   handoff log is not opened, and service log rotation registers its generations before every
   rotation, so a tombstone written while the service runs stops it. Any other failed registration

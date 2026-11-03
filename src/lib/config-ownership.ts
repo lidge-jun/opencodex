@@ -708,15 +708,18 @@ export function registerOwnedConfigPath(configDir: string, candidatePath: string
 
 /**
  * What a finished uninstall can leave when a lock file could not be unlinked (Windows keeps a file
- * another process holds open): nothing but this module's lock files.
+ * another process holds open): nothing but this module's lock files. Without ownership metadata
+ * nothing proves where such a name came from, so only files that hold no data qualify: the lock is
+ * a SQLite transaction that never writes, so its file and any sidecar stay empty. The main lock file
+ * must be among them, and each one is a single-link regular file. Anything else is refused untouched.
  */
 function onlyOwnershipLockFilesRemain(configDir: string): boolean {
   const names = readdirSync(configDir);
   const lockNames = new Set([CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
-  return names.length > 0 && names.every(name => {
+  return names.includes(CONFIG_OWNERSHIP_LOCK) && names.every(name => {
     if (!lockNames.has(name)) return false;
     const entry = lstatSync(join(configDir, name));
-    return entry.isFile() && !entry.isSymbolicLink();
+    return entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1 && entry.size === 0;
   });
 }
 
@@ -737,6 +740,8 @@ function removeIdleLockFiles(configDir: string): "removed" | "busy" {
     database.close();
     if (lockFileChanged(path, before)) return "busy";
   }
+  // Checked again under the idle lock: the files must still be empty leftovers when they are removed.
+  if (!onlyOwnershipLockFilesRemain(configDir)) return "busy";
   removeOwnershipLockFile(configDir);
   return "removed";
 }
