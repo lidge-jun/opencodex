@@ -26,6 +26,11 @@ function seedSubagents(cacheKey: string): CachedSubagents | null {
   return readSessionListCache<CachedSubagents>(cacheKey);
 }
 
+/** Scrolls the page to one of its sections, for the section index. */
+function jump(target: "featured" | "delegation" | "pin") {
+  document.getElementById(sectionAnchorId("subagents", target))?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 export default function Subagents({ apiBase }: { apiBase: string }) {
   const t = useT();
   const cacheKey = `ocx.subagents.v1:${apiBase}`;
@@ -359,9 +364,6 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const firstOption = delegation.available.find(option => option.namespaced === delegation.model);
   const firstModel = !delegation.model ? ""
     : firstOption ? formatNamespacedModelId(`${firstOption.provider}/${firstOption.model}`, t) : delegation.model;
-  const jump = (target: "featured" | "delegation" | "pin") => {
-    document.getElementById(sectionAnchorId("subagents", target))?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
 
   return (
     <>

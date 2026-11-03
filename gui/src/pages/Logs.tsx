@@ -457,6 +457,15 @@ function summarizeFilteredLogs(entries: LogEntry[]): {
   };
 }
 
+/** The Logs / Debug tab buttons: a raised plate on the selected one. */
+function tabClass(selected: boolean): string {
+  return cn(
+    "ui-v2 inline-flex h-7 cursor-pointer items-center rounded-[8px] px-3 text-[13px] font-medium transition-colors duration-200",
+    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
+    selected ? "bg-raised text-fg shadow-sm ring-1 ring-line dark:bg-surface-2" : "text-fg-subtle hover:text-fg-muted",
+  );
+}
+
 export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const resourceKey = logsCacheKey(apiBase);
@@ -698,12 +707,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const paddingBottom = virtualRows.length > 0
     ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
     : 0;
-
-  const tabClass = (selected: boolean) => cn(
-    "ui-v2 inline-flex h-7 cursor-pointer items-center rounded-[8px] px-3 text-[13px] font-medium transition-colors duration-200",
-    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
-    selected ? "bg-raised text-fg shadow-sm ring-1 ring-line dark:bg-surface-2" : "text-fg-subtle hover:text-fg-muted",
-  );
 
   return (
     <div className="logs-page flex min-w-0 flex-col gap-5 font-sans text-fg">

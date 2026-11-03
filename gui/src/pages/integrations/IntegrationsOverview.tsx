@@ -240,6 +240,17 @@ function OverviewCard({
   );
 }
 
+/*
+ * Apps that are not on this machine have nothing to switch on, so they fold away under
+ * one disclosure instead of filling the page with "Not installed" cards. An unread
+ * source (`unknown`) stays in the main grid: it may well be installed.
+ */
+function elsewhere(row: OverviewRow): boolean {
+  return row.state !== "unknown"
+    && (row.state === "not-installed" || !row.installed)
+    && !(row.toggleOn ?? row.applied);
+}
+
 export default function IntegrationsOverview({
   apiBase,
   active = true,
@@ -699,14 +710,6 @@ export default function IntegrationsOverview({
    *
    * Errors propagate so the dialog can show them while the user still has cancel.
    */
-  /*
-   * Apps that are not on this machine have nothing to switch on, so they fold away under
-   * one disclosure instead of filling the page with "Not installed" cards. An unread
-   * source (`unknown`) stays in the main grid: it may well be installed.
-   */
-  const elsewhere = (row: OverviewRow) => row.state !== "unknown"
-    && (row.state === "not-installed" || !row.installed)
-    && !(row.toggleOn ?? row.applied);
   const presentRows = rows.filter(row => !elsewhere(row));
   const elsewhereRows = rows.filter(elsewhere);
   const renderCard = (row: OverviewRow) => (

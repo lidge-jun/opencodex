@@ -29,6 +29,13 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** A labelled field of the new-session form. */
+function field(label: string, control: ReactNode) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1.5"><span className="text-[12px] leading-4 font-medium text-fg-muted">{label}</span>{control}</label>
+  );
+}
+
 export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: string; hubOrigin: string }) {
   const t = useT();
   const resource = useKeyedClientResource(
@@ -144,10 +151,6 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
     return <Banner tone="err" action={<Button variant="outline" size="sm" onClick={() => void resource.refresh()}>{t("common.retry")}</Button>}>{t("remote.loadFailed")}</Banner>;
   }
   if (state?.available === false) return <Banner tone="err">{t("remote.hubRequired")}</Banner>;
-
-  const field = (label: string, control: ReactNode) => (
-    <label className="flex min-w-0 flex-col gap-1.5"><span className="text-[12px] leading-4 font-medium text-fg-muted">{label}</span>{control}</label>
-  );
 
   return (
     <section className="remote-workspace-page flex min-w-0 flex-col gap-5 font-sans text-fg">

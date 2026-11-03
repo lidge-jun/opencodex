@@ -38,10 +38,9 @@ export function LinkSwitchRow({ on, onToggle, hint }: { on: boolean; onToggle: (
   );
 }
 
-/** Off state: what Remote Link is, in two machines and one line, under the switch. */
-export function LinkIntro({ onTurnOn }: { onTurnOn: () => void }) {
-  const t = useT();
-  const machine = (icon: ReactNode, title: string, hint: string) => (
+/** One machine of the Remote Link intro: its icon, role and a line on what it does. */
+function machine(icon: ReactNode, title: string, hint: string) {
+  return (
     <div className="flex min-w-0 flex-1 items-start gap-3 rounded-[10px] bg-surface px-3.5 py-3 ring-1 ring-line">
       <IconTile>{icon}</IconTile>
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -50,6 +49,11 @@ export function LinkIntro({ onTurnOn }: { onTurnOn: () => void }) {
       </div>
     </div>
   );
+}
+
+/** Off state: what Remote Link is, in two machines and one line, under the switch. */
+export function LinkIntro({ onTurnOn }: { onTurnOn: () => void }) {
+  const t = useT();
   return (
     <section className="remote-link-intro flex min-w-0 flex-col rounded-[12px] bg-surface p-1 ring-1 ring-line" aria-label={t("link.switch")}>
       <LinkSwitchRow on={false} onToggle={onTurnOn} hint={t("link.switchOffHint")} />
