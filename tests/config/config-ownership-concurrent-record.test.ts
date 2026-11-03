@@ -26,9 +26,15 @@ const childScript = (dir: string, rel: string, gate?: { ready: string; go: strin
   "const path = " + JSON.stringify(join(dir, rel)) + ";",
   gate ? "writeFileSync(path, \"child\"); writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
   gate ? "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(gate.go) + ") && Date.now() < until) Bun.sleepSync(5);" : "",
+  // A busy ownership lock fails fast; callers retry, and so does this child.
   "let code = 1;",
-  "try { code = recordOwnedConfigPath(" + JSON.stringify(dir) + ", path) ? 0 : 2; }",
-  "catch (error) { code = error instanceof ConfigUninstallInProgressError ? 3 : 1; if (code === 1) console.error(error); }",
+  "for (let attempt = 0; attempt < 400; attempt++) {",
+  "  try { code = recordOwnedConfigPath(" + JSON.stringify(dir) + ", path) ? 0 : 2; break; }",
+  "  catch (error) {",
+  "    if (error && error.code === \"CONFIG_OWNERSHIP_LOCK_UNAVAILABLE\") { Bun.sleepSync(5); continue; }",
+  "    code = error instanceof ConfigUninstallInProgressError ? 3 : 1; if (code === 1) console.error(error); break;",
+  "  }",
+  "}",
   "process.exit(code);",
 ].join("\n");
 const spawnChild = (dir: string, rel: string, gate?: { ready: string; go: string }) =>
@@ -145,7 +151,10 @@ describe("serialized ownership manifest (#8093)", () => {
     const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
     const release = holdLock(dir);
     try {
+      // SQLite's busy wait is off, so a held lock fails within the short bounded retry.
+      const started = Date.now();
       expect(() => recordOwnedConfigPath(dir, join(dir, "blocked"))).toThrow(ConfigOwnershipLockError);
+      expect(Date.now() - started).toBeLessThan(1_000);
     } finally { release(); }
     expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
     expect(recordOwnedConfigPath(dir, join(dir, "blocked"))).toBe(true);
@@ -352,4 +361,40 @@ describe("concurrent first registrations on an absent home (#8093)", () => {
     expect(await Promise.all(children.map(child => child.exited))).toEqual(names.map(() => 0));
     expect(manifest(dir).paths).toEqual(expect.arrayContaining(names));
   }), 60_000);
+});
+
+describe("rerun after the manifest was already deleted (#8093)", () => {
+  test("the rerun's own cleanup can recreate an initially owned file, and the rerun still finishes", withHome(async dir => {
+    const { removeOwnedConfigAfterDesktopCleanup } = await import("../../src/cli/uninstall-client-state");
+    const { withClientLifecycle } = await import("../../src/client/lifecycle-lock");
+    const { withConfigMutationLockSync } = await import("../../src/config/mutation-lock");
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    // An earlier uninstall stopped after deleting the manifest: the owner marker and lock remain.
+    removeTreeWithRetry(join(dir, CONFIG_UNINSTALL_MANIFEST));
+    const lockPath = join(dirname(dir), "runtime", "lifecycle.sqlite");
+    const result = await removeOwnedConfigAfterDesktopCleanup(
+      { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false },
+      {
+        readConnection: () => ({ kind: "disconnected" }),
+        inspectDesktop: () => ({ kind: "absent" }),
+        readReceipt: () => ({ kind: "absent" }),
+        disconnect: async () => undefined,
+        withLifecycle: work => withClientLifecycle(work, { lockPath }),
+        cleanupIntegrations: async () => ({ attempted: 0, changed: 0 }),
+        remove: () => removeOwnedConfigState(dir),
+        aclReapPending: () => false,
+        removePickerArtifacts: async () => { withConfigMutationLockSync(() => undefined, dir); return { ok: true }; },
+      } as never,
+    );
+    expect(result).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+  }));
+
+  test("without the owner marker, an initially owned name is not claimed", withHome(dir => {
+    mkdirSync(dir);
+    writeFileSync(join(dir, CONFIG_OWNERSHIP_LOCK), "");
+    writeFileSync(join(dir, "config.json"), "{}");
+    expect(removeOwnedConfigState(dir).status).toBe("refused");
+    expect(existsSync(join(dir, "config.json"))).toBe(true);
+  }));
 });

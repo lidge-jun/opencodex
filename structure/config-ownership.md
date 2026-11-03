@@ -17,7 +17,8 @@ because it records its own database through `recordOwnedConfigPath`.
   (#8093). A path the cache already lists returns after one `lstat` only while the manifest is still
   the file this process last saw under the lock; any other process's write, including a tombstone,
   sends it through the locked check.
-- A lock still busy after a two-second wait throws `ConfigOwnershipLockError`; nothing is written.
+- SQLite's own busy wait is off: a lock still held after a 50 ms bounded retry throws
+  `ConfigOwnershipLockError` and nothing is written, so a paused holder cannot stall the event loop.
 - A registration that would push the manifest past 1,024 paths, or past the 64 KiB metadata limit
   less room for the tombstone, records nothing and warns once, so the manifest always stays one
   uninstall accepts. Writers keep working, and uninstall reports such files as residual paths. A
@@ -50,7 +51,9 @@ then deletes the manifest and owner marker under the lock and removes the lock f
   order, so a root holding only the owner marker is always a stopped uninstall, never a home being
   created. If uninstall stops after deleting the manifest (a crash, or a lock
   file Windows keeps because another process holds it open), a rerun that finds only a valid owner
-  marker and lock files removes them and the root. Any other file next to them is still refused.
+  marker and lock files removes them and the root. With the owner marker present it also removes top-level
+  names every manifest starts with, which the rerun's own cleanup (the config mutation lock) can
+  recreate first. Any other file next to them is still refused.
 - Callers that create a file only after registering it skip that file on a refusal: the restart
   handoff log is not opened, and service log rotation registers its generations before every
   rotation, so a tombstone written while the service runs stops it.

@@ -25,7 +25,7 @@ export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
 export const CONFIG_OWNERSHIP_LOCK = ".opencodex-uninstall.lock";
 const OWNERSHIP_LOCK_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 /** The section under the lock is a few file operations; a longer wait means a stuck holder. */
-const OWNERSHIP_LOCK_WAIT_MS = 2_000;
+const OWNERSHIP_LOCK_WAIT_MS = 50;
 
 /** A registration found the uninstall tombstone and wrote nothing. */
 export class ConfigUninstallInProgressError extends Error {
@@ -395,7 +395,7 @@ function withOwnershipLock<T>(configDir: string, run: () => T): { value: T } | u
     let database: Database | undefined;
     try {
       database = new Database(path, { create: false, readwrite: true });
-      database.exec(`PRAGMA busy_timeout = ${OWNERSHIP_LOCK_WAIT_MS}; BEGIN IMMEDIATE`);
+      acquireImmediate(database);
     } catch (cause) {
       try { database?.close(); } catch { /* acquisition already failed */ }
       // A waiter whose lock file was unlinked by a finishing uninstall fails on the stale handle
@@ -427,6 +427,27 @@ function lockFileChanged(path: string, before: string): boolean {
   try { return fileIdentity(path) !== before; } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
     throw error;
+  }
+}
+
+/**
+ * `BEGIN IMMEDIATE` with SQLite's own busy wait off, retried only briefly. The section under the lock
+ * is a few file operations, so a cooperating holder releases within milliseconds; a holder that is
+ * paused or stuck makes this throw after {@link OWNERSHIP_LOCK_WAIT_MS} instead of stalling the
+ * event loop, and the caller reports the registration or uninstall as busy.
+ */
+function acquireImmediate(database: Database): void {
+  database.exec("PRAGMA busy_timeout = 0");
+  const deadline = Date.now() + OWNERSHIP_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      return;
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : "";
+      if (code !== "SQLITE_BUSY" || Date.now() >= deadline) throw error;
+      Bun.sleepSync(2);
+    }
   }
 }
 
@@ -475,7 +496,7 @@ export function initializeConfigOwnership(configDir: string): boolean {
 }
 
 /** How long a first registration waits for another process that is creating the same home. */
-const CONCURRENT_CREATION_WAIT_MS = 500;
+const CONCURRENT_CREATION_WAIT_MS = 100;
 
 /**
  * Load the ownership metadata, or create it in an empty root. Two processes can start on the same
@@ -556,13 +577,18 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
 function onlyOwnershipLeftoversRemain(configDir: string): boolean {
   if (existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))) return false;
   const names = readdirSync(configDir);
-  const allowed = new Set([CONFIG_OWNER_FILE, CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
-  if (names.length === 0 || !names.every(name => allowed.has(name))) return false;
+  const metadata = new Set([CONFIG_OWNER_FILE, CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
+  const hasOwner = names.includes(CONFIG_OWNER_FILE);
+  // With a valid owner marker, names every manifest starts with are this install's too: a rerun's
+  // own cleanup (the config mutation lock) can recreate one before the remover runs.
+  const initial = new Set<string>(hasOwner ? INITIAL_OWNED_PATHS : []);
+  if (names.length === 0 || !names.every(name => metadata.has(name) || initial.has(name))) return false;
   for (const name of names) {
+    if (!metadata.has(name)) continue;
     const entry = lstatSync(join(configDir, name));
     if (!entry.isFile() || entry.isSymbolicLink()) return false;
   }
-  if (!names.includes(CONFIG_OWNER_FILE)) return true;
+  if (!hasOwner) return true;
   try {
     const owner = readBoundedJson(join(configDir, CONFIG_OWNER_FILE));
     return isOwner(owner) && samePath(owner.root, canonicalRoot(configDir));
@@ -588,6 +614,10 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     // this module's own marker and lock files remain, so finish the removal.
     if (onlyOwnershipLeftoversRemain(configDir)) {
       try {
+        const rootPath = canonicalRoot(configDir);
+        for (const name of readdirSync(configDir)) {
+          if ((INITIAL_OWNED_PATHS as readonly string[]).includes(name)) removeOwnedEntry(rootPath, join(configDir, name));
+        }
         try { unlinkSync(join(configDir, CONFIG_OWNER_FILE)); } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
