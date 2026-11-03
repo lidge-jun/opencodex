@@ -7,6 +7,7 @@ import { resolvePolicyProfileId } from "../../routing/profile";
 import { parseSyntheticRowId } from "../fast-row";
 import { recallComboForLane } from "./combo-session-recall";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { isLocalCompactionCheckpoint } from "../../responses/compaction-history-framing";
 
 /** `sourceModel` is the conversation's own selector before the rewrite. */
 export interface CompactionRoutingOverride {
@@ -38,7 +39,7 @@ function configuredTriggers(value: unknown): readonly string[] | null {
 }
 
 export interface CompactionRoutingOverrideOptions {
-  /** `responses` requires a `compaction_trigger` input item; the native compact endpoint carries none. */
+  /** Responses accepts remote triggers or opted-in local checkpoints; compact carries neither. */
   endpoint?: "responses" | "compact";
   transport?: "websocket";
 }
@@ -66,8 +67,10 @@ export function applyCompactionRoutingOverride(
       ? source.startsWith(selector.slice(0, -1)) && source.length > selector.length - 1
       : source === selector)) return null;
   }
-  if (options.endpoint !== "compact"
-    && !(Array.isArray(raw.input) && raw.input.some(item => record(item)?.type === "compaction_trigger"))) return null;
+  const remoteTrigger = Array.isArray(raw.input) && raw.input.some(item => record(item)?.type === "compaction_trigger");
+  const localCheckpoint = options.endpoint !== "compact" && !remoteTrigger
+    && config.codexClientCompaction === true && isLocalCompactionCheckpoint(raw.input);
+  if (options.endpoint !== "compact" && !remoteTrigger && !localCheckpoint) return null;
 
   const metadata: unknown[] = [];
   const header = headers.get("x-codex-turn-metadata");
@@ -81,7 +84,9 @@ export function applyCompactionRoutingOverride(
     try {
       const parsed = record(JSON.parse(value));
       if (parsed?.request_kind !== "compaction") return null;
-      const carried = record(parsed.compaction)?.trigger;
+      const compaction = record(parsed.compaction);
+      if (localCheckpoint && compaction?.implementation !== "responses") return null;
+      const carried = compaction?.trigger;
       if (typeof carried !== "string" || !triggers.includes(carried)) return null;
       // Copies that name different triggers are not agreement, and picking either one would
       // let a caller widen an override by disagreeing with itself.

@@ -271,7 +271,7 @@ All registered integrations consume the shared catalog, including [Anthropic see
 | Cline | `modalities.input`, `supportsVision` |
 | Hermes | `supports_vision` (see below) |
 | OpenClaw | `input`, filtered to declared text/image/video/audio; omitted when none remain |
-| Kimi Code | `capabilities: ["image_in"]` only for declared image input; omitted for unknown/text-only models |
+| Kimi Code | `capabilities` gets `image_in` for declared image input and `thinking` when an effort ladder is exported; omitted when neither applies. A declared ladder becomes `support_efforts` limited to Kimi Code's `low`/`medium`/`high`/`xhigh`/`max` in that order (`ultra` and other values dropped), and a declared default in it becomes `default_effort`; an empty or unsupported ladder, or an explicit `supportsReasoning`/`supportsReasoningEffort: false`, emits no effort fields (#8095) |
 | MiniMax Code | No per-model image capability field emitted |
 | Raycast | `abilities.vision.supported` |
 
