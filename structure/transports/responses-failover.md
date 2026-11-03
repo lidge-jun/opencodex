@@ -278,8 +278,7 @@ Signed progress is not summary prose.
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
 `x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
-`/v1/responses` a `compaction_trigger` input item as well, so metadata alone cannot move an
-ordinary turn. Every supplied metadata copy must agree, both that the request is a compaction and
+`/v1/responses` a `compaction_trigger` input item. With `codexClientCompaction` enabled, the canonical local checkpoint prompt also matches when each metadata copy specifies `compaction.implementation: "responses"`; it keeps the normal text summary contract. Every supplied metadata copy must agree, both that the request is a compaction and
 on which trigger it carries; copies that name different triggers are rejected rather than reconciled.
 Malformed, absent, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
 only per-frame metadata; handshake headers can describe an earlier request.

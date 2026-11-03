@@ -21,6 +21,10 @@ function plainUserText(item: unknown): string | null {
   return texts.join("\n");
 }
 
+export function isLocalCompactionCheckpoint(input: unknown): boolean {
+  return Array.isArray(input) && plainUserText(input.at(-1))?.trim() === COMPACT_PROMPT;
+}
+
 function isContext(text: string): boolean {
   const head = text.trimStart();
   return head.startsWith("<") || head.startsWith("# AGENTS.md") || head.startsWith("# Context from my IDE");
@@ -44,7 +48,7 @@ export function frameCompactionHistory<T extends { input?: unknown; instructions
   if (!Array.isArray(input) || input.some(item => isRecord(item) && item.type === "compaction_trigger")) return body;
   // Codex local compaction appends this user prompt without a compaction_trigger.
   // Keep that summarizer turn free of generation-only continuation instructions.
-  if (plainUserText(input.at(-1))?.trim() === COMPACT_PROMPT) return body;
+  if (isLocalCompactionCheckpoint(input)) return body;
   let checkpointIndex = -1;
   for (let index = input.length - 1; index >= 0; index--) {
     if (isCheckpoint(input[index])) {

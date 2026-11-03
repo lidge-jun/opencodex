@@ -1,4 +1,4 @@
-import { nativeResponseFingerprint as injectionFingerprint, nativeResponseRecord as record } from "./native-response-json";
+import { nativeResponseFingerprint as injectionFingerprint, nativeResponseOutputIdentity as identity, nativeResponseRecord as record } from "./native-response-json";
 type Frame = Record<string, unknown>;
 
 /**
@@ -10,7 +10,6 @@ export function nativeResponseOutput(done: ReadonlyMap<number, Frame>, terminal:
   const observed = [...done.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
   if (terminal == null || (Array.isArray(terminal) && !terminal.length)) return observed;
   if (!Array.isArray(terminal) || terminal.some(item => !record(item))) throw new Error("Invalid native response output.");
-  const identity = (item: Frame) => typeof item.id === "string" ? `id:${item.id}` : `body:${injectionFingerprint(item)}`;
   const positions = new Map<string, number>();
   observed.forEach((item, index) => {
     const key = identity(item);

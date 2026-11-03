@@ -8,19 +8,28 @@ import { captureAntigravityModelObservation, recordAntigravityAccountRoster } fr
 import type { OcxProviderConfig } from "../../types";
 import { materializeCapturedHeaders, type CapturedModelsRequest } from "./gather-capture";
 
+/** True while the active account still holds the exact usable credential discovery sent. */
+export function antigravityActiveAccountCurrent(
+  name: string, accountId: string, accessToken: string | undefined, generation: string | undefined,
+): boolean {
+  const row = getAccountCredentialWithStatus(name, accountId);
+  return !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
+    && row.credential.access === accessToken && credentialGeneration(row.credential) === generation;
+}
+
 /** A sibling contributes only while the exact snapshot sent is still usable. */
 export async function discoverAntigravitySiblings(
   name: string, provider: OcxProviderConfig, activeAccountId: string,
   request: CapturedModelsRequest, maxBytes: number, maxModels: number,
-  root: string,
+  root: string, authorityCurrent: () => boolean,
 ): Promise<() => AntigravityAvailableModel[]> {
-  if (root !== getConfigDir()) return () => [];
+  if (root !== getConfigDir() || !authorityCurrent()) return () => [];
   const results: Array<{
     snapshot: OAuthAccessSnapshot; models: AntigravityAvailableModel[];
     observation: ReturnType<typeof captureAntigravityModelObservation>;
   }> = [];
   const current = (snapshot: OAuthAccessSnapshot): boolean => {
-    if (getConfigDir() !== root) return false;
+    if (getConfigDir() !== root || !authorityCurrent()) return false;
     const row = getAccountCredentialWithStatus(name, snapshot.accountId);
     return !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
       && credentialGeneration(row.credential) === snapshot.generation
@@ -30,8 +39,10 @@ export async function discoverAntigravitySiblings(
   for (const sibling of getAccountSet(name)?.accounts ?? []) {
     if (sibling.id === activeAccountId || sibling.paused || sibling.needsReauth) continue;
     try {
-      if (getConfigDir() !== root) break;
-      const snapshot = await getValidAccessSnapshotForAccount(name, sibling.id, { requireUsableAccount: true });
+      if (getConfigDir() !== root || !authorityCurrent()) break;
+      const snapshot = await getValidAccessSnapshotForAccount(name, sibling.id, {
+        requireUsableAccount: true, authorityCurrent: () => getConfigDir() === root && authorityCurrent(),
+      });
       const project = provider.project ?? snapshot.projectId;
       if (!project || !current(snapshot)) continue;
       const observation = captureAntigravityModelObservation();

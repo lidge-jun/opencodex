@@ -189,6 +189,9 @@ export function captureCodexPreImages(): CodexPreImages {
   };
 }
 
+/** The profile bytes one injection published, set just before it writes them. */
+export interface CodexProfilePublish { published?: string }
+
 /**
  * How many transactions of evidence the ledger keeps.
  *
@@ -366,10 +369,16 @@ export function recordCodexNativeTransactionProvenance(
  *
  * Every surface is attempted even after one fails: a second failure is worth
  * knowing about, and stopping early would leave more unrestored than necessary.
+ *
+ * `profilePublish`, when given, limits the profile surface to bytes this
+ * operation wrote: it is reverted only if `published` is set and the file still
+ * holds exactly those bytes. A refusal before the publish, or a profile another
+ * writer replaced since, is left as it is.
  */
 export function restoreCodexPreImages(
   pre: CodexPreImages,
   heldConfigWriteLock?: LockHandle,
+  profilePublish?: CodexProfilePublish,
 ): { complete: boolean; unrestored: readonly string[] } {
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, held => {
   const unrestored: string[] = [];
@@ -382,6 +391,8 @@ export function restoreCodexPreImages(
     // The current journal remains recovery authority until both artifacts are restored.
     if (name === "journal" && unrestored.length > 0) { unrestored.push(name); continue; }
     try {
+      if (name === "profile" && profilePublish
+        && (profilePublish.published === undefined || readOrNull(path) !== profilePublish.published)) continue;
       publishCodexArtifact(path, held, (destination, hooks) => {
         if (bytes === null) {
           hooks.validateBeforeRename?.(destination);
