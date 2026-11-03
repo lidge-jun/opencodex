@@ -1,3 +1,7 @@
+import type { UpstreamConditionEvidence } from "../lib/upstream-condition";
+import { ownedAnthropicErrorPayload } from "../lib/messages-error-body";
+import { markProxyError, hasProxyErrorMessage, hasProxyIncomplete } from "../lib/client-error-body";
+import { admitMessagesFailure, collectMessagesFailure, type MessagesFailureVerdictSink } from "./failure-verdict";
 import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "../responses/anthropic-progress";
 /**
  * Claude Code outbound: internal /v1/responses output -> Anthropic Messages API shapes.
@@ -427,6 +431,8 @@ export function responsesSseToAnthropicSse(
   model: string,
   opts: {
     pingIntervalMs?: number;
+    failureVerdictSink?: MessagesFailureVerdictSink;
+    proxyErrorContext?: object;
     translatorBudget: TranslatorBudget;
     /**
      * This proxy's count of the prompt it forwarded, published on `message_start` only when the
@@ -479,12 +485,13 @@ export function responsesSseToAnthropicSse(
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      const emit = (name: string, data: Rec) => {
+      const emit = (name: string, data: Rec, admissionData: Rec = data) => {
         const frame = encoder.encode(sseFrame(name, data));
-        const reservation = translatorBudget.reserveTransient(frame.byteLength, { kind: "live_transient" });
+        const admittedBytes = admissionData === data ? frame.byteLength : Buffer.byteLength(sseFrame(name, admissionData));
+        const reservation = translatorBudget.reserveTransient(admittedBytes, { kind: "live_transient" });
         controller.enqueue(frame);
         reservation.commitRetained();
-        queuedLiveFrameBytes.push(frame.byteLength);
+        queuedLiveFrameBytes.push(admittedBytes);
       };
       const ensureStarted = () => {
         if (started) return;
@@ -588,11 +595,20 @@ export function responsesSseToAnthropicSse(
       // (devlog/_plan/260716_claudecode_hardening/020). On win32 mid-stream socket
       // resets reach the reader catch (no failed-tail relay) and stay api_error —
       // same as today, deliberate residual.
-      const fail = (status: number, message: string, upstreamDerived = false, code?: string) => {
+      const fail = (status: number, message: string, upstreamDerived = false, code?: string, local = false, contract?: "stream_incomplete" | "transport_failed", evidence?: UpstreamConditionEvidence) => {
         // finish/fail sets terminated before closeOpenBlock. A closure-time
         // allocation failure must still emit one error, without retrying closure.
         if (terminated && (code !== "translation_buffer_limit" || terminalDelivered)) return;
         terminated = true;
+        const type = code === "translation_buffer_limit" ? "request_too_large"
+          : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
+        const legacy = anthropicErrorBody(status, message, type, code);
+        const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
+          overflow: code === "context_length_exceeded" && !isThroughputLimitText(message),
+          condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined, contract,
+          ...(local ? { localError: markProxyError({ message }) } : {}),
+        });
+        const admitted = () => admitMessagesFailure(opts.failureVerdictSink, payload, legacy);
         if (code === "translation_buffer_limit") {
           releaseThinkingBuffer(open);
           if (open?.callId) translatorBudget.closeCall(open.callId);
@@ -600,25 +616,22 @@ export function responsesSseToAnthropicSse(
           terminalDelivered = true;
           // No normal close frames are valid after overflow. Emit exactly one bounded
           // typed terminal without consulting the exhausted budget.
-          controller.enqueue(encoder.encode(sseFrame("error", anthropicErrorBody(
-            413,
-            message,
-            "request_too_large",
-            "translation_buffer_limit",
-          ))));
+          controller.enqueue(encoder.encode(sseFrame("error", payload)));
+          admitted();
           return;
         }
-        const type = upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : undefined;
         if (!started) {
           // An initial upstream failure is an Anthropic error stream, not a partial message.
           // Do not manufacture message_start before the terminal error. Earlier transport-only
           // pings remain valid and do not turn the failure into a partial message.
-          emit("error", anthropicErrorBody(status, message, type, code));
+          emit("error", payload, legacy);
+          admitted();
           terminalDelivered = true;
           return;
         }
         closeOpenBlock();
-        emit("error", anthropicErrorBody(status, message, type, code));
+        emit("error", payload, legacy);
+        admitted();
         terminalDelivered = true;
       };
 
@@ -866,7 +879,7 @@ export function responsesSseToAnthropicSse(
           case "response.completed": {
             const response = isRec(data.response) ? data.response : {};
             if (response.end_turn === false && !sawToolUse) {
-              fail(529, "upstream turn ended without a final answer", true);
+              fail(529, "upstream turn ended without a final answer", true, undefined, true);
               break;
             }
             finish(sawToolUse ? "tool_use" : "end_turn", response.usage);
@@ -877,7 +890,7 @@ export function responsesSseToAnthropicSse(
             const details = isRec(response.incomplete_details) ? response.incomplete_details : {};
             const outcome = anthropicIncompleteOutcome(details.reason, details.message);
             if ("stopReason" in outcome) finish(outcome.stopReason, response.usage);
-            else fail(529, outcome.failMessage, true);
+            else fail(529, outcome.failMessage, true, undefined, hasProxyIncomplete(opts.proxyErrorContext ?? upstream, details.reason, details.message), "stream_incomplete");
             break;
           }
           case "response.failed": {
@@ -900,6 +913,8 @@ export function responsesSseToAnthropicSse(
               message,
               !deterministic,
               deterministic ? code : isContextOverflowError(error, message) ? "context_length_exceeded" : undefined,
+              hasProxyErrorMessage(opts.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code }),
+              undefined, { status, message, type: typeof error.type === "string" ? error.type : undefined, code },
             );
             break;
           }
@@ -1023,12 +1038,12 @@ export function responsesSseToAnthropicSse(
           // gateways that close such streams politely hand Claude Code an empty/partial
           // turn with no retryable error — CLIProxyAPI#2189 failure pattern). Fail closed
           // with a mid-stream Anthropic error event so the client can retry.
-          if (!cancelled) fail(502, "upstream stream ended before a terminal frame (truncated response)", true);
+          if (!cancelled) fail(502, "upstream stream ended before a terminal frame (truncated response)", true, undefined, true);
         } catch (err) {
           if (isTranslatorBudgetExceededError(err)) {
             try { await reader.cancel(err); } catch { /* already closed */ }
-            fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");
-          } else fail(500, err instanceof Error ? err.message : String(err));
+            fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit", true);
+          } else fail(500, err instanceof Error ? err.message : String(err), false, undefined, false, "transport_failed");
         } finally {
           releaseThinkingBuffer(open);
           translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
@@ -1136,10 +1151,10 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
     const message = typeof details.message === "string" && details.message.trim()
       ? details.message
       : `upstream response was incomplete${typeof details.reason === "string" ? ` (${details.reason})` : ""}`;
-    return anthropicErrorBody(529, message, "overloaded_error");
+    return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529, message }, contract: "stream_incomplete" });
   }
   if (body.status === "completed" && body.end_turn === false && !sawToolUse) {
-    return anthropicErrorBody(529, "upstream turn ended without a final answer", "overloaded_error");
+    return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529 }, localError: markProxyError({ message: "upstream turn ended without a final answer" }) });
   }
   const stopReason = body.status === "incomplete" && details.reason === "max_output_tokens"
     ? "max_tokens"
@@ -1169,6 +1184,7 @@ export async function collectAnthropicMessage(
   stream: ReadableStream<Uint8Array>,
   model: string,
   translatorBudget: TranslatorBudget,
+  failureVerdictSink?: MessagesFailureVerdictSink,
 ): Promise<Rec> {
   const decoder = new TextDecoder();
   const reader = stream.getReader();
@@ -1230,6 +1246,7 @@ export async function collectAnthropicMessage(
         break;
       }
       case "error":
+        collectMessagesFailure(failureVerdictSink, data);
         error = data;
         break;
       default:

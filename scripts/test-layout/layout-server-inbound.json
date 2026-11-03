@@ -11,5 +11,9 @@
   "server-ollama-inbound-lifecycle.test.ts": "server",
   "server-ollama-inbound-errors.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server",
-  "responses-ollama-codec.test.ts": "responses"
+  "responses-ollama-codec.test.ts": "responses",
+  "messages-error-normalization.test.ts": "claude-integration",
+  "messages-header-normalization.test.ts": "claude-integration",
+  "messages-lane-errors.test.ts": "claude-integration",
+  "messages-error-contracts.test.ts": "claude-integration"
 }

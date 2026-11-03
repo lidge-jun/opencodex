@@ -1,3 +1,7 @@
+import type { UpstreamConditionEvidence } from "../../lib/upstream-condition";
+import { ownedAnthropicErrorPayload } from "../../lib/messages-error-body";
+import { markProxyError, isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
+import { admitMessagesFailure, type MessagesFailureVerdictSink } from "../../claude/failure-verdict";
 /**
  * AdapterEvent -> Anthropic Messages, without the internal Responses SSE (PF-09).
  *
@@ -21,6 +25,9 @@ import { encodeReasoningEnvelope } from "../../responses/reasoning-envelope";
 import { responsesUsage, webSearchAction } from "../../bridge/internal";
 import {
   anthropicErrorBody,
+  anthropicErrorType,
+  isContextOverflowError,
+  isThroughputLimitText,
   anthropicErrorResponse,
   anthropicFailedStatus,
   anthropicIncompleteOutcome,
@@ -35,6 +42,7 @@ import {
 } from "../../claude/outbound";
 import {
   encodeAdapterEventStream,
+  isEncoderTransportFailure,
   type AdapterEventEncodeOptions,
   type ClientFrameSink,
   type ClientWireWriter,
@@ -51,6 +59,8 @@ export interface AnthropicMessageEncodeOptions extends AdapterEventEncodeOptions
   model: string;
   /** This proxy's prompt estimate for `message_start` when no usage arrived first (#4857). */
   inputTokenFloor?: number;
+  failureVerdictSink?: MessagesFailureVerdictSink;
+  proxyErrorContext?: object;
 }
 
 interface OpenBlock {
@@ -84,6 +94,7 @@ function createAnthropicMessageWriter(
   sink: ClientFrameSink,
   model: string,
   inputTokenFloor: number | undefined,
+  options: AnthropicMessageEncodeOptions,
 ): ClientWireWriter {
   const budget = sink.budget;
   let started = false;
@@ -184,22 +195,30 @@ function createAnthropicMessageWriter(
     terminalDelivered = true;
   };
   // Transient upstream statuses become overloaded_error so Anthropic SDK clients back off.
-  const fail = (status: number, message: string, upstreamDerived = false, code?: string) => {
+  const fail = (status: number, message: string, upstreamDerived = false, code?: string, local = false, contract?: "stream_incomplete" | "transport_failed", overflow = false, evidence?: UpstreamConditionEvidence) => {
     if (terminated && (code !== "translation_buffer_limit" || terminalDelivered)) return;
     terminated = true;
+    const type = code === "translation_buffer_limit" ? "request_too_large"
+      : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
+    const legacy = anthropicErrorBody(status, message, type, code);
+    const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message }, contract,
+      overflow: (overflow || code === "context_length_exceeded") && !isThroughputLimitText(message),
+          condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined,
+      ...(local ? { localError: markProxyError({ message }) } : {}),
+    });
+    const admitted = () => admitMessagesFailure(options.failureVerdictSink, payload, legacy);
     if (code === "translation_buffer_limit") {
       releaseThinkingBuffer(open);
       if (open?.callId) budget.closeCall(open.callId);
       open = null;
       terminalDelivered = true;
       // No normal close frames are valid after overflow: one bounded typed terminal.
-      sink.emitBounded(sseFrame("error", anthropicErrorBody(413, message, "request_too_large", "translation_buffer_limit")));
+      sink.emitBounded(sseFrame("error", payload), admitted);
       return;
     }
-    const type = upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : undefined;
     // An initial failure is an error stream, not a partial message: no message_start first.
     if (started) closeOpenBlock();
-    emit("error", anthropicErrorBody(status, message, type, code), { terminal: true });
+    sink.emit(sseFrame("error", payload), { terminal: true }, admitted, sseFrame("error", legacy));
     terminalDelivered = true;
   };
 
@@ -370,7 +389,7 @@ function createAnthropicMessageWriter(
     terminal(terminal) {
       if (terminal.status === "completed") {
         if (terminal.endTurn === false && !sawToolUse) {
-          fail(529, "upstream turn ended without a final answer", true);
+          fail(529, "upstream turn ended without a final answer", true, undefined, true);
           return;
         }
         finish(sawToolUse ? "tool_use" : "end_turn", responsesUsage(terminal.usage));
@@ -379,21 +398,23 @@ function createAnthropicMessageWriter(
       if (terminal.status === "incomplete") {
         const outcome = anthropicIncompleteOutcome(terminal.incomplete?.reason, terminal.incomplete?.message);
         if ("stopReason" in outcome) finish(outcome.stopReason, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
-        else fail(529, outcome.failMessage, true);
+        else fail(529, outcome.failMessage, true, undefined, isProxyError(terminal), "stream_incomplete");
         return;
       }
       const error = (terminal.error ?? {}) as unknown as Rec;
       if (error.code === "translation_buffer_limit") {
-        fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");
+        fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit", true);
         return;
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
       const deterministic = error.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
       fail(anthropicFailedStatus(error, message), message, !deterministic,
-        deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined);
+        deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined,
+        hasProxyErrorMessage(options.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), isEncoderTransportFailure(terminal) ? "transport_failed" : undefined, isContextOverflowError(error, message),
+        { status: anthropicFailedStatus(error, message), message, type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined });
     },
     overflow() {
-      fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");
+      fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit", true);
     },
     dispose() {
       releaseThinkingBuffer(open);
@@ -409,7 +430,7 @@ export function encodeAnthropicMessageSse(
 ): ReadableStream<Uint8Array> {
   return encodeAdapterEventStream(
     events,
-    sink => createAnthropicMessageWriter(sink, options.model, options.inputTokenFloor),
+    sink => createAnthropicMessageWriter(sink, options.model, options.inputTokenFloor, options),
     { ...options, get localUpstream() { return options.localUpstream; }, keepaliveMs: MESSAGES_KEEPALIVE_MS },
   );
 }
@@ -423,29 +444,39 @@ export async function collectAnthropicMessageResponse(
   stream: ReadableStream<Uint8Array>,
   model: string,
   translatorBudget: TranslatorBudget,
+  failureVerdictSink?: MessagesFailureVerdictSink,
 ): Promise<Response> {
   let message: Rec;
+  const collectorVerdictSink: MessagesFailureVerdictSink = failureVerdictSink ?? {};
   try {
-    message = await collectAnthropicMessage(stream, model, translatorBudget);
+    message = await collectAnthropicMessage(stream, model, translatorBudget, collectorVerdictSink);
   } catch (error) {
     if (isTranslatorBudgetExceededError(error)) {
-      return anthropicErrorResponse(413, error.message, "request_too_large", error.code);
+      return anthropicErrorResponse(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
     }
-    return anthropicErrorResponse(502, error instanceof Error ? error.message : String(error), "api_error");
+    return anthropicErrorResponse(502, "The proxy could not reach or read the provider.", "api_error");
   }
-  const isError = message.type === "error";
-  const translatedError = isError && typeof message.error === "object"
-    ? (message as { error: { code?: unknown; message?: unknown } }).error
+  const legacy = collectorVerdictSink.collected ?? message;
+  const isError = legacy.type === "error";
+  const translatedError = isError && typeof legacy.error === "object"
+    ? (legacy as { error: { code?: unknown; message?: unknown } }).error
     : undefined;
   if (translatedError?.code === "translation_buffer_limit") {
     return anthropicErrorResponse(
       413,
-      typeof translatedError.message === "string"
-        ? translatedError.message
-        : "upstream translation buffer exceeded the safe limit",
+      "upstream translation buffer exceeded the safe limit",
       "request_too_large",
       "translation_buffer_limit",
     );
+  }
+  const status = isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200;
+  if (collectorVerdictSink.collected && !collectorVerdictSink.collectedProjection) {
+    const error = (message.error ?? {}) as Rec;
+    message = ownedAnthropicErrorPayload({ status, type: typeof error.type === "string" ? error.type : undefined,
+      code: typeof error.code === "string" ? error.code : undefined,
+      evidence: { status, message: typeof error.message === "string" ? error.message : undefined },
+      overflow: error.code === "context_length_exceeded",
+    });
   }
   return new Response(JSON.stringify(message), {
     status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
@@ -458,9 +489,11 @@ export function foldAnthropicMessage(
   events: AsyncIterable<AdapterEvent>,
   options: AnthropicMessageEncodeOptions,
 ): Promise<Response> {
+  const failureVerdictSink: MessagesFailureVerdictSink = options.failureVerdictSink ?? {};
   return collectAnthropicMessageResponse(
-    encodeAnthropicMessageSse(events, options),
+    encodeAnthropicMessageSse(events, { ...options, failureVerdictSink }),
     options.model,
     options.translatorBudget,
+    failureVerdictSink,
   );
 }

@@ -156,8 +156,7 @@ retry scheduling keep reading the parsed evidence through `resolveClientRetryAft
 translated upstream-derived failures, converters and direct encoders emit
 fresh envelopes with a fixed proxy message, a closed type and code, and `param: null`.
 The local `chatCompletionsErrorBody` API retains its message semantics for identified local callers.
-Messages and Responses formatting retain their existing contracts; the Anthropic tables and
-`CLAUDE_CONTEXT_OVERFLOW_MESSAGE` are exported for reuse and are not connected to those surfaces.
+Messages body normalization follows the separate contract below; Responses formatting retains its existing contract.
 
 `ownedChatErrorPayload` selects literal messages through `classifyUpstreamCondition` and closed
 exact-message/token tables; it never copies the evidence text. Unknown types use the status type (authentication, permission, rate limit, server, or
@@ -326,3 +325,45 @@ terminal objects retain their prior decisions. Tests cover these boundaries in
 | OpenAI codes | `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `invalid_request_error`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable` |
 | Anthropic types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error` |
 | Anthropic codes | The union of Anthropic types and OpenAI codes above. |
+
+## Messages error bodies and headers
+
+`src/lib/messages-error-body.ts` builds fresh Anthropic error envelopes from the shared literal tables
+in `src/lib/client-error-body.ts`. Buffered native errors, caller-forward Messages/count_tokens errors,
+translated replies, the Responses converter and the direct encoder use fixed condition or contract text.
+The writers are `src/server/claude-messages.ts`, `src/server/messages-native.ts`,
+`src/claude/outbound.ts` and `src/protocols/encoders/messages.ts`.
+Only object identity or producer registration retains local wording. Ingress constructors mark fixed
+sentences individually; rejected roles and tool-block prefixes use fixed placeholders. Original client
+model selectors use the brand in `src/lib/error-destination.ts`; configured destination strings do not
+supply client error text. Local pre-handler, admission and thread-refusal envelope shapes stay intact.
+
+Status, retry, overflow, rotation, quota and logging decisions run on original evidence. Overflow uses
+`CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after the lane's overflow-versus-throughput decision. The type chosen
+by that writer survives collection independently of the final HTTP status: a converted rate-limit
+error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
+records into the collector without serializing them; publication follows successful frame admission.
+The direct sink in `src/protocols/encoders/adapter-events.ts` acknowledges successful enqueue through an
+optional callback. Failure admission charges the legacy frame size, keeping buffer-limit decisions
+independent of replacement-message length. Request logging and combo evidence retain original records separately.
+
+The native streaming relay, tool-guard frames, shared-tap tails and native overflow SSE rewrite retain
+their existing byte behavior. The converter and direct encoder own their separate terminal writers.
+`tests/claude-integration/messages-error-normalization.test.ts` and
+`tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.
+
+`src/server/anthropic-rate-limit-headers.ts` renders an exact-name union: requests, tokens, input-tokens
+and output-tokens each have limit/remaining/reset, plus unified status/reset and 5h/7d/7d_oi window
+status/reset/utilization. Counts are integers in 0..10^12. Documented resets validate Gregorian RFC 3339
+calendar components and offsets, then render UTC whole seconds. Unified resets accept strict decimal
+seconds through 253402300799, at most six input fractional digits and three output digits. Decimal
+utilization stays on its original scale (0.62 remains 0.62), bounded to 0..100 with four output digits.
+Rounding cannot exceed the maximum. Only the closed status values `allowed` and `rejected` survive;
+other values, including `allowed_warning`, and unknown names are dropped. Raw quota consumers read the
+unchanged upstream headers. `tests/claude-integration/messages-header-normalization.test.ts` checks all
+retained names, bounds, date conversion and the forwarded statusLine fixture contract.
+
+`src/server/messages-response-headers.ts` omits upstream request IDs. The Messages ledger wrapper in
+`src/server/index/startup-warnings.ts` retains proxy-generated request-id/x-opencodex-request-id and
+removes the upstream diagnostic header and its existing CORS exposure token. count_tokens gains no
+ledger ID. Retry-After continues to use the shared formatter, including zero and existing fallbacks.

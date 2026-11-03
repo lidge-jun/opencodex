@@ -992,7 +992,7 @@ export async function prepareResponsesTransport(
     try {
       if (anthropicInstance !== undefined && anthropicRouting!.isAnthropicAccountPoolEnabled(config)) {
         const routeResult = resolveAnthropicModelRouteForInstance(anthropicInstance, config, route.modelId);
-        if (routeResult.error) return markProxyError(formatErrorResponse(400, "invalid_request_error", `Invalid Anthropic model routes: ${routeResult.error}`));
+        if (routeResult.error) return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid Anthropic model routes"));
         anthropicRouteDecision = routeResult.decision;
         const selection = anthropicRouting!.resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision, route.modelId);
         if (!selection.accountId) {

@@ -89,14 +89,19 @@ export interface EncodedTerminal {
   durable: boolean;
 }
 
+const encoderTransportFailures = new WeakSet<object>();
+export function isEncoderTransportFailure(terminal: EncodedTerminal): boolean {
+  return encoderTransportFailures.has(terminal);
+}
+
 /** Frame output owned by the driver: budget reservation, delivery release and relay counts. */
 export interface ClientFrameSink {
   readonly budget: TranslatorBudget;
-  emit(text: string, observation?: RelayedEventObservation): void;
+  emit(text: string, observation?: RelayedEventObservation, onAdmitted?: () => void, admissionText?: string): void;
   /** Admit every frame before exposing any of them. */
   emitBatch(frames: { text: string; observation?: RelayedEventObservation }[]): void;
   /** A fixed, bounded frame that must reach the client even when the budget is exhausted. */
-  emitBounded(text: string): void;
+  emitBounded(text: string, onAdmitted?: () => void): void;
   /** A transport keepalive; it counts as neither wire activity nor a relayed event. */
   emitKeepalive(text: string): void;
   desiredSize(): number;
@@ -203,10 +208,11 @@ export function encodeAdapterEventStream(
   const relayed = (observation?: RelayedEventObservation) => {
     try { hooks.onRelayed?.(observation ?? {}); } catch { /* counters never break the stream */ }
   };
-  const enqueueCharged = (text: string, observation?: RelayedEventObservation, activity = true): void => {
+  const enqueueCharged = (text: string, observation?: RelayedEventObservation, activity = true, onAdmitted?: () => void, admissionText: string = text): void => {
     if (closed) return;
     const frame = textEncoder.encode(text);
-    const reservation = budget.reserveTransient(frame.byteLength, { kind: "live_transient" });
+    const admittedBytes = admissionText === text ? frame.byteLength : Buffer.byteLength(admissionText);
+    const reservation = budget.reserveTransient(admittedBytes, { kind: "live_transient" });
     try {
       controller.enqueue(frame);
     } catch {
@@ -215,16 +221,17 @@ export function encodeAdapterEventStream(
       return;
     }
     reservation.commitRetained();
-    queuedFrameBytes.push(frame.byteLength);
+    queuedFrameBytes.push(admittedBytes);
     emittedFrames++;
     if (activity) wireActivity = true;
     // A keepalive is transport liveness, not a relayed event: the bridge enqueues its heartbeat
     // outside the relay counter, and the converters' keepalives never reach it either.
     if (activity) relayed(observation);
+    onAdmitted?.();
   };
   const sink: ClientFrameSink = {
     budget,
-    emit: (text, observation) => enqueueCharged(text, observation),
+    emit: (text, observation, onAdmitted, admissionText) => enqueueCharged(text, observation, true, onAdmitted, admissionText),
     emitBatch: frames => {
       if (closed) return;
       const staged: { frame: Uint8Array; reservation: ReturnType<TranslatorBudget["reserveTransient"]>; observation?: RelayedEventObservation }[] = [];
@@ -253,12 +260,13 @@ export function encodeAdapterEventStream(
       }
       wireActivity = true;
     },
-    emitBounded: text => {
+    emitBounded: (text, onAdmitted) => {
       if (closed) return;
       try {
         controller.enqueue(textEncoder.encode(text));
         emittedFrames++;
         relayed({ terminal: true });
+        onAdmitted?.();
       } catch {
         closed = true;
       }
@@ -823,6 +831,7 @@ export function encodeAdapterEventStream(
           reportUsage: false,
           durable: false,
         };
+        encoderTransportFailures.add(terminal);
         try {
           if (!await deliverTerminalGuarded(terminal)) return;
         } catch { /* a failing hook on the failure path must not throw into the pull */ }

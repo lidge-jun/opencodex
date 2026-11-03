@@ -64,10 +64,11 @@ actual model served. This is especially useful for external classifiers requesti
 
 ## Claude OAuth account pool (experimental)
 
-Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
-response headers on streaming, JSON and upstream-error responses, so compatible Claude Code
-statusLine consumers can read the provider's quota observations. Missing observations are
-not filled with invented values. This relay does not change account selection or retry behavior.
+Native Anthropic subscription passthrough retains recognized, valid `anthropic-ratelimit-*`
+observations with normalized values on streaming, JSON and upstream-error responses.
+Unrecognized names and invalid values are omitted; missing observations are not filled in.
+Tests check the forwarded-header contract used by Claude Code statusLine consumers, including
+fractional utilization and reset times. Account selection and retry behavior are unchanged.
 
 Usage reads support Ultra (formerly Max 20x). Pro, Max 5x and Team retain their measured
 five-hour and weekly meters whichever one is currently binding. An Ultra null five-hour limit

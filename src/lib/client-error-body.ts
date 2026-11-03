@@ -23,8 +23,8 @@ function literalMap<const T extends readonly string[]>(values: T): ReadonlyMap<s
 }
 export const OPENAI_ERROR_TYPES = literalMap(openaiTypes);
 export const OPENAI_ERROR_CODES = literalMap(openaiCodes);
-export const ANTHROPIC_ERROR_TYPES = literalMap(["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "request_too_large", "rate_limit_error", "api_error", "overloaded_error", "billing_error", "timeout_error", "conflict_error"] as const);
-export const ANTHROPIC_ERROR_CODES = literalMap([...ANTHROPIC_ERROR_TYPES.values(), ...openaiCodes] as const);
+export const ANTHROPIC_ERROR_TYPES = literalMap(["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "request_too_large", "rate_limit_error", "api_error", "overloaded_error", "billing_error", "timeout_error", "conflict_error", "send_budget_exhausted"] as const);
+export const ANTHROPIC_ERROR_CODES = literalMap([...ANTHROPIC_ERROR_TYPES.values(), ...openaiCodes, "desktop_model_mapping_unavailable", "thread_unsupported_request"] as const);
 export const CLAUDE_CONTEXT_OVERFLOW_MESSAGE = "prompt is too long: The request exceeds the model's context window.";
 export const CLIENT_ERROR_CONTRACTS = {
   context_overflow: "The request exceeds the model's context window.",
@@ -67,6 +67,9 @@ const CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["upstream_reset_replay_refused", CLIENT_ERROR_CONTRACTS.replay_refused],
   ...["cyber_policy", "invalid_prompt", "misalignment_policy_violation", "bio_policy", "model_not_in_plan", "translation_buffer_limit", "invalid_refusal", "undeclared_tool_call", "required_tool_contract_unsatisfied"].map(code => [code, CLIENT_ERROR_CONTRACTS[code as ClientErrorContract]] as const),
 ]);
+export function clientErrorCodeMessage(code: string | undefined): string | undefined {
+  return CODE_MESSAGES.get(code ?? "");
+}
 /** Local guidance is selected only by a closed reason supplied by the owning proxy call site. */
 export const LOCAL_CHAT_ERROR_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["credentials_paused", "The configured credentials are paused. Resume an account or key in account settings before retrying."],
