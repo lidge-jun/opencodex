@@ -149,6 +149,8 @@ export function beginConfigOwnershipTeardown(): () => void {
     if (released) return;
     released = true;
     teardownDepth -= 1;
+    // Nothing this scope observed may let a later call skip the tombstone check.
+    lockedManifestIdentity.clear();
   };
 }
 
@@ -506,7 +508,11 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     return false;
   }
   ownershipCache.set(cacheKey, locked.value.ownership);
-  if (locked.value.identity === undefined) lockedManifestIdentity.delete(cacheKey);
+  // A tombstoned manifest is never remembered for the fast path: only the teardown scope may
+  // register under it, and once that scope ends every call must see the tombstone again.
+  if (locked.value.identity === undefined || locked.value.ownership.manifest.uninstallStartedAt !== undefined) {
+    lockedManifestIdentity.delete(cacheKey);
+  }
   else lockedManifestIdentity.set(cacheKey, locked.value.identity);
   if (!locked.value.recorded && !warnedFullManifest.has(cacheKey)) {
     warnedFullManifest.add(cacheKey);

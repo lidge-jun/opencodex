@@ -314,3 +314,20 @@ describe("rerunning ocx uninstall through its cleanup flow (#8093)", () => {
     expect(existsSync(dir)).toBe(false);
   }));
 });
+
+describe("teardown scope ends cleanly (#8093)", () => {
+  test("after a failed teardown, a path registered inside the scope is refused again", withHome(async dir => {
+    const { beginConfigOwnershipTeardown } = await import("../../src/lib/config-ownership");
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify({ ...manifest(dir), uninstallStartedAt: Date.now() }, null, 2) + "\n");
+    const end = beginConfigOwnershipTeardown();
+    try {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      expect(recordOwnedConfigPath(dir, join(dir, "picker-state"))).toBe(true);
+      // Cleanup fails here, before the remover runs.
+    } finally { end(); }
+    expect(() => recordOwnedConfigPath(dir, join(dir, "seed"))).toThrow(ConfigUninstallInProgressError);
+    expect(() => recordOwnedConfigPath(dir, join(dir, "picker-state"))).toThrow(ConfigUninstallInProgressError);
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+  }));
+});
