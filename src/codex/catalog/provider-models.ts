@@ -460,13 +460,14 @@ export async function fetchProviderModelsWithAuth(
     const scopedStale = getStaleCached(name, authorityIdentity);
     // A run another caller started (the dashboard test) is joined even inside the failure
     // cooldown: its late success is what the catalog re-sync after it is waiting for (#8115).
-    if (isModelsFetchCoolingDown(name) && scopedStale && !qoderDiscoveryJoinable(profile, apiKey)) {
+    const discoveryScope = `${name}\0${cacheGeneration}`;
+    if (isModelsFetchCoolingDown(name) && scopedStale && !qoderDiscoveryJoinable(profile, apiKey, discoveryScope)) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       ), "degraded");
     }
     // Background discovery: waits for the full CLI bound, shared with any concurrent caller.
-    const live = await discoverQoderModels(profile, apiKey);
+    const live = await discoverQoderModels(profile, apiKey, discoveryScope);
     if (live.ok) {
       const discovered = live.models.map(id => ({
         id,

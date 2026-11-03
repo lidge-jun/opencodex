@@ -1,5 +1,6 @@
 import { discoverQoderModels, QODER_INTERACTIVE_DEADLINE_MS } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
+import { captureModelCacheGeneration, clearModelCache, isModelCacheGenerationCurrent } from "../../codex/model-cache";
 import type { OcxProviderConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
 
@@ -14,10 +15,13 @@ export interface QoderProbeDeps {
  * `qoder --list-models` can take longer than this interactive test should wait, so the test joins
  * the shared background discovery (the same run the catalog gather uses, with its longer bound)
  * and waits only its own short deadline. Past it, the provider is reported as still discovering
- * rather than failed, and a later success runs `onLateSuccess` (the management catalog
- * convergence), whose gather reads the finished run and publishes the models without a restart.
+ * rather than failed. A later success evicts the provider's cached roster (keeping its generation,
+ * so the finished run stays joinable) and runs `onLateSuccess`, the management catalog
+ * convergence, whose gather reads that run and publishes the models without a restart. Nothing
+ * happens when the cache was invalidated meanwhile: the run belongs to the previous generation.
  */
 export async function probeQoderProvider(
+  name: string,
   prov: OcxProviderConfig,
   apiKey: string | undefined,
   onLateSuccess: () => void,
@@ -28,7 +32,8 @@ export async function probeQoderProvider(
   if (!profile) {
     return jsonResponse({ ok: false, latencyMs: 0, error: "qoder discovery refused a non-canonical destination" });
   }
-  const run = discoverQoderModels(profile, apiKey ?? "");
+  const generation = captureModelCacheGeneration(name);
+  const run = discoverQoderModels(profile, apiKey ?? "", `${name}\0${generation}`);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<null>(resolve => {
     timer = setTimeout(() => resolve(null), deps.deadlineMs ?? QODER_INTERACTIVE_DEADLINE_MS);
@@ -36,7 +41,11 @@ export async function probeQoderProvider(
   const live = await Promise.race([run, deadline]).finally(() => clearTimeout(timer));
   const latencyMs = Date.now() - started;
   if (live === null) {
-    void run.then(result => { if (result.ok) onLateSuccess(); }, () => undefined);
+    void run.then(result => {
+      if (!result.ok || !isModelCacheGenerationCurrent(name, generation)) return;
+      clearModelCache(name, "eviction");
+      onLateSuccess();
+    }, () => undefined);
     return jsonResponse({
       ok: true,
       discovering: true,

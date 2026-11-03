@@ -91,9 +91,9 @@ describe("qoder discovery bound (#8115)", () => {
 describe("shared qoder discovery flight (#8115)", () => {
   test("concurrent callers for one PAT share one CLI run; another PAT gets its own", async () => {
     const cli = gatedCli();
-    const a = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat");
-    const b = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat");
-    const other = discoverQoderModels(QODER_GLOBAL_PROFILE, "other-pat");
+    const a = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", "scope");
+    const b = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", "scope");
+    const other = discoverQoderModels(QODER_GLOBAL_PROFILE, "other-pat", "scope");
     await cli.release(); await cli.release();
     expect(await a).toEqual({ ok: true, models: ["Account-Model"] });
     expect(await b).toBe(await a);
@@ -103,16 +103,16 @@ describe("shared qoder discovery flight (#8115)", () => {
 
   test("a success is reused only within the reuse window, and a failure is not reused", async () => {
     const cli = gatedCli([{ ok: false, error: "timeout" }, { ok: true, models: ["Account-Model"] }]);
-    const failed = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat");
+    const failed = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", "scope");
     await cli.release();
     expect((await failed).ok).toBe(false);
-    const ok = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat");
+    const ok = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", "scope");
     await cli.release();
     expect((await ok).ok).toBe(true);
     expect(cli.calls()).toBe(2);
-    expect(await discoverQoderModels(QODER_GLOBAL_PROFILE, "pat")).toBe(await ok);
+    expect(await discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", "scope")).toBe(await ok);
     expect(cli.calls()).toBe(2);
-    const later = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", Date.now() + QODER_DISCOVERY_REUSE_MS + 1);
+    const later = discoverQoderModels(QODER_GLOBAL_PROFILE, "pat", "scope", Date.now() + QODER_DISCOVERY_REUSE_MS + 1);
     await cli.release();
     await later;
     expect(cli.calls()).toBe(3);
@@ -143,7 +143,7 @@ describe("qoder connection test (#8115)", () => {
     const cli = gatedCli();
     let resyncs = 0;
     let resynced: Promise<string[]> | undefined;
-    const response = await probeQoderProvider(provider, "pat", () => {
+    const response = await probeQoderProvider(NAME, provider, "pat", () => {
       resyncs += 1;
       resynced = fetchProviderModels(NAME, provider, 0).then(models => models.map(model => model.id));
     }, { deadlineMs: 20 });
@@ -156,10 +156,51 @@ describe("qoder connection test (#8115)", () => {
     expect(getProviderDiscoveryStatus(NAME)).toEqual({ status: "ok" });
   });
 
+  test("a late success replaces a roster that is still fresh in the cache", async () => {
+    setFetchQoderModelsForTests(async () => ({ ok: true, models: ["Old-Model"] }));
+    expect((await fetchProviderModels(NAME, provider, 60_000)).map(model => model.id)).toEqual(["Old-Model"]);
+    clearQoderDiscoveryFlightsForTests();
+    const cli = gatedCli();
+    let resynced: Promise<string[]> | undefined;
+    const response = await probeQoderProvider(NAME, provider, "pat", () => {
+      resynced = fetchProviderModels(NAME, provider, 60_000).then(models => models.map(model => model.id));
+    }, { deadlineMs: 20 });
+    expect(await read(response)).toMatchObject({ ok: true, discovering: true });
+    await cli.release();
+    expect(await resynced).toEqual(["Account-Model"]);
+    expect(cli.calls()).toBe(1);
+  });
+
+  test("a cache invalidation revokes a run in flight: no join, no late re-sync", async () => {
+    const cli = gatedCli([{ ok: true, models: ["Previous-Account"] }, { ok: true, models: ["Current-Account"] }]);
+    let resyncs = 0;
+    const response = await probeQoderProvider(NAME, provider, "pat", () => { resyncs += 1; }, { deadlineMs: 20 });
+    expect(await read(response)).toMatchObject({ ok: true, discovering: true });
+    clearModelCache(NAME);
+    const gathered = fetchProviderModels(NAME, provider, 60_000);
+    await cli.release();
+    await cli.release();
+    expect((await gathered).map(model => model.id)).toEqual(["Current-Account"]);
+    expect(cli.calls()).toBe(2);
+    expect(resyncs).toBe(0);
+  });
+
+  test("a cache invalidation after a success stops its reuse", async () => {
+    const cli = gatedCli([{ ok: true, models: ["Before"] }, { ok: true, models: ["After"] }]);
+    const first = fetchProviderModels(NAME, provider, 60_000);
+    await cli.release();
+    expect((await first).map(model => model.id)).toEqual(["Before"]);
+    clearModelCache(NAME);
+    const second = fetchProviderModels(NAME, provider, 60_000);
+    await cli.release();
+    expect((await second).map(model => model.id)).toEqual(["After"]);
+    expect(cli.calls()).toBe(2);
+  });
+
   test("a run that fails after the deadline does not re-sync", async () => {
     const cli = gatedCli([{ ok: false, error: "auth" }]);
     let resyncs = 0;
-    const response = await probeQoderProvider(provider, "pat", () => { resyncs += 1; }, { deadlineMs: 20 });
+    const response = await probeQoderProvider(NAME, provider, "pat", () => { resyncs += 1; }, { deadlineMs: 20 });
     expect(await read(response)).toMatchObject({ ok: true, discovering: true });
     await cli.release();
     expect(resyncs).toBe(0);
@@ -167,11 +208,11 @@ describe("qoder connection test (#8115)", () => {
 
   test("a run inside the deadline reports its result as before", async () => {
     setFetchQoderModelsForTests(async () => ({ ok: true, models: ["A", "B"] }));
-    expect(await read(await probeQoderProvider(provider, "pat", () => {}, { deadlineMs: 1_000 })))
+    expect(await read(await probeQoderProvider(NAME, provider, "pat", () => {}, { deadlineMs: 1_000 })))
       .toMatchObject({ ok: true, models: 2, message: "Connected. 2 models." });
     clearQoderDiscoveryFlightsForTests();
     setFetchQoderModelsForTests(async () => ({ ok: false, error: "cli_not_found", detail: "install it" }));
-    expect(await read(await probeQoderProvider(provider, "pat", () => {}, { deadlineMs: 1_000 })))
+    expect(await read(await probeQoderProvider(NAME, provider, "pat", () => {}, { deadlineMs: 1_000 })))
       .toMatchObject({ ok: false, error: "qoder discovery cli_not_found: install it" });
   });
 });

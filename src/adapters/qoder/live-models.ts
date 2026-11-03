@@ -73,9 +73,14 @@ export const QODER_DISCOVERY_REUSE_MS = 60_000;
 type QoderDiscoveryFlight = { promise: Promise<QoderModelsResult>; succeededAt?: number };
 const qoderDiscoveryFlights = new Map<string, QoderDiscoveryFlight>();
 
-function qoderDiscoveryKey(profile: QoderProfile, apiKey: string): string {
-  // The roster is entitlement-specific, so one flight serves exactly one PAT.
-  return `${profile.providerId}\0${createHash("sha256").update(apiKey).digest("hex")}`;
+/**
+ * `scope` is the caller's provider name and model-cache generation. The roster is entitlement
+ * specific, so one flight serves exactly one PAT; binding it to the generation as well means a
+ * cache invalidation (an account or config change) revokes it, and a later caller can neither join
+ * a run started before the invalidation nor reuse its result.
+ */
+function qoderDiscoveryKey(profile: QoderProfile, apiKey: string, scope: string): string {
+  return `${scope}\0${profile.providerId}\0${createHash("sha256").update(apiKey).digest("hex")}`;
 }
 
 function joinableFlight(key: string, now: number): QoderDiscoveryFlight | undefined {
@@ -87,16 +92,16 @@ function joinableFlight(key: string, now: number): QoderDiscoveryFlight | undefi
 }
 
 /** True while a run for this PAT is in flight or its success can still be joined. */
-export function qoderDiscoveryJoinable(profile: QoderProfile, apiKey: string, now = Date.now()): boolean {
-  return joinableFlight(qoderDiscoveryKey(profile, apiKey), now) !== undefined;
+export function qoderDiscoveryJoinable(profile: QoderProfile, apiKey: string, scope: string, now = Date.now()): boolean {
+  return joinableFlight(qoderDiscoveryKey(profile, apiKey, scope), now) !== undefined;
 }
 
 /**
  * One `--list-models` run per PAT, shared by the background catalog gather and interactive callers.
  * A failed run is forgotten when it settles; a successful one stays joinable for the reuse window.
  */
-export function discoverQoderModels(profile: QoderProfile, apiKey: string, now = Date.now()): Promise<QoderModelsResult> {
-  const key = qoderDiscoveryKey(profile, apiKey);
+export function discoverQoderModels(profile: QoderProfile, apiKey: string, scope: string, now = Date.now()): Promise<QoderModelsResult> {
+  const key = qoderDiscoveryKey(profile, apiKey, scope);
   const existing = joinableFlight(key, now);
   if (existing) return existing.promise;
   const flight: QoderDiscoveryFlight = {
