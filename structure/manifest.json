@@ -537,7 +537,7 @@
       "path": "data-planes/error-detail.md",
       "tier": 3,
       "title": "Proxy-Owned Error Detail",
-      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals and producer-owned incomplete-event origins.",
+      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels.",
       "documents": [
         "src/usage/error-detail.ts",
         "src/lib/upstream-condition.ts",
@@ -548,6 +548,7 @@
         "src/server/safe-response-headers.ts",
         "src/server/request-log-failure-detail.ts",
         "src/lib/client-error-body.ts",
+        "src/lib/error-destination.ts",
         "src/chat/failure-verdict.ts"
       ]
     },

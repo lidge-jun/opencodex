@@ -858,3 +858,23 @@ for (const message of ["upstream stream ended early (adapter_eof)", KEY]) {
     expect(text).not.toContain(KEY);
   });
 }
+
+for (const route of ["direct", "translated", "passthrough"] as const) test(`explicit incomplete contract precedes copied structural wording route=${route}`, async () => {
+  const { CLIENT_ERROR_CONTRACTS } = await import("../../src/lib/client-error-body");
+  const { encodeChatCompletionSse } = await import("../../src/protocols/encoders/chat");
+  const { bridgeToResponsesSSE } = await import("../../src/bridge");
+  const { responsesSseToChatCompletionsSse } = await import("../../src/chat/outbound");
+  const message = "upstream returned malformed Chat Completions JSON";
+  const budget = createTestTranslatorBudget();
+  const events: AdapterEvent[] = [{ type: "incomplete", reason: "adapter_eof", message }];
+  const source = route === "direct" ? encodeChatCompletionSse((async function* () { yield* events; })(), { model: "fixture", translatorBudget: budget })
+    : responsesSseToChatCompletionsSse(route === "translated"
+      ? bridgeToResponsesSSE((async function* () { yield* events; })(), "fixture", undefined, undefined, undefined, undefined, 2_000, { translatorBudget: budget })
+      : bytes("event: response.incomplete\n" + frame({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "adapter_eof", message } } })), "fixture", { translatorBudget: budget });
+  const text = await new Response(source).text();
+  const failure = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error);
+  expect(failure).toBeDefined();
+  expect(failure.error.type).toBe("server_error");
+  expect(failure.error.code).toBe("upstream_server_error");
+  expect(failure.error.message).toBe(CLIENT_ERROR_CONTRACTS.stream_incomplete);
+});

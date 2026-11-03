@@ -1,6 +1,6 @@
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
-import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { SendBudgetExhaustedError, errorDestinationText, providerErrorDestinationLabel } from "../../lib/upstream-retry";
 import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
 import { isRec } from "../../claude/inbound-records";
 import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
@@ -1174,7 +1174,7 @@ export async function prepareResponsesTransport(
       }
     } catch (err) {
       if (err instanceof UnsupportedOAuthProviderError) {
-        const safeProviderName = redactSecretString(route.providerName);
+        const safeProviderName = redactSecretString(errorDestinationText(providerErrorDestinationLabel(route.providerName)));
         return markProxyError(formatErrorResponse(
           400,
           "invalid_request_error",

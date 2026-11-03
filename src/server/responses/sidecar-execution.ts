@@ -33,7 +33,7 @@ import {
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
-import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, SendBudgetExhaustedError, errorDestinationLabel } from "../../lib/upstream-retry";
 import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
@@ -480,7 +480,7 @@ export async function executeResponsesSidecars(
         });
         if (sendBudgetState.adapterDispatchBudget?.spendEnforced || !decision?.allowed) {
           if (decision?.allowed) decision.permit.release();
-          throw new SendBudgetExhaustedError("sidecar thinking recovery");
+          throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
         }
         try { sendBudgetState.noteInitialDispatch(decision.permit); }
         finally { decision.permit.release(); }

@@ -91,10 +91,10 @@ export function ownedChatErrorPayload(options: OwnedChatErrorOptions) {
   const { status, evidence } = options;
   const type = OPENAI_ERROR_TYPES.get(options.type ?? "") ?? (status === 401 ? "authentication_error" : status === 403 ? "permission_error" : status === 429 ? "rate_limit_error" : status >= 500 ? "server_error" : "invalid_request_error");
   const code = OPENAI_ERROR_CODES.get(options.code ?? "") ?? (status === 401 ? "invalid_api_key" : status === 404 ? "model_not_found" : status === 429 ? "rate_limit_exceeded" : null);
-  const fixedMessage = (options.contract === undefined || options.contract === "stream_incomplete")
+  const fixedMessage = options.contract === undefined
     && code !== "cyber_policy" && code !== "context_length_exceeded" ? fixedProxyErrorMessage(evidence.message) : undefined;
-  const message = actionableRefusalMessage(evidence, code, options.contract) ?? fixedMessage
-    ?? (options.contract ? CLIENT_ERROR_CONTRACTS[options.contract] : undefined)
+  const message = actionableRefusalMessage(evidence, code, options.contract)
+    ?? (options.contract ? CLIENT_ERROR_CONTRACTS[options.contract] : undefined) ?? fixedMessage
     ?? LOCAL_CHAT_ERROR_MESSAGES.get(options.localReason ?? "") ?? CODE_MESSAGES.get(code ?? "")
     ?? upstreamConditionMessage(classifyUpstreamCondition(evidence) ?? "upstream_failed", options.providerId);
   return { error: { message, type, param: null, code } };

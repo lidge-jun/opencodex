@@ -16,6 +16,8 @@
  * the shared abort helpers from here).
  */
 import { clearableDeadline } from "./abort";
+import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
+export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
 import { redactSecretString } from "./redact";
 
 /**
@@ -198,9 +200,9 @@ export function createTransientSendBudget(): TransientSendBudget {
  */
 export class SendBudgetExhaustedError extends Error {
   readonly code = "request_send_budget_exhausted";
-  constructor(label?: string) {
-    super(label
-      ? `request send budget exhausted before dispatch (${label})`
+  constructor(label?: ErrorDestinationLabel) {
+    super(label !== undefined
+      ? `request send budget exhausted before dispatch (${errorDestinationText(label)})`
       : "request send budget exhausted before dispatch");
     this.name = "SendBudgetExhaustedError";
   }
@@ -516,6 +518,8 @@ export interface ResetRetryOptions {
   abortSignal?: AbortSignal;
   /** Short host/path label for the retry warn log (no secrets/query strings). */
   label?: string;
+  /** Client error labels are separate from the operational retry-log label. */
+  destination?: ErrorDestinationLabel;
   /** Total upstream sends allowed, including the first one. Not a per-layer retry count. */
   attempts?: number;
   /**
@@ -652,7 +656,7 @@ export async function fetchWithResetRetry(
   // Zero is zero. The old Math.max(1, ...) floor meant an exhausted budget still bought one
   // more send on every recovery leg, which is most of what made a bounded per-layer retry
   // compose into an unbounded per-request count.
-  if (attempts === 0) throw new SendBudgetExhaustedError(opts.label);
+  if (attempts === 0) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
   try {
   let lastError: unknown;
   let sawReset = false;
@@ -665,7 +669,7 @@ export async function fetchWithResetRetry(
     // Reported before the await, one physical send at a time: a send that rejects has still
     // been made, and this helper leaves through four exits (return, reset give-up, non-reset
     // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
-    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.label);
+    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
     if (!opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed?.(1);
     try {
       let response: Response;
@@ -747,7 +751,7 @@ export async function fetchWithTransientRetry(
   const countedFetch: ReplayableFetch = (recovery) => {
     // Incremented BEFORE the await so a rejected send still consumes budget; counting only
     // successes would let a reset storm loop without bound.
-    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.label);
+    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
     sent += 1;
     const run = () => doFetch(recovery);
     return opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run();
@@ -769,7 +773,7 @@ export async function fetchWithTransientRetry(
   // and throws from one, and a caller sharing the budget across request legs must be told the
   // real count on every one of them.
   try {
-  if (budget === 0) throw new SendBudgetExhaustedError(opts.label);
+  if (budget === 0) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
   let attemptStart = Date.now();
   let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
   for (let attempt = 0; sent < budget; attempt++) {

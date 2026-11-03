@@ -1,6 +1,7 @@
 import { formatErrorResponse as formatReplaySafetyError } from "../../src/bridge/errors";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  SendBudgetExhaustedError,
   fetchWithResetRetry,
   fetchWithTransientRetry,
   isConnectionResetError,
@@ -748,4 +749,68 @@ describe("ambiguous reset safety through error formatting", () => {
     expect(response.headers.get("retry-after")).toBeNull();
     expect((await response.json()).error.code).toBe("cyber_policy");
   });
+});
+
+const destinationSentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+for (const [input, expected] of [
+  ["https://provider.example.test", "https://provider.example.test"],
+  [`https://${destinationSentinel}:password@provider.example.test/v1`, "https://provider.example.test"],
+  [`https://provider.example.test/${destinationSentinel}`, "https://provider.example.test"],
+  [`https://provider.example.test/v1?key=${destinationSentinel}`, "https://provider.example.test"],
+  [`https://provider.example.test/v1#${destinationSentinel}`, "https://provider.example.test"],
+  [`https://${destinationSentinel}@provider.example.test:8443/${destinationSentinel}?key=${destinationSentinel}#${destinationSentinel}`, "https://provider.example.test:8443"],
+  ["http://[2001:db8::1]:8080/v1?key=fixture", "http://[2001:db8::1]:8080"],
+  ["https://provider.example.test:443/", "https://provider.example.test"],
+  ["wss://provider.example.test:8443/live?key=fixture", "wss://provider.example.test:8443"],
+  [destinationSentinel, "the provider"], ["not a URL", "the provider"], ["__proto__", "the provider"],
+  ["constructor", "the provider"], ["toString", "the provider"], ["https://provider.example.test:65536/", "the provider"],
+  [`file:///${destinationSentinel}`, "the provider"], [`data:text/plain,${destinationSentinel}`, "the provider"],
+] as const) test(`send-budget constructor bounds destination case=${expected} input=${input.includes(destinationSentinel) ? "sentinel" : input}`, () => {
+  // Constructor validation also covers values supplied without the branded type.
+  const error = new SendBudgetExhaustedError(input as never);
+  expect(error).toBeInstanceOf(SendBudgetExhaustedError);
+  expect(error.code).toBe("request_send_budget_exhausted");
+  expect(error.message).toBe(`request send budget exhausted before dispatch (${expected})`);
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+test("pacing constructor bounds a value that is not a provider id", async () => {
+  const { RequestPacingQueueOverloadError } = await import("../../src/providers/request-pacing");
+  const error = new RequestPacingQueueOverloadError(`https://${destinationSentinel}@provider.example.test/${destinationSentinel}?key=${destinationSentinel}`, "queue_full", 1);
+  expect(error).toBeInstanceOf(RequestPacingQueueOverloadError);
+  expect(error.reason).toBe("queue_full");
+  expect(error.message).toBe("request pacing queue for provider 'the provider' is full");
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+test("destination factories retain only owned origins or validated provider ids", async () => {
+  const { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } = await import("../../src/lib/error-destination");
+  const label = errorDestinationLabel(`https://${destinationSentinel}@provider.example.test:8443/${destinationSentinel}?key=${destinationSentinel}`);
+  expect(errorDestinationText(label)).toBe("https://provider.example.test:8443");
+  expect(new SendBudgetExhaustedError(label).code).toBe("request_send_budget_exhausted");
+  expect(new SendBudgetExhaustedError(label).message).toBe("request send budget exhausted before dispatch (https://provider.example.test:8443)");
+  expect(errorDestinationText(providerErrorDestinationLabel("cursor"))).toBe("cursor");
+  expect(new SendBudgetExhaustedError(providerErrorDestinationLabel("cursor")).message).toBe("request send budget exhausted before dispatch (cursor)");
+  expect(errorDestinationText(providerErrorDestinationLabel("x".repeat(65)))).toBe("the provider");
+  expect(errorDestinationText(providerErrorDestinationLabel({ toString() { throw new Error("unexpected conversion"); } } as never))).toBe("the provider");
+  expect(errorDestinationText(providerErrorDestinationLabel(`https://${destinationSentinel}@provider.example.test`))).toBe("the provider");
+  for (const copy of [{ ...label }, JSON.parse(JSON.stringify(label)), { kind: "provider", value: destinationSentinel }, Object.create({ value: destinationSentinel })]) {
+    expect(errorDestinationText(copy as never)).toBe("the provider");
+    const failure = new SendBudgetExhaustedError(copy as never);
+    expect(failure).toBeInstanceOf(SendBudgetExhaustedError);
+    expect(failure.code).toBe("request_send_budget_exhausted");
+    expect(failure.message).toBe("request send budget exhausted before dispatch (the provider)");
+    expect(failure.message).not.toContain(destinationSentinel);
+  }
+  expect(new SendBudgetExhaustedError().message).toBe("request send budget exhausted before dispatch");
+});
+
+for (const kind of ["unsupported", "login"] as const) test(`OAuth provider constructor bounds an invalid provider id kind=${kind}`, async () => {
+  const { UnsupportedOAuthProviderError, OAuthLoginRequiredError } = await import("../../src/oauth");
+  const id = `https://${destinationSentinel}@provider.example.test/${destinationSentinel}?key=${destinationSentinel}`;
+  const error = kind === "unsupported" ? new UnsupportedOAuthProviderError(id) : new OAuthLoginRequiredError(id);
+  expect(error).toBeInstanceOf(kind === "unsupported" ? UnsupportedOAuthProviderError : OAuthLoginRequiredError);
+  expect(error.name).toBe(kind === "unsupported" ? "UnsupportedOAuthProviderError" : "OAuthLoginRequiredError");
+  expect(error.message).toBe(kind === "unsupported" ? "Unsupported OAuth provider in config: the provider" : "Not logged in to the provider. Run: ocx login the provider");
+  expect(error.message).not.toContain(destinationSentinel);
 });

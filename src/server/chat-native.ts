@@ -43,7 +43,7 @@ import {
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
-  SendBudgetExhaustedError,
+  SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   UpstreamRetryEvidenceError,
   type UpstreamSendRecovery,
@@ -468,7 +468,7 @@ export async function runNativeChatAttempt(
       // Backstop for sends the helper cannot see coming (a reset replay). The first
       // report settles the combo's booking; each later one is charged and booked.
       if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
-        throw new SendBudgetExhaustedError(safeHostLabel(url));
+        throw new SendBudgetExhaustedError(errorDestinationLabel(url));
       }
       physicalSends += 1;
       reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
@@ -486,7 +486,7 @@ export async function runNativeChatAttempt(
       // #2643: opted-in key-auth openai-chat providers retry pre-stream transient statuses on
       // the native chat lane too; everyone else keeps reset-only semantics.
       const remaining = remainingTransientSends();
-      if (sendBudget && remaining <= 0) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+      if (sendBudget && remaining <= 0) throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
       if (requestTransientPolicy && remaining <= 0) {
         throw new Error("native Chat transient send budget exhausted before recovery dispatch");
       }
@@ -600,7 +600,7 @@ export async function runNativeChatAttempt(
         dispatch,
         {
           abortSignal: upstream.signal,
-          label: safeHostLabel(request.url),
+          label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url),
           ...(requestTransientPolicy
             ? {
               attempts: remaining,
@@ -822,7 +822,7 @@ export async function runNativeChatAttempt(
       },
       {
         abortSignal: upstream.signal,
-        label: safeHostLabel(activeRequest.url),
+        label: safeHostLabel(activeRequest.url), destination: errorDestinationLabel(activeRequest.url),
         attempts: remainingTransientSends(),
         // The origin returned a head and may already be running the turn, so this is the
         // ambiguous row of the stage table. Only the operator allowance the Responses stream

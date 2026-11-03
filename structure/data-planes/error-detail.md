@@ -166,10 +166,23 @@ invalid request). Unknown codes use `invalid_api_key` for 401, `model_not_found`
 are prototype-safe. Model identifiers are never extracted from error text. A provider annotation
 accepts only the configured provider id with the shared 1–64 character id grammar.
 
-Fixed contracts cover context overflow, cyber policy, terminal refusals, replay refusal, translation
+Explicit client contracts take precedence over diagnostic-sentence matching. In particular, an
+upstream incomplete event cannot select structural diagnostic wording by copying a sentence; only
+producer provenance selects the legacy message path. Fixed contracts cover context overflow, cyber policy, terminal refusals, replay refusal, translation
 buffer limits, inconsistent refusal representations, undeclared tools, unsatisfied required tools,
 transport failure and incomplete streams. Context overflow uses the fixed context-window sentence;
 cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
+`src/lib/error-destination.ts` bounds any destination named by a local send-budget error. The
+constructor accepts an opaque branded label and revalidates it while building the message. URL
+labels contain only a parsed supported scheme, hostname and optional port; userinfo, path, query
+and fragment are omitted, and invalid inputs become `the provider`. Fixed provider labels accept
+only the shared 1–64 character provider-id grammar. A copied object cannot mint a label. Kiro,
+adapter-owned physical sends, native Chat, compact, sidecar and translated dispatch pass complete
+URLs to this projection instead of trusting a caller's description. Retry helpers carry this
+client label separately from their operational log label. Queue-overload and OAuth provider-error constructors validate
+the configured provider id themselves; unsupported-provider remediation applies that same bound
+and retains the existing credential-pattern redaction on its derived label. These bounds also apply before request-log persistence.
+
 Proxy-authored local errors retain their legacy Chat message, type and code. The preflight
 transport, sidecar-auth and send-budget phase results in `src/server/responses/core-pipeline.ts`
 carry a process-local object identity; `src/server/responses/core-lifetime.ts` and the deferred

@@ -115,7 +115,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
-  SendBudgetExhaustedError,
+  SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
 } from "../../lib/upstream-retry";
@@ -1141,7 +1141,7 @@ export async function handleResponsesCompact(
           identityId: logCtx.accountLogLabel }));
         let started = false;
         try {
-          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
           started = true;
           return await (report.execute ? report.execute(doFetch) : doFetch());
         } finally {
@@ -1153,11 +1153,11 @@ export async function handleResponsesCompact(
         sendClass: "auth-recovery",
         targetKey: compactTargetKey,
       });
-      if (!decision.allowed) return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
+      if (!decision.allowed) return Promise.reject(new SendBudgetExhaustedError(errorDestinationLabel(compactUrl)));
       const dispatch = () => {
         if (!decision.permit.use()) {
           decision.permit.release();
-          throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
         }
         return doFetch();
       };
@@ -1258,7 +1258,7 @@ export async function handleResponsesCompact(
               if (req.signal.aborted) throw req.signal.reason;
               stampApiKeyAccountLabel(logCtx, route.providerName, sendProvider);
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
-                identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+                identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                 distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), String(input),
@@ -1282,7 +1282,7 @@ export async function handleResponsesCompact(
         ? sendSingleCompactAttempt(doFetch)
         : fetchWithTransientRetry(doFetch, {
           abortSignal: req.signal,
-          label: safeHostLabel(compactUrl),
+          label: safeHostLabel(compactUrl), destination: errorDestinationLabel(compactUrl),
           // Key-auth policy is a logical-request total; canonical forward keeps its default
           // ladder. Both intersect the same shared base remainder as ordinary Responses.
           attempts: sendBudget.remainingBaseSends(transientSendCapFor(
