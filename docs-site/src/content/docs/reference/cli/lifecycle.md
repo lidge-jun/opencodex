@@ -292,7 +292,7 @@ are left in place.
 
 When `ocx uninstall` runs as root or from an elevated (administrator) Windows prompt, it first
 checks that no other account can change the config directory, the directories above it, or any
-directory inside it, and that no link inside the config directory leads outside it. If either check
+directory inside it, and that no link inside the config directory leads outside it (on Windows, that it holds no links at all). If either check
 fails, uninstall stops before it changes anything and says why. Run `ocx uninstall` as the account
 that owns the config directory, without `sudo` or administrator rights, or restrict those directories
 to that account and remove such links, then run it again. On Windows ARM64, where opencodex cannot

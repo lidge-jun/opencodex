@@ -14,7 +14,15 @@ import { Database } from "bun:sqlite";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GenerationContext } from "./state-store-sweeper";
 import { renameAtomicFile } from "./windows-atomic-replace";
-import { canonicalRootUnchanged, elevatedRemovalRefusal, ownedEntryPresent, removeOwnedEntry, uninstallRunsElevated } from "./config-ownership-removal";
+import {
+  canonicalRootUnchanged,
+  elevatedRemovalRefusal,
+  ownedEntryPresent,
+  removeOwnedEntry,
+  rootIdentity,
+  uninstallRunsElevated,
+  type RootIdentity,
+} from "./config-ownership-removal";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
@@ -781,12 +789,14 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
   // Everything below works on the canonical root, resolved once here, so no later step goes back
   // through the spelling the caller passed. Residual paths are reported in that spelling.
   let canonical: string;
+  let identity: RootIdentity;
   try {
     canonical = canonicalRoot(configDir);
+    identity = rootIdentity(canonical);
   } catch {
     return { status: "refused", reason: "config ownership root is not a real directory", residualPaths: [configDir] };
   }
-  const result = removeCanonicalOwnedConfigState(canonical);
+  const result = removeCanonicalOwnedConfigState(canonical, identity);
   return { ...result, residualPaths: result.residualPaths.map(path => callerSpelling(path, canonical, configDir)) };
 }
 
@@ -796,9 +806,16 @@ function callerSpelling(path: string, canonical: string, configDir: string): str
   return rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) ? join(configDir, rel) : path;
 }
 
-function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult {
-  // `configDir` is the canonical root resolved once by the caller. It is never resolved again: each
-  // step below that acts on it first confirms it is still a real directory resolving to itself.
+function removeCanonicalOwnedConfigState(configDir: string, identity: RootIdentity): ConfigRemovalResult {
+  // `configDir` is the canonical root resolved once by the caller, and `identity` the directory it
+  // named then. It is never resolved again: each step below that acts on it first confirms it is still
+  // that directory, a real one resolving to itself. A change before anything is written is refused;
+  // one found later ends the run partial, and the tombstone lets a rerun finish.
+  const rootChanged: ConfigRemovalResult = {
+    status: "refused",
+    reason: "the config directory changed while uninstall ran; run 'ocx uninstall' again",
+    residualPaths: [configDir],
+  };
   const rootMoved: ConfigRemovalResult = {
     status: "partial",
     reason: "the config directory changed while uninstall ran; run 'ocx uninstall' again",
@@ -809,6 +826,7 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
   // Before the lock exists or anything is written, so a refused elevated run changes nothing.
   const privilege = privilegeCheck(configDir);
   if (privilege?.refusal) return { status: "refused", reason: privilege.refusal, residualPaths: [configDir] };
+  if (!canonicalRootUnchanged(configDir, identity)) return rootChanged;
   if (!loadOwnershipForUninstall(configDir)) {
     // A finished uninstall whose lock file could not be unlinked (Windows keeps a file another
     // process holds open) leaves only lock files. They are removed once no process holds the lock.
@@ -856,10 +874,11 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
       // tree may all have changed since the unlocked check.
       const lockedRefusal = privilege ? elevatedRemovalRefusal(configDir) : null;
       if (lockedRefusal) return { status: "refused", reason: lockedRefusal, residualPaths: [configDir] };
+      if (!canonicalRootUnchanged(configDir, identity)) return rootChanged;
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
-      if (!canonicalRootUnchanged(configDir)) return rootMoved;
+      if (!canonicalRootUnchanged(configDir, identity)) return rootMoved;
       removeAbandonedMetadataTemps(configDir, ownership.owner);
       const rootPath = configDir;
       const elevatedUid = process.platform !== "win32" && uninstallRunsElevated() ? process.geteuid?.() : undefined;
@@ -869,7 +888,7 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
         try {
           // lstat-based: a listed symlink whose target is gone is still ours to unlink, and a link on
           // the way to an entry is reported rather than read as absence.
-          if (ownedEntryPresent(rootPath, parts)) removeOwnedEntry(rootPath, parts, { elevatedUid });
+          if (ownedEntryPresent(rootPath, parts)) removeOwnedEntry(rootPath, parts, { elevatedUid, rootIdentity: identity });
         } catch (error) {
           return {
             status: "partial",
@@ -879,7 +898,7 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
         }
       }
       uninstallStepHookForTests?.("snapshot-removed");
-      if (!canonicalRootUnchanged(configDir)) return rootMoved;
+      if (!canonicalRootUnchanged(configDir, identity)) return rootMoved;
       try {
         // Owner marker first, manifest last: until the end the tombstoned manifest stays as the record
         // a rerun resumes from, and creation (manifest first) never leaves that state.
@@ -907,7 +926,7 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
     };
   }
   if (outcome.status !== "removed") return outcome;
-  if (!canonicalRootUnchanged(configDir)) return rootMoved;
+  if (!canonicalRootUnchanged(configDir, identity)) return rootMoved;
   // The lock holder retired its own lock file on release; one that remains (Windows) is reported.
   const residualPaths = readdirSync(configDir).map(name => join(configDir, name));
   if (residualPaths.length > 0) {

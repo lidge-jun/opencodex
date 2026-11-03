@@ -121,7 +121,7 @@ describe("owned path removal stays inside the config root", () => {
   });
 
   posix("a root replaced by a link once removal has started is never followed", () => {
-    const { parent, dir } = ownedHome("ocx-removal-root-swap-");
+    const { parent, dir } = ownedHome("ocx-removal-root-link-swap-");
     const decoy = join(parent, "decoy");
     try {
       mkdirSync(decoy, { mode: 0o700 });
@@ -140,6 +140,75 @@ describe("owned path removal stays inside the config root", () => {
       const result = removeOwnedConfigState(dir);
       expect(result.status).not.toBe("removed");
       expect(readFileSync(join(decoy, "config.json"), "utf8")).toBe("keep");
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  posix("a root replaced by another real directory before the tombstone is refused untouched", () => {
+    const { parent, dir } = ownedHome("ocx-removal-root-dir-swap-");
+    const moved = join(parent, "moved");
+    try {
+      chmodSync(dir, 0o700);
+      let calls = 0;
+      setUninstallElevationProbeForTests(() => {
+        calls += 1;
+        if (calls === 3) {
+          renameSync(dir, moved);
+          mkdirSync(dir, { mode: 0o700 });
+          for (const name of [CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST]) copyFileSync(join(moved, name), join(dir, name));
+          writeFileSync(join(dir, "config.json"), "keep");
+        }
+        return true;
+      });
+      const manifest = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+      const result = removeOwnedConfigState(dir);
+      expect(result.status).toBe("refused");
+      expect(readFileSync(join(dir, "config.json"), "utf8")).toBe("keep");
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(manifest);
+      expect(existsSync(join(moved, "config.json"))).toBe(true);
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  posix("a link in the tree that reaches the root through a shared directory outside it is refused", () => {
+    const { parent, dir } = ownedHome("ocx-removal-tree-hop-");
+    const shared = join(parent, "shared");
+    try {
+      chmodSync(dir, 0o700);
+      mkdirSync(join(dir, "inner"), { mode: 0o700 });
+      mkdirSync(shared);
+      symlinkSync(join(dir, "inner"), join(shared, "hop"), "dir");
+      symlinkSync(join(shared, "hop"), join(dir, "alias"), "dir");
+      setUninstallElevationProbeForTests(() => true);
+      chmodSync(shared, 0o777);
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      chmodSync(shared, 0o700);
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+      // A link to the root itself is inside the root too.
+      unlinkSync(join(dir, "alias"));
+      symlinkSync(dir, join(dir, "self"), "dir");
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+    } finally {
+      chmodSync(shared, 0o700);
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  posix("an elevated Windows run refuses any link in the config tree before reading an ACL", () => {
+    const { parent, dir } = ownedHome("ocx-removal-windows-tree-link-");
+    let aclReads = 0;
+    try {
+      mkdirSync(join(dir, "inner"));
+      symlinkSync(join(dir, "inner"), join(dir, "alias"), "dir");
+      setUninstallElevationProbeForTests(() => true);
+      setWindowsOwnerAclRunnerForTests(() => {
+        aclReads += 1;
+        return { success: true, timedOut: false, stdout: "" };
+      });
+      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(dir))).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(aclReads).toBe(0);
     } finally {
       removeTreeWithRetry(parent);
     }

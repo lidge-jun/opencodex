@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmdirSync, unlinkSync, type Stats } from "node:fs";
-import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { isWindowsReparsePoint, nativeReparseProbeApplies } from "./private-sqlite-path";
 import { isCurrentWindowsProcessElevated } from "./windows-elevation";
 import { verifyWindowsEntriesAcl, WINDOWS_OWNER_ACL_TIMEOUT_MS } from "./windows-owner-acl";
@@ -28,7 +28,7 @@ export class OwnedPathRedirectedError extends Error {
 
 export const ELEVATED_UNINSTALL_REFUSAL = "ocx uninstall is running with elevated privileges, but another account can change "
   + "the config directory, a directory above it or a directory inside it, or the config directory holds a link that leads "
-  + "outside it. Run 'ocx uninstall' as the account that owns the config directory, without sudo or administrator rights, "
+  + "outside it (on Windows, any link). Run 'ocx uninstall' as the account that owns the config directory, without sudo or administrator rights, "
   + "or restrict those directories to that account and remove such links first.";
 
 /** Windows without the native token probe (Bun cannot run `bun:ffi` on ARM64): the run is treated as elevated. */
@@ -174,16 +174,17 @@ function windowsSpellingNearest(configDir: string): string | null {
  * `elevatedUid` set, each directory below the root must also be owned by that uid and not group- or
  * other-writable.
  */
-function assertRealDirectoryChain(rootPath: string, parts: readonly string[], elevatedUid: number | undefined): void {
+function assertRealDirectoryChain(rootPath: string, parts: readonly string[], options: OwnedRemovalOptions): void {
   const root = lstatSync(rootPath);
   if (!root.isDirectory() || root.isSymbolicLink()) throw new OwnedPathRedirectedError();
+  if (options.rootIdentity && !sameIdentity(rootPath, options.rootIdentity)) throw new OwnedPathRedirectedError();
   if (!samePath(realpathSync.native(rootPath), rootPath)) throw new OwnedPathRedirectedError();
   let current = rootPath;
   for (const part of parts) {
     current = join(current, part);
     const entry = lstatSync(current);
     if (!entry.isDirectory() || isLinkEntry(current, entry)) throw new OwnedPathRedirectedError();
-    if (elevatedUid !== undefined && posixSharedWritable(entry, elevatedUid)) throw new OwnedPathRedirectedError();
+    if (options.elevatedUid !== undefined && posixSharedWritable(entry, options.elevatedUid)) throw new OwnedPathRedirectedError();
   }
   if (parts.length > 0 && !isInsideRoot(rootPath, realpathSync.native(current))) throw new OwnedPathRedirectedError();
 }
@@ -195,10 +196,30 @@ function isInsideRoot(rootPath: string, candidate: string): boolean {
     : candidate.startsWith(prefix);
 }
 
-/** Whether the canonical root is still a real directory that resolves to itself. */
-export function canonicalRootUnchanged(rootPath: string): boolean {
+function isAtOrInsideRoot(rootPath: string, candidate: string): boolean {
+  return samePath(candidate, rootPath) || isInsideRoot(rootPath, candidate);
+}
+
+/** The device and inode of the directory a canonical root named when it was resolved. */
+export type RootIdentity = { dev: bigint; ino: bigint };
+
+export function rootIdentity(rootPath: string): RootIdentity {
+  const entry = lstatSync(rootPath, { bigint: true });
+  return { dev: entry.dev, ino: entry.ino };
+}
+
+function sameIdentity(rootPath: string, identity: RootIdentity): boolean {
+  const entry = lstatSync(rootPath, { bigint: true });
+  return entry.dev === identity.dev && entry.ino === identity.ino;
+}
+
+/**
+ * Whether the canonical root is still a real directory that resolves to itself and, with
+ * `identity`, is still the directory it named when it was resolved.
+ */
+export function canonicalRootUnchanged(rootPath: string, identity?: RootIdentity): boolean {
   try {
-    assertRealDirectoryChain(rootPath, [], undefined);
+    assertRealDirectoryChain(rootPath, [], { rootIdentity: identity });
     return true;
   } catch {
     return false;
@@ -231,6 +252,8 @@ export function ownedEntryPresent(rootPath: string, parts: readonly string[]): b
 export interface OwnedRemovalOptions {
   /** POSIX uid of an elevated run: directories removal passes through must belong to it alone. */
   elevatedUid?: number;
+  /** The root's identity when it was resolved; every check also requires the root to still be it. */
+  rootIdentity?: RootIdentity;
 }
 
 /**
@@ -239,28 +262,32 @@ export interface OwnedRemovalOptions {
  * every child and before the rmdir.
  */
 export function removeOwnedEntry(rootPath: string, parts: readonly string[], options: OwnedRemovalOptions = {}): void {
-  assertRealDirectoryChain(rootPath, parts.slice(0, -1), options.elevatedUid);
+  assertRealDirectoryChain(rootPath, parts.slice(0, -1), options);
   const path = join(rootPath, ...parts);
   const entry = lstatSync(path);
   if (entry.isSymbolicLink() || !entry.isDirectory()) {
     unlinkSync(path);
     return;
   }
-  assertRealDirectoryChain(rootPath, parts, options.elevatedUid);
+  assertRealDirectoryChain(rootPath, parts, options);
   const names = readdirSync(path);
   directoryListedHookForTests?.(path);
   for (const name of names) removeOwnedEntry(rootPath, [...parts, name], options);
-  assertRealDirectoryChain(rootPath, parts, options.elevatedUid);
+  assertRealDirectoryChain(rootPath, parts, options);
   rmdirSync(path);
 }
 
 /**
  * Every real directory in the root's tree, and every link in it, for the ownership checks. The
  * teardown steps before the remover read and write files anywhere in the tree, so a link at any
- * depth, to a file or a directory, must resolve to a place inside the root; one that leads outside
- * it, or does not resolve, makes the tree unacceptable and the result is null.
+ * depth, to a file or a directory, must resolve to the root or a place inside it, through
+ * directories and links `resolveLink` accepts (it returns what it passed, or null). One that does
+ * not makes the tree unacceptable and the result is null.
  */
-function rootTree(rootPath: string): { directories: string[]; links: string[] } | null {
+function rootTree(
+  rootPath: string,
+  resolveLink: (link: string) => { path: string; visited: string[] } | null,
+): { directories: string[]; links: string[] } | null {
   const directories: string[] = [];
   const links: string[] = [];
   const pending = [rootPath];
@@ -271,10 +298,9 @@ function rootTree(rootPath: string): { directories: string[]; links: string[] } 
       const child = join(directory, name);
       const entry = lstatSync(child);
       if (isLinkEntry(child, entry)) {
-        let target: string;
-        try { target = realpathSync.native(child); } catch { return null; }
-        if (!isInsideRoot(rootPath, target)) return null;
-        links.push(child);
+        const resolved = resolveLink(child);
+        if (resolved === null || !isAtOrInsideRoot(rootPath, resolved.path)) return null;
+        links.push(...resolved.visited);
       } else if (entry.isDirectory()) {
         pending.push(child);
       }
@@ -336,7 +362,8 @@ function onlyThisAccountCanChange(configDir: string): boolean {
       ], WINDOWS_OWNER_ACL_TIMEOUT_MS);
     }
     const rootPath = realpathSync.native(configDir);
-    const tree = rootTree(rootPath);
+    // An elevated Windows run accepts no link or reparse point anywhere in the tree.
+    const tree = rootTree(rootPath, () => null);
     if (tree === null) return false;
     // One read for the whole tree: the ACL reader takes a large batch over stdin.
     return verifyWindowsEntriesAcl([
@@ -351,7 +378,13 @@ function onlyThisAccountCanChange(configDir: string): boolean {
   const darwin = process.platform === "darwin";
   if (!existsSync(configDir)) return !darwin || darwinAclsDenyOnly(visited);
   const rootPath = realpathSync.native(configDir);
-  const tree = rootTree(rootPath);
+  // Each link is resolved the way the kernel does, through trusted directories and links only, so a
+  // link that leaves the root on the way back into it is refused as well.
+  const tree = rootTree(rootPath, link => {
+    const linkVisited: Visited = new Set();
+    const walked = walkTrusted(dirname(link), [basename(link)], euid, 0, linkVisited);
+    return walked.complete ? { path: walked.path, visited: [...linkVisited] } : null;
+  });
   if (tree === null) return false;
   const ancestors = rootAncestors(rootPath);
   if (!ancestors.every(path => posixTrustedAncestor(lstatSync(path), euid))) return false;

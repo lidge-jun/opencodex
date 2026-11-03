@@ -123,7 +123,7 @@ meta verilerini gerektirir; eski veya paylaşılan dizinler yerinde bırakılır
 
 `ocx uninstall` root olarak veya yükseltilmiş (yönetici) bir Windows isteminden çalıştığında,
 önce başka hiçbir hesabın yapılandırma dizinini, üstündeki dizinleri veya içindeki herhangi bir dizini
-değiştiremediğini ve yapılandırma dizinindeki hiçbir bağlantının dizinin dışına çıkmadığını denetler.
+değiştiremediğini ve yapılandırma dizinindeki hiçbir bağlantının dizinin dışına çıkmadığını (Windows'ta hiç bağlantı bulunmadığını) denetler.
 Denetimlerden biri başarısız olursa kaldırma işlemi hiçbir şeyi değiştirmeden durur ve nedenini bildirir.
 `ocx uninstall` komutunu yapılandırma dizininin sahibi olan hesapla, `sudo` veya yönetici hakları
 olmadan çalıştırın ya da bu dizinleri yalnızca o hesapla sınırlayıp bu tür bağlantıları kaldırdıktan
