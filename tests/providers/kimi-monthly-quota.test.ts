@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../../src/oauth/store";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { clearComboTargetCooldowns, pickComboTarget } from "../../src/combos";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -24,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearProviderQuotaCache();
+  clearComboTargetCooldowns();
   for (const key of proxyKeys) {
     if (originalProxyEnv[key] === undefined) delete process.env[key];
     else process.env[key] = originalProxyEnv[key];
@@ -191,11 +193,61 @@ describe("Kimi monthly quota", () => {
     });
   });
 
-  test("does not unwrap nested legacy windows over usable outer usages", async () => {
-    mockUsage({ usages: { limit_month_total: monthlyRow }, data: { usage: { percent: 90 } } });
+  const exhaustedLegacy = {
+    usage: { percent: 100 },
+    limits: [{ window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" }, detail: { limit: "100", used: "100" } }],
+  };
+
+  function comboConfig(): OcxConfig {
+    const base = config();
+    return {
+      ...base,
+      providers: { ...base.providers, fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", apiKey: "fallback-key" } },
+      combos: { "quota-scope": { strategy: "failover", targets: [
+        { provider: "kimi-code", model: "primary-model" }, { provider: "fallback", model: "fallback-model" },
+      ] } },
+    } as OcxConfig;
+  }
+
+  test.each([
+    { name: "usable outer usages", usages: { limit_month_total: { used_ratio: 0.2 } }, monthly: 20 },
+    { name: "empty outer usages", usages: {}, monthly: undefined },
+    { name: "malformed outer usages", usages: { limit_month_total: { used_ratio: "invalid" } }, monthly: undefined },
+    { name: "non-object outer usages", usages: "invalid", monthly: undefined },
+  ])("reports nested exhausted legacy windows beside $name", async ({ usages, monthly }) => {
+    mockUsage({ usages, data: exhaustedLegacy });
+    const cfg = comboConfig();
+    const { reports } = await fetchProviderQuotaReports(cfg, true);
+    expect(reports[0]?.quota).toMatchObject({ weeklyPercent: 100, fiveHourPercent: 100 });
+    expect(reports[0]?.quota.monthlyPercent).toBe(monthly);
+    expect(pickComboTarget(cfg, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("nested monthly container does not hide exhausted outer legacy windows", async () => {
+    mockUsage({ ...exhaustedLegacy, data: { usages: { limit_month_total: { used_ratio: 0.2 } } } });
+    const cfg = comboConfig();
+    const { reports } = await fetchProviderQuotaReports(cfg, true);
+    expect(reports[0]?.quota).toMatchObject({ weeklyPercent: 100, fiveHourPercent: 100, monthlyPercent: 20 });
+    expect(pickComboTarget(cfg, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test.each([
+    { name: "remaining above limit", row: { limit: 100, remaining: 200, used_ratio: 1 } },
+    { name: "negative remaining", row: { limit: 100, remaining: -50, used_ratio: 1 } },
+    { name: "negative used", row: { limit: 100, used: -20, used_ratio: 1 } },
+    { name: "used above limit", row: { limit: 100, used: 250, used_ratio: 1 } },
+    { name: "negative used with valid remaining", row: { limit: 100, used: -20, remaining: 50, used_ratio: 1 } },
+    { name: "negative limit", row: { limit: -100, used: 0, used_ratio: 1 } },
+  ])("falls back to used_ratio when counters are invalid: $name", async ({ row }) => {
+    mockUsage({ usages: { limit_month_total: row } });
     const { reports } = await fetchProviderQuotaReports(config(), true);
-    expect(reports[0]?.quota.monthlyPercent).toBe(37.5);
-    expect(reports[0]?.quota.weeklyPercent).toBeUndefined();
+    expect(reports[0]?.quota.monthlyPercent).toBe(100);
+  });
+
+  test("drops a row whose only counters are invalid", async () => {
+    mockUsage({ usages: { limit_month_total: { limit: 100, remaining: 200 }, limit_month_code: { used_ratio: 0.4 } } });
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(40);
   });
 
   test.each([

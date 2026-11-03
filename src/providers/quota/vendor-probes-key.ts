@@ -1125,18 +1125,17 @@ export function isCanonicalCommandCodeBaseUrl(baseUrl: string): boolean {
   return normalized === COMMAND_CODE_BASE_URL || normalized === `${COMMAND_CODE_BASE_URL}/provider/v1`;
 }
 
-/** Prefer the nested `data` shell when the outer object is only an envelope. */
-function unwrapKimiQuotaPayload(value: unknown): Record<string, unknown> | null {
-  const body = asRecord(value);
-  if (!body) return null;
-  const nested = asRecord(body.data);
-  if (!nested) return body;
-  // A null/non-usable outer field is a placeholder, not data — an envelope like
-  // { usage: null, data: { usage: {...} } } must still unwrap to the nested payload.
+/**
+ * Pick the envelope carrying the legacy windows (weekly, 5h, total credits). The monthly
+ * `usages` container is located separately, so its presence never hides a nested window.
+ */
+function kimiLegacyWindowBody(root: Record<string, unknown>): Record<string, unknown> {
+  const nested = asRecord(root.data);
+  if (!nested) return root;
+  // A null outer field is a placeholder, not data — { usage: null, data: { usage: {...} } } unwraps.
   const usable = (field: unknown): boolean => field !== undefined && field !== null;
-  const outerHasUsage = usable(body.usage) || usable(body.usages) || usable(body.limits) || usable(body.totalQuota);
-  const nestedHasUsage = usable(nested.usage) || usable(nested.usages) || usable(nested.limits) || usable(nested.totalQuota);
-  return !outerHasUsage && nestedHasUsage ? nested : body;
+  const hasLegacy = (body: Record<string, unknown>): boolean => usable(body.usage) || usable(body.limits) || usable(body.totalQuota);
+  return !hasLegacy(root) && hasLegacy(nested) ? nested : root;
 }
 
 function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, unknown>): string {
@@ -1146,22 +1145,27 @@ function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, un
     .toLowerCase();
 }
 
-/** Parse consumed usage, preferring counters, then a valid [0, 1] ratio, then direct percentages. */
+/** Counter-derived usage, or undefined when any present counter is outside [0, limit]. */
+function kimiCounterUsed(row: Record<string, unknown>): { used: number; limit: number } | undefined {
+  const limit = toFiniteNumber(row.limit);
+  if (limit === undefined || limit <= 0) return undefined;
+  const used = toFiniteNumber(row.used);
+  const remaining = toFiniteNumber(row.remaining);
+  const inRange = (value: number | undefined): boolean => value === undefined || (value >= 0 && value <= limit);
+  if (!inRange(used) || !inRange(remaining)) return undefined;
+  if (used !== undefined) return { used, limit };
+  return remaining === undefined ? undefined : { used: limit - remaining, limit };
+}
+
+/** Parse consumed usage, preferring valid counters, then a valid [0, 1] ratio, then direct percentages. */
 function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknown>): { percent: number; resetAt?: number } | null {
   const row = asRecord(value);
   if (!row) return null;
   const resetAt = quotaResetAt(row) ?? (resetFallback ? quotaResetAt(resetFallback) : undefined);
-  const limit = toFiniteNumber(row.limit);
-  if (limit !== undefined && limit > 0) {
-    let used = toFiniteNumber(row.used);
-    if (used === undefined) {
-      const remaining = toFiniteNumber(row.remaining);
-      if (remaining !== undefined) used = limit - remaining;
-    }
-    if (used !== undefined) {
-      const percent = normalizePercent((used / limit) * 100);
-      if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
-    }
+  const counters = kimiCounterUsed(row);
+  if (counters) {
+    const percent = normalizePercent((counters.used / counters.limit) * 100);
+    if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
   }
   // Newer Kimi responses expose utilization as a fraction in [0, 1].
   const ratio = toFiniteNumber(row.used_ratio ?? row.usedRatio);
@@ -1191,8 +1195,8 @@ function isKimiWeeklyLimit(item: Record<string, unknown>, detail: Record<string,
 /** Keep legacy windows separate and use the first parseable monthly row across supported envelopes. */
 function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
   const root = asRecord(value);
-  const body = unwrapKimiQuotaPayload(value);
-  if (!root || !body) return null;
+  if (!root) return null;
+  const body = kimiLegacyWindowBody(root);
   let weekly = parseKimiQuotaRow(body.usage);
   const total = parseKimiQuotaRow(body.totalQuota);
   const nested = asRecord(root.data);
