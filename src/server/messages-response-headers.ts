@@ -6,3 +6,23 @@ export function retainUpstreamMessagesRequestId(response: Response, _upstream: H
   response.headers.delete("request-id");
   return response;
 }
+
+const SUCCESS_MEDIA_TYPES = new Map([
+  ["application/json", "application/json"], ["text/plain", "text/plain"], ["text/event-stream", "text/event-stream"],
+]);
+const SUCCESS_CHARSETS = new Map([["utf-8", "utf-8"], ["us-ascii", "us-ascii"]]);
+
+/** Re-render only supported media types and charset parameters for successful bodies. */
+export function messagesSuccessContentType(headers: Headers): string {
+  const raw = headers.get("content-type") ?? "";
+  if (raw.length > 128) return "application/octet-stream";
+  const [media, ...parameters] = raw.toLowerCase().split(";");
+  const type = SUCCESS_MEDIA_TYPES.get(media!.trim());
+  if (!type) return "application/octet-stream";
+  for (const parameter of parameters) {
+    const match = /^\s*charset\s*=\s*(?:"([^"\s]+)"|([^"\s]+))\s*$/.exec(parameter);
+    const charset = match && SUCCESS_CHARSETS.get(match[1] ?? match[2]!);
+    if (charset) return `${type}; charset=${charset}`;
+  }
+  return type;
+}

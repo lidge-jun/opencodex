@@ -339,7 +339,9 @@ model selectors use the brand in `src/lib/error-destination.ts`; configured dest
 supply client error text. Local pre-handler, admission and thread-refusal envelope shapes stay intact.
 
 Status, retry, overflow, rotation, quota and logging decisions run on original evidence. Overflow uses
-`CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after the lane's overflow-versus-throughput decision. The type chosen
+`CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after the lane's overflow-versus-throughput decision on the original
+message. A context code with throughput wording does not select the compaction sentence. Buffered
+passthrough and count_tokens preserve the upstream status and closed type/code. The type chosen
 by that writer survives collection independently of the final HTTP status: a converted rate-limit
 error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
 records into the collector without serializing them; publication follows successful frame admission.
@@ -348,7 +350,11 @@ optional callback. Failure admission charges the legacy frame size, keeping buff
 independent of replacement-message length. Request logging and combo evidence retain original records separately.
 
 The native streaming relay, tool-guard frames, shared-tap tails and native overflow SSE rewrite retain
-their existing byte behavior. The converter and direct encoder own their separate terminal writers.
+their existing byte behavior. `tests/claude-integration/messages-native-stream-parity.test.ts` executes
+exact baseline modules from git-show bytes in a temporary overlay and compares configured/builtin
+stream bytes, settlement callbacks, usage and cancellation with the current modules. The baseline
+loader also checks an intentionally changed header function to prove it is executing original code.
+The converter and direct encoder own their separate terminal writers.
 `tests/claude-integration/messages-error-normalization.test.ts` and
 `tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.
 
@@ -367,3 +373,8 @@ retained names, bounds, date conversion and the forwarded statusLine fixture con
 `src/server/index/startup-warnings.ts` retains proxy-generated request-id/x-opencodex-request-id and
 removes the upstream diagnostic header and its existing CORS exposure token. count_tokens gains no
 ledger ID. Retry-After continues to use the shared formatter, including zero and existing fallbacks.
+Successful buffered passthrough bodies retain their bytes. Their media type is regenerated from
+application/json, text/plain or text/event-stream, with only utf-8/us-ascii charset parameters; other
+media types use application/octet-stream. Rebuilt error bodies always use literal application/json.
+`tests/claude-integration/messages-success-media-types.test.ts` checks both buffered entry points;
+`tests/claude-integration/messages-overflow-verdicts.test.ts` checks all owned overflow writers.

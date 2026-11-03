@@ -472,10 +472,13 @@ export async function collectAnthropicMessageResponse(
   const status = isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200;
   if (collectorVerdictSink.collected && !collectorVerdictSink.collectedProjection) {
     const error = (message.error ?? {}) as Rec;
+    const originalMessage = typeof error.message === "string" ? error.message : "";
+    const throughput = isThroughputLimitText(originalMessage);
     message = ownedAnthropicErrorPayload({ status, type: typeof error.type === "string" ? error.type : undefined,
       code: typeof error.code === "string" ? error.code : undefined,
-      evidence: { status, message: typeof error.message === "string" ? error.message : undefined },
-      overflow: error.code === "context_length_exceeded",
+      evidence: { status, message: originalMessage },
+      overflow: error.code === "context_length_exceeded" && !throughput,
+      ...(error.code === "context_length_exceeded" && throughput ? { condition: "rate_limited" as const } : {}),
     });
   }
   return new Response(JSON.stringify(message), {

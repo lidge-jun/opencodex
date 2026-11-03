@@ -15,5 +15,5 @@
   "messages-error-normalization.test.ts": "claude-integration",
   "messages-header-normalization.test.ts": "claude-integration",
   "messages-lane-errors.test.ts": "claude-integration",
-  "messages-error-contracts.test.ts": "claude-integration"
+  "messages-error-contracts.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration"
 }

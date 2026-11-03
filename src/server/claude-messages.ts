@@ -59,12 +59,14 @@ import {
 import { isClientClosedMessage, recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
-import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
+import { messagesSuccessContentType, upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
 import {
   anthropicErrorBody,
   anthropicErrorResponse,
   collectAnthropicMessage,
   isContextOverflowError,
+  isContextOverflowText,
+  isThroughputLimitText,
   responsesJsonToAnthropicMessage,
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
@@ -445,11 +447,17 @@ async function anthropicNativePassthrough(
   }
   finalize(upstream.status, { closeReason: "non_stream" });
   const retryAfter = formatClientRetryAfter(upstream.headers.get("retry-after"));
-let parsed: unknown;
+  let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { /* a non-JSON success retains its original body */ }
   const error = isRec(parsed) && isRec(parsed.error) ? parsed.error : isRec(parsed) ? parsed : {};
   const isError = !upstream.ok || (isRec(parsed) && (parsed.type === "error" || Object.hasOwn(parsed, "error")));
+  const originalMessage = typeof error.message === "string" ? error.message : "";
+  const throughput = isThroughputLimitText(originalMessage);
+  const sizedError = error.type === "invalid_request_error" || error.type === "request_too_large";
+  const overflow = ![401, 403, 429].includes(upstream.status) && !throughput
+    && (isContextOverflowError(error, originalMessage) || (sizedError && isContextOverflowText(originalMessage)));
   const clientBody = isError ? JSON.stringify(ownedAnthropicErrorPayload({ status: upstream.status,
+    overflow, ...(throughput ? { condition: "rate_limited" as const } : {}),
     type: typeof error.type === "string" ? error.type : undefined,
     code: typeof error.code === "string" ? error.code : undefined,
     evidence: { status: upstream.status, type: typeof error.type === "string" ? error.type : undefined,
@@ -457,7 +465,7 @@ let parsed: unknown;
   })) : text;
   const out = new Response(clientBody, {
     status: upstream.status,
-    headers: { ...rateLimitHeaders, "Content-Type": "application/json", ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
+    headers: { ...rateLimitHeaders, "Content-Type": isError ? "application/json" : messagesSuccessContentType(upstream.headers), ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
   });
   return isError ? attachComboFailureEvidence(out, text) : out;
 }
@@ -1359,7 +1367,8 @@ async function handleClaudeMessagesWithBudget(
       status: outStatus,
       evidence: { status: response.status, type: originalType, code: originalCode, message },
       code: decidedCode,
-      overflow: contextError,
+      overflow: contextError && !isThroughputLimitText(message),
+      ...(contextError && isThroughputLimitText(message) ? { condition: "rate_limited" as const } : {}),
       ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
       ...(isProxyError(response) ? { localError: markProxyError({ message }) } : {}),
     })), {
@@ -1446,8 +1455,13 @@ async function handleClaudeMessagesWithBudget(
         "translation_buffer_limit",
       );
     }
-    if (error && isContextOverflowError(error, typeof error.message === "string" ? error.message : "")) {
-      return Response.json(ownedAnthropicErrorPayload({ status: 400, type: "invalid_request_error", code: "context_length_exceeded", overflow: true, evidence: { status: 400, message: error.message } }), { status: 400 });
+    const originalMessage = typeof error?.message === "string" ? error.message : "";
+    if (error && isContextOverflowError(error, originalMessage)) {
+      const throughput = isThroughputLimitText(originalMessage);
+      return Response.json(ownedAnthropicErrorPayload({
+        status: 400, type: "invalid_request_error", code: "context_length_exceeded", overflow: !throughput,
+        ...(throughput ? { condition: "rate_limited" as const } : {}), evidence: { status: 400, message: originalMessage },
+      }), { status: 400 });
     }
     return Response.json(ownedAnthropicErrorPayload({ status: 502, type: "api_error", evidence: { status: 502, message: error?.message, type: error?.type, code: error?.code } }), { status: 502 });
   }
