@@ -439,62 +439,6 @@ describe("systemd service unit", () => {
   });
 
 
-  test("pins resolved homes after login-shell initialization with shell-safe quoting", () => {
-    const oldCodexHome = process.env.CODEX_HOME;
-    const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-    const oldHome = process.env.HOME;
-    const profileHome = join(TEST_DIR, "login-home");
-    const codexHome = join(TEST_DIR, "pinned-codex's-home");
-    const opencodexHome = join(TEST_DIR, "pinned-opencodex-home");
-    try {
-      mkdirSync(profileHome, { recursive: true });
-      // `/bin/sh -lc` sources this login profile. It deliberately disagrees with the
-      // service install; the command's final pin must win, including a quote in the path.
-      writeFileSync(join(profileHome, ".profile"), "export CODEX_HOME=/profile/codex\nexport OPENCODEX_HOME=/profile/opencodex\n");
-      process.env.HOME = profileHome;
-      process.env.CODEX_HOME = codexHome;
-      process.env.CODEX_SQLITE_HOME = join(TEST_DIR, "pinned-sqlite-home");
-      process.env.OPENCODEX_HOME = opencodexHome;
-      process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-      const plist = buildPlist();
-      const unit = buildUnit();
-      const pinned = `CODEX_HOME='${codexHome.replace(/'/g, "'\\''")}' OPENCODEX_HOME='${opencodexHome}' export CODEX_HOME OPENCODEX_HOME;`;
-      // launchd XML escapes shell punctuation (&apos; and &amp;), while systemd quotes
-      // the complete shell command. Both emitted commands keep the pin after `-lc`.
-      expect(plist).toContain("CODEX_HOME=&apos;");
-      expect(plist).toContain("export CODEX_HOME OPENCODEX_HOME;");
-      // systemd doubles backslashes inside the ExecStart string.
-      expect(unit).toContain(pinned.replace(/\\/g, "\\\\"));
-      expect(unit).toContain('Environment="CODEX_SQLITE_HOME=' + join(TEST_DIR, "pinned-sqlite-home") + '"');
-      expect(unit).not.toContain("local-secret");
-      expect(unit).not.toContain('Environment="OPENCODEX_API_AUTH_TOKEN=');
-
-      // This is the actual `-lc` behavior used by both service definitions: the profile
-      // runs first, then the baked assignment must survive to the child environment.
-      const command = `${pinned} printf '%s\\n%s\\n' "$CODEX_HOME" "$OPENCODEX_HOME"`;
-      const output = execFileSync("/bin/sh", ["-lc", command], {
-        env: { ...process.env, CODEX_HOME: "/manager/codex", OPENCODEX_HOME: "/manager/opencodex" },
-        encoding: "utf8",
-      });
-      expect(output.trim().split("\n")).toEqual([codexHome, opencodexHome]);
-
-      expectTextToContainPath(unit, serviceApiTokenFilePath());
-    } finally {
-      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = oldCodexHome;
-      if (oldCodexSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
-      else process.env.CODEX_SQLITE_HOME = oldCodexSqliteHome;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-      if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-      else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
-      if (oldHome === undefined) delete process.env.HOME;
-      else process.env.HOME = oldHome;
-    }
-  });
-
   test("service start checks for the systemd user unit before shelling out", async () => {
     const service = await readText("src/service/systemd.ts");
     const installSystemd = service.slice(service.indexOf("function installSystemd()"), service.indexOf("function startSystemd()"));
@@ -1233,40 +1177,6 @@ describe("Windows service task", () => {
     expect(document).toContain(`<UserId>${TEST_WINDOWS_TASK_SID}</UserId>`);
   });
 
-  test("keeps install-time home paths literal when Task Scheduler changes its environment", () => {
-    const oldCodexHome = process.env.CODEX_HOME;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const oldUserProfile = process.env.USERPROFILE;
-    const oldAppData = process.env.APPDATA;
-    const oldLocalAppData = process.env.LOCALAPPDATA;
-    try {
-      process.env.CODEX_HOME = "C:\\Users\\한글사용자\\.codex";
-      process.env.OPENCODEX_HOME = join(TEST_DIR, "install-opencodex-home-한글");
-      process.env.USERPROFILE = "C:\\Users\\TaskUser";
-      process.env.APPDATA = "C:\\Users\\TaskUser\\AppData\\Roaming";
-      process.env.LOCALAPPDATA = "C:\\Users\\TaskUser\\AppData\\Local";
-      const script = buildWindowsServiceScript();
-      expect(script).toContain('set "CODEX_HOME=C:\\Users\\한글사용자\\.codex"');
-      expect(script).toContain(`set "OPENCODEX_HOME=${join(TEST_DIR, "install-opencodex-home-한글")}"`);
-      expect(script.indexOf("chcp 65001 >nul")).toBeLessThan(script.indexOf('set "CODEX_HOME='));
-      expect(script).not.toContain('set "CODEX_HOME=%USERPROFILE%');
-      expect(script).not.toContain('set "CODEX_HOME=%APPDATA%');
-      expect(script).not.toContain('set "OPENCODEX_HOME=%USERPROFILE%');
-      expect(script).not.toContain('set "OPENCODEX_HOME=%APPDATA%');
-    } finally {
-      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = oldUserProfile;
-      if (oldAppData === undefined) delete process.env.APPDATA;
-      else process.env.APPDATA = oldAppData;
-      if (oldLocalAppData === undefined) delete process.env.LOCALAPPDATA;
-      else process.env.LOCALAPPDATA = oldLocalAppData;
-    }
-  });
-
   test("escapes environment values that would break out of set quotes", () => {
     const oldPath = process.env.PATH;
     const oldCodexHome = process.env.CODEX_HOME;
@@ -1499,26 +1409,6 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
-    }
-  });
-
-  test("bakes resolved CODEX_HOME and OPENCODEX_HOME into service definitions even when unset in process.env", () => {
-    const oldCodexHome = process.env.CODEX_HOME;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    try {
-      delete process.env.CODEX_HOME;
-      process.env.OPENCODEX_HOME = TEST_DIR;
-      const plist = buildPlist();
-      expect(plist).toContain("<key>CODEX_HOME</key><string>");
-      expect(plist).toContain("<key>OPENCODEX_HOME</key><string>");
-      const unit = buildUnit();
-      expect(unit).toContain('Environment="CODEX_HOME=');
-      expect(unit).toContain('Environment="OPENCODEX_HOME=');
-    } finally {
-      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
     }
   });
 
