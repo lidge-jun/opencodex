@@ -1233,7 +1233,7 @@ test("a non-stream body over the byte cap logs the cap as the reason", async () 
 });
 
 test("an oversized upstream error body is normalized without changing the bounded log inspection", async () => {
-  // 64 Ki characters: the order of the managed native lane's 64 KiB error read bound.
+  // Over 64 KiB: past the managed native lane's 65,536-byte error read bound.
   const errorBody = { type: "error", error: { type: "invalid_request_error", message: "x".repeat(70 * 1024) } };
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
   try {

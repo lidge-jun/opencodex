@@ -381,7 +381,7 @@ records into the collector without serializing them; publication follows success
 of JSON parsing, so scalar, array, malformed and empty payloads cannot suppress projection.
 The direct sink in `src/protocols/encoders/adapter-events.ts` acknowledges successful enqueue through an
 optional callback. Failure admission charges the legacy frame size, keeping buffer-limit decisions
-independent of replacement-message length. Request logging and combo evidence retain original records separately.
+independent of replacement-message length. The enqueued owned terminal frame can exceed the charged bytes by its size difference from the legacy frame, for at most one frame per stream. Request logging and combo evidence retain original records separately.
 
 Special-code and catch returns inspect their baseline-rendered message before choosing a fixed
 sentence. This includes collected buffer errors, transport reads, policy failures and request

@@ -246,8 +246,8 @@ export function workflowDenialSummary(
         // no way to find out what. Without one -- a caller that knows only the reason -- the
         // original sentence is kept unchanged.
         message: spend && Object.hasOwn(SPEND_SCOPE_LABEL, spend.scope)
-          && Number.isSafeInteger(spend.limit) && spend.limit >= 0 && spend.limit <= 1e12
-          && (spend.projected === undefined || (Number.isSafeInteger(spend.projected) && spend.projected >= 0 && spend.projected <= 1e12))
+          && Number.isSafeInteger(spend.limit) && spend.limit >= 0
+          && (spend.projected === undefined || (Number.isSafeInteger(spend.projected) && spend.projected >= 0))
           ? "This proxy refused the request locally: the configured " + SPEND_SCOPE_LABEL[spend.scope]
             + " token ceiling of " + formatTokenCount(spend.limit) + " is spent"
             + (spend.projected !== undefined
