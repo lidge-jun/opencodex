@@ -792,20 +792,18 @@ upstream input limit. A classified input-limit rejection reaches Claude Code as
 compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
 of a retryable 502. Providers on the native Messages lane get the same wording.
 
-Overflow normalization uses only the first **65,536 UTF-16 code units** of the provider's error
-message, including messages that already use Anthropic's wording. This is a string-length limit,
-not a byte or token limit. Text beyond it is discarded without an ellipsis or truncation marker,
-so diagnostic details and token counts near the end may be absent from the error Claude Code
-receives. The added `prompt is too long:` prefix, followed by a space, can make the final message
-longer than this retained portion.
+Messages error-response normalization uses fixed proxy-written wording. A recognized context
+rejection uses `prompt is too long: The request exceeds the model's context window.` instead of
+provider prose or token counts. Throughput errors keep a separate fixed rate-limit sentence.
 
-Within that portion, recognized Anthropic wording is kept; otherwise OpenCodex emits
-`prompt is too long: <requested> tokens > <limit> maximum` only when it finds
-`maximum context length is <limit> tokens` followed by `resulted in <requested> tokens` or
-`you requested <requested> tokens`. It uses the first stated limit and the first matching request
-count after it. If that pair is missing, reversed, or cut off, it prefixes the retained text with
-`prompt is too long:` followed by a space, without inventing counts. A throughput limit that only mentions tokens
-(for example "too many tokens per minute") keeps its text and is not treated as an overflow.
+On native and caller-forward Messages streams, only blocks whose first non-comment field is
+exactly `event:error` or `event: error` have their error data normalized. The full diagnostic within
+the 1 MiB error hold determines recovery wording. Above that bound, the stream emits
+`The provider stream reported an error.` without a compaction phrase (OVERSIZE-1M), preserving its
+issued HTTP status. Separately, native non-stream folds of collected error events return 502 where
+an untyped proxy-built error envelope previously returned 200 (FOLD-502). See the
+[Messages format contract](/reference/proxy-formats/#post-v1messages-and-count_tokens) for field
+ordering, rename replay and the scope of these two exceptions.
 
 If compaction itself still exceeds the limit, preserve the original
 history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
