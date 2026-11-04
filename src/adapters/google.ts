@@ -22,6 +22,7 @@ import { contentPartsToText, parseDataUrl } from "./image";
 import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
+import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
@@ -981,12 +982,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     // 429 rotation and raw error formatting.
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
-          fetchResponse: (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> =>
-            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
+          fetchResponse: async (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> => {
+            const res = await (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
               request,
               ctx,
               { toolSchemaProfile, toolSchemaPolicy },
-            ),
+            );
+            // A rejected replay usually arrives as a real HTTP 400, and the dispatcher reports a
+            // non-ok response without ever calling parseStream/parseResponse — the only other
+            // callers of clear-on-invalid. Without this, the bad signature stays cached and is
+            // replayed on every turn until the TTL expires (#8054). Read a clone so the body the
+            // dispatcher formats is untouched, and await it so the next turn cannot race ahead of
+            // the eviction. No resend here: payload rejection stays resend-is-futile.
+            if (res.status === 400) {
+              handleSignatureRejection(await readDisplaySafeErrorPayloadText(res.clone(), ctx?.abortSignal));
+            }
+            return res;
+          },
           formatErrorBody: (status: number, _headers: Headers, payloadText: string): string =>
             (provider.googleMode === "cloud-code-assist" ? safeAntigravityHttpErrorMessage : safeVertexHttpErrorMessage)(status, payloadText),
         }

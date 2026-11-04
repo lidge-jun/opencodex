@@ -144,6 +144,14 @@ A first `functionCall` that still has no real signature after replay receives th
 `skip_thought_signature_validator` sentinel through `applyAntigravityThoughtSignatureFallback`, on
 Antigravity, Vertex and AI Studio alike. AI Studio gained it for combo hops that hand Gemini a call
 another model issued (#7298); non-Gemini model ids never receive it.
+An upstream rejection clears the session's replay entry whether it arrives inside a 200 body or
+stream or as a real HTTP 400: the Antigravity/Vertex `fetchResponse` wrapper in
+`src/adapters/google.ts` reads a clone of the final 400 body and runs the same clear-on-invalid
+check, because the dispatcher reports a non-ok response without calling the adapter parsers. The
+next turn therefore signs its first call with the sentinel instead of replaying the rejected value
+until TTL expiry (#8054). The rejected request itself is not resent; `payload-rejected` stays
+resend-is-futile. `tests/adapters/google/google-signature-history-roundtrip.test.ts` drives the
+400 through `fetchResponse` on both modes.
 
 `src/adapters/openai-responses/passthrough.ts` removes item-level `extra_content` through
 `stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for
