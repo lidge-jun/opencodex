@@ -197,6 +197,19 @@ describe("Spanish documentation localization", () => {
     expect(checked).toBeGreaterThan(1);
   });
 
+  test("quickstart presents foreground start commands as separate alternatives in every locale", () => {
+    for (const locale of ["", ...localeFolders]) {
+      const path = join(root, locale, "getting-started/quickstart.md");
+      const blocks = codeBlocks(source(path));
+      const defaultStart = blocks.find(block => /^ocx start[ \t]+#/m.test(block));
+      expect(defaultStart, path).toBeDefined();
+      expect(defaultStart, path).not.toContain("ocx start --port 8080");
+      expect(defaultStart, path).not.toContain("ocx status");
+      expect(defaultStart, path).not.toContain("ocx gui");
+      expect(blocks, path).toContain("ocx start --port 8080\n");
+    }
+  });
+
   test("keeps executable examples and frontmatter in the current English shape", () => {
     for (const path of pages(root, true)) {
       const english = source(join(root, path));
@@ -312,6 +325,21 @@ describe("Spanish documentation localization", () => {
         expect(server, `${locale || "en"} remote-access credential planes`).toContain(identifier);
       }
     }
+  });
+
+  test("Responses admission treats empty dedicated headers as absent and rejects nonempty invalid credentials", async () => {
+    const { resolveResponsesApiAuth } = await import("../../src/server/auth-cors");
+    const config = { hostname: "0.0.0.0", providers: {}, port: 10100,
+      apiKeys: [{ id: "docs-key", name: "docs", key: "docs-secret", createdAt: "2026-11-04T00:00:00Z" }],
+    } as Parameters<typeof resolveResponsesApiAuth>[1];
+    const resolve = (dedicated: string) => resolveResponsesApiAuth(new Request("https://proxy.test/v1/responses", {
+      headers: { authorization: "Bearer docs-secret", "x-opencodex-api-key": dedicated },
+    }), config);
+    for (const empty of ["", " ", "\t  "]) {
+      expect(resolve(empty)).toMatchObject({ kind: "configured", keyId: "docs-key", source: "bearer" });
+    }
+    expect(resolve(" invalid-secret ")).toBeNull();
+    expect(resolve(" docs-secret ")).toMatchObject({ kind: "configured", keyId: "docs-key", source: "dedicated" });
   });
 
   test("Responses admission tables match the implemented header matrix in every locale", async () => {

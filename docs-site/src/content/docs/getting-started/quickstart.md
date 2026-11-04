@@ -81,10 +81,19 @@ adapter metadata.
 
 ## 2. Start the proxy
 
+Run one of these alternatives; each keeps the proxy in the foreground:
+
 ```bash
 ocx start            # defaults to port 10100
+```
+
+Alternatively, choose a different port:
+
+```bash
 ocx start --port 8080
 ```
+
+Keep that proxy terminal open. Run the following status and dashboard commands in a second terminal with the same `OPENCODEX_HOME`.
 
 On start, opencodex:
 

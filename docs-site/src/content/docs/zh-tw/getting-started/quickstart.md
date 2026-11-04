@@ -34,10 +34,19 @@ OpenRouter 預設會宣告 922,000 token 的可用 context window；Cursor 則�
 
 ## 2. 啟動代理
 
+執行下列兩種方式之一；代理會持續在前景執行：
+
 ```bash
 ocx start            # 預設埠 10100
+```
+
+也可以改用其他連接埠：
+
+```bash
 ocx start --port 8080
 ```
+
+保持此終端開啟。後續狀態檢查與儀表板命令需在另一個設定相同 `OPENCODEX_HOME` 的終端中執行。
 
 啟動時,opencodex 會:
 

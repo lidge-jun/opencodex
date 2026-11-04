@@ -648,6 +648,8 @@ produce un diagnóstico breve y específico en stderr, sin valores de claves, co
 
 Usa `--` antes de un mensaje de una sola palabra para que no pueda seleccionar un subcomando desconocido de Codex.
 
+Las credenciales automáticas también requieren una prueba reciente de propiedad del listener activo de esta instalación. En un proxy independiente, debe proceder del origen HTTP exacto de la configuración administrada del proveedor Codex; un proxy activo en otro puerto o dirección loopback no autoriza ese destino. Un cliente directo prueba su propio listener local y conserva las comprobaciones de su URL de servidor guardada, porque el servidor al que se conecta pertenece a otra instalación. Esa prueba demuestra que el listener que responde pertenece a la instalación local, no qué tipo de listener es. Si no hay una prueba coincidente, el lanzador retiene el token automático y deja el enrutamiento sin cambios.
+
 El espacio de nombres de configuración del equipo también debe impedir que otros usuarios creen
 archivos de sistema ausentes. Un espacio ProgramData/OpenAI/Codex sin protección en Windows
 impide la entrega automática de credenciales; el lanzador no lo crea. macOS acepta ACL que solo
@@ -835,7 +837,7 @@ ocx system settings --show-codex-credits on --json
 ocx system settings --json
 ```
 
-Nueva opción escribe informe `{ok:true, settings: observedFields, catalogRefreshPending}`. Ultra Fast realiza la lectura GET del mismo objetivo porque PUT omite ese valor. Una observación faltante/incompatible/leída permanece `verification:"unverified"` con `unverifiedFields` y una salida distinta de cero después de la aceptación; los valores solicitados nunca se sustituyen por observaciones. Los switches de escritorio combinados conservan datos almacenados/efectivos y los aplican. El catálogo pendiente o la aplicación nativa diferida/rechazada es distinta de una configuración guardada. Falsa pendiente no es prueba de que cada cliente ha recargado.
+Al escribir las nuevas opciones se devuelve `{ok:true, settings: observedFields, catalogRefreshPending}`. Ultra Fast consulta el mismo destino mediante GET porque PUT omite ese valor. Si la observación falta, no coincide o la lectura falla, el resultado conserva `verification:"unverified"`, incluye `unverifiedFields` y termina con un código distinto de cero tras aceptar el cambio; los valores solicitados nunca sustituyen a las observaciones. Los controles de escritorio combinados conservan los valores guardados, los efectivos y el resultado de aplicación. Que el catálogo esté pendiente o la aplicación nativa se difiera o rechace es distinto de que una opción se haya guardado. Un estado pendiente falso no demuestra que todos los clientes hayan recargado.
 
 `ocx system update` actualiza el propio OpenCodex. La superficie de inspección separada Codex CLI es:
 

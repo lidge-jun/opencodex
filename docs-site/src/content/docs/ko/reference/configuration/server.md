@@ -69,7 +69,7 @@ x-opencodex-api-key: your-secret-token
 | `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 
-Responses와 Chat Completions는 인식된 데이터 플레인 자격 증명을 `x-opencodex-api-key`에서 받으며, 이 전용 헤더가 없을 때는 `Authorization: Bearer`에서도 받습니다. 전용 헤더가 있으면 잘못된 값이어도 우선하므로, 유효한 bearer로 그 거부를 우회할 수 없습니다. 무관한 bearer는 프록시 접근을 허용하지 않으며 이 경로는 `x-api-key`를 받지 않습니다. 생성된 `apiKeys`와 공유 데이터 토큰은 상수 시간으로 비교됩니다. 관리 자격 증명은 모델 접근 권한을 부여하지 않습니다.
+Responses와 Chat Completions는 인식된 데이터 플레인 자격 증명을 `x-opencodex-api-key`에서 받으며, 이 전용 헤더가 없거나 앞뒤 공백을 제거한 값이 비어 있을 때는 `Authorization: Bearer`에서도 받습니다. 앞뒤 공백을 제거한 전용 헤더 값이 비어 있지 않으면 잘못된 값이어도 우선하므로, 유효한 bearer로 그 거부를 우회할 수 없습니다. 무관한 bearer는 프록시 접근을 허용하지 않으며 이 경로는 `x-api-key`를 받지 않습니다. 생성된 `apiKeys`와 공유 데이터 토큰은 상수 시간으로 비교됩니다. 관리 자격 증명은 모델 접근 권한을 부여하지 않습니다.
 
 Messages와 `count_tokens`는 라우팅 클라이언트 호환성을 위해 세 admission 형식을 계속 허용합니다. 하지만 비루프백
 바인드의 네이티브 Anthropic 패스스루는 프록시 admission을 `x-opencodex-api-key`로만 받고,

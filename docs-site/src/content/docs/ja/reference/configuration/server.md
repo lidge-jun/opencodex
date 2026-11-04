@@ -65,7 +65,7 @@ x-opencodex-api-key: your-secret-token
 | `/v1/messages/count_tokens` |受け入れられました |受け入れられました |受け入れられました |
 | `/v1/models` |受け入れられました |受け入れられました |受け入れられました |
 
-Responses と Chat Completions は、認識されたデータプレーン認証情報を `x-opencodex-api-key`、またはその専用ヘッダーがない場合は `Authorization: Bearer` で受け付けます。専用ヘッダーがあれば無効でも優先され、有効な bearer でその拒否を回避できません。無関係な bearer はプロキシへのアクセスを許可せず、この経路は `x-api-key` を受け付けません。生成された `apiKeys` と共有データトークンは定数時間で比較されます。管理認証情報はモデルアクセスを許可しません。
+Responses と Chat Completions は、認識されたデータプレーン認証情報を `x-opencodex-api-key`、またはその専用ヘッダーがないか、前後の空白を除去すると空になる場合は `Authorization: Bearer` で受け付けます。前後の空白を除去して空でない専用ヘッダーがあれば、無効でも優先され、有効な bearer でその拒否を回避できません。無関係な bearer はプロキシへのアクセスを許可せず、この経路は `x-api-key` を受け付けません。生成された `apiKeys` と共有データトークンは定数時間で比較されます。管理認証情報はモデルアクセスを許可しません。
 
 Messages と `count_tokens` はルーティングクライアントとの互換性のために 3 つの admission 形式を引き続き受け入れます。
 ただし非ループバック bind のネイティブ Anthropic パススルーでは、プロキシ admission は

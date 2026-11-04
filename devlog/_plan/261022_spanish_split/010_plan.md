@@ -106,7 +106,7 @@ branch at `588c95e9e636700f2035311017328d5670451e4a` on `pr-assets`.
 Privacy scan and diff whitespace checks passed. Keep the Draft and independent
 human language/render-acceptance hold; an agent's inspection is not that approval.
 
-## PR #7559 owner-requested refresh, October 23
+## PR #7559 owner-requested refresh, October 24 (UTC)
 
 Addressed the owner's [October 24 UTC triage comment](https://github.com/lidge-jun/opencodex/pull/7559#issuecomment-6378349500).
 Merged `dev` first at `2494848f56e8a4f283722b2ebd816977e828c7af`, then at
@@ -449,7 +449,7 @@ passed. Focused receipts, using repository wrappers and synthetic test homes:
 - Windows signing-policy file: 26 passed, 12 existing platform skips, 0 failed,
   186 assertions. This does not establish real release signing.
 - GUI quota freshness/refresh/account and log-filter tests: 93 passed, 0 failed,
-  527 assertions across 7 files using the GUI pinned wrapper and synthetic DOM.
+  527 assertions across 7 files using the pinned GUI test wrapper and synthetic DOM.
 - Current-dev contracts: the 19-file Linux group initially passed 511 tests,
   skipped 1 and failed 9 (3,067 assertions) because its temporary mounts were
   non-executable. A direct executable/access probe reproduced EACCES. Rechecking
@@ -972,7 +972,7 @@ All are confirmed and corrected:
 | Review item | Disposition |
 | --- | --- |
 | Remote Link / fallback-off | Limit no-transmission assurances to failures before dispatch. After forwarding starts, Home may have received or processed the request; inspect the uncertain result before retrying. English/Spanish and the affected Turkish fallback copy agree. |
-| Native Messages | Rewrite the Spanish identity/beta contract. English/Spanish identify the required observed header bundle, operator precedence, first-party destination, compatibility fallback, allowlist and stripping rules; headers grant no authorization. |
+| Native Messages | Rewrite the Spanish identity/beta contract. English/Spanish identify the header bundle that must be observed, operator precedence, first-party destination, compatibility fallback, allowlist and stripping rules; headers grant no authorization. |
 | Docker Hub | Create missing hub and remoteGui objects only for fresh volumes, with explicit replacement warnings and a separate existing-volume update recipe. Preserve siblings and existing CORS entries. Remove the incorrect assertion that the seed already contains a hub object. |
 | reasoning_effort | State the model-subset clamp, independent xhigh/max labels, explicit alias exception and noReasoningModels omission. |
 | Mistral | Specify both response paths, typed text/thinking arrays, byte/order preservation, parser reset, malformed-block errors and unchanged other hosts. |
@@ -1084,3 +1084,125 @@ Request one full CodeRabbit review without waiting for its result. Keep Draft
 for fresh review, maintainer-arranged independent Spanish/render acceptance,
 authorized current-head CI and maintainer approval. No merge, CI dispatch/retry,
 permission change or CodeRabbit configuration change is authorized here.
+
+
+## November 4 follow-up: completed review and current-dev parity
+
+Merged upstream dev through `0a30c551304927c93c26a96c034bd39a166c7460`
+(2.98.0; 55 commits beyond the previous integration base) using ordinary merge
+`5a193fe103ebe0d94d1c6b52c1117d8392aaee37`. Published history is retained.
+The Astro conflict keeps Spanish navigation and adds the new Ollama client guide.
+The test-layout conflict keeps all upstream registrations and the docs shard;
+its formatting follows upstream so the file remains below the size threshold.
+A final fetch before publication found no missing dev commits.
+
+Disposition of review `5731399667` (November 2 UTC):
+
+- Correct the triage receipt heading to October 24 UTC.
+- Separate the default and custom-port foreground quickstart commands in all
+  nine locales; explain the second terminal and shared OPENCODEX_HOME.
+- Translate the storage database condition as locked, and clarify that model
+  changes save in click order, with pending unsent changes discarded on leaving.
+- State in all nine server references that only a nonempty trimmed dedicated
+  header has priority; absent, empty and whitespace-only headers use bearer
+  fallback, while a nonempty invalid dedicated credential cannot fall back.
+- Fix the outside-diff agent read-back wording: a failed, unknown or mismatched
+  read-back leaves upstream application unknown, so operators must inspect before
+  retrying. Rephrase both unverified receipt comments without changing behavior.
+
+Spanish covers all 80 current canonical documentation paths, including the new
+Ollama API subset. Targeted semantic synchronization also covers Kiro structured
+output and refusal behavior, Codex request-owned and durable affinity, pool
+threshold selection, Anthropic quota windows, Kimi capabilities and monthly
+quota, Qoder discovery deadlines, Artificial Analysis capability data, sync
+fanout, service homes, uninstall refusal, orchestrated updates, HTTP CLI-update
+authority and fixed Messages error normalization. Backend contracts, native
+Desktop implementation, dependencies and CI/reviewer configuration are unchanged
+relative to dev. These technical and targeted semantic checks do not replace
+independent linguistic acceptance of every translated sentence.
+
+Validation on the working tree to be published, Bun 1.4.4:
+
+```powershell
+bun install --frozen-lockfile
+$env:OCX_TEST_RUNNER_BUN = (Get-Command bun).Source
+# TEMP/TMP use a private ignored test directory; the repository wrapper/preload
+# creates separate synthetic OpenCodex/Codex homes.
+$docsTests = @(rg --files tests/ci-workflows -g 'docs-*.test.ts')
+bun scripts/test.ts --timeout 120000 @docsTests tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/server/data-plane-admission-identity.test.ts
+# 446 pass / 0 fail; 5640 assertions, 17 files, including 27 Spanish cases.
+
+$related = @(
+  'tests/responses/responses-ollama-codec.test.ts',
+  'tests/server/server-ollama-inbound.test.ts',
+  'tests/providers/kiro/kiro-structured-output.test.ts',
+  'tests/providers/kiro/kiro-structured-output-strict.test.ts',
+  'tests/adapters/anthropic/anthropic-account-pool.test.ts',
+  'tests/providers/provider-anthropic-usage-windows.test.ts',
+  'tests/codex-integration/codex-affinity-request-owned.test.ts',
+  'tests/codex-integration/codex-affinity-restart-matrix.test.ts',
+  'tests/routing/codex-role-capability-pages.test.ts',
+  'tests/cli/sync-fanout.test.ts',
+  'tests/cli/sync-command-fanout.test.ts',
+  'tests/update/update-orchestrated-plan.test.ts',
+  'tests/update/update-orchestrated-arguments.test.ts',
+  'tests/update/update-orchestrated-identity.test.ts',
+  'tests/server/messages-sse-error-filter.test.ts',
+  'tests/server/messages-sse-error-lifecycle.test.ts',
+  'tests/server/safe-response-headers.test.ts'
+)
+bun scripts/test.ts --timeout 120000 @related
+# Windows: 434 pass / 6 fail; 2929 assertions, 17 files, 123.3 seconds.
+# All six failures occur while creating file symlinks (EPERM), before the
+# intended store assertions. The complete failing test file matches dev.
+
+# Same unchanged 33-case affinity file in official oven/bun:1.4.4 Linux,
+# image digest sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d:
+$reviewRoot = (Get-Location).Path
+docker run --name ocx-spanish-review-20261104 --rm --network none --read-only --user 0:0 --tmpfs /tmp:rw,nosuid,size=1g --env HOME=/tmp/runner --env OCX_TEST_RUNNER_BUN=/usr/local/bin/bun --mount "type=bind,source=$reviewRoot,target=/workspace,readonly" --workdir /workspace oven/bun:1.4.4 bun scripts/test.ts --timeout 120000 tests/codex-integration/codex-affinity-restart-matrix.test.ts
+# Linux: 33 pass / 0 fail; 147 assertions, 65.7 seconds, including all six cases.
+# The Windows expansion is not represented as green. Linux results do not
+# replace verification on a Windows host allowed to create file symlinks.
+
+bun scripts/test.ts --timeout 120000 tests/ci-workflows/docs-spanish-localization.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts
+# Final after anchor, wording and registry-format corrections:
+# 56 pass / 0 fail; 3559 assertions, three files.
+bun run typecheck
+# Zero errors in 2316 files.
+bun run structure:check
+bun scripts/file-size-ratchet.ts
+bun run privacy:scan
+git diff --cached --check
+Push-Location docs-site
+bun install --frozen-lockfile
+bun run build
+Pop-Location
+# Final complete build: 721 pages, 108027 internal links, Pagefind and sitemap.
+```
+
+The quickstart regression was observed failing before the command separation;
+it passes after the correction. The header regression exercises the current
+auth resolver with synthetic keys for empty, whitespace-only, invalid nonempty
+and valid trimmed dedicated headers. Neither probe uses personal credentials.
+
+The final browser inspection covers the new Ollama guide, corrected foreground
+quickstart, storage/save text and HTTP-update warning at desktop 1280 and mobile
+390/320 px, lang=es and no page-level horizontal overflow. Long commands scroll
+inside their blocks. Viewport overrides were reset. New captures are pinned on
+pr-assets at `01ea6efd4b3651612c5a2099a7edcc80050a0f14`, directory
+`spanish-docs-review-20261104`, outside the source branch. This is agent-run
+browser evidence; native Desktop and independent human acceptance are separate.
+
+Full-suite resource exception remains: do not repeat the entire root suite on
+this shared Windows host after prior expensive interrupted runs. Complete docs
+checks, focused runtime coverage, explicit diagnostics of the six Windows
+symlink failures and a successful isolated Linux run are documented above.
+Residual full-suite and platform coverage belongs to authorized hosted CI.
+No failed, unrun, approval-required or older-head suite is claimed as passing.
+
+Publish the corrections together, reply to the five corrected inline threads,
+record outside-diff/unverified dispositions, and update the English description
+once. Request one full CodeRabbit review without waiting for its result. Keep
+Draft for fresh review, maintainer-arranged independent Spanish/render
+acceptance, authorized current-head CI and maintainer approval. No merge,
+workflow dispatch/retry, reviewer assignment or permission change is performed.

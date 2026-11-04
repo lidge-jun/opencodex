@@ -33,10 +33,19 @@ ocx init
 
 ## 2. 启动代理
 
+运行以下两种方式之一；代理会保持在前台运行：
+
 ```bash
 ocx start            # defaults to port 10100
+```
+
+也可以改用其他端口：
+
+```bash
 ocx start --port 8080
 ```
+
+保持此终端打开。后续状态检查和仪表板命令需在另一个设置相同 `OPENCODEX_HOME` 的终端中运行。
 
 启动时，opencodex 会：
 

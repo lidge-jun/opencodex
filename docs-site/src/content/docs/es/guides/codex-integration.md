@@ -190,6 +190,8 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 
 Cuando OpenCodex posee enrutamiento, ambos modos escriben `$CODEX_HOME/opencodex.config.toml` como una configuración de referencia/retroceso. En loopback contiene las claves de raíz que puede combinar manualmente si se eliminó la inyección automática; en non-loopback contiene el formulario de proveedor dedicado. El modo de proveedor externo deja este perfil intacto.
 
+Al reconstruir ese archivo se conservan las claves simples de la raíz que OpenCodex no administra. Por ejemplo, `stream_idle_timeout_ms` y `stream_max_retries` sobreviven a la siguiente inyección. Cada asignación conservada se copia tal como está escrita, incluidos valores de varias líneas y enteros de 64 bits, y se coloca antes de la primera tabla. No se conservan las claves de tablas ni las claves raíz con puntos, como `a.b = 1`. OpenCodex prevalece en cualquier colisión: reescribe `model_provider`, `model_catalog_json` y `openai_base_url` según el modo de enrutamiento. También elimina una clave raíz cuyo nombre coincide con una tabla que escribirá el perfil, como un `features = { ... }` en línea si el perfil escribe `[features]`. Si el archivo cambia mientras la inyección espera el bloqueo de escritura, la operación termina con un error reintentable y conserva tu edición.
+
 :::caution
 Claves de raíz como `openai_base_url`, `model_provider`, y `model_catalog_json` **debe** sentarse antes de la primero `[table]` cabecera. El inyector garantiza esa colocación, elimina su propio rancio / duplicado copia, y nunca sobrescribe una raíz propiedad del usuario `openai_base_url`; si existe, la sincronización actualiza el catálogo, pero informa que el enrutamiento no fue inyectado.
 :::
@@ -372,6 +374,8 @@ Las filas de catálogo enrutadas no nativas usan `tool_mode: "code_mode_only"`. 
 Para los proveedores de claves Responses que no aceptan la gramática de herramientas personalizadas `exec` de Codex, opencodex codifica esa declaración y su historial como una herramienta de función ascendente, luego restaura el ciclo de vida de llamadas a funciones transmitidas a `custom_tool_call` antes de que Codex lo vea. El enrutamiento directo nativo OpenAI y la herramienta personalizada `apply_patch` soportada permanecen sin cambios.
 
 Si un modelo encaminado envía un parche completo a medida que la entrada `exec` de modo de código completa, opencodex lo convierte a la llamada anidada `tools.apply_patch` antes de que los eventos de finalización de herramienta alcancen Codex. Las llamadas personalizadas nativas y las llamadas a funciones convertidas usan la misma regla de finalización; las vistas previas de parches se mantienen mientras no se resuelve su forma ejecutable. JavaScript que simplemente contiene texto de parche y cargas útiles personalizadas nativas no relacionadas permanecen sin cambios.
+
+Si un modelo enrutado envuelve dos veces el cuerpo ejecutable de una herramienta de formato libre, opencodex elimina una envoltura JSON adicional que contenga únicamente una cadena input. La corrección se aplica a los cuerpos de exec local y apply_patch; deja intactas otras gramáticas y los objetos ambiguos, y no decodifica de forma recursiva. La vista previa en streaming solo se retiene mientras el cuerpo aún pueda resultar ser esa envoltura. El JavaScript que simplemente comienza con un objeto o bloque sigue transmitiéndose a medida que llega.
 
 Un modelo enrutado también puede enviar erróneamente un objeto de argumento de shell como `{"cmd":"git status --short"}` al modo de código `exec`. Para un catálogo de modo de código verificado, opencodex convierte un objeto de shell inequívoco en `tools.exec_command(...)` JavaScript y reenvía su salida a través de `text(...)`. Las opciones de shell se conservan y Codex sigue ejecutando y autoriza el comando. Los campos de reserva de JavaScript válidos, los objetos ambiguos y los espacios de nombres de herramientas no relacionados no se convierten. Esta reparación de compatibilidad no pasa por alto los límites de velocidad del proveedor ni cambia la directiva de reintento configurada.
 
@@ -661,6 +665,16 @@ Cuando se cancela la reautenticación del dispositivo de la cuenta principal, un
 Cuando una cuenta deja la selección de grupo, la razón viaja con la decisión en lugar de ser recalculada para su visualización, por lo que una superficie nunca puede informar una cuenta saludable mientras el enrutamiento la está abandonando. `GET /api/codex-auth/accounts` lleva `reauthReason` junto a `needsReauth` en cada cuenta: `missing_credential` para una credencial que nunca se almacenó, `refresh_failed` para una actualización de credenciales que sigue fallando y `quota_unauthorized` cuando se rechazó la búsqueda de uso.
 
 Una actualización de la cuenta principal que no se completa todavía responde `503` con `Retry-After`, porque un reintento aún puede tener éxito. El mensaje ahora agrega que un fallo que persiste significa que la cuenta principal necesita reautenticación, en lugar de solo pedir otro intento.
+
+<a id="request-owned-conversation-affinity"></a>
+
+### Afinidad de conversaciones con credenciales propias
+
+`codexPool.requestOwnedAffinity` es un booleano opcional, `false` de forma predeterminada. Actívalo con `true` para mantener en una cuenta apta, dentro de cada ámbito de cuota, una conversación que lleve su propio bearer de ChatGPT. La liberación de la afinidad y los desvíos de modelo aún pueden cambiar la cuenta. El vínculo solo existe en este proceso: reiniciar el proxy o rotar el bearer inicia otro vínculo. Las cadenas de subagentes sin sesión que abarcan varias generaciones pueden vincularse por hilo.
+
+Las etiquetas describen el vínculo cuando termina la selección. `unbound` indica que no se guardó ningún vínculo; `request_owned`, que la credencial del cliente no activó esta opción; y `no_conversation`, que no había una clave de conversación. Un cambio posterior de elegibilidad puede liberar un vínculo después de la selección.
+
+Con la opción activada o desactivada, una solicitud con bearer propio registra la cuenta que atendió cada turno bajo una clave limitada a ese bearer. Si un turno posterior usa otra cuenta, incluso tras una selección manual, OpenCodex elimina `previous_response_id` antes de enviar y rechaza las referencias heredadas a archivos subidos mediante `file_id` con HTTP 400, porque la cuenta nueva no puede leerlas.
 
 <a id="optional-idle-window-steering"></a>
 

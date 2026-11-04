@@ -41,10 +41,19 @@ penceresi bildirir; Cursor kendi adaptör meta verilerini korur.
 
 ## 2. Proxy'yi başlatın
 
+Aşağıdaki seçeneklerden yalnızca birini çalıştırın; proxy ön planda kalır:
+
 ```bash
 ocx start            # varsayılan port 10100
+```
+
+Farklı bir bağlantı noktası için alternatif:
+
+```bash
 ocx start --port 8080
 ```
+
+Bu terminali açık bırakın. Sonraki durum ve kontrol paneli komutlarını aynı `OPENCODEX_HOME` ile ikinci bir terminalde çalıştırın.
 
 Başlatıldığında opencodex:
 

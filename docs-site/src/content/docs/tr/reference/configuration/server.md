@@ -67,7 +67,7 @@ x-opencodex-api-key: your-secret-token
 | `/v1/messages/count_tokens` | kabul edilir | kabul edilir | kabul edilir |
 | `/v1/models` | kabul edilir | kabul edilir | kabul edilir |
 
-Responses ve Chat Completions, tanınan veri düzlemi kimlik bilgisini `x-opencodex-api-key` üzerinden; bu özel başlık yoksa `Authorization: Bearer` üzerinden kabul eder. Özel başlık geçersiz olsa da önceliklidir; geçerli bearer bu reddi gidermez. İlgisiz bearer proxy erişimi vermez ve bu yollar `x-api-key` kabul etmez. Oluşturulan `apiKeys` ve ortak veri token’ı sabit zamanda karşılaştırılır; yönetici kimlik bilgileri model erişimi sağlamaz.
+Responses ve Chat Completions, tanınan veri düzlemi kimlik bilgisini `x-opencodex-api-key` üzerinden; bu özel başlık yoksa veya kenar boşlukları silinince boş kalıyorsa `Authorization: Bearer` üzerinden kabul eder. Kenar boşlukları silindikten sonra boş olmayan özel başlık, geçersiz olsa da önceliklidir; geçerli bearer bu reddi gidermez. İlgisiz bearer proxy erişimi vermez ve bu yollar `x-api-key` kabul etmez. Oluşturulan `apiKeys` ve ortak veri token’ı sabit zamanda karşılaştırılır; yönetici kimlik bilgileri model erişimi sağlamaz.
 
 Messages ve `count_tokens`, yönlendirilen istemci uyumluluğu için üç kabul
 formunu da kabul etmeye devam eder. Yerel Anthropic doğrudan geçişi geri döngü

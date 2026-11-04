@@ -60,10 +60,19 @@ La versión estable actual incluye GPT-5.6 Sol/Terra/Luna para el paso directo d
 
 ## 2. Inicia el proxy
 
+Ejecuta una de estas alternativas; ambas mantienen el proxy en primer plano:
+
 ```bash
 ocx start            # defaults to port 10100
+```
+
+Como alternativa, elige otro puerto:
+
+```bash
 ocx start --port 8080
 ```
+
+Deja abierta esa terminal del proxy. Ejecuta los comandos de estado y del dashboard que siguen en una segunda terminal con el mismo `OPENCODEX_HOME`.
 
 Al iniciar, opencodex:
 

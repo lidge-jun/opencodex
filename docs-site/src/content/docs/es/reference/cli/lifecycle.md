@@ -46,6 +46,8 @@ ocx start --socks5-off
 
 ### `ocx stop [--json]`
 
+Un Child de Remote Link sin supervisor que recibe una señal de apagado restaura Codex nativo y Grok administrado antes de liberar su listener, comprobando de nuevo la conexión atendida antes de cada escritura. La supervisión de servicio o Desktop, la propiedad de otra instancia, los traspasos de reinicio o reciclaje y los recibos pendientes de parada del padre conservan las integraciones. Durante el apagado se rechaza un reinicio vinculado con `409 runtime_stopping`. Una terminación forzada puede omitir los manejadores de señales; sigue siendo necesaria la restauración del `ocx stop` del padre. Para volver a enrutar Codex por el Home, inicia primero el Child con `ocx start`, o `ocx service start` si está instalado como servicio, y después ejecuta `ocx sync --restart-codex`. Iniciar por sí solo no restablece el enrutamiento. Sincronizar con el Child detenido también lo restablece, pero apuntaría a un listener que no está ejecutándose: inicia primero el Child.
+
 Detiene el proxy en ejecución por su PID, elimina el archivo PID y restaura Codex nativo cuando el entorno es independiente. Si hay un servicio administrado, `ocx stop` lo detiene primero para impedir que vuelva a iniciar el proxy.
 
 En un cliente conectado a un Hub, la parada conserva el enrutamiento de Codex, su catálogo y la
@@ -133,6 +135,10 @@ Repare un hilo que se compactó a través de un proveedor enrutado antes de rean
 ### `ocx uninstall` · `ocx remove`
 
 Detenga el servicio y el proxy, elimine el servicio y la compensación Codex, restaure el Codex nativo y, a continuación, elimine la configuración local opencodex solo si todos los pasos de restauración tuvieron éxito. `remove` es un alias de `uninstall`. La limpieza de configuración requiere metadatos de propiedad creados por una instalación nueva; los directorios heredados o compartidos se dejan en su lugar.
+
+Cuando `ocx uninstall` se ejecuta como root o desde una terminal Windows elevada, comprueba primero que ninguna otra cuenta pueda modificar el directorio de configuración, sus antecesores ni los directorios que contiene. También comprueba que ningún enlace interno salga de ese directorio; en Windows exige que no haya enlaces. Si una comprobación falla, se detiene antes de modificar nada e indica el motivo. Ejecuta `ocx uninstall` con la cuenta propietaria, sin `sudo` ni privilegios de administrador, o restringe los directorios a esa cuenta y elimina esos enlaces antes de reintentarlo. En Windows ARM64, donde no puede determinarse la elevación, se aplica la misma comprobación; si no puede completarse, detén opencodex y elimina tú mismo el directorio de configuración.
+
+Una entrada registrada cuyo directorio padre dentro de la configuración sea un enlace simbólico o junction se conserva y se informa como ruta pendiente; el resultado es una desinstalación parcial. Sustituye ese enlace por el directorio real o elimínalo, y vuelve a ejecutar `ocx uninstall` para terminar.
 
 Ambos comandos no aceptan argumentos. Las banderas no soportadas (incluyendo `--dry-run` y `--yes`) salen con el estado de uso 2 antes del prevuelo o desmontaje; no se realizan cambios. Para obtener ayuda, ejecute `ocx help uninstall` o `ocx help remove`.
 
@@ -253,7 +259,7 @@ ocx sync
 
 La recuperación solo acepta un remanente probado de cero bytes. Rechaza todas las bases de datos no vacías, válidas, desconocidas, cambiadas, inseguras u ocupadas y crea un archivo del mismo directorio `.zero-byte-backup-*` en lugar de eliminar nada.
 
-Ejecute diagnósticos de conectividad y entorno de solo lectura: rutas de estado y tipo de sistema de archivos, instalaciones duales WSL, entorno/configuración proxy, accesibilidad ChatGPT, advertencias de plugin y configuración de proyecto Codex y migración de historial pendiente. La sección de orientación de la aplicación Codex también detecta la estrecha falta de coincidencia del entorno de ejecución de Windows Orca y explica la migración del servicio cuando corresponde. Las rutas mostradas por este diagnóstico redactan el nombre de usuario del sistema operativo. El médico imprime pistas de reparación, pero no las aplica.
+Ejecuta diagnósticos de solo lectura sobre rutas de estado, sistema de archivos, instalaciones WSL duplicadas, configuración y entorno de proxy, conectividad con ChatGPT, avisos de plugins y configuración de proyectos Codex, y migración pendiente del historial. La sección **Native main refresh** consulta el endpoint autenticado de solo lectura de admisión de la cuenta principal del proxy activo. Así, un `ocx doctor` iniciado por separado informa `foreign-ownership` u otro motivo de bloqueo del servicio; si no puede consultar el proxy, indica que la admisión no está disponible. El diagnóstico del directorio de Codex App también detecta el caso limitado de desajuste de directorio de ejecución de Orca en Windows y explica la migración del servicio cuando corresponde. Las rutas ocultan el nombre de usuario del sistema operativo. Doctor propone reparaciones, pero no las aplica.
 
 Los diagnósticos de Project-config ignoran los ejemplos de proveedores dentro de cadenas multilínea TOML, incluyendo `developer_instructions`. La configuración real del proveedor y del perfil después del delimitador de cierre sigue estando marcada, incluso cuando una cita escapada precede inmediatamente a ese delimitador.
 
@@ -273,7 +279,13 @@ Las escrituras de configuración usan `catalogRefreshPending`, mientras que las 
 
 Inspeccione el mismo objetivo con `ocx v2 status --json` o `ocx v2 status --live --json` y utilice `ocx system settings --json` para la lectura de la configuración. Un resultado guardado pero pendiente o desconocido no prueba retroceso y no es permiso para reproducir una escritura. Consulte [v2 resultados](/es/reference/cli/agents/#explicit-v2-target-and-outcome) y [política de cuenta](/es/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent) para conocer los límites de gasto, alcance y destino. Una lectura de estado de reset-grant puede contactar con el estado de upstream pero nunca consume o reanuda una subvención.
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+En un Home de Remote Link, un catálogo actual confirmado correctamente también se sincroniza con los Children enlazados aptos. `--local-only` desactiva ese envío. `--json` imprime un resultado `ocx.sync.fanout/1` con el resultado del Home y el estado de cada Child; los omitidos incluyen el motivo. Un código de salida distinto de cero del Home se conserva. Si el Home termina con 0, un Child fallido o con timeout, o un almacén de enlaces ilegible, produce salida 6; en los demás casos, incluidos Children omitidos, la salida es 0. Un almacén ilegible produce un mensaje sin rutas en la salida humana. La salida 7 se reserva para una actualización en curso. Si el Home lanza un error en modo JSON, stdout aún contiene un único documento de resultado y stderr muestra un mensaje saneado.
+
+El envío a Children nunca solicita reiniciar Codex App ni sus app-servers. Usa GOAT o ejecuta `ocx sync --restart-codex` en ese Child si necesita reiniciar Codex. La sincronización vinculada del Child sí puede reiniciar su propio cliente OpenCodex al aplicar cambios del Home. Si el Home agota el tiempo y detiene su proceso SSH local, una sincronización remota ya iniciada puede continuar en el Child.
+
+Si hay una actualización activa o no se puede determinar el estado del mutex compartido entre actualización y sincronización, sync no cambia nada, informa `update-in-flight` y termina con salida 7. Si otra sincronización posee el mutex, informa `sync-in-progress` y termina con 1; el Home cuenta ese Child como fallido y devuelve 6 si su propia sincronización tuvo éxito. Con `--json`, ambos rechazos imprimen un único resultado con el Home omitido y el motivo en `fanout.reason`.
 
 Un reinicio solicitado explícitamente también se ejecuta después de un cambio realizado con éxito de `config.toml`, incluso si los bytes de catálogo y caché no cambian. Una escritura de solo configuración sin opción, de rechazo, previa o de retroceso no la activa. Sin un indicador de reinicio, la sincronización nunca se reinicia automáticamente Codex.
 
@@ -412,7 +424,7 @@ En Linux, la unidad systemd invoca el primer ejecutable normal `ocx` archivo enc
 
 En macOS, launchd en su lugar utiliza el paquete local Bun y CLI rutas seleccionadas durante la instalación o reparación. Esto evita que una shim PATH mutable reciba el token de servicio API y el entorno proxy configurado en un reinicio posterior. Después de actualizar una instalación del administrador de versiones, ejecute `ocx service repair` para actualizar esas rutas antes de reiniciar el servicio. Lanzado reinicia el proxy después de un fallo o un traspaso de reinicio fallido, pero lo deja detenido cuando el servicio sale deliberadamente de forma limpia porque la aplicación de escritorio es propietaria del entorno de ejecución. Ejecute `ocx service repair` una vez para aplicar este comportamiento a un servicio instalado por una versión anterior.
 
-Las definiciones instaladas antes de este cambio todavía llevan las antiguas rutas versionadas y no pueden migrar por sí mismas: una vez que se elimina el ejecutable antiguo, no se ejecuta ningún código opencodex para solucionarlo. Ejecutar `ocx service repair` una vez después de la actualización. Linux el servicio comienza entonces sigue el lanzador; macOS repair escribe las nuevas rutas de paquetes en la definición launchd. Un proxy ya en ejecución no se sustituye por una actualización externa: cuando el CLI instalado es más nuevo que el proxy en ejecución, ejecute `ocx service restart` para que sirva la nueva compilación. En macOS, `repair` no es suficiente allí: la definición no cambió, y una reparación que no cambia nada no recarga nada. Si el proxy es más nuevo en su lugar, compruebe la instalación CLI y `PATH` como se describe en [`ocx status`](#ocx-status---json).
+Las definiciones anteriores no fijan los valores resueltos de `CODEX_HOME` y `OPENCODEX_HOME` para los reinicios del servicio. Después de actualizar, ejecuta `ocx service repair` una vez para que el shell generado restablezca ambos directorios después de inicializar el perfil de inicio, y el Programador de tareas conserve rutas absolutas en vez de expandir variables del perfil de ejecución. La reparación también actualiza rutas antiguas versionadas; si ya se eliminó el ejecutable antiguo, reinstala opencodex antes de reparar. En Linux, el servicio sigue el lanzador; en macOS, la reparación escribe las nuevas rutas del paquete y los directorios en la definición de launchd. En macOS, instalar o reparar rechaza valores de directorio o entorno proxy con caracteres de control que un plist XML no puede contener, como U+0001, e identifica la variable que debes corregir. Una actualización externa no sustituye un proxy activo: si la CLI instalada es más reciente, ejecuta `ocx service restart` para servir la nueva versión. En macOS no basta con `repair` si la definición no cambia, porque una reparación sin cambios no recarga nada. Si el proxy es más reciente que la CLI, comprueba la instalación y `PATH` como explica [`ocx status`](#ocx-status---json).
 
 | Subcomando | Medidas adoptadas |
 | --- | --- |
@@ -641,6 +653,23 @@ Abra el [panel web](/es/guides/web-dashboard/) en `http://127.0.0.1:<port>` - o 
 `ocx update` actualiza OpenCodex en sí; no actualiza el Codex CLI. Utilice el [comandos de inspección del sistema](/es/reference/cli/agents/) para inspeccionar el candidato Codex CLI configurado con inspección de procedencia limitada de solo lectura. `ocx system codex-cli-update check` no consulta un registro de paquetes ni instala una actualización.
 
 ### `ocx update [--tag latest|preview]`
+
+<a id="orchestrated-update"></a>
+
+#### Actualización orquestada
+
+La automatización puede comprobar la compatibilidad mediante `ocx capabilities --contracts --json`: el array `contracts` incluye `update.orchestrated/1`. La opción de solo contratos no puede combinarse con `--route` ni `--mutating-only`.
+
+```bash
+ocx update --plan --json [--tag latest|preview | --version <version>]
+ocx update --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]
+```
+
+Plan emite un único objeto JSON `ocx.update.plan/1`: `currentVersion`, `targetVersion`, `installer`, `runtimeOwner`, `servingPath`, `cliPath`, `canApply`, el `reason` opcional, `restartRequired`, `planToken`, `updateInFlight` y `mutationBoundMs`. El plan es de solo lectura. Los motivos son `desktop-app-owned`, `source-checkout`, `mise-managed`, `installer-unknown`, `plan-unavailable`, `serving-install-unknown`, `cli-not-serving-install`, `runtime-ownership-refused`, `target-unresolved`, `downgrade-refused` y `up-to-date`. `desktop-app-owned` dirige la actualización a Desktop; una identidad de ejecución incierta provoca rechazo en vez de adivinar. Ejecuta `ocx start` u `ocx stop` para resolver un registro de ejecución obsoleto antes de volver a planificar.
+
+Apply emite un objeto `ocx.update.result/1` con `applied`, `fromVersion`, `toVersion`, `installer`, `restarted`, `healthy`, `rolledBack` y un `error` opcional. Pasa el `planToken` del plan como `--expect-plan` para rechazar con `plan-changed` si cambia la instalación seleccionada o la identidad de ejecución. `--not-after` es un entero positivo y seguro con la hora Unix en milisegundos; después de ese momento se rechaza la modificación con `deadline-passed`. `mutationBoundMs` es 900000 (15 minutos): excederlo informa de un resultado incierto sin terminar una transacción activa. `updateInFlight` sigue siendo true mientras una actualización pueda modificar archivos, incluso si su estado es indeterminado; una sincronización por sí sola no lo activa. Una sincronización simultánea puede rechazar apply con `sync-in-progress`, y otra actualización, con `update-in-flight`.
+
+Apply orquestado termina con 0 si el resultado está verificado o ya estaba actualizado; con 10 ante un rechazo; con 11 si la actualización falló pero se verificó que la versión anterior sigue activa, incluido su proceso cuando corresponde; con 12 si el resultado no está verificado o sigue en curso; y con 64 por uso inválido. `rolledBack` solo es true si se realizó y verificó una reversión real del instalador. El comando de plan emite su resultado con salida 0; `canApply` y `reason` describen la elegibilidad.
 
 Las instalaciones independientes compiladas, incluido el paquete de escritorio MSI Windows, se actualizan a través de **Buscar actualizaciones...** en OpenCodex Desktop, o reinstalando el binario independiente desde [GitHub Lanzamientos](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reporta `installer: "standalone"`, `canUpdate: false` y `reason: "standalone_install"` con esa guía. `ocx update` sale sin éxito con la misma pista; no ejecuta una actualización de gestor de paquetes para el ejecutable compilado. Una comprobación de fuente genuina todavía reporta `installer: "source"` y `reason: "source_checkout"`.
 

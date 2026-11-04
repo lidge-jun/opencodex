@@ -34,10 +34,19 @@ annoncent une fenêtre de contexte utilisable de 372 000 jetons ; Cursor con
 
 ## 2. Démarrez le proxy
 
+Exécutez une seule de ces alternatives ; le proxy reste au premier plan :
+
 ```bash
 ocx start            # utilise le port 10100 par défaut
+```
+
+Autre possibilité : choisissez un autre port :
+
+```bash
 ocx start --port 8080
 ```
+
+Gardez ce terminal ouvert. Exécutez les commandes suivantes de statut et de tableau de bord dans un second terminal avec le même `OPENCODEX_HOME`.
 
 Au démarrage, opencodex :
 
