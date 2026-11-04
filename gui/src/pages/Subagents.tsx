@@ -1,4 +1,5 @@
 import SubagentForceControl from "../components/subagents-workspace/SubagentForceControl";
+import WorkflowBudgetPanel from "../components/WorkflowBudgetPanel";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
@@ -365,6 +366,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         </Notice>
       )}
       <SubagentForceControl key={apiBase} apiBase={apiBase} roster={chosen} />
+      <WorkflowBudgetPanel apiBase={apiBase} />
       <SubagentsWorkspace
         available={available}
         fallbackAvailable={fallbackAvailable ?? []}

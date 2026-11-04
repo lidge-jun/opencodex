@@ -1,4 +1,6 @@
 import { prepareClaudeCodePatch } from "./claude-code-settings-patch";
+import { beginCodexCliSelectionParentWriteAsync, withCodexCliSelectionParentWriteAsync,
+  CodexCliSelectionMutationBusyError, type CodexCliSelectionAsyncParentWrite } from "../../codex/cli-update-selection-gate";
 import { readConfigForAdmittedMutation } from "../../config/persisted-mutation";
 import { mirrorDesiredEnabledOntoSnapshot, persistDesktopModeField, persistDesktopProfileField } from "./claude-desktop-config-writers";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
@@ -205,6 +207,7 @@ export async function injectionModelView(config: OcxConfig, routed: readonly Cat
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   try { return await handleAgentSettingsRoutesImpl(ctx); }
   catch (error) {
+    if (error instanceof CodexCliSelectionMutationBusyError) return jsonResponse({ error: error.message, retryable: true }, 503);
     if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
     return jsonResponse({ error: "Could not save settings", code: "write_failed", diagnostic: { stage: "ca", cause: "ETIMEDOUT" } }, 500);
   }
@@ -402,10 +405,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     // repeats this check, but doing it here prevents an earlier flag/mode/agents
     // write from landing before an unsupported runtime returns 502.
     if (wantsModeHintText && body.multiAgentModeHintText !== null
-        && probeCodexSupportsModeHint() === false) {
-      return jsonResponse({
-        error: `writing multiAgentModeHintText failed: ${MODE_HINT_UNSUPPORTED_ERROR}`,
-      }, 502);
+        && await withCodexCliSelectionParentWriteAsync(probeCodexSupportsModeHint, { signal: req.signal }) === false) {
+      return jsonResponse({ error: `writing multiAgentModeHintText failed: ${MODE_HINT_UNSUPPORTED_ERROR}` }, 502);
     }
     const warnings: string[] = [];
     let requestedFlag: boolean | undefined;
@@ -428,8 +429,13 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: configWriteLockFailureMessage(configWriteLock), retryable: configWriteLock.error === "locked" }, 502);
     }
     const heldWriteLock = configWriteLock !== null && configWriteLock.ok ? configWriteLock.handle : undefined;
+    let selectionWrite: CodexCliSelectionAsyncParentWrite | undefined;
     try {
-      const writeRefusal = await settleConfigRoot(configRoot(), () => {
+      if (wantsFlag || wantsMode || wantsThreads || wantsKeepNative || (wantsModeHintText && body.multiAgentModeHintText !== null)) {
+        selectionWrite = await beginCodexCliSelectionParentWriteAsync({ signal: req.signal });
+        if (!selectionWrite.entered) return jsonResponse({ error: "codex_cli_selection_busy", retryable: true }, 503);
+      }
+      const commit = () => {
         const currentPlan = readModePlan();
         if (currentPlan instanceof Response) return currentPlan;
         const { effectiveMode } = currentPlan;
@@ -497,9 +503,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           }
         }
         return null;
-      });
+      };
+      const writeRefusal = await settleConfigRoot(configRoot(), () => selectionWrite ? selectionWrite.commit(commit) : commit());
       if (writeRefusal) return writeRefusal;
     } finally {
+      selectionWrite?.exit();
       if (heldWriteLock) releaseConfigWriteLock(heldWriteLock);
     }
     // Derived from fresh post-write readers (readConfigText is uncached): upstream
@@ -554,26 +562,28 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const body = parsedBody as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, activeCodexConfigPath } = await import("../../codex/features");
-    const before = isDefaultModeRequestUserInputEnabled();
-    let toggle = deps.toggleDefaultModeRequestUserInput;
-    if (!toggle) {
-      try {
-        const { codexFeaturesInvocation, runCodexFeaturesCommand } = await import("../../cli/v2");
-        const action = body.enabled ? "enable" : "disable";
-        const invocation = codexFeaturesInvocation(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, process.platform, { requireAvailable: true });
-        toggle = (_enabled, env, validate) => runCodexFeaturesCommand(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate, invocation);
-      } catch (error) {
-        return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${error instanceof Error ? error.message : String(error)}` }, 502);
+    const selectionWrite = await beginCodexCliSelectionParentWriteAsync({ signal: req.signal });
+    if (!selectionWrite.entered) return jsonResponse({ error: "codex_cli_selection_busy", retryable: true }, 503);
+    try {
+      const before = isDefaultModeRequestUserInputEnabled();
+      let toggle = deps.toggleDefaultModeRequestUserInput;
+      if (!toggle) {
+        try {
+          const { codexFeaturesInvocation, runCodexFeaturesCommand } = await import("../../cli/v2");
+          const action = body.enabled ? "enable" : "disable";
+          const invocation = selectionWrite.commit(() => codexFeaturesInvocation(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, process.platform, { requireAvailable: true }));
+          toggle = (_enabled, env, validate) => runCodexFeaturesCommand(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate, invocation);
+        } catch (error) {
+          if (error instanceof CodexCliSelectionMutationBusyError) throw error;
+          return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${error instanceof Error ? error.message : String(error)}` }, 502);
+        }
       }
-    }
-    // The `codex features` subprocess rewrites config.toml itself — run it
-    // under the shared write lock so it cannot interleave with an opencodex
-    // scalar edit or injection mid-write on either side.
-    const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
-    const configPath = activeCodexConfigPath();
-    // Preserve native home creation only after executable resolution succeeds.
-    prepareCodexHome(dirname(configPath));
-    {
+      // Keep selection ownership across the config-lock await and the whole
+      // synchronous child execution: an updater must not replace this command.
+      const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
+      const configPath = activeCodexConfigPath();
+      // Preserve native home creation only after executable resolution succeeds.
+      selectionWrite.commit(() => prepareCodexHome(dirname(configPath)));
       const configLock = await acquireConfigWriteLock(configPath);
       if (!configLock.ok) {
         return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
@@ -581,8 +591,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       let toggleError: string | null = null;
       let destinationChanged = false;
       try {
-        runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate));
+        selectionWrite.commit(() => runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate)));
       } catch (error) {
+        if (error instanceof CodexCliSelectionMutationBusyError) throw error;
         destinationChanged = error instanceof ConfigWriteDestinationChanged;
         const err = error as { stderr?: unknown; message?: string };
         const raw = err.stderr;
@@ -605,7 +616,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
       }
       return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
-    }
+    } finally { selectionWrite.exit(); }
   }
 
   // Subagent prompt injection model: single native or routed model whose info is

@@ -360,6 +360,7 @@ export const providerConfigSchema = z.object({
   inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
+  promoteAdditionalTools: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   preserveResponsesInputItemIds: z.boolean().optional(),
   preserveResponsesMessageMetadata: z.boolean().optional(),
@@ -865,6 +866,11 @@ export const opencodeClientExportSchema = z.object({
   timeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
 }).passthrough();
 
+/** omo dialect: an unknown value is dropped so the export falls back to the Chat default. */
+export const omoClientExportSchema = z.object({
+  api: z.enum(["openai-completions", "openai-responses"]).optional().catch(undefined),
+}).passthrough();
+
 export const asideProfileSyncSchema = z.object({
   allProfiles: z.boolean().optional(),
   profiles: z.record(
@@ -1039,6 +1045,7 @@ export const clientConnectionSchema = z.object({
 export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
   startIdleWindows: z.boolean().optional(),
+  requestOwnedAffinity: z.boolean().optional(),
   lowQuotaProtection: z.object({
     enabled: z.boolean(),
     threshold: z.number().finite().min(1).max(100),

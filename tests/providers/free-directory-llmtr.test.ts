@@ -70,6 +70,19 @@ describe("free-provider directory: LLMTR", () => {
     expect(resolveProviderModelDiscovery("llmtr", { adapter: "openai-chat", baseUrl: "https://example.test/v1" }).spec).toBeUndefined();
     expect(resolveProviderModelDiscovery("llmtr", { ...provider, adapter: "anthropic" }).spec).toBeUndefined();
     expect(resolveProviderModelDiscovery("llmtr", { ...provider, authMode: "oauth" }).spec).toBeUndefined();
+    // A registry name whose transport does not match stays on that registry result. Pointing the
+    // row at LLMTR's host must not pick up the directory chat filter.
+    const mismatched = resolveProviderModelDiscovery("nebius", {
+      adapter: "anthropic",
+      baseUrl: "https://llmtr.com/v1",
+      authMode: "key",
+    });
+    expect(mismatched.spec).toBeUndefined();
+    expect(mismatched).toEqual(resolveProviderModelDiscovery("nebius", {
+      adapter: "anthropic",
+      baseUrl: "https://api.tokenfactory.nebius.com/v1",
+      authMode: "key",
+    }));
 
     const catalog = JSON.parse(readFileSync(fixturePath("llmtr-model-discovery.json"), "utf8")) as unknown;
     const result = extractProviderModelItems(catalog, discovery);

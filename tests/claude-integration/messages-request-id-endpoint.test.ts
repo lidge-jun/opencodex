@@ -125,7 +125,7 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
       launch(mode, stream ? "sse" : "json");
       const response = await send(mode, stream);
       expect(response.status).toBe(200);
-      expect(response.headers.get("x-opencodex-upstream-request-id")).toBe(mode === "translated" ? null : "req_fixture");
+      expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
       expect(response.headers.get("set-cookie")).toBeNull();
       await expectDurableId(response);
     });
@@ -133,20 +133,20 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
 }
 
 for (const [stream, wire] of [[false, "sse"], [true, "json"]] as const) {
-  test(`managed native converts ${wire} and retains its upstream id`, async () => {
+  test(`managed native converts ${wire} and omits its upstream id`, async () => {
     launch("managed-native", wire);
     const response = await send("managed-native", stream);
-    expect(response.headers.get("x-opencodex-upstream-request-id")).toBe("req_fixture");
+    expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
     await expectDurableId(response);
   });
 }
 
 for (const mode of ["caller-forward", "managed-native"] as const) {
-  test(`${mode} logged upstream refusal has both ids`, async () => {
+  test(`${mode} logged upstream refusal has proxy ids`, async () => {
     launch(mode, "json", 400);
     const response = await send(mode, false);
     expect(response.status).toBe(400);
-    expect(response.headers.get("x-opencodex-upstream-request-id")).toBe("req_fixture");
+    expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
     await expectDurableId(response);
   });
 }
@@ -249,13 +249,13 @@ test("pre-handler body-capacity refusal receives the persisted OCX id and releas
 });
 
 const allowedOrigin = "http://fixture.example";
-function expectCors(response: Response, hasUpstream: boolean) {
+function expectCors(response: Response) {
   expect(response.headers.get("access-control-allow-origin")).toBe(allowedOrigin);
   const names = response.headers.get("access-control-expose-headers")!.toLowerCase().split(",").map(value => value.trim());
   for (const name of ["request-id", "x-opencodex-request-id"]) {
     expect(names.filter(value => value === name)).toHaveLength(1);
   }
-  expect(names.includes("x-opencodex-upstream-request-id")).toBe(hasUpstream);
+  expect(names.includes("x-opencodex-upstream-request-id")).toBe(false);
 }
 
 for (const mode of ["caller-forward", "managed-native", "translated"] as const) {
@@ -264,7 +264,7 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
       launch(mode, stream ? "sse" : "json", 200, { corsAllowOrigins: [allowedOrigin] });
       const response = await send(mode, stream, { origin: allowedOrigin });
       expect(response.status).toBe(200);
-      expectCors(response, mode !== "translated");
+      expectCors(response);
       await expectDurableId(response);
     });
   }
@@ -275,7 +275,7 @@ for (const mode of ["caller-forward", "managed-native"] as const) {
     launch(mode, "json", 400, { corsAllowOrigins: [allowedOrigin] });
     const response = await send(mode, false, { origin: allowedOrigin });
     expect(response.status).toBe(400);
-    expectCors(response, true);
+    expectCors(response);
     await expectDurableId(response);
   });
 }
@@ -288,7 +288,7 @@ test("real-listener workflow CORS retains its existing exposed refusal header", 
   chargeWorkflowSends("fixture-root", DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends);
   const response = await send("translated", false, { origin: allowedOrigin, "x-codex-parent-thread-id": "fixture-root" });
   expect(response.status).toBe(429);
-  expectCors(response, false);
+  expectCors(response);
   expect(response.headers.get("access-control-expose-headers")).toContain("x-opencodex-local-refusal");
   await expectDurableId(response);
 });

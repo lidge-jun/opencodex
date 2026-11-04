@@ -24,6 +24,7 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | `quota` | `--refresh`, `--json` | 제공자 할당량 보고서를 읽습니다. |
 | `presets` | `--json` | 대시보드 제공자 프리셋을 나열합니다. |
 | `account-mode` | `pool`, `direct`, `--json` | Codex 계정 라우팅을 풀 기반으로 할지 직접 연결로 할지 선택합니다. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | CC-Switch SQLite(`cc-switch.db`) 또는 레거시 JSON 파일에서 키 없는 프로바이더 항목을 미리보기·선택 적용·복원합니다. |
 
 기본 `add`, `remove`, `set-default`는 로컬 설정을 바꿉니다. 실행 중인 프록시를 바꾸려면 `--live`를 지정하세요. 실시간 삭제에는 `--yes`도 필요합니다. `--sync --json`도 저장 후 동기화를 실제로 시도하며, 실패하면 저장은 유지한 채 0이 아닌 코드와 `needsSync: true`를 반환합니다. `--live`와 `--sync`는 함께 쓸 수 없습니다. pacing·snapshot/apply 절차는 [영문 명령 안내](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)를 참고하세요.
 
@@ -56,6 +57,27 @@ ocx models live --provider ark --json
 
 비밀에 해당하는 값은 `--api-key`나 OAuth 로그인을 쓰세요.
 :::
+
+### 키 없는 CC-Switch 프로바이더 가져오기
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 다른 터미널에서 프록시를 시작(또는 ocx ensure 실행)한 뒤 키를 등록:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# 별도의 롤백 경로(먼저 프록시를 중지; 수정되지 않은 키 없는 항목만 제거):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch`는 일반 CC-Switch SQLite 데이터베이스나 레거시 JSON 파일에서 명시적으로 허용된 비비밀 메타데이터 필드(프로바이더 ID, 앱 유형, 기본 URL, 프로토콜 어댑터, 기본 모델)의 값**만** 투영합니다. 입력을 스캔하기 위해 소스와 내장 설정 바이트를 일시적으로 읽지만, 비밀 필드·자유 텍스트 표시 이름·TOML 주석은 바이트 수준에서 건너뛰어 문자열로 디코딩하거나 기록·로깅하지 않으며 임시 바이트 버퍼는 `finally`에서 0으로 지워집니다. 좁은 기본 URL 경로 규칙(`http(s)://host[:port]`와 빈 경로 또는 `/v1`, `/api/v1`, `/compatible-mode/v1` 같은 1~4개의 소문자 `[a-z0-9._-]` API 경로 세그먼트)과 식별자/모델 구문 검사는 심층 방어로 동작하며 부적합한 값을 에코하지 않고 거부합니다. 소스 파일은 `O_NOFOLLOW | O_NONBLOCK` 디스크립터 검증과 함께 한 번만 열리고 SQLite는 임시 파일 없이 메모리에서 읽기 전용으로 역직렬화됩니다. 여러 하드 링크(`nlink > 1`)를 가진 SQLite 파일은 별칭 경로를 통한 사이드카 검사 우회를 막기 위해 거부되며, 인접한 `-wal` 또는 `-journal` 파일이 비어 있지 않으면 CC-Switch를 종료(또는 데이터베이스 체크포인트)한 뒤 다시 시도하라고 안내하며 거부합니다. 신뢰할 수 있는 로컬 CC-Switch 소스만 사용하고, 출력된 모든 ID·모델·`baseUrl`을 확인한 뒤 자격 증명을 추가하세요:
+
+- **미리보기(기본값):** `--source <FILE>`이 필요하며 아무것도 쓰지 않고 발견·적격·충돌·무효 항목 수를 보고합니다.
+- **적용(`--apply`):** `--source <FILE>`과 중지된 프록시(`ocx stop`)가 필요하며 Remote Link Child에서는 거부됩니다. 선택한 항목만 가져오려면 `--provider <id>`를 반복하고, 루프백이나 사설 네트워크 기본 URL을 허용하려면 `--allow-private-network`를 지정하세요. 사전 미리보기 없이 실행하더라도 `--apply`는 키 없는 프로바이더 항목과 롤백 저널(`$OPENCODEX_HOME/cc-switch-provider-import-journal.json`)을 기록하기 전에 가져올 모든 프로바이더 ID·기본 모델·대상 URL을 먼저 출력합니다(텍스트 모드에서는 `stdout`, `--json` 모드에서는 `stderr`). 활성 저널이 있는 동안 두 번째 `--apply`는 거부됩니다. 출력된 항목을 확인한 뒤 프록시를 시작(다른 터미널에서 `ocx start` 또는 `ocx ensure`)하고 `printf '%s\n' "$API_KEY" | ocx account add-key <provider>`(파이프 표준 입력) 또는 `ocx login <provider>`로 자격 증명을 등록하세요.
+- **복원(`--restore`):** 자격 증명 추가의 연속이 아닌 별도의 롤백 경로로, 중지된 프록시(`ocx stop`)가 필요하며 Remote Link Child에서는 거부되고 `--source`·`--provider`·`--allow-private-network`는 받지 않습니다. `auth.json`을 바이트 수준에서 읽기 전용으로 검사(읽을 수 없거나 형식이 잘못되면 안전하게 보류)하며, 가져온 키 없는 상태와 여전히 일치하고 `defaultProvider`로 선택되지 않았으며 라우팅·콤보(combos)·폴백 정책(fallback policy)·OAuth 계정·API 키 어디에서도 참조되지 않은 프로바이더만 활성 저널에서 제거합니다.
 
 ## 인증
 
@@ -276,7 +298,7 @@ Codex JSON 행에는 등록된 `id`와 같은 `slotId`, 그리고 `native-main` 
 `auto`는 수동 선택을 지워 풀이 다시 자체 전략으로 작업을 배치하게 합니다 — 단 id가 `auto`인 Codex 계정이 있으면 정확한 id 일치가 우선되며 `ocx account clear <provider>`는 항상 자동 선택을 복원합니다. Codex 계정은 id 대신 `ocx account alias`로 지정한 별칭으로도 가리킬 수 있으며, `priority`, `pause`, `resume`, `clear-cooldown`, `remove`, `alias`에서도 마찬가지입니다. Codex 계정에서 `auto`, `main`, `__main__`은 대소문자 구분 없이 예약어이므로 별칭으로 지정할 수 없습니다. OAuth 계정과 API 키의 표시 이름에는 기존 규칙이 그대로 적용됩니다.
 
 기존 Codex 계정, OAuth 계정 또는 API key를 선택합니다. `openai`에서 `main`은 Codex App 로그인을
-선택합니다. Codex Pool 선택은 프로세스 로컬 affinity를 지우고 기존에 보이던 작업을 포함한 다음 요청부터 적용됩니다. 프록시 재시작이나 affinity eviction 뒤에도 작업이 바인딩 없는 상태가 될 수 있지만, 진행 중인 요청은 이미 확보한 계정을 유지합니다. 이 선택은 Pool 라우팅만 제어하며 Direct mode는 호출자 소유/native main credential을 계속 사용합니다. 사용량 기반 선제 전환, 401/403 재인증, 429/retry-after cooldown, 제외, 출력 전 429/402 실패 복구는 나중에 다른 적격 Pool 계정을 선택할 수 있습니다. 이러한 복구 경로는 사용량 기반 전환이 꺼져 있어도 동작합니다. 계정이 바뀌어도 OpenCodex는 대화 문맥을 재생하지만 프로바이더 측 prompt cache는 다시 예열해야 할 수 있습니다.
+선택합니다. Codex Pool 선택은 affinity를 지우고 기존에 보이던 작업을 포함한 다음 요청부터 적용됩니다. 세션 ID가 있는 요청(일반적인 Codex CLI 및 App 턴과 서브에이전트 포함)이나 바로 위 부모에 연결된 세션 없는 요청의 바인딩은 종료 시 마지막 affinity 저장이 성공하면 프록시를 정상적으로 재시작해도 최대 24시간의 유휴 기간 동안 유지될 수 있습니다. 더 깊은 세션 없는 체인과 Codex App의 주 로그인에 대한 바인딩은 메모리에만 남으며 재시작 후 다시 배정됩니다. eviction, 계정 삭제, 재로그인, 충돌 또는 affinity 초기화로 작업이 바인딩 없는 상태가 될 수 있습니다. 진행 중인 요청은 이미 확보한 계정을 유지합니다. 이 선택은 Pool 라우팅만 제어하며 Direct mode는 호출자 소유/native main credential을 계속 사용합니다. 사용량 기반 선제 전환, 401/403 재인증, 429/retry-after cooldown, 제외, 출력 전 429/402 실패 복구는 나중에 다른 적격 Pool 계정을 선택할 수 있습니다. 이러한 복구 경로는 사용량 기반 전환이 꺼져 있어도 동작합니다. 계정이 바뀌어도 OpenCodex는 대화 문맥을 재생하지만 프로바이더 측 prompt cache는 다시 예열해야 할 수 있습니다.
 알 수 없는 프로바이더나 id는 종료 코드 1입니다. `--json`은 다음을 반환합니다.
 **401/403**이 발생하면 해당 계정의 프로세스 로컬 affinity를 해제하고 재인증을 요구합니다.
 **429**에서는 `Retry-After`를 준수해 계정 cooldown을 시작하고 affinity를 해제한 뒤,

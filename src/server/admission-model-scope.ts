@@ -1,3 +1,6 @@
+import { projectLocalModelRefusalLog } from "./request-log-failure-detail";
+import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
+import { markProxyError } from "../lib/client-error-body";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { isApiAuthRequired } from "./auth-cors";
 import type { OcxApiKeyEntry, OcxConfig } from "../types";
@@ -25,6 +28,8 @@ import { markResponseNonReplayable } from "../lib/upstream-retry";
  * the management credential.
  */
 export interface AdmissionModelScope {
+  /** Every inherited scope must also admit the final destination. */
+  readonly allOf?: readonly AdmissionModelScope[];
   /** Resolved provider names this key may reach. Empty means every provider. */
   readonly providers: readonly string[];
   /** Resolved destinations this key may reach. Empty means every model. */
@@ -42,6 +47,11 @@ const normalize = (value: string): string => value.trim().toLowerCase();
 /** Does this scope admit this provider on its own terms? */
 function providerAllowedByScope(scope: AdmissionModelScope, providerName: string): boolean {
   return scope.providers.length === 0 || scope.providers.includes(normalize(providerName));
+}
+
+function unnamedDestinationAllowedByScope(scope: AdmissionModelScope, providerName: string): boolean {
+  return providerAllowedByScope(scope, providerName) && scope.models.length === 0
+    && (scope.allOf?.every(part => unnamedDestinationAllowedByScope(part, providerName)) ?? true);
 }
 
 function normalizedList(values: readonly string[] | undefined): readonly string[] {
@@ -73,9 +83,13 @@ export function resolveAdmissionModelScope(
   config: Pick<OcxConfig, "apiKeys">,
   admission: DataPlaneAdmission | undefined,
 ): AdmissionModelScope | undefined {
-  if (!admission || admission.kind !== "configured") return undefined;
-  const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
-  return entry ? admissionModelScopeOf(entry) : undefined;
+  const entry = admission?.kind === "configured"
+    ? (config.apiKeys ?? []).find(key => key.id === admission.keyId) : undefined;
+  return intersectAdmissionModelScopes(entry ? admissionModelScopeOf(entry) : undefined, admission?.callerPolicy?.modelScope);
+}
+
+export function intersectAdmissionModelScopes(a: AdmissionModelScope | undefined, b: AdmissionModelScope | undefined): AdmissionModelScope | undefined {
+  return a && b ? { providers: [], models: [], allOf: [a, b] } : a ?? b;
 }
 
 /** Consent comes from stored operator config, never request headers. Use the full listener config. */
@@ -84,10 +98,15 @@ export function admissionMayUseMeteredComboTargets(
   admission: DataPlaneAdmission | undefined,
   combo?: { allowMeteredTargets?: boolean },
 ): boolean {
+  const caller = admission?.callerPolicy;
+  if (caller && (!caller.allowMeteredComboTargets || caller.meteredRequiresComboOptIn && combo?.allowMeteredTargets !== true)) return false;
   if (admission?.kind === "configured") {
     const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
     return entry?.allowMeteredComboTargets === true;
   }
+  // A loopback-admitted internal hop's captured policy already holds this branch's decision for
+  // its listener, or the consent of the validated key it presented (#7894); it was checked above.
+  if (admission?.kind === "loopback" && caller) return true;
   // Linked ingress always carries keyed admission, even when the primary bind is loopback.
   // A secondary loopback listener on a public proxy does not qualify either.
   return (!admission || admission.kind === "loopback")
@@ -111,6 +130,7 @@ export function routeAllowedByScope(
   route: ScopedRoute,
 ): boolean {
   if (!scope) return true;
+  if (scope.allOf?.some(part => !routeAllowedByScope(part, route))) return false;
   const model = normalize(route.modelId);
   if (!providerAllowedByScope(scope, route.providerName)) return false;
   if (scope.models.length === 0) return true;
@@ -129,10 +149,10 @@ export class AdmissionModelDeniedError extends Error {
   readonly requestedModel: string;
   readonly deniedProvider: string;
   readonly deniedModel: string;
-  constructor(requestedModel: string, route: ScopedRoute) {
-    super("model " + requestedModel + " is not allowed for this API key");
+  constructor(requestedModel: ClientFacingModelLabel, route: ScopedRoute) {
+    super("model " + clientFacingModelText(requestedModel) + " is not allowed for this API key");
     this.name = "AdmissionModelDeniedError";
-    this.requestedModel = requestedModel;
+    this.requestedModel = clientFacingModelText(requestedModel);
     this.deniedProvider = route.providerName;
     this.deniedModel = route.modelId;
   }
@@ -172,13 +192,21 @@ export function admissionModelDeniedBody(error: AdmissionModelDeniedError): {
  * it to retry with another, and would make an operator's own denial
  * indistinguishable from a typo in the model name.
  */
+/** Project scope refusals before any caller finalizes its request log. */
+export function projectAdmissionModelDeniedLog(error: AdmissionModelDeniedError, logCtx: import("./request-log").RequestLogContext): AdmissionModelDeniedError {
+  projectLocalModelRefusalLog(logCtx, clientFacingModelLabel(error.requestedModel,
+    error.requestedModel === UNNAMED_DESTINATION_MODEL ? "unnamed" : "requested"));
+  logCtx.requestedModel = error.requestedModel;
+  return error;
+}
+
 export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): Response {
   const response = new Response(JSON.stringify(admissionModelDeniedBody(error)), {
     status: 403,
     headers: { "Content-Type": "application/json" },
   });
   markResponseNonReplayable(response);
-  return response;
+  return markProxyError(response, "scope");
 }
 
 /**
@@ -191,7 +219,7 @@ export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): 
  */
 export function assertRouteAllowedByScope(
   scope: AdmissionModelScope | undefined,
-  requestedModel: string,
+  requestedModel: ClientFacingModelLabel,
   route: ScopedRoute,
 ): void {
   if (!routeAllowedByScope(scope, route)) {
@@ -226,11 +254,11 @@ export function admissionScopeDenial(
   const scope = resolveAdmissionModelScope(config, admission);
   if (!scope) return undefined;
   const allowed = destination.modelId === undefined
-    ? providerAllowedByScope(scope, destination.providerName) && scope.models.length === 0
+    ? unnamedDestinationAllowedByScope(scope, destination.providerName)
     : routeAllowedByScope(scope, { providerName: destination.providerName, modelId: destination.modelId });
   if (allowed) return undefined;
   return admissionModelDeniedResponse(new AdmissionModelDeniedError(
-    requestedModel ?? UNNAMED_DESTINATION_MODEL,
+    clientFacingModelLabel(requestedModel, requestedModel === undefined ? "unnamed" : "requested"),
     {
       providerName: destination.providerName,
       modelId: destination.modelId ?? UNNAMED_DESTINATION_MODEL,

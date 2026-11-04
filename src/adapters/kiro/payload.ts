@@ -43,6 +43,13 @@ import {
   kiroReasoningContent,
   KIRO_NATIVE_EFFORTS,
 } from "./reasoning";
+import {
+  kiroStructuredOutputInstructions,
+  kiroStructuredOutputRetryMessage,
+  kiroStructuredOutputSpec,
+  kiroStructuredOutputTool,
+  type KiroStructuredOutputSpec,
+} from "./structured-output";
 import { kiroPayloadMessages, userContentText } from "./usage";
 import {
   kiroToolWireNames,
@@ -115,6 +122,7 @@ export function buildKiroPayload(
   nameMap: Map<string, string>;
   conversationId: string;
   completionMode: KiroCompletionMode;
+  structuredOutput?: KiroStructuredOutputSpec;
 } {
   validateKiroCapabilities(parsed);
   const modelId = mapModelId(parsed.modelId);
@@ -132,11 +140,24 @@ export function buildKiroPayload(
   // happens before the turn list exists. `forcedCompletionMode` still wins: the fallback retry
   // passes "text_fallback" explicitly and must not be silently downgraded.
   const trailingDeliveredAnswer = hasTrailingDeliveredFinalAnswer(kiroPayloadMessages(parsed), parsed);
+  // Structured output replaces the completion tool as the turn's terminal channel, and it needs
+  // that channel even on a tool-free turn: ordinary text is never an acceptable final answer for a
+  // caller that asked for JSON, so the turn is always "required" and the stream validates whatever
+  // arrives. Both tools at once would offer the model a prose exit from the JSON contract.
+  //
+  // It does not yield to `trailingDeliveredAnswer` the way the completion contract does. The
+  // adapter's `localTerminal` already answers such a turn without sending anything, and a disabled
+  // mode here would relay unvalidated text if any caller ever built that payload directly.
+  const structuredOutput = kiroStructuredOutputSpec(parsed);
   const completionMode: KiroCompletionMode = forcedCompletionMode
-    ?? (ordinaryTools.length > 0 && !trailingDeliveredAnswer ? "required" : "disabled");
+    ?? (structuredOutput || (ordinaryTools.length > 0 && !trailingDeliveredAnswer) ? "required" : "disabled");
+  const terminalTool = structuredOutput ? kiroStructuredOutputTool(structuredOutput) : kiroCompletionTool();
+  const retryMessage = structuredOutput
+    ? kiroStructuredOutputRetryMessage(ordinaryTools.length > 0)
+    : KIRO_COMPLETION_RETRY_MESSAGE;
   const kiroTools = completionMode === "disabled"
     ? ordinaryTools
-    : [...ordinaryTools, kiroCompletionTool()];
+    : [...ordinaryTools, terminalTool];
   const nameMap = toolContext.nameMap;
   const systemParts: string[] = [];
   const injectedChars = { value: 0 };
@@ -176,15 +197,27 @@ export function buildKiroPayload(
   const codeModeExecName = emittedCodeModeExec && !emittedShellBridge
     ? emittedAlias(emittedCodeModeExec)
     : undefined;
-  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeFromNames(
-    kiroToolWireNames(kiroTools),
-    name => advertisedAlias.get(name) ?? name,
-    codeModeExecName,
-  );
+  // A tool-free structured-output turn advertises only its output channel. The catalog nudge is a
+  // work-tool contract (shell, file search, result counting) and would describe tools that do not
+  // exist, so it is reserved for turns that carry real tools.
+  const toolCatalogNudge = structuredOutput && ordinaryTools.length === 0
+    ? undefined
+    : buildNonOpenAIToolCatalogNudgeFromNames(
+      kiroToolWireNames(kiroTools),
+      name => advertisedAlias.get(name) ?? name,
+      codeModeExecName,
+    );
   const boundedNudge = toolCatalogNudge ? boundedInjectedInstruction(toolCatalogNudge, injectedChars) : undefined;
   if (boundedNudge) systemParts.push(boundedNudge);
   if (completionMode !== "disabled") {
-    const boundedCompletion = boundedInjectedInstruction(KIRO_COMPLETION_INSTRUCTIONS, injectedChars);
+    const contract = structuredOutput
+      ? kiroStructuredOutputInstructions(
+        structuredOutput,
+        ordinaryTools.length > 0,
+        MAX_KIRO_INJECTED_INSTRUCTION_CHARS - injectedChars.value,
+      )
+      : KIRO_COMPLETION_INSTRUCTIONS;
+    const boundedCompletion = boundedInjectedInstruction(contract, injectedChars);
     if (boundedCompletion) systemParts.push(boundedCompletion);
   }
   const systemPrefix = systemParts.length > 0 ? `${systemParts.join("\n\n")}\n\n` : "";
@@ -364,7 +397,7 @@ export function buildKiroPayload(
   // structurally valid, but carrying no instruction to resume.
   const trailing = turns.at(-1);
   if (trailing?.kind === "assistant") {
-    const resumeText = completionMode === "text_fallback" ? KIRO_COMPLETION_RETRY_MESSAGE : KIRO_CONTINUATION_MESSAGE;
+    const resumeText = completionMode === "text_fallback" ? retryMessage : KIRO_CONTINUATION_MESSAGE;
     turns.push({
       kind: "user",
       content: trailing.finalAnswer ? KIRO_ANSWER_DELIVERED_MESSAGE : resumeText,
@@ -425,8 +458,8 @@ export function buildKiroPayload(
     // Never append the retry instruction onto the answer-delivered acknowledgement: it exists
     // precisely to avoid asking a finished turn for another completion call, and appending here
     // would reinstate the loop it prevents.
-    if (currentUim.content !== KIRO_COMPLETION_RETRY_MESSAGE && !answerDeliveredAck) {
-      currentUim.content = appendTurnText(currentUim.content, KIRO_COMPLETION_RETRY_MESSAGE);
+    if (currentUim.content !== retryMessage && !answerDeliveredAck) {
+      currentUim.content = appendTurnText(currentUim.content, retryMessage);
     }
   } else if (
     !currentUim.userInputMessageContext?.toolResults
@@ -464,5 +497,5 @@ export function buildKiroPayload(
     }
   }
   if (profileArn) payload.profileArn = profileArn;
-  return { payload, nameMap, conversationId, completionMode };
+  return { payload, nameMap, conversationId, completionMode, ...(structuredOutput ? { structuredOutput } : {}) };
 }

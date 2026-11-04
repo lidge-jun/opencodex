@@ -12,7 +12,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
     "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7",
     "llmtr", "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
-    "ovhcloud", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
+    "ovhcloud", "perch", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
   ],
   "recurring-uncapped": [
     "agnes", "ainative", "aion", "baidu", "glm", "glm-cn", "kilo-gateway", "opencode-zen", "requesty",
@@ -117,7 +117,7 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   iflytek: openAi("https://spark-api-open.xf-yun.com/v1", "https://console.xfyun.cn", { verification: "official", documentationUrl: "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html" }),
   liquid: openAi("https://inference.liquid.ai/v1", "https://playground.liquid.ai", { modelsUrl: "https://inference.liquid.ai/v1/models" }),
   // Checked 2026-10-29. Docs: https://llmtr.com/docs/gateway/chat-completions/.
-  // Operator: Knowhy, Istanbul (https://llmtr.com/terms). GET /v1/models is public and returned
+  // Operator: Knowhy İleri Teknoloji Ticaret Limited Şirketi (operator, per https://llmtr.com/terms). GET /v1/models is public and returned
   // 382 rows. Chat requires a Bearer key. Six chat rows are the standing zero-price set; other
   // zero-price rows are dated promotions or EVREN bring-your-own-key routes. Discovery is hybrid:
   // those six ids are seeded, and live discovery still lists paid chat models, including
@@ -216,7 +216,7 @@ const LABELS: Record<string, string> = {
   gemini: "Google Gemini", "github-models": "GitHub Models", huggingchat: "HuggingChat", huggingface: "Hugging Face",
   iflytek: "iFlytek", "inference-net": "Inference.net", llm7: "LLM7", llmtr: "LLMTR", "muse-spark-web": "Muse Spark Web",
   nlpcloud: "NLP Cloud", "ollama-cloud": "Ollama Cloud", ovhcloud: "OVHcloud", "qwen-web": "Qwen Web",
-  "t3-web": "T3 Web", uncloseai: "UncloseAI", ainative: "AI Native", baidu: "Baidu Qianfan",
+  "t3-web": "T3 Web", uncloseai: "UncloseAI", perch: "Perch", ainative: "AI Native", baidu: "Baidu Qianfan",
   glm: "Z.AI GLM", "glm-cn": "BigModel GLM (CN)", "kilo-gateway": "Kilo Gateway", "opencode-zen": "OpenCode Zen",
   sealion: "SEA-LION", bytez: "Bytez", "nous-research": "Nous Research", agentrouter: "AgentRouter",
   ai21: "AI21", baichuan: "Baichuan", crusoe: "Crusoe", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",

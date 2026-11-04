@@ -1,3 +1,4 @@
+import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
@@ -96,8 +97,14 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Original caller label, carried through synthetic children without route substitution. */
+  clientModelLabel?: ClientFacingModelLabel;
+  /** Original client envelope label when a combo was selected by a synthetic rewrite. */
+  clientResponseModelLabel?: ClientFacingModelLabel;
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
+  /** Captured synchronously at ingress, before parsing or child replay can suspend. */
+  advisorAdmissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */
@@ -116,6 +123,8 @@ export interface HandleResponsesOptions {
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */
   claudeNativeSessionId?: string;
+  /** Private Claude bridge pool identity (validated, principal-scoped when derived); completes session-id/thread-id only on Codex account-selection headers. */
+  claudeBridgePoolSession?: string;
   /** Original live policy owner; separate from caller-specific routing/sidecar snapshots. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   turnAdmissionLease?: AdmissionLease;

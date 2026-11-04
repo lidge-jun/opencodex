@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
+import { resolveTurnStateHandle } from "../../src/server/turn-state-handles";
 import {
   buildWarmupCompletionFrames,
   pumpResponsesSseToWebSocket,
@@ -323,15 +324,15 @@ describe("WS endpoint re-framer (120/132)", () => {
       "x-codex-secondary-primary-reset-at": "1781928000",
       "x-codex-secondary-limit-name": "Secondary",
     }));
+    // Without a send binding the turn-state token is dropped; unknown families and limit labels are too.
     expect(outbound).toEqual({
       "retry-after": "2",
-      "x-codex-turn-state": "state",
-      "x-codex-primary-used-percent": "100.0",
+      "x-codex-primary-used-percent": "100",
       "x-codex-primary-window-minutes": "15",
-      "x-codex-secondary-primary-reset-at": "1781928000",
-      "x-codex-secondary-limit-name": "Secondary",
       "x-ratelimit-remaining": "4",
     });
+    const bound = safeResponseHeaders(new Headers({ "x-codex-turn-state": "state" }), { turnStateBinding: "send-a" });
+    expect(resolveTurnStateHandle(bound["x-codex-turn-state"]!, "send-a")).toEqual({ value: "state" });
   });
 
   test("bounded sniffing replays the full body without dropping bytes", async () => {

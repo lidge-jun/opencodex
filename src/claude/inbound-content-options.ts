@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 import { isClaudeWebSearchToolName } from "./outbound";
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 
@@ -168,14 +169,14 @@ export function toolChoiceToResponses(choice: unknown, body: Rec): void {
     case "any": body.tool_choice = "required"; break;
     case "tool":
       if (typeof choice.name !== "string" || choice.name.length === 0) {
-        throw new AnthropicRequestError("tool_choice.tool requires a name");
+        throw markProxyError(new AnthropicRequestError("tool_choice.tool requires a name"));
       }
       // Anthropic represents hosted WebSearch as a named tool choice, while
       // Responses requires the choice type to match the hosted declaration.
       // Preserve forced-tool intent rather than weakening it to `auto`.
       if (isClaudeWebSearchToolName(choice.name)
         && (!Array.isArray(body.tools) || !body.tools.some(tool => isRec(tool) && tool.type === "web_search"))) {
-        throw new AnthropicRequestError("Restricted web search cannot be forced on a translated route without an available search declaration");
+        throw markProxyError(new AnthropicRequestError("Restricted web search cannot be forced on a translated route without an available search declaration"));
       }
       body.tool_choice = isClaudeWebSearchToolName(choice.name)
         ? { type: "web_search" }

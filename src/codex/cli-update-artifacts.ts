@@ -4,6 +4,8 @@ import { closeSync, constants, createReadStream, fstatSync, lstatSync, openSync 
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseStrictSemver } from "../lib/strict-semver";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
+import type { BigIntStats } from "node:fs";
 import { codexCliContentFileDigest, codexCliContentSetDigest, codexCliPlatformBacking } from "./cli-install-provenance";
 import { windowsArchivePathValidator, WINDOWS_CODEX_HEADER_BYTES, WINDOWS_CODEX_NATIVE_MEMBER } from "./cli-update-windows-paths";
 
@@ -105,10 +107,10 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
   options: { windowsX64?: boolean } = {}): Promise<CodexArchiveFiles> {
   if (!isSha512Integrity(target.integrity)) throw new Error("artifact_integrity_mismatch");
   let fd: number | undefined;
-  let before: ReturnType<typeof fstatSync> | undefined;
+  let before: BigIntStats | undefined;
   if (typeof source === "string") {
     fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try { before = fstatSync(fd); } catch (error) { closeSync(fd); throw error; }
+    try { before = fstatSync(fd, { bigint: true }); } catch (error) { closeSync(fd); throw error; }
     if (!before.isFile() || before.size > MAX_CODEX_ARCHIVE_BYTES) { closeSync(fd); throw new Error("artifact_file_unverified"); }
   }
   let input: Readable;
@@ -208,10 +210,10 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
     if (!ended || trailer < 512 || current || padding || headerSize) throw new Error("artifact_tar_truncated");
     if ("sha512-" + archiveHash.digest("base64") !== target.integrity) throw new Error("artifact_integrity_mismatch");
     if (fd !== undefined && before && typeof source === "string") {
-      const after = fstatSync(fd), lexical = lstatSync(source);
-      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || lexical.isSymbolicLink()
-        || lexical.dev !== before.dev || lexical.ino !== before.ino) throw new Error("artifact_file_changed");
+      const after = fstatSync(fd, { bigint: true }), lexical = lstatSync(source, { bigint: true });
+      if (!sameFileIdentity(before, after) || before.size !== after.size
+        || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs) || lexical.isSymbolicLink()
+        || !sameFileIdentity(lexical, before)) throw new Error("artifact_file_changed");
     }
     verified = true;
   } finally {

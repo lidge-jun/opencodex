@@ -1,3 +1,4 @@
+import { UNDECLARED_TOOL_CALL_MESSAGE } from "../lib/client-error-body";
 import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
@@ -45,6 +46,7 @@ import {
 import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
+import { createMaxOutputCompletion, type MaxOutputCompletionOptions } from "./max-output-completion";
 
 /** Build a buffered Responses result within a caller-owned or temporary translator budget. */
 export function buildResponseJSON(
@@ -84,7 +86,7 @@ export function buildResponseJSON(
 function buildResponseJSONWithBudget(
   events: AdapterEvent[],
   modelId: string,
-  options?: {
+  options?: MaxOutputCompletionOptions & {
     hideThinkingSummary?: boolean;
     /** Internal Chat delivery override for raw reasoning only; summaries keep their policy. */
     chatRawReasoningVisible?: boolean;
@@ -202,6 +204,7 @@ function buildResponseJSONWithBudget(
   // which is only true for a `done` without a stop reason. A buffered turn whose adapter simply
   // stopped emitting has no terminal at all, and must not be reported as a success.
   let sawTerminal = false;
+  const maxOutputCompletion = createMaxOutputCompletion(options);
   let batchCompaction = emptyChunks();
   let compactionEncryptedContent: string | undefined;
 
@@ -371,6 +374,7 @@ function buildResponseJSONWithBudget(
   };
 
   for (const e of events) {
+    maxOutputCompletion.observe(e);
     if (errorEvent) {
       // Match streaming: once the turn fails, later parallel calls must not become executable
       // completed output. Still release every retained event in order and preserve terminal usage.
@@ -491,7 +495,7 @@ function buildResponseJSONWithBudget(
         ) {
           errorEvent = {
             type: "error",
-            message: `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
+            message: UNDECLARED_TOOL_CALL_MESSAGE,
             status: 502,
             errorType: "upstream_error",
           };
@@ -570,6 +574,7 @@ function buildResponseJSONWithBudget(
         break;
       case "incomplete":
         incompleteEvent = e;
+        usage = e.usage ?? usage;
         sawTerminal = true;
         endTurn = e.endTurn;
         if (e.providerState) options?.onProviderState?.(e.providerState);
@@ -640,9 +645,10 @@ function buildResponseJSONWithBudget(
   }
 
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;
+  const gracefulComplete = maxOutputCompletion.completed && !errorEvent;
   const status = errorEvent
     ? "failed"
-    : incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter"
+    : !gracefulComplete && (incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter")
       ? "incomplete"
       : sawTerminal
         ? "completed"
@@ -662,13 +668,13 @@ function buildResponseJSONWithBudget(
     ...(failure && isCyberPolicyCode(failure.error.code)
       ? { retryable: false }
       : errorEvent?.retryable !== undefined ? { retryable: errorEvent.retryable } : {}),
-    ...(incompleteEvent ? {
+    ...(!gracefulComplete && incompleteEvent ? {
       incomplete_details: {
         reason: truncationReasonFor(incompleteEvent.reason) ?? incompleteEvent.reason,
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },
-    } : stopReason === "max_tokens" ? {
+    } : !gracefulComplete && stopReason === "max_tokens" ? {
       incomplete_details: { reason: "max_output_tokens" },
     } : stopReason === "content_filter" ? {
       incomplete_details: { reason: "content_filter" },

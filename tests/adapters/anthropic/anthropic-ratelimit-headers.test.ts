@@ -28,6 +28,7 @@ import {
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import { clearPoolRotationState } from "../../../src/codex/pool-rotation";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { settleAccountQuotaPersistForTests } from "../../../src/providers/account-quota-disk";
 import type { OcxConfig } from "../../../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -810,6 +811,8 @@ describe("Anthropic known-reset expiry", () => {
     try { observe(id!); } finally { timer.mockRestore(); }
     now += 60_000;
     flush();
+    // The fired callback admits its write after any overlapping config-root ACL flight (#7815).
+    await settleAccountQuotaPersistForTests();
     const disk = JSON.parse(readFileSync(join(home, "provider-account-quota-cache.json"), "utf8"));
     expect(disk.rows[`anthropic\u0000${id}`]).toEqual({ fiveHourPercent: 41, updatedAt: start });
     expect(disk.rows["zai\u0000untouched"]).toEqual(saved);

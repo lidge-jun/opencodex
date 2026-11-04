@@ -221,6 +221,16 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 
 下载文件 `cline-config-bundle.json` 包含两个原生文档成员：对应 `providers.json` 的 `settings`，以及对应 `models.json` 的 `catalog`。它本身不是 Cline 设置文件。建议使用集成命令，以获得带日志的合并和回滚。此生成集成不支持远程准入接线，需要免认证的回环访问。
 
+## omo（基于 Pi）的 Responses 方言
+
+托管的基于 Pi 的 omo 配置块默认使用 Chat 方言（`api: "openai-completions"`）。Chat 会在工具调用之间丢弃上一步的推理，较长的 omo 工具循环会受到影响。要让启用和每次刷新都写入 Responses 方言，请在 opencodex 配置中添加以下仅能在配置文件中设置的键：
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+重启代理以加载修改后的配置（服务安装使用 `ocx service restart`，否则先 `ocx stop` 再 `ocx start`），然后在仪表盘的 **Connect → omo** 中刷新 omo 集成。仅刷新会使用运行中代理的配置，不会重新读取配置文件。该设置只对 omo 生效；Pi、Gentle Shell 等其他 Pi 格式客户端仍使用 `openai-completions`。要改回 Chat，请删除该键，按同样方式重启代理，再刷新 **Connect → omo**。未知值会被忽略。opencodex 仍只管理 `~/.omo/agent/models.json` 中的 `providers.opencodex`，该文件中的其他提供商保持不变。
+
 ## omo (Codex / LazyCodex) 角色推理强度
 
 检测到 LazyCodex 后，可以在 omo 标签页的 **omo (Codex / LazyCodex)** 部分为 `$CODEX_HOME/agents/*.toml` 中的每个角色选择模型和推理强度，然后点击 **保存**。没有固定模型的角色所在行可以只保存推理强度，该角色仍继承其模型。opencodex 只更新该角色文件根级的 `model` 和 `model_reasoning_effort` 键，缺少的固定值会插入到文件开头附近；角色的指令、其他注释和其他键保持不变。只更改模型的保存不会发送 `effort`，两个文件中的推理强度都保持原样。选择某个级别会插入或替换角色文件中的 `model_reasoning_effort`；如果 LazyCodex 支持该级别，还会写入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色文件中，并移除旧的 `reasoning`）。在命令行中可以用 `ocx agent roles set <role> <model> --effort <level>` 完成同样的操作。
@@ -232,6 +242,8 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 如果 `~/.omo/omo.jsonc` 不存在，不会创建它。如果其中包含注释，保存会删除这些注释，因此不会改动该文件，请手动设置该值。跳过镜像不会撤销角色文件的保存。如果角色文件已保存但 omo.jsonc 写入失败，该行的按钮会变为 **重试 omo.jsonc**，重新发送同一推理强度选择，包括通过 **继承推理强度** 进行的清除（`null`）。在重试成功之前，该角色之后任何不改动推理强度的 **保存** 或 **自动分配** 的 **应用** 都会一并发送这个待处理的选择；明确选择的推理强度会取代它。
 
 **自动分配** 会为每个已评估、且所选模型的推理强度级别列表不为空的角色提出推理强度；**应用**、**全部应用** 或 `ocx agent roles suggest --apply` 会插入或替换该角色的 `model_reasoning_effort`。推理强度取自所选模型自身的级别：最低级别、默认级别、比默认高一级，或最高级别。级别列表为空时不提出推理强度（`proposedEffort: null`）；此时 **应用** 会省略 `effort`，保留已有的固定强度。`null` 提案永远不会清除固定的推理强度。
+
+CLI 命令 `ocx agent roles suggest --apply` 在一个历史批次中最多应用 **50 个需要更改的角色**。设置已一致、未完成评估或未分配的角色不计入限额。超过 50 个时，命令会在发送任何角色更新之前以退出码 5 拒绝操作。请先不带 `--apply` 预览，再用 `ocx agent roles set <role> <model> [--effort <level>]` 逐个应用更改。中途中断后如何区分已确认的写入、结果未确认的请求以及安全重试，请参阅 [CLI 应用与恢复约定](/reference/cli/agents/)。
 
 ## Kilo
 

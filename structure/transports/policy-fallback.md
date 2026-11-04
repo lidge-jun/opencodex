@@ -9,6 +9,8 @@ accepted, so a declined policy target never scopes the request's own route.
 `src/server/responses/policy-fallback.ts` inspects and executes each retry as a concrete candidate,
 so a public combo or profile alias cannot reselect its destination. Redirects remain inside the
 original evaluation, including eligible destinations omitted from the bounded diagnostic trace.
+The outer retry owner captures caller admission policy before its first attempt when ingress has not
+already supplied it. Every candidate receives that same immutable Advisor policy snapshot.
 
 When a main-account hard-lock fallback selects a profile, `src/server/responses/request-prepare.ts`
 checks its first ranked destination against the original model under the
@@ -25,6 +27,9 @@ The initial decision remains the selection evidence while physical attempts reco
 Cancellation, non-replayable responses and committed output keep the
 [shared replay boundaries](responses-failover.md). A local policy refusal is identified by its
 in-process response identity; matching upstream prose or error codes cannot authorize another attempt.
+Formatted quota errors retain [their upstream-code provenance](responses-combo-boundaries.md#upstream-account-quota-exhaustion-failover)
+through lifecycle wrappers; a reflected quota message on a 400/422 response does not authorize a
+candidate hop merely because formatting serialized it as `insufficient_quota` or its text mentions a free-tier single-request cap.
 
 Coverage: `tests/routing/routing-policy-dispatch-scope.test.ts` exercises real request preparation,
 normalization and configured subagent selection with synthetic dispatch. It also covers recovery,
