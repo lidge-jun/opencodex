@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build -c vite.classic.config.ts",
     "lint": "oxlint .",
     "test": "bun ../scripts/test-with-pinned-bun.ts --isolate tests",
     "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
