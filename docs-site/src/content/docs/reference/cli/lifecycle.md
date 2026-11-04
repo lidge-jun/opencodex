@@ -82,6 +82,8 @@ ocx start --socks5-off
 
 ### `ocx stop [--json]`
 
+An unsupervised Link Child handling a shutdown signal restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Service/Desktop supervision, sibling ownership, restart/recycle handoff and pending parent stop receipts preserve integrations. Shutdown rejects bound restart with `409 runtime_stopping`. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
+
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
 On a connected hub client, `ocx stop` leaves Codex routing, its
@@ -287,6 +289,19 @@ Stop the service and proxy, remove the service and Codex shim, restore native Co
 opencodex local config only if all restore steps succeeded. `remove` is an alias of `uninstall`.
 Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories
 are left in place.
+
+When `ocx uninstall` runs as root or from an elevated (administrator) Windows prompt, it first
+checks that no other account can change the config directory, the directories above it, or any
+directory inside it, and that no link inside the config directory leads outside it (on Windows, that it holds no links at all). If either check
+fails, uninstall stops before it changes anything and says why. Run `ocx uninstall` as the account
+that owns the config directory, without `sudo` or administrator rights, or restrict those directories
+to that account and remove such links, then run it again. On Windows ARM64, where opencodex cannot
+tell whether the prompt is elevated, the same check applies; if it cannot be completed, stop opencodex
+and remove the config directory yourself.
+
+A recorded entry whose parent directory inside the config directory is a link (a symlink or junction)
+is left in place and listed as a remaining path, and the run ends as a partial uninstall. Replace that
+link with the real directory or remove it, then run `ocx uninstall` again to finish.
 
 Both commands accept no arguments. Unsupported flags (including `--dry-run` and `--yes`)
 exit with usage status 2 before preflight or teardown; no changes are made.
@@ -502,9 +517,12 @@ of deleting anything.
 
 Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
 installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
-and pending history migration. The Codex app-home targeting section also detects the narrow Windows
-Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
-diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
+and pending history migration. The **Native main refresh** section reads admission status from the
+running proxy's authenticated, read-only native-main admission endpoint, so a separately launched `ocx doctor`
+reports the service's `foreign-ownership` or other fence reason; if the proxy cannot be queried it
+reports admission as unavailable. The Codex app-home targeting section also detects the narrow
+Windows Orca runtime-home mismatch and explains service migration when applicable. Paths shown by
+this diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
 
 Project-config diagnostics ignore provider examples inside TOML multiline strings, including
 `developer_instructions`. Real provider and profile settings after the closing delimiter are still
@@ -770,10 +788,15 @@ Launchd restarts the proxy after a crash or failed restart handoff, but leaves i
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.
 
-Definitions installed before this change still carry the old versioned paths and cannot migrate
-themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
-`ocx service repair` once after upgrading. Linux service starts then follow the launcher; macOS
-repair writes the new package paths into the launchd definition.
+Definitions installed before this change do not have the resolved `CODEX_HOME` and `OPENCODEX_HOME`
+pinned for service restarts. After upgrading, run `ocx service repair` once so the generated shell
+reasserts both homes after login-profile initialization and Task Scheduler keeps absolute home paths
+rather than expanding the task's runtime profile variables. Repair also refreshes old versioned paths;
+if the old executable was already deleted, reinstall opencodex before repairing. Linux service
+starts then follow the launcher; macOS repair writes the new package and home paths into the launchd
+definition.
+On macOS, install and repair refuse a home or proxy environment value that contains a control
+character an XML plist cannot hold (for example U+0001); the error names the variable to fix.
 An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
 than the running proxy, run `ocx service restart` so the new build serves. On macOS, `repair` is not
 enough there: the definition did not change, and a repair that changes nothing reloads nothing.

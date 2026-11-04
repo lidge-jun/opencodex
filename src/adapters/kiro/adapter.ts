@@ -22,6 +22,7 @@ import { fetchKiroWithRetry } from "../kiro-retry";
 import { fingerprint, invocationId, osTag } from "../kiro-wire";
 import { hasTrailingDeliveredFinalAnswer } from "./conversation";
 import { buildKiroPayload } from "./payload";
+import type { KiroStructuredOutputSpec } from "./structured-output";
 import {
   jsonStringSerializedUtf8Bytes,
   parseKiroStream,
@@ -60,6 +61,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let toolNameMap: Map<string, string> | undefined;
   let conversationId: string | undefined;
   let completionMode: KiroCompletionMode = "disabled";
+  let structuredOutput: KiroStructuredOutputSpec | undefined;
   let requestSnapshot: OcxParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
@@ -88,6 +90,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     requestOnPhysicalSend?.({ ordinal, ...(recovery ? { recovery } : {}) });
   };
 
+  /**
+   * Build the Kiro request for a parsed turn, optionally forcing the completion mode (the bounded
+   * retry passes `text_fallback`), and capture the state the stream parser needs.
+   */
   const build = async (
     parsed: OcxParsedRequest,
     forcedCompletionMode?: KiroCompletionMode,
@@ -96,6 +102,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     nameMap: Map<string, string>;
     conversationId: string;
     completionMode: KiroCompletionMode;
+    structuredOutput?: KiroStructuredOutputSpec;
     inputTokens: number;
     contextInputEstimate: number;
   }> => {
@@ -154,6 +161,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         region,
         requestedModel: parsed.modelId,
         completionMode: built.completionMode,
+        structuredOutput: built.structuredOutput !== undefined,
         bodyBytes: new TextEncoder().encode(body).length,
         messageCount: kiroPayloadMessages(parsed).length,
         toolCount: parsed.context.tools?.length ?? 0,
@@ -173,6 +181,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       nameMap: built.nameMap,
       conversationId: built.conversationId,
       completionMode: built.completionMode,
+      ...(built.structuredOutput ? { structuredOutput: built.structuredOutput } : {}),
       inputTokens: estimateKiroInputTokens(parsed),
       contextInputEstimate,
     };
@@ -297,6 +306,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       toolNameMap = built.nameMap;
       conversationId = built.conversationId;
       completionMode = built.completionMode;
+      structuredOutput = built.structuredOutput;
       // Runtime callbacks belong to the original request, not the retry payload.
       requestSnapshot = structuredClone(Object.fromEntries(
         Object.entries(parsed).filter(([, value]) => typeof value !== "function"),
@@ -306,6 +316,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       return built.request;
     },
 
+    /** Parse a streaming Kiro response, with the bounded retry wired to this request. */
     parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       return parseKiroStream(
         response,
@@ -318,6 +329,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         completionMode,
         completionMode === "required" ? fallbackFactory : undefined,
         contextInputEstimate,
+        structuredOutput,
       );
     },
 
@@ -345,9 +357,11 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       return safeKiroHttpErrorMessage(status, headers, payloadText);
     },
 
-    // Kiro always returns an event stream, including for non-streaming Responses requests. Drain
-    // the decoder into a budget-owned batch so an upstream stream cannot grow this array without
-    // bound while the caller waits for the complete JSON response.
+    /**
+     * Kiro always returns an event stream, including for non-streaming Responses requests. Drain
+     * the decoder into a budget-owned batch so an upstream stream cannot grow this array without
+     * bound while the caller waits for the complete JSON response.
+     */
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const events: AdapterEvent[] = [];
       try {
@@ -362,6 +376,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
           completionMode,
           completionMode === "required" ? fallbackFactory : undefined,
           contextInputEstimate,
+          structuredOutput,
         )) {
           retainTranslatedEvent(e, budget, events.at(-1));
           events.push(e);

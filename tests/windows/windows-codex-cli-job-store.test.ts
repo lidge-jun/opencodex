@@ -99,6 +99,44 @@ describe("windows owner ACL mixed policies", () => {
     expect(windowsEntriesAclMatches(userRun([{ owner: FOREIGN_SID, aces: [allow(FULL_CONTROL, USER_SID)] }]), entries)).toBe(false);
   });
 
+  test("write-private creation parents reject inherited child-creation grants to foreign users", () => {
+    const inheritOnly = 0x1 | 0x2 | 0x8; // OBJECT_INHERIT | CONTAINER_INHERIT | INHERIT_ONLY
+    const entries: WindowsAclEntry[] = [{ path: "C:\\cfg", directory: true, policy: "write-private" }];
+    expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+      aces: [allow(READ_ONLY_MASK, FOREIGN_SID, inheritOnly)] }]), entries)).toBe(true);
+    expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+      aces: [allow(READ_ONLY_MASK | CREATE_ONLY_MASK, FOREIGN_SID, inheritOnly)] }]), entries)).toBe(false);
+    expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+      aces: [allow(FULL_CONTROL, FOREIGN_SID, inheritOnly)] }]), entries)).toBe(false);
+    // Inheritable grants without INHERIT_ONLY are effective on this parent too.
+    expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+      aces: [allow(CREATE_ONLY_MASK, FOREIGN_SID, 0x1 | 0x2)] }]), entries)).toBe(false);
+  });
+
+  test("existing ancestor templates do not bypass the creation-parent policy", () => {
+    const inheritOnly = 0x1 | 0x2 | 0x8;
+    // A volume root may grant effective add-subdirectory plus a broad inherited
+    // template. Existing descendants are checked separately; no child is created
+    // under an entry admitted solely as trusted-ancestry.
+    const ancestor = { owner: TRUSTED_INSTALLER_SID, aces: [
+      allow(0x4, FOREIGN_SID), allow(0xe0010000, FOREIGN_SID, inheritOnly),
+    ] };
+    const parent = { owner: USER_SID, aces: [allow(FULL_CONTROL, USER_SID)] };
+    const entries: WindowsAclEntry[] = [
+      { path: "C:\\", directory: true, policy: "trusted-ancestry" },
+      { path: "C:\\private", directory: true, policy: "write-private" },
+    ];
+    expect(windowsEntriesAclMatches(userRun([ancestor, parent]), entries)).toBe(true);
+    // The same effective grant is unsafe on an existing ancestor, and the same
+    // inherit-only template is unsafe at the direct child-creation boundary.
+    expect(windowsEntriesAclMatches(userRun([
+      { ...ancestor, aces: [allow(0xe0010000, FOREIGN_SID)] }, parent,
+    ]), entries)).toBe(false);
+    expect(windowsEntriesAclMatches(userRun([ancestor, {
+      ...parent, aces: [...parent.aces, allow(FULL_CONTROL, FOREIGN_SID, inheritOnly)],
+    }]), entries)).toBe(false);
+  });
+
   test("confined policies tolerate deny ACEs but refuse callback, opaque and NULL-DACL output", () => {
     const entries: WindowsAclEntry[] = [{ path: "C:\\cfg", directory: true, policy: "write-private" }];
     expect(windowsEntriesAclMatches(userRun([{ owner: USER_SID, aces: [allow(FULL_CONTROL, USER_SID), deny(FULL_CONTROL, FOREIGN_SID)] }]), entries)).toBe(true);

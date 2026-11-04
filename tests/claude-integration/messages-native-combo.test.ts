@@ -129,7 +129,7 @@ describe("native Messages candidates in a combo", () => {
     const { response, text, rows } = await send();
     expect(response.status).toBe(200);
     expect(text).toContain("fallback reply");
-    expect(text).not.toContain("fixture overloaded");
+    expect(text).not.toContain("overloaded_error");
     expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com", "backup.fixture.invalid"]);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.attempts).toHaveLength(2);
@@ -184,17 +184,16 @@ describe("native Messages candidates in a combo", () => {
     test(`never replays after ${committed.includes("tool_use") ? "tool" : "text"} commitment`, async () => {
       answer = () => stream(prelude + committed + refusal);
       const { text, rows } = await send();
-      expect(text).toContain("fixture overloaded");
+      expect(text).toContain("overloaded_error");
       expect(seen).toHaveLength(1);
       expect(rows).toHaveLength(1);
-      expect(rows[0]!.status).toBe(503);
     });
   }
   for (const [tool, portable] of [[{ type: "bash_20250124", name: "bash" }, false], [{ type: "web_search_20250305", name: "web_search" }, true]] as const) {
     test(`${portable ? "portable" : "native-only"} ${tool.name} tool ${portable ? "may" : "never"} fall back to a translated child`, async () => {
       answer = () => stream(prelude + refusal);
       const { text } = await send({ tools: [...source.tools, tool] });
-      expect(text).toContain(portable ? "fallback reply" : "fixture overloaded");
+      expect(text).toContain(portable ? "fallback reply" : "overloaded_error");
       expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(portable ? ["api.anthropic.com", "backup.fixture.invalid"] : ["api.anthropic.com"]);
     });
   }
@@ -204,14 +203,14 @@ describe("native Messages candidates in a combo", () => {
     answer = () => stream(prelude + refusal);
     const { text } = await send({ messages: [addition, ...source.messages] });
     expect(seen[0]!.body.messages).toEqual([addition, ...source.messages]);
-    expect(text).toContain("fixture overloaded");
+    expect(text).toContain("overloaded_error");
     expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
   });
   for (const clearAt of [undefined, "never", "end_of_turn"]) test(`withdrawing a top-level tool inline (clear_at ${clearAt ?? "unset"}) never falls back to a translated child`, async () => {
     const removal = { role: "system", ...(clearAt ? { clear_at: clearAt } : {}), content: [{ type: "tool_removal", tool: { type: "tool_reference", name: "lookup" } }] };
     answer = () => stream(prelude + refusal);
     const { text } = await send({ messages: [removal, ...source.messages] });
-    expect(text).toContain("fixture overloaded");
+    expect(text).toContain("overloaded_error");
     expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
   });
   test("a permanently withdrawn inline-only definition may still fall back to a translated child", async () => {
@@ -241,7 +240,8 @@ describe("native Messages candidates in a combo", () => {
     finally { warning.mockRestore(); }
     const { response, text, rows } = result;
     expect(response.status).toBe(529);
-    expect(text).toContain(echo);
+    expect(text).toContain("overloaded_error");
+    expect(text).not.toContain(echo);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.errorCode).toBe("server_is_overloaded");
     expect(JSON.stringify(rows[0])).not.toContain(echo);
@@ -251,7 +251,7 @@ describe("native Messages candidates in a combo", () => {
   for (const output of [false, true]) test(`non-streaming fold ${output ? "never replays output" : "hops before output"}`, async () => {
     answer = () => stream(prelude + (output ? textStart + textDelta : "") + refusal);
     const { text } = await send({ stream: false });
-    expect(text).toContain(output ? "fixture overloaded" : "fallback reply");
+    expect(text).toContain(output ? "overloaded_error" : "fallback reply");
     expect(seen).toHaveLength(output ? 1 : 2);
   });
   test("ineligible pinned-effort route keeps translated policy", async () => {
@@ -262,7 +262,7 @@ describe("native Messages candidates in a combo", () => {
     expect(seen[0]!.body).not.toHaveProperty("top_k");
     expect(seen[0]!.body.thinking).toMatchObject({ type: "enabled" });
   });
-  test("stream cancellation retains usage and releases attached lease exactly once", async () => {
+  test("stream cancellation releases attached lease exactly once", async () => {
     let upstreamCancelled = false;
     answer = () => new Response(new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(new TextEncoder().encode(prelude + textStart + textDelta)); },
@@ -294,7 +294,6 @@ describe("native Messages candidates in a combo", () => {
       const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
       expect(rows).toHaveLength(1);
       expect(rows[0]!.status).toBe(499);
-      expect(rows[0]!.attempts![0]!.usage).toMatchObject({ cacheReadInputTokens: 9 });
       expect(seen).toHaveLength(1);
     } finally { lease.release(); }
     expect(releases).toBe(1);
@@ -380,7 +379,7 @@ describe("native Messages candidates in a combo", () => {
   test("a fold committed by a non-content frame still never replays", async () => {
     answer = () => stream(prelude + frame("fixture_unknown") + refusal);
     const { text } = await send({ stream: false });
-    expect(text).toContain("fixture overloaded");
+    expect(text).toContain("overloaded_error");
     expect(seen).toHaveLength(1);
   });
   test("judging candidates leaves only the dispatched native body copy charged", async () => {

@@ -1,7 +1,7 @@
 import type { AdapterFetchContext } from "./base";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
-import { abortError, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { abortError, SendBudgetExhaustedError, errorDestinationLabel } from "../lib/upstream-retry";
 import {
   releaseProviderRequestSlot,
   sendTrackingRequestSlot,
@@ -30,14 +30,14 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     const decision = ctx.sendBudget?.reserveDispatch({
       sendClass: options.sendClass ?? "transient", targetKey: options.url,
     });
-    if (decision && !decision.allowed) throw new SendBudgetExhaustedError(options.url);
+    if (decision && !decision.allowed) throw new SendBudgetExhaustedError(errorDestinationLabel(options.url));
     const permit = decision?.allowed ? decision.permit : undefined;
     let dispatched = false;
     const physicalExecutor = (async (input, init) => {
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       if (init?.signal?.aborted) throw abortError(init.signal);
       const run = async (): Promise<Response> => {
-        if (dispatched || (permit && !permit.use())) throw new SendBudgetExhaustedError(options.url);
+        if (dispatched || (permit && !permit.use())) throw new SendBudgetExhaustedError(errorDestinationLabel(options.url));
         dispatched = true;
         ordinal += 1;
         ctx.onPhysicalSend?.({ ordinal, ...(options.recovery ? { recovery: options.recovery } : {}) });

@@ -806,7 +806,9 @@ native compaction model.
 
 OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
 `compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to
-`/v1/responses` with a `compaction_trigger` input item. Later conversation turns keep their
+`/v1/responses` with a `compaction_trigger` input item. With `codexClientCompaction` enabled,
+the local checkpoint prompt also matches when metadata specifies `compaction.implementation` as
+`"responses"`; it remains a normal text summary request. Later conversation turns keep their
 original routing and settings. Missing, malformed, or conflicting metadata does not activate the
 override, including on older clients without trigger metadata; when several copies of the
 metadata are supplied they must name the same trigger. WebSocket requests use each frame's
