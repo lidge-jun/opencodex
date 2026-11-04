@@ -175,7 +175,9 @@ trying the remaining targets.
 
 A provider's HTTP 400 response can still be target-specific. When its error explicitly has type
 `upstream_error` and carries no structured error code, the combo can try the next target without
-cooling the failed one. An explicit `invalid_request_error` code remains terminal.
+cooling the failed one. OpenRouter's opaque provider wrapper (`Provider returned error` with
+numeric `code: 400` and `metadata.raw: "ERROR"`) is treated the same way. Known malformed
+`response_format` schema errors and explicit `invalid_request_error` codes remain terminal.
 
 ### Round-robin: smooth weighted batches
 

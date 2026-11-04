@@ -84,6 +84,28 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureDecision(400, message, genericUpstream)).toBe("hop");
     expect(comboFailureCooldownScope(400, message, genericUpstream)).toBe("none");
 
+    // OpenRouter's Stealth wrapper drops the type and reports the HTTP status as a numeric code;
+    // this is still an opaque upstream failure, not a caller validation verdict.
+    const openRouterOpaque400 = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+      user_id: "user_test",
+    });
+    expect(comboFailureDecision(400, openRouterOpaque400)).toBe("hop");
+    expect(comboFailureCooldownScope(400, openRouterOpaque400)).toBe("none");
+
+    // A generic upstream envelope must not turn known malformed response_format requests into
+    // retries of the same invalid payload.
+    for (const malformed of [
+      "Invalid schema for response_format 'reply': 'type' is a required property.",
+      "response_format.type must be one of 'text', 'json_object', 'json_schema'.",
+    ]) {
+      expect(comboFailureDecision(400, malformed, genericUpstream)).toBe("stop");
+    }
+
     // Without the explicit provider type, and with a real structured validation code, a 400
     // remains terminal instead of treating any opaque client error as target-specific.
     expect(comboFailureDecision(400, message)).toBe("stop");

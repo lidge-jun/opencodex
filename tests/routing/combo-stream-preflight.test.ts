@@ -379,6 +379,16 @@ describe("combo stream preflight", () => {
     }
   });
 
+  test("retries a zero-output bare upstream_error 400 without a structured code", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: { type: "upstream_error", message: "Provider returned error" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
   test("passes a zero-output credential error to the ordinary combo classifier", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",
