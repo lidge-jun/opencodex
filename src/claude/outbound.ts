@@ -1272,6 +1272,7 @@ export async function collectAnthropicMessage(
           if (dataValue !== null) dataLines.push(dataValue);
         }
         const dataLine = dataLines.join("\n");
+        if (eventName === "error" && failureVerdictSink) failureVerdictSink.collectedErrorEvent = true;
         if (!dataLine) continue;
         let data: unknown;
         try { data = JSON.parse(dataLine); } catch { continue; }

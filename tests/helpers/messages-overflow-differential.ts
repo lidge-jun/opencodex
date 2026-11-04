@@ -73,4 +73,4 @@ for (const lane of messagesOverflowLanes) for (const input of applicableMessages
   rows.push({ lane, input, [base ? "base" : "head"]: { ...result, internalDecisions } });
 }
 delete (globalThis as any).__messagesOverflowRecord;
-await Bun.write(output, JSON.stringify({ schemaVersion: 4, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");
+await Bun.write(output, JSON.stringify({ schemaVersion: 5, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");

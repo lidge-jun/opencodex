@@ -12,7 +12,7 @@ const golden = JSON.parse(readFileSync(fixturePath("messages-overflow-decisions.
 const head = new Map<string, Row>();
 const key = (row: Row) => `${row.lane}/${row.input.id}`;
 beforeAll(async () => {
-  expect(golden.schemaVersion).toBe(4);
+  expect(golden.schemaVersion).toBe(5);
   expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
   const scratch = mkdtempSync(join(tmpdir(), "ocx-overflow-decisions-"));
   try {
@@ -35,6 +35,12 @@ for (const base of golden.rows) test(`${key(base)}: origin/dev client recovery`,
   expect(after.status).toBe(before.status);
   const classification = base.input.classification[base.lane as typeof messagesOverflowLanes[number]];
   expect(["error", "success"]).toContain(classification);
+  if (["native-fold", "native-fold-builtin", "direct-collector"].includes(base.lane)) {
+    expect(classification).toBe("error");
+    expect(base.input.eventLanes).toContain(base.lane);
+  }
+  expect(before.clientRecognizes).toBe(base.input.recovery[base.lane as typeof messagesOverflowLanes[number]]);
+  expect(after.clientRecognizes).toBe(base.input.recovery[base.lane as typeof messagesOverflowLanes[number]]);
   expect(after.clientRecognizes).toBe(before.clientRecognizes);
   expect(after.internalDecisions).toEqual(before.internalDecisions);
   const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
@@ -45,7 +51,7 @@ for (const base of golden.rows) test(`${key(base)}: origin/dev client recovery`,
     return;
   }
   expect(after.envelopeType).toBe("error");
-  if (before.status < 200 || before.status >= 300) {
+  if (base.input.eventLanes?.includes(base.lane as typeof messagesOverflowLanes[number]) || before.status < 200 || before.status >= 300) {
     expect(after.text.length).toBeGreaterThan(0);
     expect(after.text).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
   }

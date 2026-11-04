@@ -349,8 +349,12 @@ SDK diagnostic from the original relayed body: a truthy top-level message wins, 
 non-JSON errors use their raw text. Buffered passthrough Messages/count_tokens rebuild only
 non-2xx bodies. Every 2xx passthrough body retains its original bytes, including any error member
 or envelope marker; status stays unchanged, and only the approved response headers normalize.
-Completed native folds
-also preserve non-error records. Incomplete translated JSON uses its original formatter message
+Native fold and raw direct collection project every collected error event, including HTTP-200
+records, by the collector's recorded event identity rather than the payload shape. Empty, malformed
+and non-object payloads keep their original collector/status result as internal evidence; their
+client envelope is rebuilt too. A record's original client-visible message or serialized payload
+selects recovery wording even when its status is 200. Incomplete translated JSON uses its original
+formatter message
 before selecting the fixed incomplete or compaction sentence. Internal overflow decisions and HTTP
 status stay separate
 from this client-message check: a coded raw-collector throughput refusal still answers 400 without
@@ -363,7 +367,8 @@ classification. Buffered passthrough and count_tokens preserve the upstream stat
 type/code. The type chosen
 by that writer survives collection independently of the final HTTP status: a converted rate-limit
 error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
-records into the collector without serializing them; publication follows successful frame admission.
+records into the collector without serializing them; publication follows successful frame admission. The sink records error-event dispatch independently
+of JSON parsing, so scalar, array, malformed and empty payloads cannot suppress projection.
 The direct sink in `src/protocols/encoders/adapter-events.ts` acknowledges successful enqueue through an
 optional callback. Failure admission charges the legacy frame size, keeping buffer-limit decisions
 independent of replacement-message length. Request logging and combo evidence retain original records separately.

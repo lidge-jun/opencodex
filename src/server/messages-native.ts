@@ -1,6 +1,6 @@
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
-import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, messagesOverflowPresentation, messagesRelayedOverflowPresentation, isMessagesErrorEnvelope } from "../lib/messages-error-body";
+import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
 import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
@@ -998,9 +998,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         return failEvidence(502, text, "api_error", undefined, overflow, error);
       }
       finishLog(200);
-      const collected = collectorVerdictSink.collected;
-      const originalError = collected && isRec(collected.error) ? collected.error : {};
-      const clientMessage = collected && isMessagesErrorEnvelope(collected) ? ownedAnthropicErrorPayload({ status: 200,
+      const collected = collectorVerdictSink.collected ?? message;
+      const originalError = isRec(collected.error) ? collected.error : {};
+      const clientMessage = collectorVerdictSink.collectedErrorEvent ? ownedAnthropicErrorPayload({ status: 200,
         type: typeof originalError.type === "string" ? originalError.type : undefined,
         code: typeof originalError.code === "string" ? originalError.code : undefined,
         overflow: messagesRelayedOverflowPresentation(JSON.stringify(collected), collected),

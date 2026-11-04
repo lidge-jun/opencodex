@@ -69,14 +69,17 @@ for (const direct of [false, true]) test(`${direct ? "direct" : "converter"} pub
     expect(sink).toEqual({});
   } finally { enqueue.mockRestore(); }
 });
-for (const raw of [
-  'event: ping\ndata: {"type":"error","error":{"message":"fixture"}}\n\n',
-  'event: error\ndata: ["fixture"]\n\n', 'event: error\ndata: malformed\n\n',
-  'event: error\ndata: {"type":"error"}', 'event: error\ndata:\n\n',
-]) test(`collector ignored shape ${JSON.stringify(raw)}`, async () => {
+for (const [raw, seen] of [
+  ['event: ping\ndata: {"type":"error","error":{"message":"fixture"}}\n\n', false],
+  ['event: ping\ndata: {"collectedErrorEvent":true,"error":{"message":"fixture"}}\n\n', false],
+  ['event: error\nevent: ping\ndata: malformed\n\n', false],
+  ['event: error\ndata: ["fixture"]\n\n', true], ['event: error\ndata: malformed\n\n', true],
+  ['event: error\ndata: {"type":"error"}', false], ['event: error\ndata:\n\n', true],
+] as const) test(`collector records event identity for ${JSON.stringify(raw)}`, async () => {
   const sink: MessagesFailureVerdictSink = {};
   const result = await collectAnthropicMessage(new Response(raw).body!, "fixture", createTestTranslatorBudget(), sink);
-  expect(result.type).toBe("message"); expect(sink).toEqual({});
+  expect(result.type).toBe("message"); expect(sink.collected).toBeUndefined();
+  expect((sink as { collectedErrorEvent?: boolean }).collectedErrorEvent).toBe(seen ? true : undefined);
 });
 test("collector preserves a parsed non-error record as its original verdict", async () => {
   const sink: MessagesFailureVerdictSink = {};
