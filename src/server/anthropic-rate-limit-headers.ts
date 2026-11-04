@@ -30,13 +30,30 @@ const date: Normalize = value => {
   const zoneMinute = zone.length === 1 ? 0 : Number(zone.slice(4, 6));
   if (year < 1970 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59
     || zoneHour > 23 || zoneMinute > 59 || zone === "-00:00") return undefined;
-  const milliseconds = Number((match[7] ?? "").padEnd(3, "0").slice(0, 3));
-  const local = new Date(Date.UTC(year, month - 1, day, hour, minute, second, milliseconds));
-  if (local.getUTCFullYear() !== year || local.getUTCMonth() !== month - 1 || local.getUTCDate() !== day) return undefined;
-  const offset = (zoneHour * 60 + zoneMinute) * 60_000 * (zone[0] === "-" ? -1 : 1);
-  const utc = local.getTime() - offset;
-  if (utc < 0 || utc > MAX_EPOCH * 1000 + 999) return undefined;
-  return new Date(utc).toISOString().replace(".000Z", "Z");
+  const monthDays = (y: number, m: number): number => m === 2
+    ? (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0) ? 29 : 28)
+    : [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]!;
+  if (day > monthDays(year, month)) return undefined;
+  let utcYear = year, utcMonth = month, utcDay = day;
+  const offset = (zoneHour * 60 + zoneMinute) * 60 * (zone[0] === "-" ? -1 : 1);
+  let utcSecond = hour * 3600 + minute * 60 + second - offset;
+  if (utcSecond < 0) {
+    utcSecond += 86400;
+    if (--utcDay === 0) {
+      if (--utcMonth === 0) { utcMonth = 12; utcYear--; }
+      utcDay = monthDays(utcYear, utcMonth);
+    }
+  } else if (utcSecond >= 86400) {
+    utcSecond -= 86400;
+    if (++utcDay > monthDays(utcYear, utcMonth)) {
+      utcDay = 1;
+      if (++utcMonth === 13) { utcMonth = 1; utcYear++; }
+    }
+  }
+  if (utcYear < 1970 || utcYear > 9999) return undefined;
+  const pad = (n: number, digits = 2): string => n.toString().padStart(digits, "0");
+  const fraction = (match[7] ?? "").replace(/0+$/, "");
+  return `${pad(utcYear, 4)}-${pad(utcMonth)}-${pad(utcDay)}T${pad(Math.floor(utcSecond / 3600))}:${pad(Math.floor(utcSecond / 60) % 60)}:${pad(utcSecond % 60)}${fraction ? `.${fraction}` : ""}Z`;
 };
 const EXACT: ReadonlyMap<string, Normalize> = new Map([
   ...["requests", "tokens", "input-tokens", "output-tokens"].flatMap(family => [

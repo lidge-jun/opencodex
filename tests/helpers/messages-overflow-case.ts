@@ -19,11 +19,6 @@ function sdkMessage(text: string, parsed: any): string {
   return parsed?.message ? typeof parsed.message === "string" ? parsed.message : JSON.stringify(parsed.message)
     : parsed ? JSON.stringify(parsed) : text;
 }
-function realEnvelope(parsed: any): boolean {
-  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-    && (parsed.type === "error" || (parsed.error !== null && typeof parsed.error === "object" && !Array.isArray(parsed.error)
-      && (typeof parsed.error.type === "string" || typeof parsed.error.message === "string")));
-}
 export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixture: MessagesOverflowFixture) {
   const tail = fixture.id.startsWith("frame-complete-") ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "";
   const error = { ...(fixture.type ? { type: fixture.type } : {}), ...(fixture.status !== undefined ? { status: fixture.status } : {}), message: `${fixture.message} ${overflowSentinel}`, ...(fixture.code !== undefined ? { code: fixture.code } : {}) };
@@ -62,12 +57,12 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
     const stream = lane === "converter" || lane === "direct-stream";
     let payload: any;
     try { payload = JSON.parse(stream ? text.split("data: ").at(-1)! : text); } catch { /* non-JSON bodies are observed as text */ }
-    const success = response.ok && !realEnvelope(payload) && !(stream && text.includes("event: error\n"));
-    const message = success ? "" : sdkMessage(text, payload);
-    return { status: response.status, success, mediaType: response.headers.get("content-type"),
+    const clientError = !response.ok || (stream && text.includes("event: error\n"));
+    const message = clientError ? sdkMessage(text, payload) : "";
+    return { status: response.status, clientError, envelopeType: payload?.type, mediaType: response.headers.get("content-type"),
       type: typeof payload?.error?.type === "string" ? payload.error.type : undefined,
       code: payload?.error?.code as string | undefined, text, message,
-      clientRecognizes: !success && clientRecognizesOverflow(message),
+      clientRecognizes: clientError && clientRecognizesOverflow(message),
       compactionSentence: payload?.error?.message === compactionSentence };
 
   } finally { translatorBudget?.dispose(); release?.(); await upstream?.stop(true); }

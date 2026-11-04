@@ -1,4 +1,4 @@
-import { ownedAnthropicErrorPayload, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation, isMessagesErrorEnvelope } from "../lib/messages-error-body";
+import { ownedAnthropicErrorPayload, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
 import { isProxyError, markProxyError, carryProxyError, attachComboFailureEvidence, comboFailureEvidence } from "../lib/client-error-body";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { clientFacingModelLabel, clientFacingModelText } from "../lib/error-destination";
@@ -449,7 +449,7 @@ async function anthropicNativePassthrough(
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { /* a non-JSON success retains its original body */ }
   const error = isRec(parsed) && isRec(parsed.error) ? parsed.error : isRec(parsed) ? parsed : {};
-  const isError = !upstream.ok || isMessagesErrorEnvelope(parsed);
+  const isError = !upstream.ok;
   const originalMessage = typeof error.message === "string" ? error.message : "";
   const throughput = isThroughputLimitText(originalMessage);
   const overflow = messagesRelayedOverflowPresentation(text, parsed);

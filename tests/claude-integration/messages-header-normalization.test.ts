@@ -4,7 +4,7 @@ const sentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
 const table: [string, string, string][] = [];
 for (const family of ["requests", "tokens", "input-tokens", "output-tokens"]) {
   for (const field of ["limit", "remaining"]) table.push([`anthropic-ratelimit-${family}-${field}`, "00042", "42"]);
-  table.push([`anthropic-ratelimit-${family}-reset`, "2026-11-03t12:30:40.987654321+02:30", "2026-11-03T10:00:40.987Z"]);
+  table.push([`anthropic-ratelimit-${family}-reset`, "2026-11-03t12:30:40.987654321+02:30", "2026-11-03T10:00:40.987654321Z"]);
 }
 for (const window of ["", "-5h", "-7d", "-7d_oi"]) {
   table.push([`anthropic-ratelimit-unified${window}-status`, "allowed", "allowed"]);
@@ -30,7 +30,7 @@ const cases = [
   ["unified-5h-utilization", "99.999999999999", "100"], ["unified-5h-utilization", "100.000000000001", undefined],
   ["unified-5h-utilization", "0.12345", "0.1235"], ["unified-status", "rejected", "rejected"],
   ["unified-status", "allowed_warning", undefined], ["unified-status", "Allowed", undefined],
-  ["tokens-reset", "2024-02-29T23:59:59.9Z", "2024-02-29T23:59:59.900Z"],
+  ["tokens-reset", "2024-02-29T23:59:59.9Z", "2024-02-29T23:59:59.9Z"],
   ["tokens-reset", "2026-01-01T00:00:00.987+01:00", "2025-12-31T23:00:00.987Z"],
   ["tokens-reset", "2026-01-01T23:59:59.001-00:01", "2026-01-02T00:00:59.001Z"],
   ["tokens-reset", "1970-01-01T00:00:00.001Z", "1970-01-01T00:00:00.001Z"],
@@ -39,7 +39,18 @@ const cases = [
   ["tokens-reset", "9999-12-31T22:59:59.999-01:00", "9999-12-31T23:59:59.999Z"],
   ["tokens-reset", "9999-12-31T23:59:59.999-00:01", undefined],
   ["tokens-reset", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00Z"],
-  ["tokens-reset", "2026-01-01T00:00:00.000999999Z", "2026-01-01T00:00:00Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.000999999Z", "2026-01-01T00:00:00.000999999Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.1+01:00", "2025-12-31T23:00:00.1Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.123+01:00", "2025-12-31T23:00:00.123Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.123456+01:00", "2025-12-31T23:00:00.123456Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.987654321+01:00", "2025-12-31T23:00:00.987654321Z"],
+  ["tokens-reset", "2024-03-01T00:00:00.123456+00:01", "2024-02-29T23:59:00.123456Z"],
+  ["tokens-reset", "2024-02-29T23:59:59.1-00:01", "2024-03-01T00:00:59.1Z"],
+  ["tokens-reset", "1970-01-01T00:00:00.000000001Z", "1970-01-01T00:00:00.000000001Z"],
+  ["tokens-reset", "9999-12-31T23:59:59.999999999Z", "9999-12-31T23:59:59.999999999Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.100000000Z", "2026-01-01T00:00:00.1Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.000000000Z", "2026-01-01T00:00:00Z"],
+  ["tokens-reset", "2026-01-01T00:00:00.1234567890Z", undefined],
   ["tokens-reset", "2026-02-29T00:00:00Z", undefined], ["tokens-reset", "2026-11-31T00:00:00Z", undefined],
   ["tokens-reset", "1970-01-01T00:00:00+01:00", undefined], ["tokens-reset", "2026-01-01T00:00:00-00:00", undefined],
   ["tokens-reset", "9999-12-31T23:59:59.999Z", "9999-12-31T23:59:59.999Z"],

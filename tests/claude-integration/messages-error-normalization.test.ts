@@ -13,7 +13,7 @@ function contained(text: string) {
 }
 for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
   for (const status of [200, 400, 401, 402, 403, 404, 409, 413, 429, 500, 502, 503, 504, 529]) {
-    test(`buffered passthrough ${path} ${status} rebuilds the envelope`, async () => {
+    test(`buffered passthrough ${path} ${status} ${status === 200 ? "preserves the body" : "rebuilds the envelope"}`, async () => {
       const raw = { type: "error", request_id: sentinel, [sentinel]: sentinel, error: {
         type: sentinel, message: sentinel, code: sentinel, param: sentinel, details: { error_code: sentinel }, nested: [sentinel],
       } };
@@ -30,13 +30,16 @@ for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
           : await handleClaudeMessages(req, config, { model: input.model, provider: "anthropic-native" });
         const text = await response.text();
         expect(response.status).toBe(status);
-        contained(text);
+        if (status === 200) expect(text).toBe(JSON.stringify(raw));
+        else contained(text);
         const headers = JSON.stringify([...response.headers]);
         contained(headers);
         expect(response.headers.get("anthropic-ratelimit-requests-remaining")).toBe("42");
         expect(response.headers.get("retry-after")).toBe("0");
-        expect(Object.keys(JSON.parse(text)).sort()).toEqual(["error", "type"]);
-        expect(Object.keys(JSON.parse(text).error).sort()).toEqual(["message", "type"]);
+        if (status !== 200) {
+          expect(Object.keys(JSON.parse(text)).sort()).toEqual(["error", "type"]);
+          expect(Object.keys(JSON.parse(text).error).sort()).toEqual(["message", "type"]);
+        }
       } finally { await upstream.stop(true); }
     });
   }
