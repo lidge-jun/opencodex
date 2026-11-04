@@ -39,6 +39,7 @@ export function registerComboContextOverflowCases<Server>({
     // A relay that serializes a Python SDK exception quotes the provider verdict inside a dict repr.
     "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
+    JSON.stringify({ code: "invalid-argument", error: "Failed to start sampling: [input_too_large] The prompt is too long for this model's context window (555817 tokens > 500000 tokens)" }),
     "The conversation has exceeded this model's context limit.",
     "This input is beyond the context window for the selected model.",
     "The request has reached the model context length limit.",
@@ -171,6 +172,11 @@ export function registerComboContextOverflowCases<Server>({
       expect(isDefiniteContextOverflow(400, message)).toBe(true);
       expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { message } }))).toBe(true);
     }
+    // String-valued `error` envelopes use the bounded leaf fallback.
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "This model's maximum context length is 8192 tokens." }))).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Please reduce the length of the messages or completion." }))).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Failed to start sampling: [input_too_large] The prompt is too long for this model's context window (555817 tokens > 500000 tokens)" }))).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Invalid 'tools[0].function.name': 'prompt is too long'" }))).toBe(false);
     for (const echo of [
       JSON.stringify({ error: { code: "invalid_value", message: "customer's prompt is too long" } }),
       JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),
