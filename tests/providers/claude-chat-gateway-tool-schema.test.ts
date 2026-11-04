@@ -149,6 +149,43 @@ describe("Claude behind a Chat Completions gateway: tool schema root", () => {
     }
   });
 
+  test.each(["oneOf", "anyOf", "allOf"])("preserves %s roots with unread declarations inside inline compositions", outer => {
+    for (const inner of ["oneOf", "anyOf", "allOf"]) {
+      for (const declaration of [{ properties: { payload: { type: "string" } } }, { $ref: "#/$defs/Payload" }]) {
+        for (const nested of [declaration, { allOf: [{ anyOf: [{ oneOf: [declaration] }] }] }]) {
+          const schema = { $defs: { Payload: { properties: { payload: { type: "string" } } } }, [outer]: [{ [inner]: [nested] }] };
+          const before = structuredClone(schema);
+          expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ ...schema, type: "object" });
+          expect(schema).toEqual(before);
+        }
+      }
+    }
+  });
+
+  test("constraint-only compositions flatten without scanning property schemas or literal values", () => {
+    const literal = { properties: { payload: { type: "string" } }, $ref: "#/missing" };
+    const properties = { nested: { anyOf: [literal] }, literal: { default: literal, examples: [literal], const: literal } };
+    const schema = { anyOf: [{ properties, allOf: [{ anyOf: [{ oneOf: [{ required: ["nested"], default: literal, const: literal, enum: [literal], examples: [literal] }] }] }] }] };
+    expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ type: "object", properties });
+  });
+
+  test("bounds inline composition inspection per schema, including depth and repeated branches", () => {
+    const chain = (depth: number) => {
+      let node: Record<string, unknown> = { required: ["payload"] };
+      for (let i = 0; i < depth; i++) node = { allOf: [node] };
+      return node;
+    };
+    const boundary = { anyOf: [chain(256)] };
+    expect(toolFor("claude-sonnet-5-5", gateway, undefined, boundary).parameters).toEqual({ type: "object" });
+    for (const schema of [
+      { anyOf: [chain(257)] },
+      { anyOf: [{ allOf: Array.from({ length: 257 }, () => ({ required: ["payload"] })) }] },
+      { anyOf: Array.from({ length: 257 }, () => ({ allOf: [{ required: ["payload"] }] })) },
+    ]) {
+      expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ ...schema, type: "object" });
+    }
+  });
+
   test("a non-Claude wire override excludes a Claude request alias", () => {
     const fn = toolFor("claude-alias", gateway, "gpt-5.6-terra");
     expect(fn.parameters).toEqual({ ...unionRoot, type: "object" });

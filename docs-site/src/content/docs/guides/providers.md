@@ -1782,7 +1782,10 @@ Nested schemas retain their existing normalization. Root required fields are ret
 branch required fields are merged, while `oneOf`/`anyOf` branch required fields are not promoted.
 Local root-branch references are followed for at most 64 references across the schema; unresolved,
 cyclic, external, over-budget references or referenced compositions leave the root composition intact
-and may be rejected upstream. Nested references are preserved. Flattening is lossy: branch constraints
+and may be rejected upstream. Inline nested compositions also stay intact when they contain unread
+properties or references, repeat a node, or exceed 256 inspected entries per tool schema; constraint-only
+nesting still flattens. Property schemas and literal values are not scanned by this guard. Nested
+references are preserved. Flattening is lossy: branch constraints
 disappear and later property definitions win, so tools must validate arguments. Existing Zen and
 Azure schema compatibility rules remain in effect.
 

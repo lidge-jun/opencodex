@@ -37,9 +37,31 @@ function sanitizeZenToolParameters(value: unknown): unknown {
   return out;
 }
 
+/** Inspect composition edges only: property schemas and literal values are not branches. */
+function hasUnreadClaudeComposition(branch: Record<string, unknown>, budget: { nestedRemaining: number }): boolean {
+  const pending = [branch];
+  const seen = new Set<object>(pending);
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    for (const key of ["oneOf", "anyOf", "allOf"]) {
+      const variants = node[key];
+      if (!Array.isArray(variants)) continue;
+      for (const variant of variants) {
+        if (budget.nestedRemaining-- <= 0) return true;
+        if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
+        if (Object.hasOwn(variant, "properties") || Object.hasOwn(variant, "$ref") || seen.has(variant)) return true;
+        seen.add(variant);
+        pending.push(variant as Record<string, unknown>);
+      }
+    }
+  }
+  return false;
+}
+
 /** Read only root-branch ref chains; never expand property schemas or literal data. */
-function claudeRootBranchLayers(branch: Record<string, unknown>, root: Record<string, unknown>, budget: { remaining: number }): Record<string, unknown>[] | undefined {
+function claudeRootBranchLayers(branch: Record<string, unknown>, root: Record<string, unknown>, budget: { remaining: number; nestedRemaining: number }): Record<string, unknown>[] | undefined {
   if (typeof branch.$ref === "string" && ["oneOf", "anyOf", "allOf"].some(key => Array.isArray(branch[key]))) return undefined;
+  if (hasUnreadClaudeComposition(branch, budget)) return undefined;
   const layers = [branch];
   const seen = new Set<object>([branch]);
   let current = branch;
@@ -72,7 +94,7 @@ function ensureZenRootObjectSchema(schema: unknown, sanitizeNested = true): Reco
 
   const props: Record<string, unknown> = sanitizeNested ? {} : Object.create(null);
   const required = new Set<string>();
-  const refBudget = { remaining: 64 };
+  const refBudget = { remaining: 64, nestedRemaining: 256 };
   if (obj.properties && typeof obj.properties === "object") {
     Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(obj.properties) : obj.properties);
   }
