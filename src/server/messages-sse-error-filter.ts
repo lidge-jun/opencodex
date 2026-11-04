@@ -5,17 +5,17 @@ import { sseFieldValue } from "../lib/sse-decoder";
 
 const encoder = new TextEncoder();
 type Newline = "\n" | "\r" | "\r\n";
-/** Rewrite only data lines; intervening protocol fields retain their original order and bytes. */
+/** Final errors emit only data fields after the already-public, closed error declaration. */
 function ownedSuffix(bytes: Uint8Array, space: boolean, newline: Newline): Uint8Array {
   const text = new TextDecoder().decode(bytes);
   const lines = [...text.matchAll(/([^\r\n]*)(\r\n|\r|\n|$)/g)].filter(match => match[0] !== "");
   const data = lines.map(line => sseFieldValue(line[1]!, "data")).filter(value => value !== null).join("\n");
   // An empty named error still dispatches the SDK's generic APIError; add no parseable data.
-  if (data === "") return bytes;
+  if (data === "") return encoder.encode(lines.filter(line => sseFieldValue(line[1]!, "data") !== null).map(line => line[0]).join(""));
   const payload = messagesSseErrorPayload(data);
   let replaced = false;
   return encoder.encode(lines.map(line => {
-    if (sseFieldValue(line[1]!, "data") === null) return line[0];
+    if (sseFieldValue(line[1]!, "data") === null) return "";
     if (replaced) return "";
     replaced = true;
     return `data:${space ? " " : ""}${payload}${line[2] ? newline : ""}`;
@@ -80,7 +80,7 @@ export function createMessagesSseErrorFilter(context = new MessagesSseFrameConte
   const finishError = (emit: (bytes: Uint8Array) => void, delimiter: boolean, ending?: number): boolean => {
     const forced = oversize;
     if (forced) {
-      emit(encoder.encode(`event:${headerSpace ? " " : ""}error${newline}data:${headerSpace ? " " : ""}${messagesSseOversizePayload()}${delimiter ? newline + newline : ""}`));
+      emit(encoder.encode(`data:${headerSpace ? " " : ""}${messagesSseOversizePayload()}${delimiter ? newline + newline : ""}`));
     } else {
       const suffix = hold?.subarray(0, held) ?? new Uint8Array();
       emit(lastError ? ownedSuffix(suffix, headerSpace, newline) : suffix);

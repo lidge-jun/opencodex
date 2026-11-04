@@ -658,10 +658,12 @@ Most requests are translated to Responses, routed normally, then translated back
 or Anthropic SSE.
 
 Native and caller-forward SSE use error-response normalization only when the first non-comment
-field of a block is exactly `event:error` or `event: error`. Comments pass through without consuming
-that slot. Data/id/retry/other-event/unknown-first blocks retain their bytes and delivery timing,
-even if a later field names error; their error data is outside this normalization scope. Protocol
-control fields remain unchanged. No possible-event prefix is delayed.
+field of a block is exactly `event:error` or `event: error`. Leading comments pass through without
+consuming that slot. Data/id/retry/other-event/unknown-first blocks retain their bytes and delivery timing,
+even if a later field names error; their error data is outside this normalization scope. Final
+contained errors contain only the error declaration, data fields and terminator; id, retry, comment,
+unknown and repeated event fields after the declaration are omitted, also when data is empty.
+No possible-event prefix is delayed.
 
 After an eligible declaration, one error suffix is held up to 1 MiB. Within the bound, a later
 non-error rename replays the original suffix unchanged after the boundary decision; that suffix is

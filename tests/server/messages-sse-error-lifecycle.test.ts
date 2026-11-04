@@ -52,6 +52,7 @@ test("repeated control fields count toward the hold and a later rename cannot un
   const text = Buffer.concat(out).toString();
   expect(text).toContain('event: error\ndata: {"type":"error","error":{"type":"api_error","message":"The provider stream reported an error."}}\n\n');
   expect(text.includes("ping")).toBe(false);
+  expect(text.match(/^event: error$/gm)).toHaveLength(1);
 });
 test("registered product and an upstream exact copy take distinct paths", () => {
   const context = new MessagesSseFrameContext();
@@ -63,11 +64,29 @@ test("registered product and an upstream exact copy take distinct paths", () => 
   expect(Buffer.concat(owned).toString()).toContain('"message":"anthropic passthrough upstream stream failed"');
   expect(Buffer.concat(upstream).toString()).toContain('"message":"The provider failed to complete the request."');
 });
-test("metadata control fields remain original; only eligible data changes", () => {
-  const raw = encode(`: ${SSE_SENTINEL}\nevent:error\nid: ${SSE_SENTINEL}\nretry: ${SSE_SENTINEL}\ndata: {"message":"${SSE_SENTINEL}"}\n\n`);
+test("final error drops suffix control fields while preserving leading comments", () => {
+  const raw = encode(`: leading comment\nevent:error\nid: ${SSE_SENTINEL}\nretry: ${SSE_SENTINEL}\n: ${SSE_SENTINEL}\nextension: ${SSE_SENTINEL}\nevent: error\ndata: {"message":"${SSE_SENTINEL}"}\n\n`);
   const filter = createMessagesSseErrorFilter(); const out: Uint8Array[] = [];
   filter.push(raw, bytes => out.push(bytes));
   const text = Buffer.concat(out).toString();
-  expect(text).toContain(`: ${SSE_SENTINEL}\nevent:error\nid: ${SSE_SENTINEL}\nretry: ${SSE_SENTINEL}\n`);
-  expect(text.slice(text.indexOf("data:"))).not.toContain(SSE_SENTINEL);
+  expect(text.length).toBeGreaterThan(0);
+  expect(text.startsWith(": leading comment\nevent:error\ndata:")).toBe(true);
+  expect(text.includes(SSE_SENTINEL)).toBe(false);
+  expect(text.match(/^event: ?error$/gm)).toHaveLength(1);
+});
+for (const nl of ["\n", "\r", "\r\n"]) for (const space of ["", " "]) for (const data of ["", "data", "data:", "data: "]) {
+  test(`empty-data fields: ${JSON.stringify({ nl, space, data })}`, () => {
+    const raw = encode(`event:${space}error${nl}id: ${SSE_SENTINEL}${nl}${data ? data + nl : ""}: ${SSE_SENTINEL}${nl}event: error${nl}${nl}`);
+    const out: Uint8Array[] = []; createMessagesSseErrorFilter().push(raw, bytes => out.push(bytes));
+    const text = Buffer.concat(out).toString();
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.includes(SSE_SENTINEL)).toBe(false);
+    expect(text).toBe(`event:${space}error${nl}${data ? data + nl : ""}${nl}`);
+  });
+}
+test("within-bound non-error rename retains suffix fields in original order", () => {
+  const raw = encode(`event: error\nid: ${SSE_SENTINEL}\n: ${SSE_SENTINEL}\ndata: {}\nevent: ping\n\n`);
+  const out: Uint8Array[] = []; createMessagesSseErrorFilter().push(raw, bytes => out.push(bytes));
+  expect(Buffer.concat(out).length).toBeGreaterThan(0);
+  expect(Buffer.concat(out)).toEqual(raw);
 });

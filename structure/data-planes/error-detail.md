@@ -418,8 +418,10 @@ accounting tap and the existing configured-only overflow rewrite. The final enqu
 `src/server/messages-sse-error-filter.ts` introduces no stream queue, timer or possible-prefix hold.
 Only a block whose first non-comment field is exactly `event:error` or `event: error` is eligible.
 Every other block retains its original bytes, chunk boundaries and logical enqueue turns, including
-later error declarations, data/id/retry-first blocks and ordinary events above 1 MiB. Comments do
-not consume first-field eligibility; control fields themselves retain their bytes.
+later error declarations, data/id/retry-first blocks and ordinary events above 1 MiB. Leading
+comments do not consume first-field eligibility and retain their bytes. Final contained errors emit
+only the closed error declaration, data fields and terminator; all other post-declaration fields
+are omitted, including with empty data. Within-bound non-error renames retain their original fields.
 
 One eligible block holds at most 1 MiB of original suffix bytes, including interleaved fields.
 Within the bound, a final non-error rename replays those bytes unchanged with the permitted suffix
@@ -449,6 +451,7 @@ success/internal row and explicitly lists the ten changed error-response normali
 `tests/server/messages-sse-error-filter.test.ts`,
 `tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
 first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
+`tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
 The converter and direct encoder own their separate terminal writers.
 `tests/claude-integration/messages-error-normalization.test.ts` and
 `tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.
