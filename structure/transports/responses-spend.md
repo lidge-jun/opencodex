@@ -22,6 +22,12 @@ lease to its active turn. Terminal output or cancellation releases that lease; s
 retain the same physical-send window. `tests/responses/responses-websocket-workflow-ceiling.test.ts`
 starts with an unseen root and verifies its ceiling and lease cleanup in both spend modes.
 
+Workflow refusals constructed inside native Messages keep the Anthropic `{ type: "error", error: { type, message, code } }`
+envelope, HTTP status, local-refusal header and its CORS exposure. Projection preserves process-local proxy
+provenance and any non-replayable marker. This applies both when the spend observer records the denial and
+when the request's physical limit refuses before the root observer can record it; the latter still names
+an exhausted live root accurately. `tests/responses/responses-spend-contract-c.test.ts` covers both paths.
+
 ## Prepaid initial sends
 
 `src/server/responses/core-combo.ts` derives each target scope before reserving its initial send.

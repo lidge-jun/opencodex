@@ -4,9 +4,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpendReservationLedger, configureSharedSpendLedger, sharedSpendLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal, type SpendReservationPolicy } from "../../src/lib/spend-reservation-ledger";
-import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createRequestSpendTracker, type RequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createRequestExecutionBudget, claimDispatchSpendProof, createPhysicalSendReporter } from "../../src/lib/request-execution-budget";
-import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, workflowSpendCeilingReached } from "../../src/lib/workflow-budget";
+import { admitWorkflowTurn, resetWorkflowBudgetsForTest, workflowBudgetSnapshot, workflowSpendCeilingReached } from "../../src/lib/workflow-budget";
+import { bindWorkflowBudgetConfig, currentWorkflowBudgetPolicy } from "../../src/lib/workflow-budget-config";
+import { isProxyError } from "../../src/lib/client-error-body";
+import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { parseRequest } from "../../src/responses/parser";
 import { routeModel } from "../../src/router";
 import { applyFinalRouteRequestNormalization } from "../../src/server/responses/core-normalize";
@@ -99,6 +102,8 @@ for (const enforced of [false, true]) for (const status of [503, 429]) {
           expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
           expect(JSON.parse(body).error.code).toBe("rate_limit_exceeded");
           if (status === 429) {
+            expect(JSON.parse(body)).toMatchObject({ type: "error", error: { type: "rate_limit_error" } });
+            expect(response.headers.get("access-control-expose-headers")).toContain("x-opencodex-local-refusal");
             expect(body).toContain("no additional provider request was sent");
             expect(body).not.toContain("no provider was contacted");
           } else expect(body).toContain("no provider was contacted");
@@ -125,6 +130,69 @@ for (const enforced of [false, true]) for (const status of [503, 429]) {
     }
   }, 10_000);
 }
+
+test("native Messages keeps the Anthropic envelope when request and root send ceilings coincide", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-messages-root-envelope-"));
+  const priorHome = process.env.OPENCODEX_HOME;
+  const codexHome = installIsolatedCodexHome("ocx-messages-envelope-codex-");
+  process.env.OPENCODEX_HOME = home;
+  const release = acquireOwnedSpendHome();
+  const translatorBudget = createTranslatorBudget();
+  const ctx = log("fixture");
+  let releaseRoot = () => {};
+  let sends = 0;
+  const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+    adapter: "anthropic", authMode: "key", apiKey: "fixture-key", baseUrl: "http://127.0.0.1:1/v1",
+    allowPrivateNetwork: true, liveModels: false, models: ["fixture-model"],
+    retryOn429: { attempts: 4, respectRetryAfter: true },
+    fetch: async () => {
+      sends++;
+      return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture upstream rate limit" } },
+        { status: 429, headers: { "retry-after": "0" } });
+    },
+  } }, workflowBudget: { maxPhysicalSends: 4 } };
+  const outbound = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation(() => { throw new Error("unexpected network fetch in memory fixture"); });
+  try {
+    resetWorkflowBudgetsForTest(); clearKeyCooldowns();
+    bindWorkflowBudgetConfig(config);
+    configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 100_000 }, canonicalProviderIds: ["fixture"] });
+    const decision = admitWorkflowTurn("messages-envelope-root", "interactive", currentWorkflowBudgetPolicy());
+    expect(decision?.admitted).toBe(true);
+    if (!decision?.admitted) throw new Error("fixture workflow admission failed");
+    releaseRoot = () => decision.lease.release();
+    const response = await handleNativeMessages({
+      req: new Request("http://localhost/v1/messages", { method: "POST", headers: { "x-codex-parent-thread-id": "messages-envelope-root" } }),
+      config, logCtx: ctx, route: routeModel(config, "fixture/fixture-model"),
+      body: { model: "fixture-model", messages: [{ role: "user", content: "fixture" }], max_tokens: 1, stream: false },
+      requestedModel: "fixture/fixture-model", translatorBudget,
+    });
+    expect(sends).toBe(4);
+    expect(workflowBudgetSnapshot("messages-envelope-root")?.sends).toBe(4);
+    // The request's physical cap refuses before the root observer. No tracker refusal means
+    // this reaches SendBudgetExhaustedError, not the NativeMessagesSpendRefusal branch.
+    expect((ctx.spendTracker as RequestSpendTracker).enforced).toBe(true);
+    expect((ctx.spendTracker as RequestSpendTracker).refusals).toBe(0);
+    expect(ctx.localTerminalReason).toBe("workflow_sends_exhausted");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+    expect(response.headers.get("access-control-expose-headers")).toContain("x-opencodex-local-refusal");
+    expect(isProxyError(response)).toBe(true);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const body = await response.json();
+    expect(body).toMatchObject({ type: "error", error: { type: "rate_limit_error", code: "rate_limit_exceeded" } });
+    expect(body.error.message).toContain("no additional provider request was sent");
+  } finally {
+    ctx.spendTracker?.settle(undefined);
+    translatorBudget.dispose(); releaseRoot(); release();
+    outbound.mockRestore(); bindWorkflowBudgetConfig(null);
+    resetWorkflowBudgetsForTest(); clearKeyCooldowns(); resetProviderRequestPacingForTest();
+    await flushNativeMainStartupReleases(); await flushConfigDirHardeningForTests();
+    await flushWindowsSecretAclReapsBeforeRemoval(home);
+    await flushWindowsSecretAclReapsBeforeRemoval(codexHome.path);
+    if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;
+    codexHome.restoreEnvironment(); codexHome.removeAfterDrain(); removeTreeWithRetry(home);
+  }
+});
 
 test("Responses A B and Messages share canonical ceiling", async () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-contract-c-messages-"));
