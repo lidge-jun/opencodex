@@ -392,6 +392,22 @@ Messages and direct IR codecs use `messagesRolePresentation` in `src/lib/message
 to preserve recovery recognition and failed JSON-role coercion status without displaying the role.
 The legacy envelope stays in the combo-evidence side channel, separate from the owned response.
 
+Messages local-refusal presentation uses construction-registered process metadata in
+`src/lib/client-error-body.ts`, carried through response clones and registered terminal contexts.
+`src/lib/messages-error-body.ts` selects fixed guidance from that closed reason or a closed local
+code; serialized fields and diagnostic text cannot register a reason. The original message still
+feeds status, recovery, logs and private combo evidence. Messages/count_tokens non-2xx delivery
+removes selector fields from scope refusals and never renders request/configuration labels, limits
+or upstream reset times. Shared producers retain their existing bytes for Chat and other surfaces.
+HTTP workflow refusals enter the same Messages projection at
+`src/server/admitted-http-turn.ts`. A replacement refusal keeps its own construction identity.
+
+Only buffered/folded Messages consumers receive a legacy-record sink; streaming delivery does
+not retain those records. Adapter iterator-read failures alone carry transport provenance;
+writer and terminal-hook faults retain the generic proxy-failure presentation. Successful buffered
+passthrough retains guarded usage accounting, then returns its original body before error
+inspection or serialization.
+
 The native streaming relay, tool-guard frames, shared-tap tails and native overflow SSE rewrite retain
 their existing byte behavior. `tests/claude-integration/messages-native-stream-parity.test.ts` executes
 the current modules against `tests/fixtures/messages-native-stream-parity.json`, including
@@ -432,3 +448,11 @@ media types use application/octet-stream. Rebuilt error bodies always use litera
 existing branch verdicts without changing their results or client bytes. Normal tests run head only
 and require no git history; client recovery-phrase recognition, HTTP status and internal decisions
 must each match the baseline.
+
+The overflow comparison is divided among six sibling test files using
+`tests/helpers/messages-overflow-assertions.ts`. Each test executes at most 64 rows in one child;
+no hook computes the complete matrix. The same fixture, case-table hash and per-row assertions
+cover every lane. Direct Response byte checks remain in
+`tests/claude-integration/messages-overflow-verdicts.test.ts`. Local refusal and delivery checks
+live in `tests/claude-integration/messages-proxy-refusals.test.ts` and
+`tests/claude-integration/messages-review-regressions.test.ts`.

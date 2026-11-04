@@ -202,16 +202,16 @@ const nativeFailRows = [
     "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
   },
   {
-    "call": "const response = fail(429, message, \"rate_limit_error\");",
-    "disposition": "cooldown text reconstructed from typed local scope and UTC reset"
+    "call": "const response = markProxyError(fail(429, message, \"rate_limit_error\"), date === undefined ? undefined : \"usage\");",
+    "disposition": "local construction identity selects fixed Messages guidance; original status/evidence remains internal"
   },
   {
-    "call": "if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), \"permission_error\");",
-    "disposition": "fixed local literal at the mapped native producer"
+    "call": "if (error instanceof OAuthAccountPausedError) return markProxyError(fail(403, publicOAuthAuthenticationErrorMessage(error), \"permission_error\"), publicOAuthErrorPresentation(error));",
+    "disposition": "local construction identity selects fixed Messages guidance; original status/evidence remains internal"
   },
   {
-    "call": "if (error instanceof OAuthLoginRequiredError) return fail(401, publicOAuthAuthenticationErrorMessage(error), \"authentication_error\");",
-    "disposition": "fixed local literal at the mapped native producer"
+    "call": "if (error instanceof OAuthLoginRequiredError) return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), \"authentication_error\"), publicOAuthErrorPresentation(error));",
+    "disposition": "local construction identity selects fixed Messages guidance; original status/evidence remains internal"
   },
   {
     "call": "return fail(401, \"Configured Anthropic OAuth instance is unavailable\", \"authentication_error\");",
@@ -242,11 +242,11 @@ const nativeFailRows = [
     "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
   },
   {
-    "call": "return fail(401, publicOAuthAuthenticationErrorMessage(error), \"authentication_error\");",
-    "disposition": "fixed local literal at the mapped native producer"
+    "call": "return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), \"authentication_error\"), publicOAuthErrorPresentation(error));",
+    "disposition": "local construction identity selects fixed Messages guidance; original status/evidence remains internal"
   },
   {
-    "call": "const refusal = fail(429, error.message, \"rate_limit_error\");",
+    "call": "const refusal = markProxyError(fail(429, error.message, \"rate_limit_error\"), error.reason === \"keys_exhausted\" ? undefined : \"pacing\");",
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
@@ -262,7 +262,7 @@ const nativeFailRows = [
     "disposition": "fixed local literal at the mapped native producer"
   },
   {
-    "call": "const refusal = fail(429, sendError.message, \"rate_limit_error\");",
+    "call": "const refusal = markProxyError(fail(429, sendError.message, \"rate_limit_error\"), sendError.reason === \"keys_exhausted\" ? undefined : \"pacing\");",
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
@@ -302,8 +302,8 @@ const nativeFailRows = [
     "disposition": "guard-owned undeclared-tool refusal"
   },
   {
-    "call": "if (localMessage !== undefined) return fail(502, localMessage, \"api_error\", undefined, text);",
-    "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
+    "call": "if (localMessage !== undefined) return markProxyError(fail(502, localMessage, \"api_error\", undefined, text), logCtx.failureDetail?.code === \"body_overflow\" ? \"body_overflow\" : logCtx.failureDetail?.code === \"body_stall\" ? \"body_stall\" : undefined);",
+    "disposition": "local construction identity selects fixed Messages guidance; original status/evidence remains internal"
   },
   {
     "call": "if (req.signal.aborted) return fail(499, \"Client cancelled request\", \"api_error\");",

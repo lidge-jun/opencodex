@@ -538,7 +538,8 @@ describe("managed native Messages", () => {
       { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false });
     expect(response.status).toBe(502);
-    expect(text).toContain("exceeded 64 bytes");
+    expect(text).toContain("anthropic passthrough body exceeded the safe limit");
+    expect(text.length).toBeGreaterThan(0); expect(text).not.toContain("64 bytes");
     const row = rowFor(requestId);
     expect(row.status).toBe(502);
     expect(row.closeReason).toBe("body_overflow");

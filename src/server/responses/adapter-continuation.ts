@@ -1,4 +1,4 @@
-import { isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
+import { proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
@@ -158,7 +158,7 @@ export function createAdapterContinuations(
     }
     const refusal = unwrapUpstreamRetryEvidenceError(error);
     if (refusal instanceof AdmissionModelDeniedError || refusal instanceof SendBudgetExhaustedError) rememberProxyErrorMessage(logCtx, refusal.message, { status: refusal instanceof AdmissionModelDeniedError ? 403 : 429,
-      type: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : "rate_limit_error", code: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : refusal.code });
+      type: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : "rate_limit_error", code: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : refusal.code, presentation: refusal instanceof AdmissionModelDeniedError ? "scope" : "send" });
     if (refusal instanceof AdmissionModelDeniedError) {
       return {
         type: "error", message: refusal.message, status: 403,
@@ -703,7 +703,7 @@ export function createAdapterContinuations(
         ? normalized.message ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
         : `Provider continuation error ${response.status}: ${normalized.safeText}`;
       if (isProxyError(response)) rememberProxyErrorMessage(logCtx, message, { status: normalized.cyberPolicy ? 400 : response.status,
-        type: normalized.cyberPolicy ? normalized.type ?? CYBER_POLICY_ERROR_CODE : undefined, code: normalized.cyberPolicy ? CYBER_POLICY_ERROR_CODE : undefined });
+        type: normalized.cyberPolicy ? normalized.type ?? CYBER_POLICY_ERROR_CODE : undefined, code: normalized.cyberPolicy ? CYBER_POLICY_ERROR_CODE : undefined, presentation: proxyErrorPresentation(response) });
       yield {
         type: "error",
         status: normalized.cyberPolicy ? 400 : response.status,

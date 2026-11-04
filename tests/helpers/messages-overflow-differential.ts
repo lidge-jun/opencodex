@@ -2,9 +2,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash } from "./messages-overflow-cases";
-const [mode, scratch, output] = process.argv.slice(2) as [string, string, string];
+const [mode, scratch, output, selectedLane, offset = "0", limit] = process.argv.slice(2) as [string, string, string, string?, string?, string?];
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 const base = mode === "--generate-base";
+if (base && selectedLane) throw new Error("Baseline generation requires the complete case table");
+if (selectedLane && !(messagesOverflowLanes as readonly string[]).includes(selectedLane)) throw new Error("Unknown Messages lane");
+const first = Number(offset); const count = limit === undefined ? Infinity : Number(limit);
+if (!Number.isSafeInteger(first) || first < 0 || (count !== Infinity && (!Number.isSafeInteger(count) || count <= 0))) throw new Error("Invalid Messages slice");
 function git(...args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot() });
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
@@ -76,7 +80,7 @@ function intern<T>(values: T[], value: T): number {
   if (index >= 0) return index;
   return values.push(value) - 1;
 }
-for (const lane of messagesOverflowLanes) for (const input of applicableMessagesOverflowFixtures(lane)) {
+for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane === selectedLane)) for (const input of applicableMessagesOverflowFixtures(lane).slice(first, first + count)) {
   const observations = new Map<string, boolean[]>();
   (globalThis as any).__messagesOverflowRecord = (tag: string, value: boolean) => {
     const values = observations.get(tag) ?? []; values.push(value); observations.set(tag, values);

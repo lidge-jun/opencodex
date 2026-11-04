@@ -560,10 +560,13 @@ export function encodeAdapterEventStream(
     stepping = true;
     gated = false;
     const emittedAtStart = emittedFrames;
+    let readingUpstream = false;
     try {
       while (!terminated && !closed && emittedFrames === emittedAtStart) {
         iteratorStarted = true;
+        readingUpstream = true;
         const next = await it.next();
+        readingUpstream = false;
         // A cancel during the await must not process or charge a late event.
         if (closed || clientCancelled) {
           gated = true;
@@ -838,7 +841,7 @@ export function encodeAdapterEventStream(
           reportUsage: false,
           durable: false,
         };
-        encoderTransportFailures.add(terminal);
+        if (readingUpstream) encoderTransportFailures.add(terminal);
         try {
           if (!await deliverTerminalGuarded(terminal)) return;
         } catch { /* a failing hook on the failure path must not throw into the pull */ }

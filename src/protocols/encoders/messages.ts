@@ -1,6 +1,6 @@
 import type { UpstreamConditionEvidence } from "../../lib/upstream-condition";
 import { ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../../lib/messages-error-body";
-import { markProxyError, isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
+import { proxyMessagePresentation, markProxyError, isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import { admitMessagesFailure, type MessagesFailureVerdictSink } from "../../claude/failure-verdict";
 /**
  * AdapterEvent -> Anthropic Messages, without the internal Responses SSE (PF-09).
@@ -203,7 +203,7 @@ function createAnthropicMessageWriter(
     const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message }, contract,
       overflow: messagesOverflowPresentation((legacy.error as Rec).message),
       condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined,
-      ...(local ? { localError: markProxyError({ message }) } : {}),
+      ...(local ? { localError: markProxyError({ message }, proxyMessagePresentation(options.proxyErrorContext, message, { type: evidence?.type, code: evidence?.code ?? code })) } : {}),
     });
     const admitted = () => admitMessagesFailure(options.failureVerdictSink, payload, legacy);
     if (code === "translation_buffer_limit") {

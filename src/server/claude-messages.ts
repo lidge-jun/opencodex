@@ -1,4 +1,4 @@
-import { ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
+import { normalizeMessagesProxyRefusal, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
 import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, isProxyError, markProxyError, carryProxyError, attachComboFailureEvidence, comboFailureEvidence } from "../lib/client-error-body";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { clientFacingModelLabel, clientFacingModelText } from "../lib/error-destination";
@@ -350,8 +350,8 @@ async function anthropicNativePassthrough(
     recordLocalFailureDetail(logCtx, storedReason, detail);
     finalize(status, { closeReason });
     const legacy = anthropicErrorBody(status, redactSecretString(originalMessage), type);
-    return ownedAnthropicErrorResponse({ status, type, evidence: { status }, localError: markProxyError({ message: safeMessage }),
-      overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
+    return markProxyError(ownedAnthropicErrorResponse({ status, type, evidence: { status }, localError: markProxyError({ message: safeMessage }),
+      overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy), closeReason === "body_stall" ? "body_stall" : closeReason === "body_overflow" ? "body_overflow" : undefined);
   };
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
@@ -449,8 +449,12 @@ async function anthropicNativePassthrough(
   }
   finalize(upstream.status, { closeReason: "non_stream" });
   const retryAfter = formatClientRetryAfter(upstream.headers.get("retry-after"));
+  if (upstream.ok) return new Response(text, {
+    status: upstream.status,
+    headers: { ...rateLimitHeaders, "Content-Type": messagesSuccessContentType(upstream.headers), ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
+  });
   let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { /* a non-JSON success retains its original body */ }
+  try { parsed = JSON.parse(text); } catch { /* non-JSON errors keep original recognition evidence */ }
   const error = isRec(parsed) && isRec(parsed.error) ? parsed.error : isRec(parsed) ? parsed : {};
   const isError = !upstream.ok;
   const originalMessage = typeof error.message === "string" ? error.message : "";
@@ -592,7 +596,7 @@ export async function handleClaudeMessages(
     const response = await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy, ingress);
     const finalized = carryProxyError(response, finalizeTranslatorBudgetResponse(response, translatorBudget, req.signal));
     const evidence = comboFailureEvidence(response);
-    return evidence === undefined ? finalized : attachComboFailureEvidence(finalized, evidence);
+    return normalizeMessagesProxyRefusal(req, evidence === undefined ? finalized : attachComboFailureEvidence(finalized, evidence));
   } catch (error) {
     translatorBudget.dispose();
     throw error;
@@ -1377,7 +1381,7 @@ async function handleClaudeMessagesWithBudget(
       overflow: messagesOverflowPresentation((legacy.error as Rec).message),
       ...(contextError && isThroughputLimitText(message) ? { condition: "rate_limited" as const } : {}),
       ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
-      ...(isProxyError(response) ? { localError: markProxyError({ message }) } : {}),
+      ...(isProxyError(response) ? { localError: carryProxyError(response, { message }) } : {}),
     })), {
       status: outStatus,
       headers: outHeaders,
@@ -1391,7 +1395,7 @@ async function handleClaudeMessagesWithBudget(
     const anthropicSse = responsesSseToAnthropicSse(response.body, clientFacingModelText(clientModelLabel), {
       translatorBudget,
       nativeReasoningTagFor: blob => nativeReasoningTag(nativeReasoningMint.owner, blob),
-      failureVerdictSink, proxyErrorContext: logCtx,
+      failureVerdictSink: stream ? undefined : failureVerdictSink, proxyErrorContext: logCtx,
       // Only a floor, and only for the first frame: an upstream that reports usage early wins
       // over it inside the translator, and the terminal `message_delta` carries the
       // authoritative count either way (#4857).
@@ -1590,7 +1594,10 @@ function thinkingProjectionForPreview(config: OcxConfig, modelId: string): Claud
   }
 }
 
-export async function handleClaudeCountTokens(
+export async function handleClaudeCountTokens(...args: Parameters<typeof handleClaudeCountTokensInner>): Promise<Response> {
+  return normalizeMessagesProxyRefusal(args[0], await handleClaudeCountTokensInner(...args));
+}
+async function handleClaudeCountTokensInner(
   req: Request,
   config: OcxConfig,
   requestPolicy: RequestPolicyView = config,

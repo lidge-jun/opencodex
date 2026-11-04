@@ -231,7 +231,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink, proxyErrorContext: logCtx, get localUpstream() { return input.localUpstream; } })
     : encodeAnthropicMessageSse(events, {
       ...encodeOptions,
-      failureVerdictSink: messagesFailureVerdictSink,
+      failureVerdictSink: encoder.stream ? undefined : messagesFailureVerdictSink,
       proxyErrorContext: logCtx,
       get localUpstream() { return input.localUpstream; },
       ...(encoder.inputTokenFloor !== undefined ? { inputTokenFloor: encoder.inputTokenFloor } : {}),

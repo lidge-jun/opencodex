@@ -1,6 +1,6 @@
 import type { UpstreamConditionEvidence } from "../lib/upstream-condition";
 import { ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../lib/messages-error-body";
-import { markProxyError, hasProxyErrorMessage, hasProxyIncomplete } from "../lib/client-error-body";
+import { proxyMessagePresentation, markProxyError, hasProxyErrorMessage, hasProxyIncomplete } from "../lib/client-error-body";
 import { admitMessagesFailure, collectMessagesFailure, type MessagesFailureVerdictSink } from "./failure-verdict";
 import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "../responses/anthropic-progress";
 /**
@@ -606,7 +606,7 @@ export function responsesSseToAnthropicSse(
         const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
           overflow: messagesOverflowPresentation((legacy.error as Rec).message),
           condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined, contract,
-          ...(local ? { localError: markProxyError({ message }) } : {}),
+          ...(local ? { localError: markProxyError({ message }, proxyMessagePresentation(opts.proxyErrorContext, message, { type: evidence?.type, code: evidence?.code ?? code })) } : {}),
         });
         const admitted = () => admitMessagesFailure(opts.failureVerdictSink, payload, legacy);
         if (code === "translation_buffer_limit") {

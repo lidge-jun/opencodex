@@ -80,7 +80,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { stampApiKeyAccountLabel } from "../providers/label";
-import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { publicOAuthErrorPresentation, OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { resolveProtocolSettings } from "../protocols/settings";
@@ -403,13 +403,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       const message = error.usageLimit === null ? `${scope} are temporarily rate-limited`
         : `${scope} have reached their usage limit${date ? `; the first one resets at ${date}` : ""}`;
       finishLog(429, error.message);
-      const response = fail(429, message, "rate_limit_error");
+      const response = markProxyError(fail(429, message, "rate_limit_error"), date === undefined ? undefined : "usage");
       const advice = error.retryAfterSeconds !== null ? formatClientRetryAfter(error.retryAfterSeconds) : undefined;
       if (advice !== undefined) response.headers.set("retry-after", advice);
       return response;
     }
-    if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error");
-    if (error instanceof OAuthLoginRequiredError) return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+    if (error instanceof OAuthAccountPausedError) return markProxyError(fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error"), publicOAuthErrorPresentation(error));
+    if (error instanceof OAuthLoginRequiredError) return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error"), publicOAuthErrorPresentation(error));
     return null;
   };
 
@@ -469,7 +469,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (localRefusal) return localRefusal;
       if (error instanceof NativeOAuthSelectionChangedError) return fail(409, error.message, "api_error");
       if (error instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error", undefined, error.message);
-      return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+      return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error"), publicOAuthErrorPresentation(error));
     }
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
@@ -479,7 +479,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     } catch (error) {
       cleanupAbort(); upstream.abort();
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
-      const refusal = fail(429, error.message, "rate_limit_error");
+      const refusal = markProxyError(fail(429, error.message, "rate_limit_error"), error.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(error.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
@@ -861,7 +861,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
-      const refusal = fail(429, sendError.message, "rate_limit_error");
+      const refusal = markProxyError(fail(429, sendError.message, "rate_limit_error"), sendError.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
@@ -992,7 +992,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             ["stream_ended_early", "anthropic passthrough upstream stream ended before message_stop"],
             ["stream_failed", "The proxy could not reach or read the provider."],
           ]).get(logCtx.failureDetail?.code ?? "");
-          if (localMessage !== undefined) return fail(502, localMessage, "api_error", undefined, text);
+          if (localMessage !== undefined) return markProxyError(fail(502, localMessage, "api_error", undefined, text), logCtx.failureDetail?.code === "body_overflow" ? "body_overflow" : logCtx.failureDetail?.code === "body_stall" ? "body_stall" : undefined);
         }
         const legacy = anthropicErrorBody(baselineOverflow ? 400 : 502,
           redactSecretString(baselineOverflow ? claudePromptTooLongMessage(text) : text),
