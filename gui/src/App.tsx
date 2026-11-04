@@ -20,7 +20,8 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
-import { IconMenu, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconMenu, IconGlobe, IconPower, IconX, IconRefresh, IconHistory } from "./icons";
+import { switchDashboardEdition } from "./lib/dashboard-edition";
 import { NAV_GROUPS, NAV_TIERS, groupForPage, visibleGroupPages } from "./nav-groups";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
@@ -578,6 +579,10 @@ export default function App() {
                 style={{ flex: 1, minWidth: 0, width: "100%" }}
               />
             </div>
+            <button type="button" className="sidebar-orb" onClick={() => switchDashboardEdition("classic")}
+              aria-label={t("shellV2.uiClassic")} title={t("shellV2.uiClassicHint")}>
+              <IconHistory />
+            </button>
             {themeSwitch}
           </div>
           <SidebarGithubRow

@@ -36,6 +36,13 @@
           }
         }
         document.documentElement.lang = langMap[locale];
+        // Someone who switched to the classic dashboard keeps landing there (src/lib/dashboard-edition.ts).
+        // The tray popover is not a dashboard page and stays on this build.
+        try {
+          if (localStorage.getItem("ocx-ui") === "classic" && location.hash.indexOf("#/tray") !== 0) {
+            location.replace("/classic/" + location.search + location.hash);
+          }
+        } catch (e) {}
       })();
     </script>
   </head>
