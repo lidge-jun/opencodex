@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 /**
  * Accounting and measurement pieces shared by the two Claude Messages lanes.
  *
@@ -467,7 +468,7 @@ export function sanitizePassthroughToolCallIds(messages: unknown[]): void {
     const field = fieldOf(block);
     if (!field || typeof block[field] !== "string") continue;
     const wire = callIds.allocate(block[field] as string);
-    if (wire === undefined) throw new AnthropicRequestError(`${block.type} block has an empty ${field}`);
+    if (wire === undefined) throw markProxyError(new AnthropicRequestError(field === "id" ? "tool_use block has an empty id" : "tool_result block has an empty tool_use_id"));
     block[field] = wire;
   }
 }

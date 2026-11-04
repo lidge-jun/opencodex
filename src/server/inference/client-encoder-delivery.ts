@@ -1,3 +1,4 @@
+import type { MessagesFailureVerdictSink } from "../../claude/failure-verdict";
 import type { FailureVerdictSink } from "../../chat/failure-verdict";
 /**
  * Adapter delivery straight into a Chat or Messages client's wire (PF-09).
@@ -217,6 +218,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     },
   };
   const failureVerdictSink: FailureVerdictSink = {};
+  const messagesFailureVerdictSink: MessagesFailureVerdictSink = {};
   const encodeOptions = {
     model: encoder.model,
     translatorBudget,
@@ -229,6 +231,8 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink, proxyErrorContext: logCtx, get localUpstream() { return input.localUpstream; } })
     : encodeAnthropicMessageSse(events, {
       ...encodeOptions,
+      failureVerdictSink: encoder.stream ? undefined : messagesFailureVerdictSink,
+      proxyErrorContext: logCtx,
       get localUpstream() { return input.localUpstream; },
       ...(encoder.inputTokenFloor !== undefined ? { inputTokenFloor: encoder.inputTokenFloor } : {}),
     });
@@ -241,7 +245,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     // The routed turn always streams internally; a non-streaming client gets the fold.
     response = encoder.protocol === "chat"
       ? await collectChatCompletionResponse(tracked, encoder.model, translatorBudget, failureVerdictSink)
-      : await collectAnthropicMessageResponse(tracked, encoder.model, translatorBudget);
+      : await collectAnthropicMessageResponse(tracked, encoder.model, translatorBudget, messagesFailureVerdictSink);
   }
   return attachClientWireLog(markClientWire(response, encoder.protocol), log);
 }

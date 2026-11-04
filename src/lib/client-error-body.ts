@@ -23,8 +23,8 @@ function literalMap<const T extends readonly string[]>(values: T): ReadonlyMap<s
 }
 export const OPENAI_ERROR_TYPES = literalMap(openaiTypes);
 export const OPENAI_ERROR_CODES = literalMap(openaiCodes);
-export const ANTHROPIC_ERROR_TYPES = literalMap(["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "request_too_large", "rate_limit_error", "api_error", "overloaded_error", "billing_error", "timeout_error", "conflict_error"] as const);
-export const ANTHROPIC_ERROR_CODES = literalMap([...ANTHROPIC_ERROR_TYPES.values(), ...openaiCodes] as const);
+export const ANTHROPIC_ERROR_TYPES = literalMap(["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "request_too_large", "rate_limit_error", "api_error", "overloaded_error", "billing_error", "timeout_error", "conflict_error", "send_budget_exhausted"] as const);
+export const ANTHROPIC_ERROR_CODES = literalMap([...ANTHROPIC_ERROR_TYPES.values(), ...openaiCodes, "desktop_model_mapping_unavailable", "thread_unsupported_request"] as const);
 export const CLAUDE_CONTEXT_OVERFLOW_MESSAGE = "prompt is too long: The request exceeds the model's context window.";
 export const CLIENT_ERROR_CONTRACTS = {
   context_overflow: "The request exceeds the model's context window.",
@@ -67,6 +67,9 @@ const CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["upstream_reset_replay_refused", CLIENT_ERROR_CONTRACTS.replay_refused],
   ...["cyber_policy", "invalid_prompt", "misalignment_policy_violation", "bio_policy", "model_not_in_plan", "translation_buffer_limit", "invalid_refusal", "undeclared_tool_call", "required_tool_contract_unsatisfied"].map(code => [code, CLIENT_ERROR_CONTRACTS[code as ClientErrorContract]] as const),
 ]);
+export function clientErrorCodeMessage(code: string | undefined): string | undefined {
+  return CODE_MESSAGES.get(code ?? "");
+}
 /** Local guidance is selected only by a closed reason supplied by the owning proxy call site. */
 export const LOCAL_CHAT_ERROR_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["credentials_paused", "The configured credentials are paused. Resume an account or key in account settings before retrying."],
@@ -137,14 +140,28 @@ export function comboFailureEvidence(response: Response): string | undefined { r
 
 /** Identity belongs to the locally constructed object, never to serialized fields. */
 const proxyErrors = new WeakSet<object>();
-export function markProxyError<T extends object>(value: T): T { proxyErrors.add(value); return value; }
+export type ProxyErrorPresentation = "roster" | "pacing" | "input" | "outbound" | "inbound" | "send" | "cooldown" | "cooldown_pinned" | "hard_lock" | "recovery" | "usage" | "model_availability" | "oauth_login" | "discovery" | "muse_http" | "config" | "workflow" | "workflow_unbound" | "scope" | "body_stall" | "body_overflow" | "combo" | "copilot" | "pool_refresh";
+const proxyPresentations = new WeakMap<object, ProxyErrorPresentation>();
+export function proxyErrorPresentation(value: object): ProxyErrorPresentation | undefined { return proxyPresentations.get(value); }
+export function markProxyError<T extends object>(value: T, presentation?: ProxyErrorPresentation): T {
+  proxyErrors.add(value);
+  if (presentation !== undefined) proxyPresentations.set(value, presentation);
+  return value;
+}
+export function carryProxyErrorPresentation<T extends object>(source: object, target: T): T {
+  const kind = proxyErrorPresentation(source);
+  if (source instanceof Response && target instanceof Response && source.status !== target.status) return target;
+  if (kind !== undefined && proxyErrorPresentation(target) === undefined) proxyPresentations.set(target, kind);
+  return target;
+}
 export function isProxyError(value: object): boolean { return proxyErrors.has(value); }
 export function carryProxyError<T extends object>(source: object, target: T): T {
-  return isProxyError(source) ? markProxyError(target) : target;
+  return isProxyError(source) ? carryProxyErrorPresentation(source, markProxyError(target)) : target;
 }
 /** The tool guard records only messages it constructs for this response's request context. */
-export interface ProxyErrorMessageFields { type?: string; code?: string | null }
+export interface ProxyErrorMessageFields { type?: string; code?: string | null; presentation?: ProxyErrorPresentation }
 const proxyMessages = new WeakMap<object, Map<string, Set<string>>>();
+const proxyMessagePresentations = new WeakMap<object, Map<string, Map<string, ProxyErrorPresentation>>>();
 const errorFields = (fields: ProxyErrorMessageFields) => JSON.stringify([fields.type ?? null, fields.code ?? null]);
 export function rememberProxyErrorMessage(context: object, message: string, fields: ProxyErrorMessageFields & { status: number }): void {
   let messages = proxyMessages.get(context);
@@ -153,16 +170,30 @@ export function rememberProxyErrorMessage(context: object, message: string, fiel
   if (!allowed) { allowed = new Set(); messages.set(message, allowed); }
   const classified = classifyError(fields.status, fields.type ?? "upstream_error", message);
   // The bridge may classify a field while preserving the other field's explicit local verdict.
-  for (const type of [fields.type, classified.type]) for (const code of [fields.code, classified.code]) allowed.add(errorFields({ type, code }));
+  for (const type of [fields.type, classified.type]) for (const code of [fields.code, classified.code]) {
+    const key = errorFields({ type, code }); allowed.add(key);
+    if (fields.presentation !== undefined) {
+      let rows = proxyMessagePresentations.get(context);
+      if (!rows) { rows = new Map(); proxyMessagePresentations.set(context, rows); }
+      let kinds = rows.get(message); if (!kinds) { kinds = new Map(); rows.set(message, kinds); }
+      kinds.set(key, fields.presentation);
+    }
+  }
 }
 export function carryProxyErrorContext(source: object, target: object): void {
   carryProxyIncompleteContext(source, target);
   let messages = proxyMessages.get(source);
   if (!messages) { messages = new Map(); proxyMessages.set(source, messages); }
   proxyMessages.set(target, messages);
+  let presentations = proxyMessagePresentations.get(source);
+  if (!presentations) { presentations = new Map(); proxyMessagePresentations.set(source, presentations); }
+  proxyMessagePresentations.set(target, presentations);
 }
 export function hasProxyErrorMessage(context: object | undefined, message: string, fields: ProxyErrorMessageFields): boolean {
   return context !== undefined && proxyMessages.get(context)?.get(message)?.has(errorFields(fields)) === true;
+}
+export function proxyMessagePresentation(context: object | undefined, message: string, fields: ProxyErrorMessageFields): ProxyErrorPresentation | undefined {
+  return context === undefined ? undefined : proxyMessagePresentations.get(context)?.get(message)?.get(errorFields(fields));
 }
 // These complete sentences contain only proxy literals, including each recognized reason.
 const PROXY_FIXED_MESSAGES: ReadonlyMap<string, string> = literalMap([
