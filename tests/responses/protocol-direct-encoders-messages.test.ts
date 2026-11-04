@@ -339,17 +339,19 @@ describe("direct Messages encoder matches bridge + converter (stream)", () => {
 });
 
 describe("direct Messages fold matches bridge + collector (non-stream)", () => {
-  test("generic-coded context overflow triggers client compaction on both paths", async () => {
-    const events: AdapterEvent[] = [{ type: "error", errorType: "server_error",
-      code: "server_error", message: "Your input exceeds the context window of this model", retryable: true }];
-    const frames = await expectStreamParity(events);
-    expect(frames).toEqual([{ event: "error", data: { type: "error", error: {
-      type: "invalid_request_error", code: "context_length_exceeded",
-      message: "prompt is too long: Your input exceeds the context window of this model",
-    } } }]);
-    const response = await expectFoldParity(events);
-    expect(response.status).toBe(400);
-  });
+  test.each(["server_error", "upstream_error", "api_error", "internal_error"])(
+    "generic-coded %s context overflow triggers client compaction on both paths", async code => {
+      const events: AdapterEvent[] = [{ type: "error", errorType: "server_error",
+        code, message: "Your input exceeds the context window of this model", retryable: true }];
+      const frames = await expectStreamParity(events);
+      expect(frames).toEqual([{ event: "error", data: { type: "error", error: {
+        type: "invalid_request_error", code: "context_length_exceeded",
+        message: "prompt is too long: Your input exceeds the context window of this model",
+      } } }]);
+      const response = await expectFoldParity(events);
+      expect(response.status).toBe(400);
+    },
+  );
 
   test.each([400, 413, undefined])("context rejection remains terminal with upstream status %s", async status => {
     const events: AdapterEvent[] = [{ type: "error", status, errorType: "invalid_request_error",

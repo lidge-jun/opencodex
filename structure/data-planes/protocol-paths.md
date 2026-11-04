@@ -223,11 +223,11 @@ the wire-silence heartbeat and live-destination stall watchdog ([timeout policy]
 `chat.ts` (`encodeChatCompletionSse`, `foldChatCompletion`) and `messages.ts`
 (`encodeAnthropicMessageSse`, `foldAnthropicMessage`) are the writers; the Chat one also emits `reasoning_details` ([#7429](chat-reasoning-details.md)). They reuse the
 converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
-(ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`,
-`chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
-`anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
-so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector. Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
+(ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`, `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
+`anthropicIncompleteOutcome`, `anthropicFailedStatus`, `isContextOverflowError`, the message snapshot, the web-search pair),
+so the frames a client receives are the converters' frames. A fold is the encoded stream read by the existing collector.
+Messages terminal errors use the shared context-overflow verdict for their code as well as their status: definite generic-coded refusals receive `context_length_exceeded` and `prompt is too long` wording even when marked retryable, while the deterministic undeclared-tool error keeps its code. `tests/responses/protocol-direct-encoders-messages.test.ts` pins stream and fold parity.
+Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
