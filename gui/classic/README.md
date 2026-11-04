@@ -20,3 +20,5 @@ when one exists, otherwise to `../src/`.
 - A change to a shared file in `../src/` reaches this UI too. If it breaks the classic build,
   `bun run build` fails; fix the shared file, or copy the old version of that file in here.
 - It is excluded from lint, react-doctor and the file-size ratchet, and it is not type-checked.
+  For that reason the lint suppression comments the old files carried were removed: nothing
+  reads them here, and PR hygiene treats every added suppression as new.

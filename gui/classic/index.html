@@ -13,7 +13,9 @@
         try {
           var t = localStorage.getItem("ocx-theme");
           if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-        } catch (e) {}
+        } catch (e) {
+          document.documentElement.removeAttribute("data-theme"); // storage blocked: follow the OS theme
+        }
         // FOUT guard: set <html lang> before first paint so :lang() font stacks apply immediately.
         // Mirrors detectInitial() + LOCALES in src/i18n/shared.ts.
         var langMap = { en: "en", de: "de", fr: "fr", ko: "ko", zh: "zh-CN", "zh-TW": "zh-TW", ru: "ru", ja: "ja", tr: "tr", vi: "vi" };

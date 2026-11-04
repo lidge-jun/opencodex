@@ -731,8 +731,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       window.clearTimeout(timeout);
       stop();
     };
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadPresets is a plain async loader
     // like the rest of this file's; a useCallback wrapper trips PreserveManualMemo, and the
     // effect only ever needs the current closure. Verified 2026-08-27: converting both loaders
     // to useCallback and completing the dep array turns ONE warning into five react-compiler
@@ -883,7 +881,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     if (groups.length === 0) return;
     needsDefaultCollapseRef.current = false;
     const all = new Set(groups.map(group => group.provider));
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
     setCollapsed(all);
     writeCollapsedProviders(all);
   }, [groups]);
@@ -2581,7 +2578,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           {collapseControls}
           <div className="models-provider-list">
             {
-              // eslint-disable-next-line react-hooks/refs, react/react-compiler -- The hover ref is only read by row event handlers nested in this renderer.
               visibleGroups.map(group => renderGroup(group))
             }
           </div>

@@ -8,7 +8,8 @@ const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
 
 test("a remembered classic choice forwards before first paint, except for the tray popover", async () => {
   const html = await read("../index.html");
-  expect(html).toContain('localStorage.getItem("ocx-ui") === "classic"');
+  expect(html).toContain('edition = localStorage.getItem("ocx-ui");');
+  expect(html).toContain('edition === "classic"');
   expect(html).toContain('location.hash.indexOf("#/tray") !== 0');
   expect(html).toContain('location.replace("/classic/" + location.search + location.hash)');
 });

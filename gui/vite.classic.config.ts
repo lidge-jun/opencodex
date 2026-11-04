@@ -16,7 +16,18 @@ import react from '@vitejs/plugin-react'
 const GUI = fileURLToPath(new URL('.', import.meta.url))
 const SRC = join(GUI, 'src')
 const CLASSIC_SRC = join(GUI, 'classic', 'src')
-const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+
+/** The parent package version, baked in as the fallback shown before /healthz answers. */
+function packageVersion(): string {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    const version = (parsed as { version?: unknown }).version
+    return typeof version === 'string' ? version : '0.0.0'
+  } catch (error) {
+    throw new Error('classic dashboard build: cannot read ../package.json', { cause: error })
+  }
+}
+const version = packageVersion()
 
 const inside = (root: string, path: string) => {
   const rel = relative(root, path)

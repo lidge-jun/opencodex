@@ -70,8 +70,6 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
     { pollMs: 2000, enabled: active && !!debug?.claude },
   );
   const claudeEntries = claudePoll.data ?? [];
-
-  // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
   const lineVirtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollContainerRef.current,
@@ -146,8 +144,6 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
       controller.abort();
     };
     // Intentionally omit fetchLogs/entries — identity gate prevents switch storms.
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stream identity only
   }, [active, apiBase, stream, streamEnabled]);
 
   const pollInFlightRef = useRef(false);

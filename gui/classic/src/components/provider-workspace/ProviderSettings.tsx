@@ -112,8 +112,6 @@ export default function ProviderSettings({
   const [pacingModelDelay, setPacingModelDelay] = useState("");
   const [pacingModelConcurrency, setPacingModelConcurrency] = useState("");
   const [pacingStatus, setPacingStatus] = useState<PacingStatus | null>(null);
-
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
   useEffect(() => {
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
@@ -135,15 +133,12 @@ export default function ProviderSettings({
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
   }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
   // draft, so it is deliberately kept out of the form-reset effect above.
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional split from the form reset */
   useEffect(() => {
     setAccountMode(item.codexAccountMode ?? "pool");
   }, [item.codexAccountMode]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (apiBase === undefined) return;
@@ -172,8 +167,6 @@ export default function ProviderSettings({
       });
     return () => { cancelled = true; };
     // Remount via key={item.name}; capture savedBaseUrl once per mount/fetch.
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- item.baseUrl sync is handled by the form-reset effect
   }, [apiBase, item.name]);
 
   useEffect(() => {

@@ -675,7 +675,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.
-  // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
   const rowVirtualizer = useVirtualizer({
     count: filteredLogs.length,
     getScrollElement: () => scrollContainerRef.current,
