@@ -112,6 +112,12 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   let pendingToolResultAudioParts: unknown[] = [];
   let mintedIdSeq = 0;
   const seenWireCallIds = new Set<string>();
+  // One call id can arrive with more than one result: Codex code mode records the yield marker
+  // for a running cell, then each late `notify()`/wait output as a further result for the same
+  // call. OpenAI-compatible chat providers reject the second `role:"tool"` reply for an id that
+  // was already answered ("Duplicate tool output for call_id"), so the repeats stay out of the
+  // wire body and their text is appended to the result that already answered the call.
+  const answeredToolResults = new Map<string, { content: unknown }>();
 
   const mintCallId = (): string => {
     let id = "";
@@ -165,6 +171,20 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
     flushToolResultImages();
     flushToolResultAudio();
     releaseDeferredBarriers();
+  };
+
+  /** Append a repeated result for an already-answered call to the answer that call already got. */
+  const appendAnsweredToolResultText = (
+    message: { content: unknown },
+    text: string,
+  ): void => {
+    if (text.length === 0) return;
+    const current = message.content;
+    // `toolResultTextForWire` always returns text for a `role:"tool"` reply, so the answer is a
+    // string; an unexpected shape still keeps both halves rather than dropping the repeat.
+    message.content = typeof current === "string" && current.length > 0
+      ? `${current}\n\n${text}`
+      : typeof current === "string" ? text : [current, text];
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
@@ -369,11 +389,13 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         let toolCallId = msg.toolCallId;
         const matchIdx = toolCallId ? pendingToolCalls.findIndex(c => c.id === toolCallId) : -1;
         if (matchIdx >= 0 && toolCallId) {
-          out.push({
+          const toolMsg = {
             role: "tool",
             tool_call_id: toolCallId,
             content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
-          });
+          };
+          out.push(toolMsg);
+          answeredToolResults.set(toolCallId, toolMsg);
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
           pendingToolCalls.splice(matchIdx, 1);
@@ -381,6 +403,24 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             flushToolResultImages();
             flushToolResultAudio();
             releaseDeferredBarriers();
+          }
+        } else if (
+          toolCallId
+          && answeredToolResults.has(toolCallId)
+          && !pendingToolCalls.some(c => c.id === toolCallId)
+        ) {
+          // Same call, another result: fold it into the answer already on the wire instead of
+          // repeating the `role:"tool"` reply the upstream already answered. Nothing is dropped;
+          // the model still reads every recorded output in arrival order.
+          appendAnsweredToolResultText(
+            answeredToolResults.get(toolCallId)!,
+            toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
+          );
+          pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
+          pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
+          if (pendingToolCalls.length === 0) {
+            flushToolResultImages();
+            flushToolResultAudio();
           }
         } else {
           if (!toolCallId) toolCallId = `call_orphan_${out.length}`;
