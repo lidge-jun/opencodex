@@ -63,13 +63,13 @@ for (const [index, error] of failures.entries()) {
     contained(text);
     expect(text).toContain("event: error\n");
     const payload = JSON.parse(text.split("data: ").at(-1)!);
-    if (index === 2 || index === 3) expect(payload.error).toMatchObject({ type: "invalid_request_error", ...(direct && index === 3 ? {} : { code: "context_length_exceeded" }), message: direct && index === 3 ? "The request exceeds the model's context window." : "prompt is too long: The request exceeds the model's context window." });
+    if (index === 2 || index === 3) expect(payload.error).toMatchObject({ type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: The request exceeds the model's context window." });
     if (index === 4 || index === 5) expect(payload.error.type).toBe("rate_limit_error");
     const foldBudget = createTestTranslatorBudget();
     const fold = direct ? await foldAnthropicMessage((async function* () { yield { ...error, type: "error", errorType: error.type } as AdapterEvent; })(), { model: "fixture", translatorBudget: foldBudget }) : null;
     if (fold) {
       const body = await fold.text(); contained(body);
-      expect(fold.status).toBe(index === 2 ? 400 : 502);
+      expect(fold.status).toBe(index === 2 || index === 3 ? 400 : 502);
       expect(JSON.parse(body).error.type).toBe(payload.error.type);
     }
   });
