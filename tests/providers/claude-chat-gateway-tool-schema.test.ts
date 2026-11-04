@@ -169,6 +169,35 @@ describe("Claude behind a Chat Completions gateway: tool schema root", () => {
     expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ type: "object", properties });
   });
 
+  test("empty property maps in constraint-only compositions do not block flattening", () => {
+    for (const properties of [{}, Object.create(null)]) {
+      const schema = { oneOf: [{ allOf: [{ properties, required: ["payload"] }] }] };
+      expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ type: "object" });
+    }
+  });
+
+  test("empty property maps do not hide deeper declarations or references", () => {
+    for (const declaration of [{ properties: { payload: { type: "string" } } }, { $ref: "#/missing" }]) {
+      const schema = { anyOf: [{ allOf: [{ properties: {}, oneOf: [declaration] }] }] };
+      expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ ...schema, type: "object" });
+    }
+  });
+
+  test("nonempty and invalid property maps retain the conservative fallback", () => {
+    for (const properties of [JSON.parse('{"__proto__":{"type":"string"}}'), null, [], "", false, 0]) {
+      const schema = { anyOf: [{ allOf: [{ properties }] }] };
+      expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ ...schema, type: "object" });
+    }
+  });
+
+  test("shared constraint-only nodes flatten after shared Chat normalization clones them", () => {
+    // The adapter entry point cannot exercise the later guard's object-identity branch.
+    const shared = { properties: {}, required: ["payload"] };
+    const schema = { anyOf: [{ allOf: [shared], oneOf: [shared] }] };
+    expect(schema.anyOf[0].allOf[0]).toBe(schema.anyOf[0].oneOf[0]);
+    expect(toolFor("claude-sonnet-5-5", gateway, undefined, schema).parameters).toEqual({ type: "object" });
+  });
+
   test("bounds inline composition inspection per schema, including depth and repeated branches", () => {
     const chain = (depth: number) => {
       let node: Record<string, unknown> = { required: ["payload"] };

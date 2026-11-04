@@ -49,7 +49,13 @@ function hasUnreadClaudeComposition(branch: Record<string, unknown>, budget: { n
       for (const variant of variants) {
         if (budget.nestedRemaining-- <= 0) return true;
         if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
-        if (Object.hasOwn(variant, "properties") || Object.hasOwn(variant, "$ref") || seen.has(variant)) return true;
+        if (Object.hasOwn(variant, "properties")) {
+          const properties = (variant as Record<string, unknown>).properties;
+          if (!properties || typeof properties !== "object" || Array.isArray(properties) || Object.keys(properties).length > 0) return true;
+          const prototype = Object.getPrototypeOf(properties);
+          if (prototype !== null && prototype !== Object.prototype) return true;
+        }
+        if (Object.hasOwn(variant, "$ref") || seen.has(variant)) return true;
         seen.add(variant);
         pending.push(variant as Record<string, unknown>);
       }
