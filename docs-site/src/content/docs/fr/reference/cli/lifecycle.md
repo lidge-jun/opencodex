@@ -32,6 +32,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+Un Link Child non supervisé restaure Codex natif et Grok avant de libérer son listener lors d’un signal, en revérifiant la connexion à chaque écriture. Service/Desktop, sibling, transfert de redémarrage et reçu stop du parent préservent les intégrations. L’arrêt refuse le redémarrage avec `409 runtime_stopping`. Une terminaison forcée peut éviter le signal ; la restauration par `ocx stop` reste nécessaire.
+
 Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
 
 Sur un client hub connecté, `ocx stop`, y compris via l’API, conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion ; `ocx start` les dessert de nouveau. L’arrêt explicite d’un Remote Link Child rétablit au contraire, si la restauration partagée réussit, le routage natif de Codex, le catalogue et les métadonnées de reprise sauvegardées, et supprime la configuration Grok gérée. La connexion Home enregistrée reste conservée ; `ocx disconnect` la supprime.
@@ -77,6 +79,10 @@ Réparez l'historique d'une tâche compactée par un fournisseur routé avant de
 ### `ocx uninstall` · `ocx remove`
 
 Arrête le service et le proxy, supprime le service et le shim Codex, rétablit le fonctionnement natif de Codex, puis supprime la configuration locale d’opencodex uniquement si toutes les étapes de restauration ont réussi. `remove` est un alias de `uninstall`. Le nettoyage de la configuration exige les métadonnées de propriété créées par une installation récente ; les répertoires anciens ou partagés sont conservés.
+
+Lorsque `ocx uninstall` s’exécute en tant que root ou depuis une invite Windows élevée (administrateur), il vérifie d’abord qu’aucun autre compte ne peut modifier le répertoire de configuration, les répertoires qui le contiennent ni aucun répertoire qu’il contient, et qu’aucun lien du répertoire de configuration ne mène en dehors de celui-ci (sous Windows, qu’il ne contient aucun lien). Si l’une de ces vérifications échoue, la désinstallation s’arrête avant toute modification et en indique la raison. Lancez `ocx uninstall` avec le compte propriétaire du répertoire de configuration, sans `sudo` ni droits d’administrateur, ou réservez ces répertoires à ce compte et supprimez ces liens, puis relancez la commande. Sous Windows ARM64, où opencodex ne peut pas savoir si l’invite est élevée, la même vérification s’applique ; si elle ne peut pas aboutir, arrêtez opencodex et supprimez vous-même le répertoire de configuration.
+
+Une entrée enregistrée dont un répertoire parent dans le répertoire de configuration est un lien (lien symbolique ou jonction) est laissée en place et listée parmi les chemins restants, et l’exécution se termine par une désinstallation partielle. Remplacez ce lien par le répertoire réel ou supprimez-le, puis relancez `ocx uninstall` pour terminer.
 
 ## État et santé
 

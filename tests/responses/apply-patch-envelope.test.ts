@@ -5,6 +5,7 @@ import {
   normalizeApplyPatchDelimiters,
   repairFreeformToolInput,
   stableCanonicalPatchPrefix,
+  unwrapFreeformToolInput,
 } from "../../src/responses/apply-patch-envelope";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../../src/responses/code-mode-helper-compat";
 
@@ -23,6 +24,48 @@ const CANONICAL_PATCH = `*** Begin Patch
 *** End Patch`;
 
 describe("apply_patch envelope repair", () => {
+  test.each([
+    ["exec", 'text("nested wrapper");'],
+    ["apply_patch", CANONICAL_PATCH],
+  ])("unwraps one extra canonical string body for %s", (tool, body) => {
+    const nested = JSON.stringify({ input: body });
+    const args = JSON.stringify({ input: nested });
+    expect(repairFreeformToolInput(args, tool)).toBe(body);
+    expect(repairFreeformToolInput(args, tool, "functions")).toBe(body);
+    expect(repairFreeformToolInput(body, tool)).toBe(body);
+    expect(repairFreeformToolInput(nested, tool)).toBe(body);
+    // A third layer is deliberately left in place.
+    expect(repairFreeformToolInput(JSON.stringify({ input: args }), tool)).toBe(nested);
+    expect(repairFreeformToolInput(args, tool, "mcp")).toBe(nested);
+    expect(repairFreeformToolInput(args, "render_diagram")).toBe(nested);
+  });
+
+  test("the reported exec body parses only after the extra wrapper is removed", () => {
+    const body = 'text("nested wrapper");';
+    const nested = JSON.stringify({ input: body });
+    expect(() => new Function("text", nested)).toThrow(SyntaxError);
+    const values: string[] = [];
+    new Function("text", repairFreeformToolInput(JSON.stringify({ input: nested }), "exec"))(
+      (value: string) => values.push(value),
+    );
+    expect(values).toEqual(["nested wrapper"]);
+  });
+
+  test.each(["exec", "apply_patch"])("preserves noncanonical nested %s bodies", tool => {
+    for (const nested of [
+      '{"input":"text(1)","extra":true}',
+      '{"input":42}', '{"input":null}', '{"input":{}}',
+      '{"code":"text(1)"}', '["text(1)"]', '{"input":"incomplete',
+    ]) {
+      expect(repairFreeformToolInput(JSON.stringify({ input: nested }), tool)).toBe(nested);
+    }
+    for (const input of [null, 42, true, {}, []]) {
+      const args = JSON.stringify({ input });
+      expect(repairFreeformToolInput(args, tool)).toBe(args);
+    }
+    expect(unwrapFreeformToolInput(undefined, tool)).toBe("");
+  });
+
   test("repairs only the outer lines of a complete top-level apply_patch payload", () => {
     expect(repairFreeformToolInput(DECORATED_PATCH, "apply_patch")).toBe(CANONICAL_PATCH);
     expect(normalizeApplyPatchDelimiters(DECORATED_PATCH)).toBe(CANONICAL_PATCH);
@@ -174,6 +217,12 @@ describe("raw exec patch envelope recognition", () => {
     // decorated delimiters are normalized on the way through.
     expect(source).toContain(JSON.stringify(CANONICAL_PATCH));
     expect(source).not.toContain("*** Begin Patch ***");
+  });
+
+  test("recognizes a double-wrapped patch submitted as exec", () => {
+    const args = JSON.stringify({ input: JSON.stringify({ input: DECORATED_PATCH }) });
+    expect(resolveCodeModeHelperName(undefined, "exec", args, undefined, CODE_MODE)).toBe("apply_patch");
+    expect(compileCodeModeHelperInput(args, "apply_patch", "exec")).toContain(JSON.stringify(CANONICAL_PATCH));
   });
 
   test("refuses JavaScript that merely mentions an envelope", () => {

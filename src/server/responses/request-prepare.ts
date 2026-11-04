@@ -158,6 +158,7 @@ import {
   currentTurnWireToolCatalogBody,
   hasExplicitEmptyToolCatalog,
   collectDeclaredWireToolNames,
+  collectTranslatedHostedToolNames,
   collectDeclaredBareCustomWireToolNames,
 } from "../responses-undeclared-tool-guard";
 import { streamingContextOverflowResponse } from "./context-overflow";
@@ -498,10 +499,12 @@ export async function prepareResponsesRequest(
     const catalogBody = options.directRequest && parsed.context.tools?.length
       ? { tools: parsed.context.tools.map(tool => ({ type: "function", name: tool.name })) } : parsed._rawBody;
     const currentCatalog = currentTurnWireToolCatalogBody(catalogBody, parsed._replayPrefixLen);
+    // A hosted tool declared this turn authorizes the function name its translation uses.
+    const translatedHostedNames = collectTranslatedHostedToolNames(currentCatalog);
     clientToolCatalogRestriction = {
-      declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
+      declaredToolNames: new Set([...collectDeclaredWireToolNames(currentCatalog), ...translatedHostedNames]),
       bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
-      canonicalToolNames: collectDeclaredWireToolNames(currentCatalog, { canonicalOnly: true }),
+      canonicalToolNames: new Set([...collectDeclaredWireToolNames(currentCatalog, { canonicalOnly: true }), ...translatedHostedNames]),
       // Ordinary Responses validation stays with its delivery owner; replay cannot add authority.
       enforceDeclaredToolNames: (inboundWire === "responses" && (parsed._replayPrefixLen ?? 0) > 0)
         || options.clientDeclaredEmptyToolCatalog === true
@@ -512,6 +515,7 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
       parsed._anthropicServerReplay = options.anthropicServerReplay;
+      if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response

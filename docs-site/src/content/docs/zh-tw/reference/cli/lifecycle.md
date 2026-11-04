@@ -28,6 +28,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+無人監督的 Link Child 處理結束訊號時，會在每次寫入前核對連線，並在關閉接聽器前還原 Codex 原生設定及受管理的 Grok。服務/Desktop、sibling、重新啟動交接和父程序 stop 收據會保留設定。結束中的重新啟動要求回傳 `409 runtime_stopping`。強制終止可能略過訊號處理，仍需父程序 `ocx stop` 的還原路徑。
+
 停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
 對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
@@ -70,6 +72,10 @@ ocx eject back
 ### `ocx uninstall` · `ocx remove`
 
 停止服務與代理、移除服務與 Codex shim、還原原生 Codex，然後僅在所有還原步驟成功時移除 opencodex 本機設定。`remove` 是 `uninstall` 的別名。設定清理需要由全新安裝建立的擁有權中繼資料；舊版或共享目錄會被原樣保留。
+
+當 `ocx uninstall` 以 root 身分或在已提升（系統管理員）權限的 Windows 提示字元中執行時，會先確認其他帳號無法變更設定目錄、其上層目錄以及其中的任何目錄，並確認設定目錄內沒有指向其外部的連結（在 Windows 上則是完全沒有連結）。只要有一項不符合，解除安裝就會在做出任何變更之前停止並說明原因。請以擁有設定目錄的帳號、不使用 `sudo` 或系統管理員權限執行 `ocx uninstall`，或將這些目錄限制為僅該帳號可寫入並移除此類連結，然後再次執行。在無法判斷提示字元是否已提升權限的 Windows ARM64 上也會進行相同檢查；若檢查無法完成，請先停止 opencodex，再手動移除設定目錄。
+
+若某個已記錄項目在設定目錄內的上層目錄是連結（符號連結或連接點），該項目會保留原樣並列為剩餘路徑，本次執行以部分解除安裝結束。將該連結換成實際目錄或將其移除後，再次執行 `ocx uninstall` 即可完成。
 
 ## 狀態與健康
 

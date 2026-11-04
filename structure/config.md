@@ -384,7 +384,7 @@ report is additive.
 
 When opencodex owns routing, it also writes `$CODEX_HOME/opencodex.config.toml` as an explicit profile
 target. Codex config uses `service_tier = "fast"` and `[features].fast_mode = true`;
-catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value. Provider `responseTierAuthoritative` is an optional strict boolean validated by `src/config/schema/leaf-validators.ts`; it changes response evidence only, as defined in the [response-tier observation contract](transports/responses.md#response-tier-observation-authority).
+catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value. Provider `responseTierAuthoritative` is an optional strict boolean validated by `src/config/schema/leaf-validators.ts`; it changes response evidence only, as defined in the [response-tier observation contract](transports/responses.md#response-tier-observation-authority). Regenerating that profile (`preserveUnmanagedProfileKeys` in `src/codex/inject/config-toml.ts`) carries the previous profile's plain root assignments forward as their original source text, above the first table. Nothing is decoded and reserialized, so a 64-bit integer Bun cannot represent survives. The generated profile wins every collision: keys in `MANAGED_PROFILE_ROOT_KEYS` are never carried, even when the active template omits them, and a carried key named like the first segment of a generated table (`features`, `model_providers`) is dropped, because TOML forbids defining a table twice. Table bodies and dotted root keys are not carried. The injector re-reads the profile under the write lock and refuses retryably when it differs from the bytes the plan carried from (`tests/codex-integration/codex-profile-preservation.test.ts`). That refusal leaves the profile untouched. After a later failure, rollback reverts the profile only when this injection published it and the file still holds exactly those bytes, so an edit another writer landed survives (the `profilePublish` argument of `restoreCodexPreImages`); config and journal roll back as before.
 
 ## Provider output defaults
 
@@ -466,12 +466,12 @@ the backup itself is not rewritten. See the [catalog contract](catalog.md#shared
 Full `ocx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
-and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
+and removes only normalized manifest entries, resolved from the canonical root without passing through a linked directory ([removal rules](config-ownership.md#removal-stays-inside-the-root)). Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
-remain in place and make the command report a partial uninstall with their exact paths.
+remain in place and make the command report a partial uninstall with their exact paths. Manifest updates and the uninstall tombstone are in [config ownership](config-ownership.md).
 
-The newly created OAuth downgrade copy is registered after copying, so owned uninstall
-includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
+The OAuth downgrade copy is registered before the exclusive copy, so owned uninstall includes
+it (a full manifest skips it). Destructive OAuth mutations rewrite that copy without the removed provider through the
 no-follow writer variant that leaves the owner manifest untouched, so a copy an earlier install
 left unregistered stays unclaimed. Invalid-config recovery copies are deliberately NOT registered: their names carry
 a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
