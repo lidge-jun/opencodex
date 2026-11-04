@@ -410,7 +410,7 @@ function isMalformedResponseFormatRequest(status: number, message: string): bool
   const errorMessage = http400ErrorRecord(message)?.message;
   const detail = typeof errorMessage === "string" ? errorMessage : message;
   return /\binvalid schema(?: for)? response_format\b/i.test(detail)
-    || /\bresponse_format(?:\.[a-z_]+)?\s+must be (?:one of|valid)\b/i.test(detail);
+    || /\bresponse_format(?:\.[a-z_]+)?\s+must be (?:one of|valid|a valid)\b/i.test(detail);
 }
 
 /** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */

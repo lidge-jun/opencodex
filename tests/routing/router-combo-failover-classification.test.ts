@@ -102,6 +102,7 @@ describe("combo failure cooldown scope", () => {
     for (const malformed of [
       "Invalid schema for response_format 'reply': 'type' is a required property.",
       "response_format.type must be one of 'text', 'json_object', 'json_schema'.",
+      "response_format must be a valid JSON schema.",
     ]) {
       expect(comboFailureDecision(400, malformed, genericUpstream)).toBe("stop");
     }

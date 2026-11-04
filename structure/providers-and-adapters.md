@@ -588,7 +588,7 @@ Account-row projection is loaded with `import()` after each account probe in `sr
 
 ## Combo model refusal evidence
 
-`src/combos/failover.ts` recognizes a bounded, exact HTTP 400 plan/model refusal, not credential or entitlement evidence. It also permits a 400 explicitly typed `upstream_error` with no structured code to try another combo target, while an explicit `invalid_request_error` code and other hard stops remain terminal; this target-local fallback records no cooldown.
+`src/combos/failover.ts` recognizes a bounded, exact HTTP 400 plan/model refusal, not credential or entitlement evidence. It also permits an uncoded typed `upstream_error` 400 or OpenRouter's exact opaque numeric-400 wrapper to try another combo target. Malformed `response_format` schema errors and other terminal `invalid_request_error` cases stop; request-local target incompatibilities recognized by `isRequestLocalTargetIncompatibility` and `isResponseFormatCapabilityRefusal` may advance. These target-local fallbacks record no cooldown.
 `src/server/responses/core-combo-failure.ts` captures its finite classification before display truncation;
 `src/server/responses/combo-stream-preflight.ts` preserves it before rebuilding terminal SSE errors.
 `src/server/responses/core-options.ts` carries the value to the combo decision. An inspected non-match
