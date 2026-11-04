@@ -78,6 +78,21 @@ describe("combo failure cooldown scope", () => {
     )).toBe("none");
   });
 
+  test("an explicitly generic upstream 400 hops without cooling the failed target", () => {
+    const message = "Provider error 400: Provider returned error";
+    const genericUpstream = { upstreamType: "upstream_error" };
+    expect(comboFailureDecision(400, message, genericUpstream)).toBe("hop");
+    expect(comboFailureCooldownScope(400, message, genericUpstream)).toBe("none");
+
+    // Without the explicit provider type, and with a real structured validation code, a 400
+    // remains terminal instead of treating any opaque client error as target-specific.
+    expect(comboFailureDecision(400, message)).toBe("stop");
+    expect(comboFailureDecision(400, message, {
+      ...genericUpstream,
+      code: "invalid_request_error",
+    })).toBe("stop");
+  });
+
   test.each([400, 422])("HTTP %s per-request free-tier cap still hops without cooldown scope", status => {
     const message = "This prompt is longer than the free tier allows for a single request.";
     const options = { code: "free_rate_limited" };
