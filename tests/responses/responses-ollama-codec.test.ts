@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ollamaToChat, ollamaBufferedResponse, createOllamaStreamState, consumeOllamaChatChunk, ollamaStreamTerminal, OllamaCodecError } from "../../src/protocols/codecs/ollama";
+import { ollamaToChat, ollamaBufferedResponse, createOllamaStreamState, consumeOllamaChatChunk, ollamaStreamTerminal, OllamaCodecError, MAX_OLLAMA_TOOL_CALLS } from "../../src/protocols/codecs/ollama";
 
 const png = "iVBORw0KGgo=";
 const schema = { type: "object", properties: { q: { type: "string", enum: ["a", "b"] } }, required: ["q"], additionalProperties: false };
@@ -39,6 +39,12 @@ describe("Ollama codec", () => {
     const duplicate = [{ role: "assistant", content: "", tool_calls: [{ id: "same", function: { name: "f", arguments: {} } }, { id: "same", function: { name: "g", arguments: {} } }] }];
     expect(() => ollamaToChat("chat", { model: "m", messages: duplicate })).toThrow(OllamaCodecError);
     expect(() => ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: [{ id: 7, function: { name: "f", arguments: {} } }] }] })).toThrow(OllamaCodecError);
+  });
+  test("bounds aggregate tool-call validation work", () => {
+    const calls = Array.from({ length: MAX_OLLAMA_TOOL_CALLS }, (_, i) => ({ id: `id${i}`, function: { name: "f", arguments: {} } }));
+    expect((ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: calls }] }).messages as any[])[0].tool_calls).toHaveLength(MAX_OLLAMA_TOOL_CALLS);
+    calls.push({ id: "overflow", function: { name: "f", arguments: {} } });
+    expect(() => ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: calls }] })).toThrow("Too many tool calls");
   });
   test("rejects unsupported and malformed shapes with bounded errors", () => {
     for (const body of [
