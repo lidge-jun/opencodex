@@ -294,6 +294,8 @@ export interface ModelCapabilities extends ReasoningCapabilities {
   video?: { processing?: "static" | "agentic" };
   /** Opt in exact first-party DeepSeek models to one-hour image file persistence. */
   deepseekImageFiles?: boolean;
+  /** Images a first-party Mistral Chat request may carry for this model; older ones are pruned. */
+  mistralMaxImages?: number;
 }
 
 /**

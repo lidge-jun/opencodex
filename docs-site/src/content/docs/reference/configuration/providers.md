@@ -33,6 +33,29 @@ have a 60-second upload deadline, a 128 MiB input cap and at most two simultaneo
 provider pacing/concurrency still applies. Oversized text or unconvertible images still need
 compaction; this transport repair does not extend the model's context window.
 
+## Mistral: images per request
+
+Mistral caps how many images one API request may carry, counting every turn of the replayed
+history. Its [vision guide](https://docs.mistral.ai/capabilities/vision/) documents 8, and most
+Mistral vision models refuse a ninth with HTTP 400. Some models accept more: measured caps are
+20 for `deepseek-v4-1-flash-1017` (which answers an opaque HTTP 503, code `3800`, past it), 100
+for `mistral-large-4` and its `mistral-large-4-0` alias, and no refusal through 256 for
+`zai-glm-5-3-flash`. Without pruning, a long
+session with many screenshots fails on every turn while its token context still has room.
+
+For the first-party Chat destination (`https://api.mistral.ai/v1/chat/completions`), opencodex
+keeps the newest images within the cap and replaces older ones with a short text note in the
+outbound request only, for translated Responses turns and native Chat Completions requests
+alike. Client history and compaction stay unchanged; token usage is what Mistral reports for
+the request actually sent, after the replacement. Images promoted from tool results count like
+any other. The measured caps ship as registry
+`modelCapabilities` rows, so a provider renamed but still pointed at the Mistral destination
+keeps them; any other model uses 8. Declare a model's own cap with
+`modelCapabilities: { "mistral-small-2603": { mistralMaxImages: 8 } }` (an integer from 1 to
+1000). The declaration outranks the registry row, and PATCH `null` on the axis removes it.
+Pruning adds no separate upload or persistence. Images retained within the cap
+are sent to Mistral in the outbound request. Other destinations are unchanged.
+
 ## GPT-6.1 Terra
 
 [GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) was released on October 26, 2026 as the successor to GPT-5.6 Terra. `gpt-6.1-terra` is available alongside `gpt-5.6-terra`; no default model or sub-agent roster changes. GitHub Copilot uses Responses; OpenRouter lists `openai/gpt-6.1-terra` with 1,050,000 context and $1.00 input / $5.00 output per 1M tokens.
@@ -1805,7 +1828,7 @@ contracts.
 
 ### Per-model capability declarations
 
-`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`) and `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
+`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`), `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)) and `mistralMaxImages` (integer 1–1000; see [Mistral images per request](#mistral-images-per-request)). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
 
 The raw provider editor and provider API expose this map. POST/PUT replace an explicitly supplied map and reject null entries. PATCH merges individual axes; null clears a map, model, axis or video processing value, while `{}` makes no change. Omitted provider overwrites preserve the existing map. Malformed hand-edited files retain valid independent axes and treat malformed explicit input modalities as text-only, with a diagnostic.
 
