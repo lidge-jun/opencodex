@@ -61,6 +61,7 @@ const CONTEXT_PARAM = new RegExp(`^(?:${CONTEXT_PARAM_NAMES})(?:$|[.[])`, "i");
 const PARAMETER_VALIDATION_CODES: ReadonlySet<string> = new Set(["invalid_value", "invalid_type"]);
 const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
   /\binvalid_(?:value|type)\b/i,
+  /\bunsupported\s+parameter\b/i,
   new RegExp(`['"]param['"]\\s*:\\s*['"](?!(?:${CONTEXT_PARAM_NAMES})(?:['".[]))`, "i"),
   /\binvalid\s+(?:value\s+for\s+)?['"`\u2018\u201c]/i,
   /\binvalid\s+(?:tool|function|parameter|argument|field|value)\b/i,
@@ -73,12 +74,39 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
   return typeof record.param === "string" && record.param.length > 0 && !CONTEXT_PARAM.test(record.param);
 }
 
+const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/i;
+
+/** Negation in the clause that contains a match, from the clause start through its end. */
+function isNegatedAt(text: string, start: number, end: number): boolean {
+  const clauseStart = Math.max(
+    text.lastIndexOf(".", start), text.lastIndexOf(";", start), text.lastIndexOf(",", start),
+  ) + 1;
+  return NEGATED_CONTEXT_VERDICT.test(text.slice(clauseStart, end));
+}
+
+function hasAffirmedVerdict(text: string, verdict: RegExp): boolean {
+  const flags = verdict.flags.includes("g") ? verdict.flags : `${verdict.flags}g`;
+  const globalVerdict = new RegExp(verdict.source, flags);
+  for (const match of text.matchAll(globalVerdict)) {
+    const start = match.index ?? 0;
+    if (!isNegatedAt(text, start, start + match[0].length)) return true;
+  }
+  return false;
+}
+
+function hasAffirmedPhrase(text: string, phrase: string): boolean {
+  for (let start = text.indexOf(phrase); start !== -1; start = text.indexOf(phrase, start + 1)) {
+    if (!isNegatedAt(text, start, start + phrase.length)) return true;
+  }
+  return false;
+}
+
 function isDefiniteContextOverflowMessage(text: string): boolean {
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
-    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
-    || CONTEXT_WINDOW_POSITION_VERDICTS.some(verdict => verdict.test(text))
-    || CONTEXT_WINDOW_TOO_LONG_VERDICTS.some(verdict => verdict.test(text))
+    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => hasAffirmedPhrase(normalized, phrase))
+    || CONTEXT_WINDOW_POSITION_VERDICTS.some(verdict => hasAffirmedVerdict(text, verdict))
+    || CONTEXT_WINDOW_TOO_LONG_VERDICTS.some(verdict => hasAffirmedVerdict(text, verdict))
     || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 
@@ -127,10 +155,17 @@ export function isDefiniteContextOverflow(status: number, message: string, match
     // Some gateways put their complete diagnostic in a string-valued `error` field rather
     // than the usual `{ error: { message } }` envelope. Read only that bounded leaf; a code
     // elsewhere in the JSON still cannot establish an overflow by itself.
-    const errorText = [record.error, response?.error, response?.last_error, record.last_error]
-      .find((candidate): candidate is string => typeof candidate === "string");
-    if (errorText === undefined) return false;
-    text = errorText.trim();
+    const errorTextSource = [
+      { owner: record, value: record.error },
+      ...(response ? [
+        { owner: response, value: response.error },
+        { owner: response, value: response.last_error },
+      ] : []),
+      { owner: record, value: record.last_error },
+    ].find(candidate => typeof candidate.value === "string");
+    if (!errorTextSource || typeof errorTextSource.value !== "string") return false;
+    if (isParameterValidationRecord(errorTextSource.owner)) return false;
+    text = errorTextSource.value.trim();
   }
   return false;
 }
