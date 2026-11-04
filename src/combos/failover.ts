@@ -647,7 +647,7 @@ function isResponseFormatCapabilityRefusal(
 export function comboFailureCooldownScope(
   status: number,
   message: string,
-  options?: { code?: string | null },
+  options?: { code?: string | null; upstreamType?: string | null },
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
   if (isAnthropicBillingFailure(status, message, options?.code)) return "provider";
@@ -671,6 +671,10 @@ export function comboFailureCooldownScope(
   // through the same provider row carries the same key and will fail identically.
   if (status === 401 || status === 402 || status === 403) return "provider";
   if (PROVIDER_SCOPED_FAILURE_CODES.has(code)) return "provider";
+  // An explicitly generic provider error on a 400 can be target-specific (for example a
+  // gateway rejecting a model's translated payload). It may advance the combo, but it says
+  // nothing about target health and must not quarantine the target.
+  if (status === 400 && normalizedFailureCode(options?.upstreamType) === "upstream_error" && !code) return "none";
   return "target";
 }
 
@@ -788,6 +792,7 @@ export function comboFailureDecision(
   message: string,
   options?: {
     code?: string | null;
+    upstreamType?: string | null;
     codexModelRefusal?: CodexAccountModelRefusal;
     failedAdapter?: string;
     /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
@@ -890,6 +895,12 @@ export function comboFailureDecision(
   // 400 / invalid_request_error envelope, so it must precede that stop. Exhaustion prose alone
   // never reaches this arm: a validation error can quote quota wording back (#7625).
   if (hasAccountExhaustionCode(options?.code)) return "hop";
+  // A response explicitly typed as `upstream_error` is the provider's generic failure
+  // envelope, not an assertion that the caller sent malformed input. If it has no structured
+  // code to preserve, let a heterogeneous combo try another target; a real invalid-request
+  // code remains terminal.
+  if (status === 400 && normalizedFailureCode(options?.upstreamType) === "upstream_error"
+    && !normalizedFailureCode(options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

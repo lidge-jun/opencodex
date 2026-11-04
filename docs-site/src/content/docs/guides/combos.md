@@ -173,6 +173,10 @@ each request starts with Anthropic. A retryable Anthropic failure moves that req
 retryable OpenAI failure can move it to Google. A terminal error stops immediately instead of
 trying the remaining targets.
 
+A provider's HTTP 400 response can still be target-specific. When its error explicitly has type
+`upstream_error` and carries no structured error code, the combo can try the next target without
+cooling the failed one. An explicit `invalid_request_error` code remains terminal.
+
 ### Round-robin: smooth weighted batches
 
 `round-robin` uses smooth weighted round-robin. A larger target weight gives that target a larger

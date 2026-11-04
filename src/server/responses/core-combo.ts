@@ -1403,6 +1403,7 @@ export async function executeComboResponses(
       ? "stop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
+        upstreamType: failure.upstreamType,
         codexModelRefusal: failure.codexModelRefusal,
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
@@ -1475,6 +1476,7 @@ export async function executeComboResponses(
     const attemptedTargets = pick.attempted;
     const failureCooldownScope = comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
+      upstreamType: failure.upstreamType,
     });
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;

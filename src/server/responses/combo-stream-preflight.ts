@@ -112,11 +112,14 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const code = typeof error.code === "string"
     ? error.code
     : typeof event.code === "string" ? event.code : null;
+  const upstreamType = typeof error.type === "string"
+    ? error.type
+    : typeof event.type === "string" ? event.type : null;
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
   return comboFailureDecision(status, message, {
-    code, codexModelRefusal: terminalModelRefusal(status, event),
+    code, upstreamType, codexModelRefusal: terminalModelRefusal(status, event),
   }) === "hop";
 }
 
