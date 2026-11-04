@@ -339,6 +339,8 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
+        // Reject invalid authority before lock preparation creates coordination files.
+        readCliConfigForMutation();
         const config = validate(loadInput(path));
         // Do not hold the shared lock while reading stdin. Check live mode and save
         // in the same synchronous transaction; saveConfig reuses this transaction.
