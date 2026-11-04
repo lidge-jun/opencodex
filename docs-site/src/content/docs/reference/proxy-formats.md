@@ -663,7 +663,7 @@ consuming that slot. Data/id/retry/other-event/unknown-first blocks retain their
 even if a later field names error; their error data is outside this normalization scope. Final
 contained errors contain only the error declaration, data fields and terminator; id, retry, comment,
 unknown and repeated event fields after the declaration are omitted, also when data is empty.
-No possible-event prefix is delayed.
+No possible-event prefix is delayed. Split CR/LF delimiters preserve delivery of later events and stream completion.
 
 After an eligible declaration, one error suffix is held up to 1 MiB. Within the bound, a later
 non-error rename replays the original suffix unchanged after the boundary decision; that suffix is

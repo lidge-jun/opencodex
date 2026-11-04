@@ -452,6 +452,8 @@ success/internal row and explicitly lists the ten changed error-response normali
 `tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
 first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
 `tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
+`tests/claude-integration/messages-sse-continuation.test.ts` checks later-event and EOF delivery after
+a suppressed split-CRLF continuation; pull completion depends on actual client output.
 The converter and direct encoder own their separate terminal writers.
 `tests/claude-integration/messages-error-normalization.test.ts` and
 `tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.

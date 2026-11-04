@@ -380,10 +380,7 @@ export function relaySseWithBlockRewrite(
     // Consume a late LF before scanning, so it cannot pair with a new LF to create
     // a phantom empty callback. Any following line ending stays in the input buffer.
     buffer.append(fragment);
-    if (continuation && pendingLineFeedVisible) {
-      enqueueText(controller, "\n");
-      return 1;
-    }
+    if (continuation && pendingLineFeedVisible) return enqueueText(controller, "\n");
     return 0;
   };
 

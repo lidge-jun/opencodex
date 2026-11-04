@@ -248,6 +248,10 @@ CR dispatches without awaiting EOF. A later LF extends that delimiter: byte deli
 framing-only continuation, excluded from event-count limits and the next event's byte cap;
 inspection consumes it without creating an event. The text rewrite relay keeps that continuation
 outside rewrite/drop callbacks and settles injected nonfinal CR delimiters as CRLF.
+The relay counts actual client enqueues, including late LF continuations suppressed by the Messages
+filter; with no emitted chunk it keeps reading through the next event or EOF.
+`tests/responses/sse-payload-rewrite-continuation.test.ts` binds that progress across rewrite, tap
+and standalone filter delivery; endpoint coverage also preserves later event bytes.
 
 `src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
 their charge/release lifecycle while it asks a per-call progressive reader from

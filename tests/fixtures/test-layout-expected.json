@@ -1613,5 +1613,7 @@
   "messages-sse-error-presentation.test.ts": "lib",
   "messages-sse-delivery.test.ts": "claude-integration",
   "messages-sse-baseline-contract.test.ts": "claude-integration",
-  "messages-sse-control-fields.test.ts": "claude-integration"
+  "messages-sse-control-fields.test.ts": "claude-integration",
+  "messages-sse-continuation.test.ts": "claude-integration",
+  "sse-payload-rewrite-continuation.test.ts": "responses"
 }
