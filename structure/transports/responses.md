@@ -1,6 +1,6 @@
 # Responses Transport
 
-Canonical HTTP and WebSocket sends share the [account installation identity contract](../providers/codex-installation-identity.md). The adapter serializes the isolated metadata before WS preparation; Direct and native main retain caller values.
+Optional upload reduction follows [its contract](upload-reduction.md). Canonical HTTP and WebSocket sends share the [account installation identity contract](../providers/codex-installation-identity.md). The adapter serializes the isolated metadata before WS preparation; Direct and native main retain caller values.
 WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
@@ -48,7 +48,7 @@ Explicitly opted-in first-party DeepSeek image replay uses `src/server/responses
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
 Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
 the upstream HTTP-version helper, and core-owned admission-deadline metadata. Provider-local recovery queues share `src/lib/provider-admission-wait.ts`: local waiting retains client cancellation while pausing the upstream header timer, which restarts before dispatch. Server, provider, and WebSocket data types remain type-only edges. Opt-in `codexWsReuseAcrossTurns` (default off) in `src/server/responses/codex-ws-pool.ts` keeps a socket for an account and thread across turns, waits at most 750ms for a busy socket before dialing another, and leaves `x-codex-turn-state` / `x-codex-turn-metadata` on each frame.
-Account refusal observers are injected by the calling transport owner and captured before the physical send; their wrapper forwards replacement pacing admission to the physical dispatch owner. It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
+The shared execution-budget reporter supplies fresh physical-send admission for incremental cache-miss recovery. Account refusal observers are injected by the calling transport owner and captured before the physical send; their wrapper forwards replacement pacing admission to the physical dispatch owner. It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 
 `OCX_FRESH_CONNECTION_HOSTS` accepts comma-separated hostnames whose outbound HTTP sends bypass

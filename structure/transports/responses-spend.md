@@ -108,7 +108,15 @@ physical-dispatch receipt; when it is active the shared physical-send reporter k
 a send is never charged by both. Other callers keep early settlement only when enforcement is inactive;
 enforced permits stay refundable until execution.
 For a Codex WebSocket request, the receipt runs before the frame is sent and at most once across
-the WS attempt and its HTTP fallback. If WS send then fails and HTTP refuses before dispatch, that
+the WS attempt and its unsent HTTP fallback. Incremental cache-miss recovery captures the shared
+`src/lib/request-execution-budget.ts` reporter, settles the delta's deferred report, then reserves
+a new transient permit. WS and oversized HTTP recovery confirm that permit at physical dispatch;
+the outer helper subtracts the early report. Its live remaining allowance includes deferred
+reports and credits only its own unsettled prepaid booking. Both spend modes consult that
+shared remainder before another transient or reset retry. A failed recovery cannot fund an
+extra send, and exhaustion preserves the upstream response or reset replay refusal.
+Incremental Combo sends use the reporter to settle their exact initial booking and recovery.
+If WS send then fails and HTTP refuses before dispatch, that
 accepted booking remains charged even though no physical send occurred.
 The existing `refundableAdapterDispatchBudget` view stays available to direct Antigravity search;
 its legacy already-settled-hop replacement still requires a fresh admitted reservation.

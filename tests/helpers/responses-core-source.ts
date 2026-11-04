@@ -21,6 +21,9 @@ export const RESPONSES_CORE_MODULES = [
   "native-steering-policy.ts",
   "native-steering-replay.ts",
   "codex-ws-correlation.ts",
+  // Reached from native dispatch: acknowledged-prefix state and its physical-send accounting.
+  "codex-ws-incremental.ts",
+  "codex-ws-send-accounting.ts",
   "core-lifetime.ts",
   "core-replay.ts",
   "core-errors.ts",

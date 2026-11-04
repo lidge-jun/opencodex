@@ -1,3 +1,4 @@
+import { codexWsIncrementalUploadEnabled, CODEX_WS_INCREMENTAL_IDLE_MS, CODEX_WS_INCREMENTAL_MAX_AGE_MS } from "./codex-ws-incremental";
 import { createHmac, randomBytes } from "node:crypto";
 import { codexWsReuseAcrossTurnsEnabled } from "../../config/codex-ws-reuse-setting";
 import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
@@ -29,8 +30,13 @@ function digest(input: unknown): string {
   return createHmac("sha256", processKey).update(JSON.stringify(input)).digest("hex");
 }
 
-/** Identity comes from the selected outgoing request, never a model label or caller hint. */
-export function codexWsReuseIdentity(url: string, headers: Record<string, string>, frameText: string, proxy?: string, dialUrl?: string): CodexWsReuseIdentity | null {
+/**
+ * Identity comes from the selected outgoing request, never a model label or caller hint.
+ * `caller` is the trusted admitted caller (see codexWsCallerKey), never client-supplied: it is
+ * part of the scope, so differently admitted callers never share, queue for, or retire each
+ * other's sockets even on one upstream credential, account and thread.
+ */
+export function codexWsReuseIdentity(url: string, headers: Record<string, string>, frameText: string, proxy?: string, dialUrl?: string, caller?: string): CodexWsReuseIdentity | null {
   if (url !== CODEX_RESPONSES_HTTP_URL) return null;
   let body: unknown;
   try { body = JSON.parse(frameText); } catch { return null; }
@@ -55,7 +61,7 @@ export function codexWsReuseIdentity(url: string, headers: Record<string, string
   if (immutable.length > 128 || immutable.some(([, field]) => !value(field))
     || immutable.reduce((bytes, [name, field]) => bytes + Buffer.byteLength(name) + Buffer.byteLength(field), 0) > 32 * 1024) return null;
   const reuseAcrossTurns = codexWsReuseAcrossTurnsEnabled();
-  const scope = digest(reuseAcrossTurns ? [url, account, thread] : [url, account, thread, turn]);
+  const scope = digest(reuseAcrossTurns ? [url, account, thread, caller ?? null] : [url, account, thread, turn, caller ?? null]);
   const lite = metadata.ws_request_header_x_openai_internal_codex_responses_lite;
   if (lite !== undefined && lite !== "true" && lite !== "false") return null;
   // `dialUrl` is the socket destination after plugin rewrites; absent means the canonical one.
@@ -79,7 +85,10 @@ export class CodexWsPool {
   private readonly idleMs: number;
   private readonly maxAgeMs: number;
   private readonly waitMs: number;
+  private readonly customIdle: boolean;
+  private readonly customAge: boolean;
   constructor(options: PoolOptions = {}) {
+    this.customIdle = options.idleMs !== undefined; this.customAge = options.maxAgeMs !== undefined;
     this.now = options.now ?? Date.now;
     this.maxSessions = options.maxSessions ?? CODEX_WS_POOL_MAX_SESSIONS;
     this.idleMs = options.idleMs ?? CODEX_WS_POOL_IDLE_MS;
@@ -194,7 +203,7 @@ export class CodexWsPool {
         return;
       }
       entry.idleAt = this.now();
-      if (entry.retired || entry.idleAt - entry.createdAt >= this.maxAgeMs) this.remove(entry);
+      if (entry.retired || entry.idleAt - entry.createdAt >= this.ageLimit()) this.remove(entry);
     }
     this.arm();
   }
@@ -209,10 +218,13 @@ export class CodexWsPool {
     const now = this.now();
     for (const entry of this.entries.values()) {
       if (!entry.session.busy && (entry.session.closed || entry.retired
-        || now - entry.idleAt >= this.idleMs || now - entry.createdAt >= this.maxAgeMs)) this.remove(entry);
+        || now - entry.idleAt >= this.idleLimit() || now - entry.createdAt >= this.ageLimit())) this.remove(entry);
     }
     this.arm();
   }
+
+  private idleLimit(): number { return !this.customIdle && codexWsIncrementalUploadEnabled() ? CODEX_WS_INCREMENTAL_IDLE_MS : this.idleMs; }
+  private ageLimit(): number { return !this.customAge && codexWsIncrementalUploadEnabled() ? CODEX_WS_INCREMENTAL_MAX_AGE_MS : this.maxAgeMs; }
 
   private arm(): void {
     clearTimeout(this.timer);
@@ -224,7 +236,7 @@ export class CodexWsPool {
     }
     let deadline = Infinity;
     for (const entry of this.entries.values()) if (!entry.session.busy) {
-      deadline = Math.min(deadline, entry.idleAt + this.idleMs, entry.createdAt + this.maxAgeMs);
+      deadline = Math.min(deadline, entry.idleAt + this.idleLimit(), entry.createdAt + this.ageLimit());
     }
     if (!Number.isFinite(deadline)) return;
     this.timer = setTimeout(() => { this.timer = undefined; this.sweep(); }, Math.max(1, deadline - this.now()));
