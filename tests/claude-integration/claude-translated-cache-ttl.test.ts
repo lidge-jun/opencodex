@@ -29,6 +29,19 @@ afterAll(() => {
   removeTreeWithRetry(home);
 });
 
+function sseReply(): Response {
+  const frames = [
+    { type: "message_start", message: { id: "msg_x", type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
+  return new Response(frames.map(f => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } });
+}
+
 async function wireTtls(
   callerTtl: "1h" | undefined,
   cacheRetention?: "short" | "long",
@@ -39,16 +52,7 @@ async function wireTtls(
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
     wires.push(String(init?.body));
-    const frames = [
-      { type: "message_start", message: { id: "msg_x", type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
-      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
-      { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
-      { type: "message_stop" },
-    ];
-    return new Response(frames.map(f => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join(""),
-      { headers: { "content-type": "text/event-stream" } });
+    return sseReply();
   }) as typeof globalThis.fetch;
   const config = {
     port: 0, defaultProvider: "anth",
@@ -151,5 +155,48 @@ describe("callerCacheRetention walks every block container", () => {
       tools: [{ name: "T", input_schema: { type: "object", properties: { cache_control: h1 } } }],
       messages: [{ role: "assistant", content: [{ type: "tool_use", id: "t", name: "T", input: { cache_control: h1 } }] }],
     })).toBeUndefined();
+  });
+});
+
+describe("translated Claude lane system breakpoint", () => {
+  // Claude Code marks its stable system block and ends with a per-turn env block. The single
+  // joined system block put the breakpoint on the env bytes, so no turn could read the cache.
+  async function wireSystem(env: string): Promise<unknown[]> {
+    const wires: string[] = [];
+    const fetch = (async (_input: unknown, init?: RequestInit) => {
+      wires.push(String(init?.body));
+      return sseReply();
+    }) as typeof globalThis.fetch;
+    const config = {
+      port: 0, defaultProvider: "anth", claudeCode: { nativePassthrough: false },
+      providers: { anth: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch } },
+    } as unknown as OcxConfig;
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 64,
+        system: [
+          { type: "text", text: "You are Claude Code." },
+          { type: "text", text: "Stable instructions.", cache_control: { type: "ephemeral" } },
+          { type: "text", text: env },
+        ],
+        messages: [{ role: "user", content: "Hi." }],
+      }),
+    }), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(wires).toHaveLength(1);
+    return JSON.parse(wires[0]!).system;
+  }
+
+  test("the breakpoint ends at the caller's cached block, before the per-turn tail", async () => {
+    const first = await wireSystem("<env>Today: 2026-11-03</env>");
+    const second = await wireSystem("<env>Today: 2026-11-04</env>");
+    const cached = (system: unknown[]) => system.filter(b => (b as { cache_control?: unknown }).cache_control);
+    expect(cached(first)).toHaveLength(1);
+    expect(cached(first)).toEqual(cached(second));
+    expect(JSON.stringify(cached(first))).not.toContain("<env>");
+    expect(JSON.stringify(first.at(-1))).toContain("2026-11-03");
   });
 });
