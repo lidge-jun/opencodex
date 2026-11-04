@@ -87,7 +87,7 @@ import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attemp
 import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
-import { workflowRefusalResponse } from "./workflow-refusal";
+import { workflowRefusalResponse, workflowSendCeilingRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
 import { protocolTraceSuppressed } from "../protocols/trace";
@@ -212,6 +212,8 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
    */
   sendBudget?: RequestExecutionBudget;
   comboDispatchPermit?: SingleUseDispatchPermit;
+  /** The shared observer records a Combo child's refusal on its parent's context. */
+  workflowRefusalContext?: Pick<RequestLogContext, "localTerminalReason">;
   /** Replaces the request-relative first-output mark; a combo child records its own. */
   onFirstOutput?: () => void;
   /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
@@ -259,6 +261,7 @@ export function createNativeChatComboSource(input: {
   requestedModel: string;
   requestedStream: boolean;
   translatorBudget: TranslatorBudget;
+  workflowRefusalContext?: Pick<RequestLogContext, "localTerminalReason">;
   /** The request's data-plane admission; native children inherit it for replay scope. */
   admission?: DataPlaneAdmission;
 }): ComboProtocolSource {
@@ -277,6 +280,7 @@ export function createNativeChatComboSource(input: {
       finishLog: child.finishLog,
       sendBudget: child.sendBudget,
       comboDispatchPermit: child.comboDispatchPermit,
+      workflowRefusalContext: input.workflowRefusalContext,
       onFirstOutput: child.onFirstOutput,
       ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
       ...(input.admission ? { admission: input.admission } : {}),
@@ -700,6 +704,9 @@ export async function runNativeChatAttempt(
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
+      const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined,
+        execution.workflowRefusalContext);
+      if (refusal) { finishLog(429); return refusal; }
       // A decision this process made, answered as the Responses path answers it: 429, not 502.
       return failLocal(429, sendError.message, SEND_BUDGET_EXHAUSTED_CODE, SEND_BUDGET_EXHAUSTED_CODE);
     }

@@ -14,6 +14,8 @@ import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
 import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
+import { isProxyError } from "../lib/client-error-body";
+import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -409,7 +411,10 @@ export async function sendResponseToWebSocket(
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     if (!isCurrent()) return;
-    sendJsonFrame(ws, buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers));
+    const frame = buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers);
+    const refusal = isProxyError(response) ? response.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER) : null;
+    if (refusal) (frame.headers as Record<string, string>)[WORKFLOW_LOCAL_REFUSAL_HEADER] = refusal;
+    sendJsonFrame(ws, frame);
     return;
   }
 

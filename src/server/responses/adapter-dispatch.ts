@@ -123,7 +123,7 @@ import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
-import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+import { unboundPoolSpendRefusalResponse, workflowSendCeilingRefusalResponse } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -583,7 +583,7 @@ export async function prepareAdapterExchange(
     // blaming the provider makes the caller send the whole turn again -- the amplification this
     // budget exists to stop. The passthrough path has answered 429 here since #4546.
     if (err instanceof SendBudgetExhaustedError) {
-      return unboundPoolSpendRefusalResponse(logCtx)
+      return unboundPoolSpendRefusalResponse(logCtx) ?? workflowSendCeilingRefusalResponse(logCtx, sendBudgetState.workflowRootId)
         ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message));
     }
     const msg = describeUpstreamConnectFailure(err, connectMs);
@@ -872,7 +872,7 @@ export async function prepareAdapterExchange(
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
         if (err instanceof SendBudgetExhaustedError) {
-          return { failed: unboundPoolSpendRefusalResponse(logCtx)
+          return { failed: unboundPoolSpendRefusalResponse(logCtx) ?? workflowSendCeilingRefusalResponse(logCtx, sendBudgetState.workflowRootId)
             ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message)) };
         }
         const msg = describeUpstreamConnectFailure(err, connectMs);

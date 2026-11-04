@@ -290,8 +290,8 @@ export function workflowDenialSummary(
  * It exists because the body cannot carry it: `classifyError` rewrites every 429 to
  * `rate_limit_error` / `rate_limit_exceeded`, so a local refusal and a provider rate limit are
  * byte-identical in shape. Changing that classification would change how every client retries,
- * so the name goes beside the body instead. No upstream sets this header, which is precisely
- * what makes its presence conclusive.
+ * so the name goes beside the body instead. Response projections require the in-process proxy
+ * marker before carrying this header, so an upstream response cannot forge local provenance.
  */
 export const WORKFLOW_LOCAL_REFUSAL_HEADER = "x-opencodex-local-refusal";
 

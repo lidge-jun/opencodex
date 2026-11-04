@@ -11,9 +11,16 @@ spent budget tells the client. Dispatch and retry behavior is in
 reporter retries, concurrent requests and adapter-owned permits share the root's existing window.
 Unused dispatch permits consume no root sends, and cleanup cannot refund a claimed physical start.
 Observe-only reports reconcile those starts once; already-sent legacy reports remain recorded.
-Codex's bounded eight-attempt gated-model recovery may exceed its per-request allowance, but every
-retry still claims the shared root ceiling before replacing the previous upstream response.
+The confirmed same-account gated-model ladder owns one non-renewable allowance of seven retries
+over the shared ledger. Each rung obtains fresh normal-capacity durable spend admission and a
+producer held across its fetch; root and token refusals retain the last upstream response.
+Ordinary reservation refunds do not replenish this allowance. The exception does not increase
+the ordinary parent's send or target-change allowances.
 `tests/responses/responses-workflow-send-ceiling.test.ts` covers both spend modes and retry helpers.
+Every new inbound WebSocket inference turn admits its root before dispatch and attaches the workflow
+lease to its active turn. Terminal output or cancellation releases that lease; sequential frames
+retain the same physical-send window. `tests/responses/responses-websocket-workflow-ceiling.test.ts`
+starts with an unseen root and verifies its ceiling and lease cleanup in both spend modes.
 
 ## Prepaid initial sends
 

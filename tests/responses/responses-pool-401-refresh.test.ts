@@ -12,7 +12,9 @@ import { prepareResponsesRequest } from "../../src/server/responses/request-prep
 import { handleComboResponses } from "../../src/server/responses/core";
 import type { ResponsesAdmissionState } from "../../src/server/responses/core-options";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createBoundedSameTargetRecovery, createRequestExecutionBudget, deriveRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { admitWorkflowTurn, DEFAULT_WORKFLOW_BUDGET_POLICY, resetWorkflowBudgetsForTest, workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
 import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
 import {
@@ -1578,14 +1580,12 @@ describe("Codex account retries share the workflow send ceiling", () => {
             }),
           },
         );
-
-
         expect(response.status).toBe(400);
         expect(await response.json()).toEqual(responseBody(limit));
         expect(harness.sends).toEqual(Array(limit).fill("Bearer rejected-access"));
         expect(harness.refreshes).toEqual([]);
         expect(rootSends()).toBe(limit);
-        if (budget && limit <= 2) expect(budget.used).toBe(1);
+        if (budget) expect(budget.used).toBe(limit);
       });
     }
 
@@ -1620,6 +1620,112 @@ describe("Codex account retries share the workflow send ceiling", () => {
         if (budget) expect(budget.used).toBe(limit);
       });
     }
+  }
+
+  for (const [maxTokens, rootLimit] of [[500, 16], [1500, 16], [4000, 16], [4000, 2]] as const) {
+    test(`gated-model recovery reserves durable spend before each send (ceiling=${maxTokens}, root=${rootLimit})`, async () => {
+      const rootSends = admitRoot(rootLimit);
+      const lines: string[] = [];
+      const journal: SpendJournal = {
+        read: () => [...lines], append: line => { lines.push(line); },
+        rewrite: next => { lines.splice(0, lines.length, ...next); },
+      };
+      const ledger = createSpendReservationLedger({ journal,
+        policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens } },
+      });
+      const logCtx = { model: "", provider: "openai", spendPoolId: "openai",
+        spendInputEstimateTokens: 100, spendOutputCeilingTokens: 400 } as RequestLogContext;
+      const tracker = createRequestSpendTracker(logCtx, rootId, ledger);
+      const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+      const expectedSends = Math.min(maxTokens / 500, rootLimit);
+      const responseBody = (sendNumber: number) => ({
+        detail: `The '${gatedModel}' model is not supported when using Codex with a ChatGPT account.`,
+        send_number: sendNumber,
+      });
+      const harness = installHarness({
+        responseForSend: (_authorization, sendNumber) => Response.json(responseBody(sendNumber), { status: 400 }),
+      });
+      try {
+        const response = await handleResponses(
+          request("/v1/responses", { model: gatedModel, headers: { "x-codex-parent-thread-id": rootId } }),
+          config(), logCtx, {
+            sendBudget: budget,
+            resolveCodexModelEntitlements: async () => ({
+              modelsByAccount: new Map([[ACCOUNT_ID, new Set([gatedModel])]]),
+              confirmedAccountIds: new Set([ACCOUNT_ID]), credentialIdentities: new Map(),
+            }),
+          },
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual(responseBody(expectedSends));
+        expect(harness.sends).toEqual(Array(expectedSends).fill("Bearer rejected-access"));
+        expect(harness.refreshes).toEqual([]);
+        expect(rootSends()).toBe(expectedSends);
+        expect(budget.used).toBe(expectedSends);
+        expect(budget.physicalStarted).toBe(expectedSends);
+        expect(budget.physicalLimit).toBe(4);
+        expect(tracker.refusals).toBe(expectedSends < 8 ? 1 : 0);
+        expect(ledger.snapshot("root", rootId)?.reserved).toBe(expectedSends * 500);
+        const records = lines.map(line => JSON.parse(line));
+        expect(records.filter(record => record.kind === "dispatch")).toHaveLength(expectedSends);
+
+        if (expectedSends === 8) {
+          // The exception is consumed once across derived views. It cannot replenish itself
+          // or lend its expanded physical allowance to an ordinary alternate-account ladder.
+          const sameTargetKey = `openai|${gatedModel}`;
+          const derived = deriveRequestExecutionBudget(budget, budget.policy);
+          const recovery = createBoundedSameTargetRecovery(budget, sameTargetKey, 7);
+          expect(createBoundedSameTargetRecovery(derived, sameTargetKey, 7)).toBe(recovery);
+          expect(recovery.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
+          expect(createBoundedSameTargetRecovery(derived, "other|model", 7).reserve())
+            .toEqual({ allowed: false, reason: "target-transition-exhausted" });
+          expect(budget.reserveDispatch({ sendClass: "account-failover", targetKey: "other|model" }).allowed).toBe(false);
+          expect(budget.claimPhysicalSend?.()).toBeUndefined();
+          expect(budget.used).toBe(8);
+          expect(rootSends()).toBe(8);
+        }
+      } finally {
+        tracker.settle(undefined);
+      }
+      expect(ledger.snapshot("root", rootId)?.reserved).toBe(0);
+      expect(ledger.snapshot("root", rootId)?.unresolved).toBe(expectedSends * 500);
+    });
+  }
+
+  test("an ordinary reservation refund cannot enlarge the same-target recovery grant", () => {
+    const budget = createRequestExecutionBudget();
+    const ordinary = budget.reserveDispatch({ sendClass: "initial", targetKey: "openai|model" });
+    if (!ordinary.allowed) throw new Error("ordinary fixture reservation refused");
+    const recovery = createBoundedSameTargetRecovery(budget, "openai|model", 1);
+    ordinary.permit.release();
+    const retry = recovery.reserve();
+    if (!retry.allowed) throw new Error("recovery fixture reservation refused");
+    expect(retry.permit.use()).toBe(true);
+    expect(budget.used).toBe(1);
+    expect(recovery.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
+  });
+
+  for (const observed of [false, true]) {
+    test(`a foreign budget cannot mint a second recovery grant through a derived view (observed=${observed})`, () => {
+      const foreign = { ...createRequestExecutionBudget(), used: 1, workflowCountObserved: observed };
+      const first = createBoundedSameTargetRecovery(foreign, "openai|model", 1);
+      const derived = deriveRequestExecutionBudget(foreign, foreign.policy);
+      const again = createBoundedSameTargetRecovery(derived, "openai|model", 7);
+      if (observed) {
+        // The bridge cannot carry a foreign observer. It cannot turn that missing owner
+        // into permission to send without durable/root accounting.
+        expect(first.reserve()).toEqual({ allowed: false, reason: "spend-exhausted" });
+        expect(again.reserve()).toEqual({ allowed: false, reason: "spend-exhausted" });
+        expect(foreign.used).toBe(1);
+      } else {
+        expect(again).toBe(first);
+        const decision = first.reserve();
+        if (!decision.allowed) throw new Error("legacy recovery refused");
+        expect(decision.permit.use()).toBe(true);
+        expect(foreign.used).toBe(2);
+        expect(again.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
+      }
+    });
   }
 
   test("a failed legacy account permit releases its request reservation without claiming a root send", async () => {

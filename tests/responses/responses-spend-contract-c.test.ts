@@ -97,6 +97,11 @@ for (const enforced of [false, true]) for (const status of [503, 429]) {
         } else {
           expect(response.status, body).toBe(429);
           expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+          expect(JSON.parse(body).error.code).toBe("rate_limit_exceeded");
+          if (status === 429) {
+            expect(body).toContain("no additional provider request was sent");
+            expect(body).not.toContain("no provider was contacted");
+          } else expect(body).toContain("no provider was contacted");
         }
       }
       expect(sends).toBe(2);

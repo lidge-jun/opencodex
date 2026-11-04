@@ -128,7 +128,7 @@ import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ow
 import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
-import { workflowRefusalResponse } from "./workflow-refusal";
+import { workflowRefusalResponse, workflowSendCeilingRefusalResponse } from "./workflow-refusal";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { admissionModelDeniedResponse, projectAdmissionModelDeniedLog, type AdmissionModelScope } from "./admission-model-scope";
 import { nativeMessagesToolScopeDenial } from "./messages-native-scope";
@@ -842,7 +842,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
-    if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
+    if (sendError instanceof SendBudgetExhaustedError) {
+      const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined);
+      if (refusal) { finishLog(429); return refusal; }
+      return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
+    }
     if (sendError instanceof NativeMessagesSpendRefusal) {
       const refusal = workflowRefusalResponse(logCtx.errorCode === "workflow_sends_exhausted"
         ? "workflow-sends-exhausted" : "workflow-spend-exhausted", logCtx);

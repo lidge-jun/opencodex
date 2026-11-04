@@ -254,6 +254,8 @@ interface SharedSendLedger {
   spent: number;
   physicalStarted: number;
   physicalLimit?: number;
+  /** Foreign legacy views retain one bounded recovery owner across derived bridges. */
+  recoveryOwner?: RequestExecutionBudget;
   pendingExternalSends: Set<object>;
   /**
    * Spend one of this logical request's replacements for an ambiguous failure. Beside `spent`
@@ -270,6 +272,18 @@ interface SharedSendLedger {
 }
 
 const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>();
+interface SameTargetRecoveryScope {
+  targetKey: string;
+  maxAdditionalSends: number;
+  physicalLimit: number;
+  reservationPrefix: string;
+  reservationSequence: number;
+}
+export interface BoundedSameTargetRecovery {
+  readonly workflowCountObserved: boolean;
+  reserve(): DispatchDecision;
+}
+const sameTargetRecoveries = new WeakMap<object, { targetKey: string; recovery: BoundedSameTargetRecovery }>();
 /** Whether physical admission owns this budget's workflow accounting. */
 export function hasWorkflowSendObserver(budget: TransientSendBudget): boolean {
   return (budget as RequestExecutionBudget).workflowCountObserved === true;
@@ -426,17 +440,19 @@ function createRequestExecutionBudgetWithLedger(
   policy: RequestExecutionBudgetPolicy,
   logicalRequestId: string | undefined,
   counter: SharedSendLedger,
+  recovery?: SameTargetRecoveryScope,
 ): RequestExecutionBudget {
   const observer = counter.observer;
   let reserveSpent = false;
   let alternateTargetSends = 0;
   let targetTransitions = 0;
-  let lastTargetKey: string | undefined;
+  let recoverySends = 0;
+  let lastTargetKey: string | undefined = recovery?.targetKey;
   const targetReservations: Array<{ targetKey: string }> = [];
 
   const budget: RequestExecutionBudget = {
     get physicalStarted(): number { return counter.physicalStarted; },
-    get physicalLimit(): number | undefined { return counter.physicalLimit; },
+    get physicalLimit(): number | undefined { return recovery?.physicalLimit ?? counter.physicalLimit; },
     get spendEnforced(): boolean { return observer?.enforced === true; },
     get workflowCountObserved(): boolean { return observer?.beforePhysicalSend !== undefined; },
     get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
@@ -454,8 +470,9 @@ function createRequestExecutionBudgetWithLedger(
     },
     claimPhysicalSend(): number | undefined {
       budget.startRequest?.();
-      if (observer?.enforced !== true || counter.physicalLimit === undefined) return undefined;
-      if (counter.physicalStarted >= counter.physicalLimit || !budget.claimWorkflowSend!()) return undefined;
+      const limit = recovery?.physicalLimit ?? counter.physicalLimit;
+      if (observer?.enforced !== true || limit === undefined) return undefined;
+      if (counter.physicalStarted >= limit || !budget.claimWorkflowSend!()) return undefined;
       return ++counter.physicalStarted;
     },
     get used(): number { return counter.spent; },
@@ -492,6 +509,10 @@ function createRequestExecutionBudgetWithLedger(
     },
     get ambiguousResendSpent(): boolean { return counter.ambiguousResendSpent; },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
+      if (recovery && (intent.targetKey !== recovery.targetKey || intent.sendClass !== "transient")) {
+        return { allowed: false, reason: "target-transition-exhausted" };
+      }
+      if (recovery && recoverySends >= recovery.maxAdditionalSends) return { allowed: false, reason: "total-exhausted" };
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
       if (counter.spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
 
@@ -523,9 +544,14 @@ function createRequestExecutionBudgetWithLedger(
       // Consulted last, because it is the only bound here that WRITES. A ledger entry booked
       // for a dispatch a cheaper check above would have refused is spend this request never
       // makes, and it would hold those tokens against the scope until retention expired.
-      budget.startRequest?.({ targetKey: intent.targetKey });
+      // Extra same-target recovery is outside the request's original physical allowance.
+      // Each rung therefore needs fresh normal-capacity spend admission; it cannot reuse
+      // an earlier seed to turn a request-total exception into a token-ceiling exception.
+      const spendTargetKey = recovery
+        ? `${recovery.reservationPrefix}:${++recovery.reservationSequence}` : intent.targetKey;
+      budget.startRequest?.({ targetKey: spendTargetKey });
       let spendProof: SpendReservationProof | undefined;
-      if (observer && !observer.charge({ targetKey: intent.targetKey, deferDispatch: true, onReserved: proof => { spendProof = proof; } })) {
+      if (observer && !observer.charge({ targetKey: spendTargetKey, deferDispatch: true, onReserved: proof => { spendProof = proof; } })) {
         return { allowed: false, reason: "spend-exhausted" };
       }
 
@@ -534,6 +560,7 @@ function createRequestExecutionBudgetWithLedger(
       // one remaining send admitted two physical sends, which is the per-request multiplication
       // this budget exists to stop. Everything is booked now; `release()` is the way back.
       counter.spent += 1;
+      if (recovery) recoverySends += 1;
       const receipt = { targetKey: intent.targetKey };
       targetReservations.push(receipt);
       if (intent.countedExternally === true) counter.pendingExternalSends.add(receipt);
@@ -547,7 +574,7 @@ function createRequestExecutionBudgetWithLedger(
       let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
         if (observer?.enforced !== true) return budget.claimWorkflowSend!();
-        const seed = observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof);
+        const seed = observer.ensureSeed?.({ targetKey: spendTargetKey }, spendProof);
         if (!seed) return false;
         const ordinal = budget.claimPhysicalSend?.();
         if (ordinal === undefined) return false;
@@ -598,6 +625,7 @@ function createRequestExecutionBudgetWithLedger(
             if (!counter.pendingExternalSends.delete(receipt)) return;
           }
           counter.spent -= 1;
+          if (recovery) recoverySends -= 1;
           observer?.refund(spendProof ?? null);
           if (drawsReserve) reserveSpent = false;
           if (chargesAlternateTarget) alternateTargetSends -= 1;
@@ -662,6 +690,48 @@ export function deriveRequestExecutionBudget(
 }
 
 /**
+ * A validated same-target recovery may own a bounded exception to the request send total.
+ * It shares all spend/root accounting, but never raises the parent's ordinary allowances.
+ * The first grant is fixed for this shared ledger; another target or caller cannot replenish it.
+ */
+export function createBoundedSameTargetRecovery(
+  parent: RequestExecutionBudget,
+  targetKey: string,
+  maxAdditionalSends: number,
+): BoundedSameTargetRecovery {
+  const counter = sharedSendLedgers.get(parent);
+  const owner = counter?.recoveryOwner ?? counter ?? parent;
+  const existing = sameTargetRecoveries.get(owner);
+  const refused = (reason: BudgetDenial): BoundedSameTargetRecovery => ({
+    workflowCountObserved: false, reserve: () => ({ allowed: false, reason }),
+  });
+  if (existing) return existing.targetKey === targetKey ? existing.recovery : refused("target-transition-exhausted");
+  // A foreign budget cannot transfer a private durable-spend observer to this exception,
+  // including when it reaches this owner through a derived legacy bridge.
+  const foreignParent = counter?.recoveryOwner ?? (!counter ? parent : undefined);
+  if (foreignParent && (foreignParent.spendEnforced || hasWorkflowSendObserver(foreignParent))) return refused("spend-exhausted");
+  if (!Number.isSafeInteger(maxAdditionalSends) || maxAdditionalSends <= 0
+    || !Number.isSafeInteger(parent.used + maxAdditionalSends)) return refused("total-exhausted");
+  // Freeze the ordinary limit through its original owner before constructing the exception.
+  parent.startRequest?.();
+  const shared = counter ?? ledgerFor(parent);
+  const allowance = parent.used + maxAdditionalSends;
+  const budget = createRequestExecutionBudgetWithLedger({
+    maxTotalModelSends: allowance, baseSendAllowance: allowance, finalRecoveryAllowance: 0,
+    maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+  }, parent.logicalRequestId, shared, {
+    targetKey, maxAdditionalSends, physicalLimit: shared.physicalStarted + maxAdditionalSends,
+    reservationPrefix: `${targetKey}|same-target-recovery:${++logicalRequestSeq}`, reservationSequence: 0,
+  });
+  const recovery: BoundedSameTargetRecovery = {
+    get workflowCountObserved() { return hasWorkflowSendObserver(budget); },
+    reserve: () => budget.reserveDispatch({ sendClass: "transient", targetKey }),
+  };
+  sameTargetRecoveries.set(owner, { targetKey, recovery });
+  return recovery;
+}
+
+/**
  * A budget that did not come from this factory still honors the public `used` contract, so
  * bridge onto it rather than failing the request. `isRequestExecutionBudget` is a shape test,
  * so a stub can reach here; turning that into a thrown error would convert a routing request
@@ -690,6 +760,7 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
   return {
     get spent(): number { return parent.used; },
     set spent(next: number) { parent.used = next; },
+    recoveryOwner: parent,
     pendingExternalSends,
     physicalStarted: 0,
     // Asked of the parent rather than counted here. A local counter is a SECOND grant: two

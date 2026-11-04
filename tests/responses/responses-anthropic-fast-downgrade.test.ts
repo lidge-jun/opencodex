@@ -320,12 +320,61 @@ for (const limit of [1, 2]) test(`a legacy request budget obeys the root ceiling
   if (admitted?.admitted) admitted.lease.release();
   const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
   const budget = createRequestExecutionBudget();
-  const response = await handleResponses(request(rootId), config(), { model: "", provider: "" }, { sendBudget: budget });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(rootId), config(), logCtx, { sendBudget: budget });
   expect(response.status).toBe(limit === 1 ? 429 : 200);
-  await response.text();
+  const body = await response.json();
+  if (limit === 1) {
+    expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+    expect(body.error.code).toBe("rate_limit_exceeded");
+    expect(logCtx.errorCode).toBe("workflow_sends_exhausted");
+  } else expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
   expect(sends).toHaveLength(limit);
   expect(workflowBudgetSnapshot(rootId, policy)?.sends).toBe(limit);
   expect(budget.used).toBe(limit);
+});
+
+test("a root exhausted during initial admission has the workflow refusal header and code", async () => {
+  const rootId = "fast-initial-root-race";
+  const policy = { ...DEFAULT_WORKFLOW_BUDGET_POLICY, maxPhysicalSends: 1 };
+  bindWorkflowBudgetConfig({ workflowBudget: { maxPhysicalSends: 1 } });
+  const admitted = admitWorkflowTurn(rootId, "interactive", policy);
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(() => success());
+  let claimedByOtherChild = false;
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    startRequest: () => {
+      if (!claimedByOtherChild) { chargeWorkflowSends(rootId, 1); claimedByOtherChild = true; }
+    }, charge: () => true, refund: () => {},
+  });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(rootId), config(), logCtx, { sendBudget: budget });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+  expect((await response.json()).error.code).toBe("rate_limit_exceeded");
+  expect(logCtx.errorCode).toBe("workflow_sends_exhausted");
+  expect(sends).toHaveLength(0);
+  expect(budget.used).toBe(0);
+  expect(workflowBudgetSnapshot(rootId, policy)?.sends).toBe(1);
+});
+
+test("request-local exhaustion retains its own code while the workflow still has allowance", async () => {
+  const rootId = "fast-request-only-refusal";
+  const admitted = admitWorkflowTurn(rootId, "interactive");
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(() => success());
+  const configured = config();
+  configured.providers["anthropic-apikey"]!.retryOnReset = { replacements: 1 };
+  const budget = createRequestExecutionBudget({ maxTotalModelSends: 0, baseSendAllowance: 0,
+    finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(rootId), configured, logCtx, { sendBudget: budget });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+  expect((await response.json()).error.code).toBe("request_send_budget_exhausted");
+  expect(logCtx.errorCode).not.toBe("workflow_sends_exhausted");
+  expect(sends).toHaveLength(0);
+  expect(workflowBudgetSnapshot(rootId)?.sends).toBe(0);
 });
 
 function legacyAdmissionFixture() {
