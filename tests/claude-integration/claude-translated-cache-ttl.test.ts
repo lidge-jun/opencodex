@@ -196,6 +196,7 @@ describe("translated Claude lane system breakpoint", () => {
     const cached = (system: unknown[]) => system.filter(b => (b as { cache_control?: unknown }).cache_control);
     expect(cached(first)).toHaveLength(1);
     expect(cached(first)).toEqual(cached(second));
+    expect(JSON.stringify(cached(first))).toContain("Stable instructions.");
     expect(JSON.stringify(cached(first))).not.toContain("<env>");
     expect(JSON.stringify(first.at(-1))).toContain("2026-11-03");
   });
