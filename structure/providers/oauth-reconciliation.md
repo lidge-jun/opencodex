@@ -15,3 +15,7 @@ Copilot long-context evidence and xAI window overrides through restarts and re-l
 Saved seeds have no provenance separate from operator edits, so existing entries are retained;
 only missing operator-map defaults refresh. Live discovery and request-time admission keep their own limits.
 Regression coverage: `tests/oauth/oauth-reconcile-operator-maps.test.ts`.
+
+## Microsoft 365 Copilot
+
+`src/oauth/m365-copilot.ts` participates in the existing protected account store, login publication and lazy-only refresh flow. Login produces an instructions-only hint because its managed browser captures the nativeclient callback directly. Its maintained alias catalog remains static across reconciliation. See [the provider contract](m365-copilot.md).

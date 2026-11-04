@@ -340,3 +340,7 @@ upstream `invalid_argument`.
 `src/adapters/unique-tool-call-ids.ts` forwards optional per-exchange stream context while
 retaining tool-call ID reminting; [completed tool blocks](../providers/completed-tool-blocks.md)
 require that context independently of request construction.
+
+## Microsoft 365 Copilot
+
+The `m365-copilot` registry factory in `src/adapters/registry.ts` inherits the Chat tool-lowering contract while `src/adapters/m365-copilot.ts` owns a native ChatHub `runTurn`. The Microsoft transport, account-bound sessions and managed-browser OAuth are described in [the provider contract](../providers/m365-copilot.md). No second adapter factory inventory is introduced.

@@ -1,4 +1,5 @@
 import { assertWorkBuddyDestination } from "../providers/workbuddy";
+import { M365_COPILOT_BASE_URL } from "../providers/m365-copilot-models";
 import type { OcxProviderConfig } from "../types";
 import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
@@ -6,6 +7,10 @@ import { resolveProviderTransport } from "../providers/xai-transport";
 
 /** Discovery owns its configured row (a frozen capture for catalog gathers), not live config. */
 export function mayResolveModelsOAuth(name: string, provider: OcxProviderConfig | undefined): boolean {
+  if (name === "m365-copilot" || provider?.adapter === "m365-copilot") {
+    return name === "m365-copilot" && provider?.adapter === "m365-copilot" && !provider.disabled
+      && provider.baseUrl.replace(/\/+$/, "") === M365_COPILOT_BASE_URL;
+  }
   // The DSH account token is pinned to its own adapter and fixed DeepSeek hosts. Its catalog is
   // static, so no discovery path may resolve it, whatever adapter or baseUrl the row was edited to.
   if (name === "dsh-account") return false;

@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
-import { LoginHint, type LoginHintData } from "../src/components/login-url-block";
+import { LoginHint, type LoginHintData, type LoginHintPaste } from "../src/components/login-url-block";
 import { addProviderModalReducer, createInitialAddProviderState } from "../src/components/add-provider-modal-reducer";
 import { addCodexAccountUiReducer, initialAddCodexAccountUiState } from "../src/components/add-codex-account-reducer";
 import { DEVICE_LOGIN_POLL_BUDGET_MS, loginPollAttempts } from "../src/oauth-login-budget";
@@ -64,13 +64,13 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function render(hint: LoginHintData) {
+async function render(hint: LoginHintData, options: { providerId?: string; paste?: LoginHintPaste } = {}) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root ??= createRoot(host);
     root.render(
       <LanguageProvider>
-        <LoginHint hint={hint} />
+        <LoginHint hint={hint} {...options} />
       </LanguageProvider>,
     );
   });
@@ -79,6 +79,17 @@ async function render(hint: LoginHintData) {
 function openLink(): HTMLAnchorElement | null {
   return host.querySelector(".login-url-block-open") as HTMLAnchorElement | null;
 }
+
+test("managed Microsoft 365 login shows instructions without a callback paste field or extra link", async () => {
+  await render({ url: "", instructions: "Complete sign-in in the isolated browser window." }, {
+    providerId: "m365-copilot",
+    paste: { value: "", busy: false, message: "", ok: true, onChange: () => {}, onSubmit: () => {} },
+  });
+  expect(host.textContent).toContain("Complete sign-in");
+  expect(host.querySelector(".login-hint-paste")).toBeNull();
+  expect(openLink()).toBeNull();
+  expect(clipboardWrites).toEqual([]);
+});
 
 test("says so when the proxy could not open a browser, and keeps the way in", async () => {
   await render({ url: URL_A, browserLaunch: "failed" });

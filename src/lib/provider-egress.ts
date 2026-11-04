@@ -233,6 +233,22 @@ export function isEgressTransparentExecutor(executor: unknown): boolean {
     && (executor as unknown as Record<symbol, unknown>)[EGRESS_TRANSPARENT_EXECUTOR] === true;
 }
 
+type SocketRoute = Readonly<Pick<OcxProviderConfig, "proxy" | "noProxy">>;
+interface SocketBinding { providerName: string; baseUrl: string; route: SocketRoute }
+const socketBindings = new WeakMap<typeof globalThis.fetch, SocketBinding>();
+
+/** Explicit native-socket authority; HTTP egress transparency alone does not grant it. */
+export function bindProviderSocketRoute(executor: typeof globalThis.fetch, providerName: string, provider: OcxProviderConfig): void {
+  socketBindings.set(executor, { providerName, baseUrl: provider.baseUrl, route: Object.freeze({
+    proxy: provider.proxy, noProxy: Array.isArray(provider.noProxy) ? [...provider.noProxy] : provider.noProxy,
+  }) });
+}
+
+export function providerSocketRoute(executor: typeof globalThis.fetch, providerName: string, baseUrl: string): SocketRoute | undefined {
+  const binding = socketBindings.get(executor);
+  return binding?.providerName === providerName && binding.baseUrl.replace(/\/$/, "") === baseUrl ? binding.route : undefined;
+}
+
 /** The destination of a fetch input, or null when it cannot be read as a URL. */
 export function egressTargetUrl(input: string | URL | Request): string | null {
   if (typeof input === "string") return input;

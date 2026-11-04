@@ -120,6 +120,7 @@ export interface CatalogGatherProviderModelOutcome {
   readonly state: "authoritative" | "degraded";
 }
 export interface ModelsAuthResolution {
+  readonly m365?: import("../../oauth/types").M365CopilotWebSession;
   readonly workbuddy?: import("../../oauth/types").WorkBuddyOAuthMetadata;
   readonly apiKey: string | undefined;
   readonly observed: boolean;
