@@ -1,15 +1,25 @@
-import { lstatSync, readFileSync } from "node:fs";
-import { validateConfigCandidate } from "../config";
+import { lstatSync } from "node:fs";
+import { readConfigDiagnostics } from "../config";
 
 export interface ConfigPreflightResult {
   ok: boolean;
-  reason?: "invalid_json" | "invalid_schema" | "read_error";
+  reason?: "fallback" | "read_error";
   error?: string;
 }
 
 export function runConfigPreflight(configPath: string): ConfigPreflightResult {
+  // An occupied path must genuinely be a regular file.
+  // A dangling symlink throws ENOENT on stat/readFileSync (treating it as missing in snapshots),
+  // but lstatSync reveals the occupied non-file entry.
   try {
-    lstatSync(configPath);
+    const stat = lstatSync(configPath);
+    if (!stat.isFile()) {
+      return {
+        ok: false,
+        reason: "read_error",
+        error: `Configuration entry at ${configPath} is not a regular file.`,
+      };
+    }
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return { ok: true };
@@ -20,9 +30,19 @@ export function runConfigPreflight(configPath: string): ConfigPreflightResult {
       error: err instanceof Error ? err.message : String(err),
     };
   }
-  let text = "";
+
+  // Use the runtime's diagnostics loader rather than strict candidate validation.
+  // This permits configs repaired by mergeConfigDefaults or sanitized for load,
+  // aborting only when loadConfig would fall back to defaults.
   try {
-    text = readFileSync(configPath, "utf8");
+    const diagnostics = readConfigDiagnostics({ passive: true });
+    if (diagnostics.source === "fallback") {
+      return {
+        ok: false,
+        reason: "fallback",
+        error: diagnostics.error || "Configuration failed to load and fell back to defaults.",
+      };
+    }
   } catch (err: unknown) {
     return {
       ok: false,
@@ -30,23 +50,6 @@ export function runConfigPreflight(configPath: string): ConfigPreflightResult {
       error: err instanceof Error ? err.message : String(err),
     };
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
-  } catch (err: unknown) {
-    return {
-      ok: false,
-      reason: "invalid_json",
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-  const candidate = validateConfigCandidate(parsed);
-  if (!candidate.ok) {
-    return {
-      ok: false,
-      reason: "invalid_schema",
-      error: candidate.error,
-    };
-  }
+
   return { ok: true };
 }

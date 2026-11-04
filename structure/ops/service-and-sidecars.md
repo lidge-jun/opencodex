@@ -501,7 +501,7 @@ so an override can never shorten the budgets that prevent a duplicate proxy, and
 `src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
 constants in child processes.
 
-The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe
+The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe (`src/server/proxy-liveness.ts`). In Bun installs (`src/update/index.ts`), `runConfigPreflight` inspects `config.json` before stopping the proxy: an unreadable entry (dangling symlinks) or fallback defaults (`readConfigDiagnostics({ passive: true }).source === "fallback"`) aborts with code 1 before `ocx stop`. Service/tray stay untouched, advising `ocx config validate`. Reparable configs do not abort. npm/pnpm flows (`bin/ocx.mjs`) keep their existing stop sequence.
 `src/update/proxy-liveness-probe.mjs`, decided by
 `src/update/stop-decision.mjs`. A refused dial is `dead`. A dial that is only dropped or times
 out, which is what a listener bound to a tailnet address produces once it is gone, falls back to
