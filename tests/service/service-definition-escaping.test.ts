@@ -76,11 +76,13 @@ describe("systemd unit escaping", () => {
     expect(word).toBeDefined();
     const command = decodeSystemdExecWord(word!);
     const pins = command.slice(0, command.indexOf(PIN_END) + PIN_END.length);
-    const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\n%s\\n" "$CODEX_HOME" "$OPENCODEX_HOME"'], {
-      env: { PATH: "/usr/bin:/bin", HOME: "/should-not-appear", USER: "nobody" },
-      encoding: "utf8",
-    });
-    expect(output.split("\n").slice(0, 2)).toEqual([codexHome, opencodexHome]);
+    if (process.platform !== "win32") {
+      const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\n%s\\n" "$CODEX_HOME" "$OPENCODEX_HOME"'], {
+        env: { PATH: "/usr/bin:/bin", HOME: "/should-not-appear", USER: "nobody" },
+        encoding: "utf8",
+      });
+      expect(output.split("\n").slice(0, 2)).toEqual([codexHome, opencodexHome]);
+    }
   });
 
   test("Environment= keeps $ literal and escapes only specifiers", () => {
@@ -185,8 +187,10 @@ describe("launchd plist string encoding", () => {
         .toEqual({ parser, env: [codexHome, opencodexHome, proxyValue] });
       // The exec line keeps the same homes once launchd hands it to /bin/sh.
       const pins = args[2]!.slice(0, args[2]!.indexOf(PIN_END) + PIN_END.length);
-      const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\0%s" "$CODEX_HOME" "$OPENCODEX_HOME"'], { encoding: "utf8" });
-      expect({ parser, homes: output.split("\0") }).toEqual({ parser, homes: [codexHome, opencodexHome] });
+      if (process.platform !== "win32") {
+        const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\0%s" "$CODEX_HOME" "$OPENCODEX_HOME"'], { encoding: "utf8" });
+        expect({ parser, homes: output.split("\0") }).toEqual({ parser, homes: [codexHome, opencodexHome] });
+      }
     }
   });
 

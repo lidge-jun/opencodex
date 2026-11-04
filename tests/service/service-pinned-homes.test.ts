@@ -88,12 +88,14 @@ describe("systemd service unit", () => {
 
       // This is the actual `-lc` behavior used by both service definitions: the profile
       // runs first, then the baked assignment must survive to the child environment.
-      const command = `${pinned} printf '%s\\n%s\\n' "$CODEX_HOME" "$OPENCODEX_HOME"`;
-      const output = execFileSync("/bin/sh", ["-lc", command], {
-        env: { ...process.env, CODEX_HOME: "/manager/codex", OPENCODEX_HOME: "/manager/opencodex" },
-        encoding: "utf8",
-      });
-      expect(output.trim().split("\n")).toEqual([codexHome, opencodexHome]);
+      if (process.platform !== "win32") {
+        const command = `${pinned} printf '%s\\n%s\\n' "$CODEX_HOME" "$OPENCODEX_HOME"`;
+        const output = execFileSync("/bin/sh", ["-lc", command], {
+          env: { ...process.env, CODEX_HOME: "/manager/codex", OPENCODEX_HOME: "/manager/opencodex" },
+          encoding: "utf8",
+        });
+        expect(output.trim().split("\n")).toEqual([codexHome, opencodexHome]);
+      }
 
       expectTextToContainPath(unit, serviceApiTokenFilePath());
     } finally {
