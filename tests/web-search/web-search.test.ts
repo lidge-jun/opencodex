@@ -725,6 +725,43 @@ test("OpenAI web-search execution uses the pinned canonical URL and selected cre
   expect(observedProtocol).toBe("http1.1");
 });
 
+test("issue #8160 - OpenAI search helper strips responses-lite marker from merged headers", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedHeaders: Headers | undefined;
+  globalThis.fetch = (async (_url: any, init: any) => {
+    capturedHeaders = new Headers(init?.headers);
+    return new Response(
+      'data: ' + JSON.stringify({ type: "response.completed", response: { status: "completed", output: [] } }) + '\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    await runOpenAiWebSearch(
+      "synthetic query",
+      { type: "web_search" },
+      {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        headers: { "x-openai-internal-codex-responses-lite": "true", "x-custom-test": "forwarded" },
+      } as any,
+      new Headers({
+        "x-openai-internal-codex-responses-lite": "true",
+        "chatgpt-account-id": "test-account",
+      }),
+      { model: "gpt-6.1-sol", reasoning: "low", timeoutMs: 1_000 },
+    );
+
+    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders!.has("x-openai-internal-codex-responses-lite")).toBe(false);
+    expect(capturedHeaders!.get("chatgpt-account-id")).toBe("test-account");
+    expect(capturedHeaders!.get("x-custom-test")).toBe("forwarded");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?: string; data: Record<string, unknown> }[]> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
