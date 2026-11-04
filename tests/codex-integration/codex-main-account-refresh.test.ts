@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +34,25 @@ afterEach(() => {
 });
 
 describe("native main token refresh", () => {
+  test("rejects adjacent large file identities before publication", async () => {
+    const path = join(home, "auth.json");
+    const original = JSON.stringify({ auth_mode: "chatgpt", tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
+    writeFileSync(path, original);
+    const realStat = fs.statSync;
+    const id = 2n ** 53n;
+    let replaced = false;
+    const spy = spyOn(fs, "statSync").mockImplementation(((target, options) => {
+      const value = options?.bigint ? realStat(target, { bigint: true }) : realStat(target);
+      const ino = replaced ? id + 1n : id;
+      return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
+    }) as typeof fs.statSync);
+    setMainAuthJsonBeforeRenameHookForTests(() => { replaced = true; });
+    try {
+      expect(Number(id)).toBe(Number(id + 1n));
+      expect(await getValidMainAccountToken({ refreshToken: async () => ({ access: "new-access", refresh: "new-refresh", expires: Date.now() + 3600000, accountId: "account-main" }) })).toMatchObject({ accessToken: "new-access" });
+      expect(readFileSync(path, "utf8")).toBe(original);
+    } finally { spy.mockRestore(); }
+  });
   test("refreshes a refresh-only auth file and atomically preserves unrelated fields", async () => {
     const authPath = join(home, "auth.json");
     const original = {

@@ -1,4 +1,6 @@
 import type { VendorContextInference } from "./vendor-context";
+import type { MultiAgentMode } from "../../types/multi-agent";
+export type { MultiAgentMode } from "../../types/multi-agent";
 import { retainedNativeInheritanceTemplate } from "./native-template";
 export { findSupportedNativeTemplate } from "./native-template";
 import { isCodexControlPlaneModel } from "../control-plane-models";
@@ -593,14 +595,6 @@ export function ensureStrictCatalogFields(
   }
   return ensureAutoCompactTokenLimit(entry);
 }
-
-/**
- * "v2-plaintext" is a forced-v2 pass like "v2", but the mode itself records the
- * operator's opt-in to plaintext delivery of native v2 collaboration messages and
- * keeps the global `multi_agent_v2` feature disabled. The literal must never be
- * written into `multi_agent_version`, whose values Codex validates.
- */
-export type MultiAgentMode = "v1" | "default" | "v2" | "v2-plaintext";
 
 export interface MultiAgentModeOptions {
   /** Caller-owned source metadata already defines the default for these projected rows. */

@@ -74,7 +74,7 @@ test("transient upstream 502 -> client 529 overloaded_error; retry fired; log ke
     expect(response.headers.get("retry-after")).toBe("0");
     const json = await response.json() as { type?: string; error?: { type?: string; message?: string } };
     expect(json.error?.type).toBe("overloaded_error");
-    expect(json.error?.message).toContain("request ID test-42");
+    expect(json.error?.message).toBe("The provider failed to complete the request.");
     // Diagnostics stay honest: the request log keeps the upstream status, not the client 529.
     const entry = getRequestLogEntries().findLast(e => e.surface === "claude");
     expect(entry?.status).toBe(502);

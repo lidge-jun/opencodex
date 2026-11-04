@@ -17,7 +17,8 @@ export interface WindowsPrivateEntry {
  * - "write-private": the POSIX mode&022==0 analog for objects we did NOT create — the
  *   serving token or a kernel-equivalent owner (SYSTEM, Administrators, TrustedInstaller)
  *   must own the object, and no grantee outside the trusted write set may hold write,
- *   create, delete or DACL/owner control. Read grants to anyone are fine.
+ *   create, delete or DACL/owner control, including inherit-only templates for
+ *   children this process may create. Read grants to anyone are fine.
  * - "trusted-ancestry": the POSIX uid∈{euid,0} + non-shared-writable ancestor analog.
  *   The owner must be the serving token or a kernel-equivalent owner (SYSTEM,
  *   Administrators, TrustedInstaller — each can already take ownership of any object,
@@ -26,6 +27,9 @@ export interface WindowsPrivateEntry {
  *   (FILE_ADD_FILE / FILE_ADD_SUBDIRECTORY without delete or write-existing): that is
  *   the closest NTFS analog of a root-owned sticky directory such as C:\, whose stock
  *   ACL grants Authenticated Users add-subdirectory while refusing every other write.
+ *   This policy checks existing ancestors only and ignores inherit-only templates;
+ *   callers must use write-private or the stricter private policy for every direct
+ *   parent of a new child.
  */
 export type WindowsAclPolicy = "private" | "private-runtime-directory" | "write-private" | "trusted-ancestry";
 export interface WindowsAclEntry extends WindowsPrivateEntry {
@@ -117,14 +121,20 @@ try {
 `;
 const ENCODED_ACL_SCRIPT = Buffer.from(ACL_SCRIPT, "utf16le").toString("base64");
 
+/** Above this many paths the script reads them from stdin, keeping one process for a whole tree. */
+const ACL_ENV_PATH_LIMIT = 16;
+
 function defaultWindowsOwnerAclRunner(entries: readonly WindowsPrivateEntry[], timeoutMs: number): WindowsOwnerAclResult {
-  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length), OCX_ACL_STDIN: "0" };
-  for (let i = 0; i < entries.length; i++) env[`OCX_ACL_PATH_${i}`] = entries[i]!.path;
+  const viaStdin = entries.length > ACL_ENV_PATH_LIMIT;
+  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length), OCX_ACL_STDIN: viaStdin ? "1" : "0" };
+  if (!viaStdin) for (let i = 0; i < entries.length; i++) env[`OCX_ACL_PATH_${i}`] = entries[i]!.path;
+  // Base64 lines are data, as in the async runner; no path text becomes PowerShell source.
+  const input = viaStdin ? Buffer.from(entries.map(entry => Buffer.from(entry.path, "utf8").toString("base64")).join("\n") + "\n") : undefined;
   const result = Bun.spawnSync([
     resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive",
     "-ExecutionPolicy", "Bypass", "-EncodedCommand", ENCODED_ACL_SCRIPT,
   ], {
-    env, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+    env, stdin: input ?? "ignore", stdout: "pipe", stderr: "ignore",
     timeout: timeoutMs, windowsHide: true,
   });
   return { success: result.success, timedOut: result.exitedDueToTimeout ?? false, stdout: result.stdout ?? new Uint8Array() };
@@ -243,9 +253,9 @@ function privateEntryOk(entry: ParsedEntry | null, directory: boolean, run: Pars
  * Confined-write and trusted-ancestry policies for objects this process did not create.
  *
  * Deny ACEs are permitted because they can only remove access; allow ACEs must be
- * ordinary non-callback CommonAce entries. Inherit-only ACEs are skipped: they are
- * templates for children, and every object this module protects carries its own
- * hardened protected DACL, so an ancestor's template cannot grant anything inside it.
+ * ordinary non-callback CommonAce entries. Write-private also checks inherit-only
+ * templates: newly created children receive those grants before hardening. Existing
+ * trusted ancestors are not creation parents; each descendant is checked separately.
  */
 function confinedEntryOk(entry: ParsedEntry | null, run: ParsedAclRun, policy: WindowsAclPolicy): boolean {
   if (!entry || entry.aces === null || (entry.controlFlags & 0x4 /* SE_DACL_PRESENT */) === 0) return false;
@@ -262,9 +272,12 @@ function confinedEntryOk(entry: ParsedEntry | null, run: ParsedAclRun, policy: W
     if (ace.type === 1) continue; // ACCESS_DENIED: removes access, never grants it.
     if (ace.type !== 0) return false; // only ACCESS_ALLOWED records can be evaluated.
     if (ace.flags === null || ace.mask === null || ace.sid === null) return false;
-    if ((ace.flags & INHERIT_ONLY_ACE) !== 0) continue;
+    if (policy === "trusted-ancestry" && (ace.flags & INHERIT_ONLY_ACE) !== 0) continue;
     if (ace.sid === run.user || TRUSTED_WRITE_SIDS.has(ace.sid)) continue;
-    const createOk = policy === "trusted-ancestry" && STICKY_OWNERS.has(owner) ? CREATE_MASK : 0;
+    // Create rights on a sticky trusted ancestor are safe for that ancestor itself,
+    // but an inherit-only template would grant them inside a newly created child.
+    const createOk = policy === "trusted-ancestry" && STICKY_OWNERS.has(owner)
+      && (ace.flags & INHERIT_ONLY_ACE) === 0 ? CREATE_MASK : 0;
     const allowed = (READ_MASK | createOk) >>> 0;
     if (((ace.mask >>> 0) & ~allowed) !== 0) return false;
   }

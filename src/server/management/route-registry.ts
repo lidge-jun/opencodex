@@ -136,6 +136,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api/routes", mutates: true, exempt: { reason: "compatibility-alias", why: "Superseded by PUT /api/pool/settings, which the CLI now drives. Kept working for existing clients and pinned by exact-body goldens in tests/server/account-pool-management-api.test.ts; no CLI verb targets it any more." } },
   // codex/native-profile-api
   { method: "GET", path: "/api/native-main-profiles", module: "codex/native-profile-api", mutates: false },
+  { method: "GET", path: "/api/native-main-profiles/admission", module: "codex/native-profile-api", mutates: false, exempt: { reason: "deferred-verb", why: "Read by `ocx doctor` over its single-use local read capability; ocx doctor is not a registry verb, and no operator verb reports admission on its own yet.", owner: "native-main admission", ownerDoc: "structure/codex-home.md" } },
   { method: "GET", path: "/api/native-main-profiles/doctor", module: "codex/native-profile-api", mutates: false },
   { method: "POST", path: "/api/native-main-profiles/recover", module: "codex/native-profile-api", mutates: true },
   { method: "POST", path: "/api/native-main-profiles/register", module: "codex/native-profile-api", mutates: true },
@@ -180,7 +181,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Saved native observation intent requires an operator-paired local GUI action and fresh field revision." } },
   // server/management/codex-cli-update-routes
   { method: "GET", path: "/api/codex/cli-update/plan", module: "server/management/codex-cli-update-routes", mutates: false, exempt: { reason: "local-transport", why: "The CLI runs the same proof-bound plan builder locally; the authenticated route also supplies the dashboard plan." } },
-  { method: "POST", path: "/api/codex/cli-update/apply", module: "server/management/codex-cli-update-routes", mutates: true, exempt: { reason: "session-only", why: "HTTP apply requires a confirmed trusted loopback GUI session; the CLI invokes the same durable job owner locally." } },
+  { method: "POST", path: "/api/codex/cli-update/apply", module: "server/management/codex-cli-update-routes", mutates: true, exempt: { reason: "session-only", why: "HTTP apply requires a current paired dashboard session on trusted loopback ingress, matching origin, CSRF and confirmed: true; the local CLI uses --yes independently." } },
   { method: "GET", path: "/api/codex/cli-update/jobs/{jobId}", module: "server/management/codex-cli-update-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "The CLI status command reads the same protected job record directly and does not use job IDs as authorization." } },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: true },

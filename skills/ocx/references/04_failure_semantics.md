@@ -14,6 +14,8 @@ exit contract. Its common mappings and the main exceptions are:
 | 64 | usage validation in `capabilities`, `ready`, `resolve` | fix arguments; no discovery/request for invalid input |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist | no |
 | 5 | HTTP 409 — conflict; a lock is held or state moved under you | inspect first; stale baselines require review |
+| 6 | `ocx sync` completed the Home step but a Child failed or timed out, or the link store was unreadable | inspect the fan-out result |
+| 7 | reserved for an update in flight during sync | wait for the update, then retry |
 | 1 | everything else: transport failure, 5xx, unexpected errors | depends on `reason` |
 
 Two consequences worth internalizing:

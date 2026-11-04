@@ -1,4 +1,5 @@
 {
+  "responses-native-output-identity.test.ts": "responses",
   "graceful-max-output-tokens.test.ts": "responses",
   "graceful-max-output-tokens-exclusions.test.ts": "responses",
   "advisor-web-search.test.ts": "advisor",
@@ -8,5 +9,7 @@
   "response-replay-combo-identity.test.ts": "server",
   "responses-replay-owner-storage.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",
-  "passthrough-abort.test.ts": "responses"
+  "passthrough-abort.test.ts": "responses",
+  "current-turn-tool-catalog-direct.test.ts": "responses",
+  "current-turn-tool-catalog-namespace.test.ts": "responses"
 }

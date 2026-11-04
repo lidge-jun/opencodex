@@ -3,6 +3,7 @@ import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { MultiAgentMode } from "./multi-agent";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 
@@ -964,17 +965,8 @@ export interface OcxConfig {
    * Unset or omitted by default.
    */
   blockedModelRedirects?: Record<string, string>;
-  /**
-   * Multi-agent surface override:
-   * - "v1": force ALL models to v1 surface (override upstream pins)
-   * - "default" | undefined: respect upstream model pins (sol/terra=v2, luna=v1, rest=codex flag)
-   * - "v2": force ALL models to v2 surface (override upstream pins)
-   * - "v2-plaintext": force ALL models to v2 surface via catalog pins while the global
-   *   `multi_agent_v2` feature stays disabled. Selecting the mode is itself the explicit
-   *   opt-in to plaintext delivery of native v2 collaboration messages; the separate
-   *   `plaintextV2AgentMessages` flag is not required and is never rewritten by a mode change.
-   */
-  multiAgentMode?: "v1" | "default" | "v2" | "v2-plaintext";
+  /** Multi-agent surface override; mode selection and consent follow MultiAgentMode. */
+  multiAgentMode?: MultiAgentMode;
   /**
    * Which revision of the sub-agent surface advisory this install has answered.
    * Absent means it has answered none. Written by the dashboard, never by a mode change.
@@ -1856,6 +1848,8 @@ export interface OcxWebSearchSidecarConfig {
 export interface OcxCodexPoolConfig {
   /** Start idle Codex windows when the pool is initialized. */
   startIdleWindows?: boolean;
+  /** Enable process-local affinity for caller-owned credentials; defaults off. */
+  requestOwnedAffinity?: boolean;
   /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.

@@ -21,7 +21,7 @@ CLI installation inspection reason codes, including Windows deferral, follow the
 
 ## Plaintext V2 agent messages
 
-`src/responses/plaintext-v2-agent-messages.ts` owns the experimental request compiler and response restoration. The legacy `plaintextV2AgentMessages` field defaults to unset; explicit true or the explicitly selected `v2-plaintext` mode enables it through `isPlaintextV2AgentMessagesEnabled` in `src/config/multi-agent-surface.ts`. Selecting or leaving that mode preserves the independent legacy field. Only Responses ingress to the final canonical ChatGPT forward route activates rewriting. Catalog pins affect new sessions, but the compiler predicate is evaluated for every eligible request, including later requests from existing V2 sessions. Disabling this setting does not delete retained history, provider, response-cache or diagnostic copies.
+`src/responses/plaintext-v2-agent-messages.ts` owns the experimental request compiler and response restoration. `src/types/multi-agent.ts` owns the shared surface-mode type used by configuration and re-exported by catalog parsing. The legacy `plaintextV2AgentMessages` field defaults to unset; explicit true or the explicitly selected `v2-plaintext` mode enables it through `isPlaintextV2AgentMessagesEnabled` in `src/config/multi-agent-surface.ts`. Selecting or leaving that mode preserves the independent legacy field. Only Responses ingress to the final canonical ChatGPT forward route activates rewriting. Catalog pins affect new sessions, but the compiler predicate is evaluated for every eligible request, including later requests from existing V2 sessions. Disabling this setting does not delete retained history, provider, response-cache or diagnostic copies.
 A default collaboration catalog is required: top-level `tools`, or, when that field is absent,
 the first input item's developer `additional_tools` catalog used by Responses Lite. Explicit
 top-level catalogs take precedence; user-role and later historical catalogs do not opt in.
@@ -48,6 +48,7 @@ response/debug state. This is application-level plaintext over HTTPS, depends on
 upstream behavior, and does not decrypt existing tasks or replace authenticated recovery.
 
 Restored calls and selectors carry an explicit collaboration namespace and unqualified child name.
+Restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
 Codex treats qualified names literally and defaults absent namespaces to functions. Only child
 declarations inherit their restored namespace container; the compiler never invents an empty
 encryption marker when the upstream omitted it or returned a nonempty marker.
@@ -362,7 +363,7 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   the role's task domain, then price rank (input plus output per 1M tokens). The sizing answer carries a neutral `domain`
   (coding, agentic, reasoning, writing, knowledge, general; missing means general), and `src/codex/role-capability.ts` reads
   that domain's scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
-  resolves; the source refuses redirects and keeps a 30-second timeout and a 16 MiB body bound. With no key or on failure it
+  resolves, page by page from the free list `/api/v2/language/models/free` until `pagination.has_more` is false (the legacy `/api/v2/data/llms/models` answers 410 Gone after 2026-11-04); every domain takes the Intelligence Index, since the Coding and Agentic Indexes are always null and the free list has no math index. The source refuses redirects, keeps a 30-second timeout per request, and fails the read past ten pages or 16 MiB across them. With no key or on failure it
   keeps configured tiers and price signals, reports the reason through `capability.error`, and returns null source
   attribution. The `capability` block attributes the source; Artificial Analysis terms forbid redistribution, so its scores
   are dropped from that block. Mapped models keep their mapped tier either way. With two or more measured unmapped

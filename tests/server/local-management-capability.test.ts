@@ -53,6 +53,52 @@ describe("local management read capability", () => {
   const now = 1_800_000_000_000;
   const expiresAt = now + LOCAL_MANAGEMENT_CAPABILITY_TTL_MS;
 
+  test("allowlists the side-effect-free admission read, never the native-profile doctor", () => {
+    const capability = createLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission,
+      pid,
+      port,
+      expiresAt,
+    );
+    expect(capability).toHaveLength(43);
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission,
+      pid,
+      port,
+      expiresAt,
+      capability,
+      now,
+    )).toBe(true);
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      `${LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission}?unexpected=1`,
+      pid,
+      port,
+      expiresAt,
+      capability,
+      now,
+    )).toBe(false);
+    // The doctor endpoint runs a staging sweep that can delete staged credentials and returns
+    // paths and profile ids, so a read capability must never be mintable for it.
+    expect(createLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      "/api/native-main-profiles/doctor",
+      pid,
+      port,
+      expiresAt,
+    )).toBeNull();
+  });
+
   test("binds one allowlisted GET to its nonce, path, PID, and port", () => {
     const capability = createLocalManagementReadCapability(
       secret,

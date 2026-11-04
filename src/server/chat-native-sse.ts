@@ -1,4 +1,6 @@
-import { chatCompletionsErrorBody } from "../chat/outbound";
+import { ownedChatErrorPayload, canonicalSseErrorBlock } from "../lib/client-error-body";
+import { legacyFailureVerdict, type FailureVerdictSink } from "../chat/failure-verdict";
+import { chatCompletionsErrorBody, type ChatCompletionsCollectorSource } from "../chat/outbound";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import {
@@ -66,6 +68,10 @@ export function usageFromChat(value: unknown): OcxUsage | undefined {
   };
 }
 
+function namedErrorControlBlock(data: string | null): string {
+  return "event: error\n" + (data === null ? "" : data.split("\n").map(line => `data: ${line}\n`).join("")) + "\n";
+}
+
 export function structuredError(value: unknown): {
   message: string;
   type?: string;
@@ -83,6 +89,19 @@ export function structuredError(value: unknown): {
     ...(error.code === null || typeof error.code === "string" ? { code: error.code } : {}),
     ...(typeof error.status === "number" && Number.isInteger(error.status) ? { status: error.status } : {}),
   };
+}
+
+/** Preserve the ordinary relay representation, replacing only choice error objects. */
+export function normalizeChatChoiceErrors(value: Rec): Rec {
+  if (!Array.isArray(value.choices)) return value;
+  return { ...value, choices: value.choices.map(choice => {
+    if (!isRec(choice) || choice.error === undefined || choice.error === null) return choice;
+    const original = structuredError({ error: choice.error }) ?? { message: "upstream error" };
+    const status = original.status ?? 502;
+    const { message, type, code } = ownedChatErrorPayload({ status, type: original.type, code: original.code,
+      evidence: { ...original, status, code: original.code ?? undefined } }).error;
+    return { ...choice, error: { message, type, code } };
+  }) };
 }
 
 function normalizedChunk(value: Rec, requestedModel: string): Rec {
@@ -159,6 +178,8 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
 
 interface NativeChatSseOptions {
   requestedModel: string;
+  failureVerdictSink?: FailureVerdictSink;
+  collectorSource?: ChatCompletionsCollectorSource;
   translatorBudget: TranslatorBudget;
   signal: AbortSignal;
   stallTimeoutSec?: number;
@@ -291,9 +312,13 @@ export function nativeChatSse(
     const safeMessage = redactSecretString(message);
     releaseBuffer();
     try {
-      const frame = `data: ${JSON.stringify(chatCompletionsErrorBody(status, safeMessage, type, code))}\n\n`;
+      const legacy = chatCompletionsErrorBody(status, safeMessage, type, code);
+      const error = legacy.error as { type: string; code: string | null };
+      const frame = canonicalSseErrorBlock(ownedChatErrorPayload({ status, type: error.type, code: error.code,
+        evidence: { status, type, code, message: safeMessage } }));
       if (code === "translation_buffer_limit") controller.enqueue(encoder.encode(frame));
       else enqueue(controller, frame);
+      if (options.failureVerdictSink) options.failureVerdictSink.verdict = legacyFailureVerdict(legacy);
     } catch { /* controller may already be closed */ }
     settle(status, safeMessage);
     try { void reader.cancel(new Error(safeMessage)).catch(() => {}); } catch { /* already closed */ }
@@ -304,16 +329,21 @@ export function nativeChatSse(
     block: string,
     delimiter: string,
   ): void => {
+    let eventName = "";
+    for (const line of block.split(/\r\n|\r|\n/)) {
+      if (line === "event") eventName = "";
+      else if (line.startsWith("event:")) eventName = line.slice(6).replace(/^ /, "");
+    }
     const payload = sseDataPayload(block);
     if (payload === null) {
       if (performance.now() >= pullDeadline) throw stalled;
-      relay(controller, block + delimiter);
+      relay(controller, eventName === "error" ? namedErrorControlBlock(payload) : block + delimiter);
       return;
     }
     const trimmed = payload.trim();
     if (trimmed === "") {
       if (performance.now() >= pullDeadline) throw stalled;
-      relay(controller, block + delimiter);
+      relay(controller, eventName === "error" ? namedErrorControlBlock(payload) : block + delimiter);
       return;
     }
     if (trimmed === "[DONE]") {
@@ -322,7 +352,7 @@ export function nativeChatSse(
         return;
       }
       sawDone = true;
-      enqueue(controller, replaceSseDataPayload(block, "[DONE]") + delimiter);
+      enqueue(controller, eventName === "error" ? namedErrorControlBlock("[DONE]") : replaceSseDataPayload(block, "[DONE]") + delimiter);
       releaseBuffer();
       settle(200);
       try { void reader.cancel().catch(() => {}); } catch { /* already closed */ }
@@ -351,7 +381,9 @@ export function nativeChatSse(
         classified.code = error.code;
       }
       const safe = chatCompletionsErrorBody(status, classified.message, classified.type, classified.code);
-      enqueue(controller, replaceSseDataPayload(block, JSON.stringify(safe)) + delimiter);
+      enqueue(controller, canonicalSseErrorBlock(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
+        evidence: { status, type: error.type, code: error.code ?? undefined, message: error.message } })));
+      if (options.failureVerdictSink) options.failureVerdictSink.verdict = legacyFailureVerdict(safe);
       releaseBuffer();
       settle(isCyberPolicyCode(classified.code) ? 400 : status, classified.message);
       try { void reader.cancel(new Error(classified.message)).catch(() => {}); } catch { /* already closed */ }
@@ -404,7 +436,20 @@ export function nativeChatSse(
       firstOutput = true;
       options.onFirstOutput?.();
     }
-    relay(controller, replaceSseDataPayload(block, JSON.stringify(normalizedChunk(parsed, options.requestedModel))) + delimiter);
+    if (eventName === "error" || parsed.type === "error") {
+      // These frames keep the ordinary relay's control flow; only client bytes change.
+      const flat = structuredError({ error: parsed })!;
+      const status = flat.status ?? 502;
+      const payload = ownedChatErrorPayload({ status, type: flat.type, code: flat.code,
+        evidence: { ...flat, status, code: flat.code ?? undefined } }).error;
+      options.collectorSource?.retain(JSON.stringify(payload), parsed);
+      relay(controller, (eventName === "error" ? "event: error\n" : "") + canonicalSseErrorBlock(payload));
+    } else {
+      const normalized = normalizedChunk(parsed, options.requestedModel);
+      const choiceError = choices.some(choice => isRec(choice) && choice.error !== undefined && choice.error !== null);
+      relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(normalized))
+        : replaceSseDataPayload(block, JSON.stringify(normalized)) + delimiter);
+    }
   };
 
   function onAbort() {

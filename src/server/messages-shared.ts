@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 /**
  * Accounting and measurement pieces shared by the two Claude Messages lanes.
  *
@@ -28,6 +29,7 @@ import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { AnthropicRequestError, isRec, type Rec } from "../claude/inbound-records";
 import type { RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
+import { recordLocalFailureDetail } from "./request-log-failure-detail";
 import type { OcxConfig } from "../types";
 
 export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; cacheCreation1hInputTokens?: number } | undefined {
@@ -267,7 +269,8 @@ export function tapAnthropicSseForLog(
       // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
       // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
       // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
-      logCtx.upstreamError = message.slice(0, 500);
+      recordLocalFailureDetail(logCtx, message, closeReason === "body_stall"
+        ? { code: "body_stall", value: guard?.stallMs ?? 0 } : { code: "body_overflow", value: guard?.maxBytes ?? 0 });
       finalize(502, { terminalStatus: "incomplete", closeReason });
       closeWithErrorFrame(errType, message);
     }
@@ -350,7 +353,7 @@ export function tapAnthropicSseForLog(
           // reset (below), so the client never reads a partial answer as a finished message.
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
-          logCtx.upstreamError = failure;
+          recordLocalFailureDetail(logCtx, failure, { code: lastDeliveredStop === "error" ? "stream_error_stop" : "stream_ended_early" });
           if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
           finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
           closeWithErrorFrame("api_error", failure);
@@ -411,6 +414,8 @@ export function tapAnthropicSseForLog(
         const message = redactSecretString(`anthropic passthrough upstream stream failed: ${err instanceof Error ? err.message : String(err)}`);
         logCtx.transportPhase = "mid_stream";
         logCtx.terminalSource = "synthetic";
+        // The runtime error text stays internal; the row keeps the fixed sentence only.
+        recordLocalFailureDetail(logCtx, "anthropic passthrough upstream stream failed", { code: "stream_failed" });
         logCtx.upstreamError = message.slice(0, 500);
         if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
@@ -463,7 +468,7 @@ export function sanitizePassthroughToolCallIds(messages: unknown[]): void {
     const field = fieldOf(block);
     if (!field || typeof block[field] !== "string") continue;
     const wire = callIds.allocate(block[field] as string);
-    if (wire === undefined) throw new AnthropicRequestError(`${block.type} block has an empty ${field}`);
+    if (wire === undefined) throw markProxyError(new AnthropicRequestError(field === "id" ? "tool_use block has an empty id" : "tool_result block has an empty tool_use_id"));
     block[field] = wire;
   }
 }

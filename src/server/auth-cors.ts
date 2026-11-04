@@ -48,6 +48,7 @@ import { vercelGatewayRoutingConfigError } from "../providers/vercel-gateway-rou
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 import { authorizationCredential } from "../lib/authorization-scheme";
+import { noteTurnStateCaller } from "./turn-state-handles";
 
 let _corsOrigin = "http://localhost:10100";
 // Listener identity is process-local. Never infer this trust from forwarded headers: the
@@ -537,6 +538,22 @@ export function resolveContextPrincipal(req: Request, config: OcxConfig, admissi
   return undefined;
 }
 
+/** Preserve only loopback replay identity removed by the forwarding-header filter. */
+export function resolveFilteredReplayPrincipal(
+  req: Request,
+  config: OcxConfig,
+  admission: DataPlaneAdmission,
+  forwardHeaders: Headers,
+): Readonly<{ clientPrincipalId: string }> | undefined {
+  if (admission.kind !== "loopback"
+    || !(req.headers.has("x-opencodex-api-key") || req.headers.has("x-api-key"))) return undefined;
+  const principal = resolveContextPrincipal(req, config, admission);
+  const forwardedPrincipal = resolveContextPrincipal(new Request(req.url, { headers: forwardHeaders }), config, admission);
+  // A surviving bearer keeps its existing per-frame resolution and key-rotation semantics.
+  if (principal && principal !== forwardedPrincipal) return Object.freeze({ clientPrincipalId: principal });
+  return undefined;
+}
+
 /** Stable structural replay identity. This does not replace process-local opaque-state ownership. */
 export function resolveDurableReplayPrincipal(
   req: Request,
@@ -571,11 +588,15 @@ export function isDataPlaneAdmissionSecret(token: string, config: OcxConfig): bo
  * configured entry to name, and folding them into the id as sentinel strings
  * would collide with a hand-edited entry that happens to be called `loopback` —
  * ids are only validated as non-empty strings.
+ *
+ * Every admitted data-plane path builds its log context here, so this is also where the request's
+ * caller is recorded for turn-state handle binding (src/server/turn-state-handles.ts).
  */
 export function admissionFields(admission: DataPlaneAdmission): {
   admissionKind: DataPlaneAdmission["kind"];
   apiKeyId?: string;
 } {
+  noteTurnStateCaller(admission);
   return admission.kind === "configured"
     ? { admissionKind: "configured", apiKeyId: admission.keyId }
     : { admissionKind: admission.kind };

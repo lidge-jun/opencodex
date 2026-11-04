@@ -87,6 +87,23 @@ describe("Codex CLI apply artifacts", () => {
     const f = fixtureArtifactSet(); const changed = Buffer.from(f.main); changed[changed.length - 1] ^= 1;
     await expect(verifyCodexCliArchive(changed, f.artifacts.main)).rejects.toThrow();
   });
+  test("rejects an archive path identity differing above numeric precision", async () => {
+    const root = createCodexCliTestRoot("ocx-archive-identity-");
+    const f = fixtureArtifactSet(), path = join(root, "artifact.tgz");
+    writeFileSync(path, f.main);
+    const fstat = fs.fstatSync, lstat = fs.lstatSync;
+    const opened = spyOn(fs, "fstatSync").mockImplementation(((fd: number, options?: { bigint?: boolean }) => {
+      const value = fstat(fd, options as never);
+      return { ...value, isFile: () => value.isFile(), dev: options?.bigint ? 42n : 42, ino: options?.bigint ? 9007199254740992n : 9007199254740992 };
+    }) as typeof fs.fstatSync);
+    const lexical = spyOn(fs, "lstatSync").mockImplementation(((name: fs.PathLike, options?: { bigint?: boolean }) => {
+      const value = lstat(name, options as never);
+      return { ...value, isSymbolicLink: () => value.isSymbolicLink(), dev: options?.bigint ? 42n : 42, ino: options?.bigint ? 9007199254740993n : 9007199254740992 };
+    }) as typeof fs.lstatSync);
+    try {
+      await expect(verifyCodexCliArchive(path, f.artifacts.main)).rejects.toThrow("artifact_file_changed");
+    } finally { opened.mockRestore(); lexical.mockRestore(); removeTreeWithRetry(root); }
+  });
   test.each(["valid", "corrupt"] as const)("real-file archive %s closes its stream before return and preserves a reused sentinel fd", async kind => {
     const root = createCodexCliTestRoot("ocx-archive-lifetime-");
     const f = fixtureArtifactSet(), path = join(root, "artifact.tgz"), sentinelPath = join(root, "sentinel");

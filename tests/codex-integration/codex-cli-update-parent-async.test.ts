@@ -13,6 +13,9 @@ import { createCodexCliRecoveryTestHome } from "../helpers/codex-cli-recovery-ho
 import { trustWindowsTempFixtureAncestry } from "../helpers/windows-temp-ancestry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
+import * as configWriteLock from "../../src/codex/config-write-lock";
+import { handleAgentSettingsRoutes } from "../../src/server/management/agent-settings-routes";
+import type { ManagementContext } from "../../src/server/management/context";
 
 let home: string;
 let saved: Record<string, string | undefined>;
@@ -243,6 +246,99 @@ for (const outcome of ["allow", "deny", "plan-changed", "cancel"] as const) test
     }
   } finally { proof.resolve(true); await pending; }
 });
+
+function featureToggleFixture(signal?: AbortSignal) {
+  process.env.CODEX_HOME = join(home, "codex");
+  mkdirSync(process.env.CODEX_HOME);
+  const path = join(process.env.CODEX_HOME, "config.toml");
+  const original = "[features]\ndefault_mode_request_user_input = false\n";
+  writeFileSync(path, original);
+  const url = new URL("http://localhost/api/codex-auth/features/default-mode-request-user-input");
+  const req = new Request(url, { method: "PUT", signal,
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }) });
+  return { path, original, req, url };
+}
+function callFeatureToggle(f: ReturnType<typeof featureToggleFixture>, toggle?: NonNullable<ManagementContext["deps"]["toggleDefaultModeRequestUserInput"]>) {
+  return handleAgentSettingsRoutes({ req: f.req, url: f.url, config: { providers: [] } as unknown as OcxConfig,
+    deps: { toggleDefaultModeRequestUserInput: toggle }, version: "test", trustedLoopbackIngress: true,
+    guiSessionIssuance: null, convergeCodexCatalog: async () => { throw new Error("unexpected catalog convergence"); },
+    syncClaudeAgentDefsBestEffort: async () => {} });
+}
+
+test("single feature toggle refuses a held update gate before any child runs", async () => {
+  const f = featureToggleFixture(); let children = 0;
+  const worker = gate.createWorkerCommitWindow({ gate: gate.codexCliUpdateSelectionGate(), fence: gate.createCodexCliUpdateFence() });
+  expect(worker.tryEnter()).toBe(true);
+  try {
+    const response = await callFeatureToggle(f, () => { children++; writeFileSync(f.path, f.original.replace("false", "true")); });
+    expect(response?.status).toBe(503);
+    expect(await response!.json()).toMatchObject({ error: "codex_cli_selection_busy", retryable: true });
+    expect(children).toBe(0);
+    expect(readFileSync(f.path, "utf8")).toBe(f.original);
+    expect(gate.codexCliSelectionGateState()).toBe("worker_commit");
+  } finally { worker.exit(); }
+});
+
+test("no-toggle feature request resolves its runtime inside parent admission commit", async () => {
+  const f = featureToggleFixture();
+  spies.push(spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmissionAsync").mockResolvedValue(false));
+  spies.push(spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmission").mockReturnValue(false));
+  const lock = spyOn(configWriteLock, "acquireConfigWriteLock"); spies.push(lock);
+  const worker = gate.createWorkerCommitWindow({ gate: gate.codexCliUpdateSelectionGate(), fence: gate.createCodexCliUpdateFence() });
+  let resolutions = 0, state = "", workerEntered = false, nestedEntered = false;
+  spies.push(spyOn(runtime, "resolveAndPersistCodexRuntime").mockImplementation(() => {
+    resolutions++; state = gate.codexCliSelectionGateState();
+    workerEntered = worker.tryEnter(); if (workerEntered) worker.exit();
+    const nested = gate.beginCodexCliSelectionParentWrite();
+    nestedEntered = nested.entered; if (nestedEntered) nested.exit();
+    return { runtime: { command: "codex", source: "fallback", version: null }, failures: [] };
+  }));
+  try {
+    const response = await callFeatureToggle(f);
+    expect(resolutions).toBe(1); expect(state).toBe("parent_write");
+    expect(workerEntered).toBe(false); expect(nestedEntered).toBe(true);
+    expect(response?.status).toBe(502);
+    expect(await response!.json()).toMatchObject({ error: "default_mode_request_user_input toggle failed: spawn codex ENOENT" });
+    expect(lock).not.toHaveBeenCalled(); expect(readFileSync(f.path, "utf8")).toBe(f.original);
+    expect(free()).toBe(true);
+  } finally { worker.exit(); }
+});
+
+for (const outcome of ["success", "child-failure", "cancel", "lock-failure"] as const) {
+  test(`single feature toggle holds selection across config-lock wait and releases after ${outcome}`, async () => {
+    const controller = new AbortController(); const f = featureToggleFixture(controller.signal);
+    spies.push(spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmissionAsync").mockResolvedValue(false));
+    const reached = deferred<void>(), release = deferred<void>();
+    const acquire = configWriteLock.acquireConfigWriteLock;
+    spies.push(spyOn(configWriteLock, "acquireConfigWriteLock").mockImplementation(async (...args) => {
+      reached.resolve(); await release.promise;
+      return outcome === "lock-failure" ? { ok: false as const, error: "locked" as const } : acquire(...args);
+    }));
+    let children = 0, childGate = ""; let workerEntered = false;
+    const worker = gate.createWorkerCommitWindow({ gate: gate.codexCliUpdateSelectionGate(), fence: gate.createCodexCliUpdateFence() });
+    const pending = callFeatureToggle(f, () => {
+      children++; childGate = gate.codexCliSelectionGateState();
+      workerEntered = worker.tryEnter(); if (workerEntered) worker.exit();
+      if (outcome === "child-failure") throw new Error("fixture child failure");
+      writeFileSync(f.path, f.original.replace("false", "true"));
+    });
+    try {
+      await reached.promise;
+      expect(gate.codexCliSelectionGateState()).toBe("parent_write");
+      const entered = worker.tryEnter(); if (entered) worker.exit();
+      expect(entered).toBe(false);
+      if (outcome === "cancel") controller.abort();
+      release.resolve();
+      const response = await pending;
+      expect(response?.status).toBe(outcome === "success" ? 200 : outcome === "cancel" ? 503 : 502);
+      expect(children).toBe(outcome === "cancel" || outcome === "lock-failure" ? 0 : 1);
+      if (children) { expect(childGate).toBe("parent_write"); expect(workerEntered).toBe(false); }
+      expect(readFileSync(f.path, "utf8")).toBe(outcome === "success" ? f.original.replace("false", "true") : f.original);
+      expect(existsSync(f.path + ".ocx-write.lock")).toBe(false);
+      expect(free()).toBe(true);
+    } finally { release.resolve(); await pending; worker.exit(); }
+  });
+}
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 async function nativeTerminalStore() {

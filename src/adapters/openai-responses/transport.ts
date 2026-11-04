@@ -1,25 +1,17 @@
 import type { IncomingMeta } from "../base";
 import type { OcxProviderConfig } from "../../types";
 import {
+  FORWARD_HEADERS,
   CODEX_ATTESTATION_HEADER,
-  CODEX_INSTALLATION_ID_HEADER,
   CODEX_RESPONSES_LITE_HEADER,
-  CODEX_TURN_METADATA_HEADER,
-  deriveCodexAccountInstallationId,
-  rewriteTurnMetadataInstallationId,
+  isolateCodexPoolAccountHeaders,
 } from "../../codex/forward-transport-headers";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers-destination";
 import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
 import { AGENT_ASSERTION_HEADER } from "../../lib/authorization-scheme";
 import { openaiResponsesUrl } from "../openai-responses-url";
 
-// Caller credentials are forwarded only to the canonical Codex destination, never by capability.
-export const FORWARD_HEADERS = [
-  "authorization", "chatgpt-account-id", "openai-beta", "originator", "session_id", "session-id",
-  "thread-id", "x-client-request-id", "x-codex-beta-features", "x-codex-installation-id",
-  "x-codex-parent-thread-id", "x-codex-turn-metadata", "x-codex-turn-state", "x-codex-window-id",
-  "x-oai-attestation", "x-openai-subagent", "x-responsesapi-include-timing-metrics", "version", CODEX_RESPONSES_LITE_HEADER,
-];
+export { FORWARD_HEADERS } from "../../codex/forward-transport-headers";
 
 /** Carry permitted client metadata across an internal compact handoff, never credentials. */
 export function copyResponsesClientMetadata(target: Headers, incoming: Headers, provider: OcxProviderConfig): void {
@@ -55,16 +47,20 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
     url = `${baseUrl}/responses`;
     if (provider.headers) Object.assign(headers, provider.headers);
     const runtimeProvider = provider as {
-      _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
+      _codexAccountOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" };
       _codexAccountRequired?: boolean;
     };
     if (mayForwardCallerCredentials && runtimeProvider._codexAccountRequired && !runtimeProvider._codexAccountOverride) {
       throw new Error("Codex pool account auth is required but unavailable");
     }
     if (mayForwardCallerCredentials) {
+      // Caller-existence gates also apply when provider defaults use mixed casing.
+      for (const name of Object.keys(headers)) {
+        if (["x-codex-installation-id", "x-codex-turn-metadata", CODEX_ATTESTATION_HEADER].includes(name.toLowerCase())) delete headers[name];
+      }
       for (const name of FORWARD_HEADERS) {
         const value = incoming.headers.get(name);
-        if (!value) continue;
+        if (value === null) continue;
         if (name === CODEX_RESPONSES_LITE_HEADER) {
           for (const existing of Object.keys(headers)) {
             if (existing.toLowerCase() === name) delete headers[existing];
@@ -75,19 +71,14 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
     }
     const override = runtimeProvider._codexAccountOverride;
     if (override && mayForwardCallerCredentials) {
-      headers.authorization = `Bearer ${override.accessToken}`;
-      headers["chatgpt-account-id"] = override.chatgptAccountId;
-      delete headers[CODEX_ATTESTATION_HEADER];
-      if (override.chatgptAccountId?.trim()) {
-        const installId = headers[CODEX_INSTALLATION_ID_HEADER];
-        if (installId && installId.trim()) {
-          headers[CODEX_INSTALLATION_ID_HEADER] = deriveCodexAccountInstallationId(override.chatgptAccountId, installId);
-        }
-        const turnMeta = headers[CODEX_TURN_METADATA_HEADER];
-        if (turnMeta) {
-          headers[CODEX_TURN_METADATA_HEADER] = rewriteTurnMetadataInstallationId(turnMeta, override.chatgptAccountId);
-        }
-      }
+      const selected = new Headers(headers);
+      selected.set("authorization", `Bearer ${override.accessToken}`);
+      selected.set("chatgpt-account-id", override.chatgptAccountId);
+      selected.delete(CODEX_ATTESTATION_HEADER);
+      if (override.kind !== "main-pool") isolateCodexPoolAccountHeaders(selected, override.chatgptAccountId);
+      // Replace every casing of managed fields after static headers and caller headers merge.
+      for (const name of Object.keys(headers)) delete headers[name];
+      selected.forEach((value, name) => { headers[name] = value; });
     } else if (mayForwardCallerCredentials) {
       // dual_header runtime assertion: first-party Direct only, beside the caller's own Bearer.
       // A pool override above never carries it, and non-canonical transports never see it.

@@ -295,8 +295,8 @@ describe("Kiro completion through public server endpoints", () => {
             { type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] },
             { type: "compaction_trigger" },
           ],
-          // Routed compaction must strip the structured-output request: the Kiro guard
-          // refuses structured output, and a surviving json_schema would constrain what has
+          // Routed compaction must strip the structured-output request: Kiro would emulate a
+          // surviving json_schema through its structured-output tool and constrain what has
           // to be a plain prose summary.
           text: { format: { type: "json_schema", name: "answer", schema: { type: "object" } } },
         }),

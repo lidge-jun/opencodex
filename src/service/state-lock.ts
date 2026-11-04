@@ -15,6 +15,7 @@ import {
   type BigIntStats,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { statTimeMs } from "../lib/file-identity";
 
 const SERVICE_STATE_LOCK_WAIT_MS = 2_000;
 const SERVICE_STATE_LOCK_POLL_MS = 20;
@@ -116,7 +117,7 @@ function readLockSnapshot(lockPath: string): ServiceStateLockSnapshot | null {
     if (!currentLock.isDirectory() || !sameIdentity(lockIdentity, currentLock)
       || !currentOwner.isFile() || !sameIdentity(ownerIdentity, currentOwner)
       || currentOwner.size !== ownerIdentity.size) return null;
-    return { record, ownerPath, lockIdentity, ownerIdentity, mtimeMs: Number(ownerIdentity.mtimeNs) / 1e6 };
+    return { record, ownerPath, lockIdentity, ownerIdentity, mtimeMs: statTimeMs(ownerIdentity.mtimeNs) };
   } catch {
     return null;
   }
