@@ -28,6 +28,11 @@ const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
   /\b(?:context\s+(?:window|length|limit)|model(?:'s)?\s+context(?:\s+(?:window|length|limit))?)\b.{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted|at\s+capacity)\b/i,
 ];
 
+/** Explicit provider wording that an input is too long for a model's context capacity. */
+const CONTEXT_WINDOW_TOO_LONG_VERDICTS: readonly RegExp[] = [
+  /\b(?:prompt|input|request|messages?)\s+(?:is|are|was|were)\s+too\s+long\s+for\b.{0,60}\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+];
+
 /**
  * Short provider verdicts that a validation error could otherwise echo as the caller's own value
  * (#7443). Each counts only at the very start of the provider's leaf message, after JSON envelopes
@@ -73,6 +78,7 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
     || CONTEXT_WINDOW_POSITION_VERDICTS.some(verdict => verdict.test(text))
+    || CONTEXT_WINDOW_TOO_LONG_VERDICTS.some(verdict => verdict.test(text))
     || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 
@@ -113,8 +119,18 @@ export function isDefiniteContextOverflow(status: number, message: string, match
       .find((candidate): candidate is Record<string, unknown> =>
         !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
         && typeof (candidate as Record<string, unknown>).message === "string");
-    if (!source || isParameterValidationRecord(source)) return false;
-    text = (source.message as string).trim();
+    if (source) {
+      if (isParameterValidationRecord(source)) return false;
+      text = (source.message as string).trim();
+      continue;
+    }
+    // Some gateways put their complete diagnostic in a string-valued `error` field rather
+    // than the usual `{ error: { message } }` envelope. Read only that bounded leaf; a code
+    // elsewhere in the JSON still cannot establish an overflow by itself.
+    const errorText = [record.error, response?.error, response?.last_error, record.last_error]
+      .find((candidate): candidate is string => typeof candidate === "string");
+    if (errorText === undefined) return false;
+    text = errorText.trim();
   }
   return false;
 }
