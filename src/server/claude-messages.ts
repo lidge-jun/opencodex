@@ -1,3 +1,5 @@
+import { MessagesSseFrameContext } from "../lib/messages-sse-error-presentation";
+import { createMessagesSseErrorFilter } from "./messages-sse-error-filter";
 import { normalizeMessagesProxyRefusal, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
 import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, isProxyError, markProxyError, carryProxyError, attachComboFailureEvidence, comboFailureEvidence } from "../lib/client-error-body";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
@@ -396,7 +398,8 @@ async function anthropicNativePassthrough(
   };
   const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   if (upstream.ok && contentType.includes("text/event-stream") && upstream.body) {
-    return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize, bodyGuard), {
+    const frames = new MessagesSseFrameContext();
+    return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize, bodyGuard, frames, createMessagesSseErrorFilter(frames)), {
       status: upstream.status,
       headers: {
         ...rateLimitHeaders,

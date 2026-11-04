@@ -856,7 +856,7 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
     const errorFrame = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim()) as { type: string; error: { type: string; message: string } };
     expect(errorFrame.type).toBe("error");
     expect(errorFrame.error.type).toBe("api_error");
-    expect(errorFrame.error.message).toContain("anthropic passthrough upstream stream failed: ");
+    expect(errorFrame.error.message).toBe("anthropic passthrough upstream stream failed");
     // The committed request is not replayed.
     expect(upstream.requests()).toBe(1);
 
@@ -1382,7 +1382,7 @@ test("a native stream over the byte cap logs a 502 incomplete row and keeps its 
   const upstream = Bun.serve({ port: 0, fetch: () => new Response(PARTIAL_TURN_SSE, { headers: { "content-type": "text/event-stream" } }) });
   try {
     const { text, row, usage } = await stalledStreamRow(upstream, { bodyMaxBytes: 64 });
-    expect(text).toContain("exceeded 64 bytes");
+    expect(text).toContain("anthropic passthrough body exceeded the safe limit");
     expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
     expect(row.failureDetail).toEqual({ code: "body_overflow", value: 64 });
     expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });

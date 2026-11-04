@@ -314,3 +314,6 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 Codex compaction can select a request-local model through the
 [existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
 manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary. Only explicit `reasoningRetention.enabled: true` (advanced, default off) makes routed v1/v2 compaction use `src/responses/reasoning-retention.ts` to keep readable reasoning out of the summarizer: text within the smaller of 20% of the compacting window and 100000 estimated tokens (both configurable) returns as exact historical context after a readable summary succeeds; an unknown window uses the absolute cap. Overflow is archived under the resolved OpenCodex home with a path notice. Native compact and opaque compaction output retain their original protocols.
+
+- **INV-MESSAGES-SSE-01** — Messages SSE contains data only after a completed eligible first-field error declaration. Other blocks retain exact bytes and logical enqueue timing, including later error declarations.
+  Enforced by `tests/server/messages-sse-error-filter.test.ts`.

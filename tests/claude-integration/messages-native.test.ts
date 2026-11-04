@@ -495,7 +495,7 @@ describe("managed native Messages", () => {
       expect(text).toContain("streamed");
       expect(text).toContain("\n\nevent: error\ndata: ");
       expect(text).toContain('"type":"api_error"');
-      expect(text).toContain("anthropic passthrough upstream stream failed: ");
+      expect(text).toContain('"message":"anthropic passthrough upstream stream failed"');
       expect(truncated.requests()).toBe(1);
       const row = rowFor(requestId);
       expect(row.status).toBe(502);
@@ -550,7 +550,7 @@ describe("managed native Messages", () => {
     const config = fixtureConfig(startUpstream(ok), { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
     expect(response.status).toBe(200);
-    expect(text).toContain("exceeded 64 bytes");
+    expect(text).toContain("anthropic passthrough body exceeded the safe limit");
     const row = rowFor(requestId);
     expect(row.status).toBe(502);
     expect(row.terminalStatus).toBe("incomplete");

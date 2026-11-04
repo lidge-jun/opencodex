@@ -657,6 +657,21 @@ These endpoints speak the Anthropic Messages dialect used by Claude Code and com
 Most requests are translated to Responses, routed normally, then translated back to Anthropic JSON
 or Anthropic SSE.
 
+Native and caller-forward SSE use error-response normalization only when the first non-comment
+field of a block is exactly `event:error` or `event: error`. Comments pass through without consuming
+that slot. Data/id/retry/other-event/unknown-first blocks retain their bytes and delivery timing,
+even if a later field names error; their error data is outside this normalization scope. Protocol
+control fields remain unchanged. No possible-event prefix is delayed.
+
+After an eligible declaration, one error suffix is held up to 1 MiB. Within the bound, a later
+non-error rename replays the original suffix unchanged after the boundary decision; that suffix is
+delayed. Otherwise the full selected SDK diagnostic determines fixed error wording and recovery.
+Above the bound, even a later rename forces api_error with no code and the fixed sentence
+`The provider stream reported an error.`, containing no compaction phrase. This OVERSIZE-1M
+exception changes error data/recognition with HTTP status unchanged. The independent FOLD-502
+exception changes native non-stream collected-error envelopes from 200 to 502; it retains their
+existing payload presentation. Buffered successful passthrough bodies retain their original bytes.
+
 On translated Messages requests, reasoning replay shares the request's translation budget.
 Envelope admission includes encoding/decoding copy overhead, not just the original signature
 length. Requests exceeding this budget return HTTP 413 with `translation_buffer_limit`;

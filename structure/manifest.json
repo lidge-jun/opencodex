@@ -571,7 +571,12 @@
         "src/server/messages-native.ts",
         "src/claude/outbound.ts",
         "src/protocols/encoders/messages.ts",
-        "src/protocols/encoders/adapter-events.ts"
+        "src/protocols/encoders/adapter-events.ts",
+        "src/lib/messages-sse-error-presentation.ts",
+        "src/server/messages-sse-error-filter.ts",
+        "src/server/messages-native-tool-guard.ts",
+        "src/server/messages-shared.ts",
+        "src/server/sse-payload-rewrite.ts"
       ]
     },
     {

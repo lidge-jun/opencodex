@@ -375,7 +375,7 @@ Responses retains its existing custom-header contract.
 
 Claude Messages preserves the classified `context_length_exceeded` error (`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, `src/server/claude-messages.ts`): one streaming `invalid_request_error` terminal, or HTTP 400 without a retry hint when collected or failed-JSON.
 Buffered and converted error writers use the fixed `CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after their original overflow-versus-throughput decision; type/code presence and final status follow each lane's original decision, independently of message replacement.
-The native streaming lane retains its separate `claudeOverflowSsePayload`/`anthropicErrorBody` behavior, including stated counts and throughput text. That rewrite sits after the log tap so stall timing reads raw bytes; Anthropic pools skip it. Buffered native refusals use the fixed wording without adding a code.
+The configured native streaming lane retains its separate `claudeOverflowSsePayload` rewrite after the log tap, so stall timing and observers read the original bytes; Anthropic pools skip that rewrite. Final client enqueue applies [first-field error-response normalization](error-detail.md#messages-error-bodies-and-headers), replacing eligible data with fixed wording under its 1 MiB bound. FOLD-502 changes the native collected-error final status only; OVERSIZE-1M changes over-bound error data/recognition with issued status unchanged. Buffered native refusals use the fixed wording without adding a code.
 This adds no recovery send or context pruning; replay refusal and translation-buffer limits keep their handling.
 History: `devlog/_plan/261009_claude_1m_default/010_prompt_too_long_envelope.md`.
 
