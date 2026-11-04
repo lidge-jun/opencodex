@@ -118,12 +118,13 @@ event-stream token. A caller can still opt into inspecting a response without a 
 
 Native post-header reset recovery shares that boundary, because it is asking the same question
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
-`headers-only` before any parsed event, `protocol-prelude` after `response.created`,
-`semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A `response.created` whose snapshot already carries output items is not a
-prelude.
+`headers-only` before any parsed event other than a Codex metadata frame, `protocol-prelude` after
+`response.created`, `semantic-output` once anything else arrives, including a payload it could not
+parse — and the resend gate decides. A `response.created` whose snapshot already carries output
+items is not a prelude.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
+  Codex metadata frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
@@ -133,6 +134,14 @@ prelude.
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
+
+The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.response.metadata` into
+the same body, usually before `response.created`. These frames are rebuilt from quota and header
+metadata, so the preflight treats them like the lifecycle preamble: they neither commit the child
+nor end inspection. Any other unknown event type still commits. Before #8107 a rate-limit frame
+committed a native Codex target, so a zero-output `server_is_overloaded` refusal after it was relayed
+in a 200 stream and the combo never tried its next target.
+`tests/responses/combo-codex-ws-overload-failover.test.ts` covers that hop.
 
 The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
 relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
