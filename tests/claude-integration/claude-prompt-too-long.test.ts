@@ -229,7 +229,7 @@ describe("native Messages lane", () => {
     const { response, text } = await send(nativeConfig(sseReply), true);
     expect(response.status).toBe(200);
     const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
-    expect(data.error.message).toBe("prompt is too long: Your request exceeded model token limit: 262144");
+    expect(data.error.message).toBe("prompt is too long: The request exceeds the model's context window.");
   });
 
   test("bounds oversized overflow messages on the managed native SSE route", async () => {
@@ -242,7 +242,7 @@ describe("native Messages lane", () => {
     })), true);
     expect(response.status).toBe(200);
     const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
-    expect(data.error.message).toBe(`prompt is too long: ${message.slice(0, 64 * 1024)}`);
+    expect(data.error.message).toBe("prompt is too long: The request exceeds the model's context window.");
   });
 
   test("stall detection still times raw upstream bytes, not whole rewritten frames", async () => {
