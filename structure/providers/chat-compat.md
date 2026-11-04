@@ -230,7 +230,16 @@ Calls emitted before the first matched output stay together as one assistant bat
 their outputs in call order; hook-injected messages that split the batch move after it without being
 dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
 batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
-and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
+and missing, reused-call-id, or backwards call/result pairs are left for the upstream to reject rather
+than guessed.
+
+Repeated outputs for one call are recorded history, not an ambiguity: Codex code mode emits a yield
+marker for a running cell, then each late `notify()`/wait output for the same `call_id`.
+`mergeRepeatedResponsesToolOutputs` joins them in arrival order at the first output; strings stay
+strings, a mixed set becomes content parts, and only the unambiguous shape (one call, all outputs
+after it) is merged. The Chat route folds a repeat into the `role:"tool"` reply that already answered
+the call ("Duplicate tool output for call_id" is that 400), and OpenGateway's Responses parser reports
+the same history as a tool-role adjacency error, so its input projection merges before adjacency.
 
 That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider name. Kimi's Code Plan
 Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),

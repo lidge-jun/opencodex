@@ -1347,7 +1347,7 @@
     "responses-native-item-extensions.test.ts": "responses",
     "responses-native-item-extensions-compact.test.ts": "responses",
     "responses-main-quota-observation.test.ts": "responses", "compaction-continuation-note.test.ts": "responses", "compaction-continuation-wire.test.ts": "responses",
-    "external-task-input-repair.test.ts": "responses",
+    "external-task-input-repair.test.ts": "responses", "responses-repeated-tool-outputs.test.ts": "responses",
     "openai-responses-summary-none.test.ts": "responses",
     "responses-forward-output-cap.test.ts": "responses",
     "opencode-cli.test.ts": "providers",
