@@ -37,7 +37,7 @@ function sanitizeZenToolParameters(value: unknown): unknown {
   return out;
 }
 
-function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
+function ensureZenRootObjectSchema(schema: unknown, sanitizeNested = true): Record<string, unknown> {
   const obj = schema && typeof schema === "object" && !Array.isArray(schema)
     ? schema as Record<string, unknown>
     : {};
@@ -46,14 +46,14 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
   const rootType = obj.type;
   const rootObjectType = rootType === "object" || (Array.isArray(rootType) && rootType.includes("object"));
   if (!hasComposition) {
-    const base = sanitizeZenToolParameters(obj) as Record<string, unknown>;
+    const base = (sanitizeNested ? sanitizeZenToolParameters(obj) : { ...obj }) as Record<string, unknown>;
     return rootObjectType && base.type === "object" ? base : { ...base, type: "object" };
   }
 
   const props: Record<string, unknown> = {};
   const required = new Set<string>();
   if (obj.properties && typeof obj.properties === "object") {
-    Object.assign(props, sanitizeZenSchemaMap(obj.properties) as Record<string, unknown>);
+    Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(obj.properties) : obj.properties);
   }
   if (Array.isArray(obj.required)) {
     for (const entry of obj.required) if (typeof entry === "string") required.add(entry);
@@ -66,7 +66,7 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
       if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
       const rec = variant as Record<string, unknown>;
       if (rec.properties && typeof rec.properties === "object") {
-        Object.assign(props, sanitizeZenSchemaMap(rec.properties) as Record<string, unknown>);
+        Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(rec.properties) : rec.properties);
       }
       if (mergeRequired && Array.isArray(rec.required)) {
         for (const entry of rec.required) if (typeof entry === "string") required.add(entry);
@@ -74,7 +74,7 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
     }
   }
 
-  const merged = sanitizeZenToolParameters(obj) as Record<string, unknown>;
+  const merged = (sanitizeNested ? sanitizeZenToolParameters(obj) : { ...obj }) as Record<string, unknown>;
   delete merged.oneOf;
   delete merged.anyOf;
   delete merged.allOf;
@@ -92,6 +92,21 @@ function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
 
 /** Azure Model Router (and Gemini-in-the-pool) 400s Codex MCP schemas whose root is a union. */
 const AZURE_CHAT_FORBIDDEN_ROOT_KEYS = ["oneOf", "anyOf", "allOf", "enum", "const", "not"] as const;
+
+/**
+ * Anthropic validates every tool `input_schema` as a plain object and answers 400
+ * "input_schema does not support oneOf, allOf, or anyOf at the top level". Gateways that
+ * front Claude behind a Chat Completions wire (new-api / EasyRouter style relays) forward the
+ * schema as-is, so a Codex MCP tool with a union root fails the whole turn. The provider-wide
+ * adapter cannot be split per model, so decide on the upstream model id: Claude ids get the
+ * same root flattening the native Anthropic adapter applies; every other model is untouched.
+ */
+function isClaudeModelId(modelId: string | undefined): boolean {
+  if (typeof modelId !== "string") return false;
+  const id = modelId.trim().toLowerCase();
+  const tail = id.slice(id.lastIndexOf("/") + 1);
+  return tail.startsWith("claude-");
+}
 
 function isAzureOpenAiChatTarget(provider: OcxProviderConfig): boolean {
   try {
@@ -576,14 +591,15 @@ export function toolsToChatFormatForProvider(
   const base = toolsToChatFormat(parsed, provider, registry);
   const azureChat = isAzureOpenAiChatTarget(provider);
   const zenChat = shouldSanitizeZenToolParameters(provider);
-  if (!base || (!zenChat && !azureChat)) return base;
+  const claudeChat = isClaudeModelId(parsed._wireModelOverride ?? parsed.modelId);
+  if (!base || (!zenChat && !azureChat && !claudeChat)) return base;
   return base.map(tool => {
     if (!tool || typeof tool !== "object") return tool;
     const functionDef = (tool as { function?: Record<string, unknown> }).function;
     if (!functionDef || typeof functionDef !== "object") return tool;
     const parameters = azureChat
       ? sanitizeAzureChatToolParameters(functionDef.parameters ?? {})
-      : ensureZenRootObjectSchema(functionDef.parameters ?? {});
+      : ensureZenRootObjectSchema(functionDef.parameters ?? {}, zenChat);
     const nextFunction: Record<string, unknown> = { ...functionDef, parameters };
     // strict: true plus a flattened schema is rejected by Gemini-in-the-pool routers.
     if (azureChat) delete nextFunction.strict;
