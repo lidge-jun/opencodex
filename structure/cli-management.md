@@ -2,7 +2,7 @@
 
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
-`ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. Local selection admission re-reads the mode and rechecks entry consent before either native or proxy writes, so a mode changed during the wait cannot reuse earlier idempotent permission. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.
+`ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. Local selection admission re-reads the mode and rechecks entry consent before either native or proxy writes, so a mode changed during the wait cannot reuse earlier idempotent permission. Generic config set/import refuse a new plaintext-mode entry and direct the operator to that coordinated transition; already-active restoration and exits remain allowed. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.
 
 ## CLI readiness diagnostics
 
@@ -78,6 +78,8 @@ Management route declarations describe actual HTTP calls only; local Lab automat
 ## Provider live operations and bounded editor input
 
 Local config set/unset/import, offline effort, custom-model add/remove and provider add/remove/default wait for config-root ACL settlement before their synchronous mutation phase. Candidate reads and validation run inside admission; invalid or unreadable authority is refused without replacing its bytes. Models/provider runners in `src/cli/dispatch.ts` use `runCliAction` for the standard usage-error message and exit 2, retaining handler `process.exitCode` on normal completion. Post-save sync keeps its existing result contract. Custom-model removal rechecks the confirmed row after any prompt and admission. The [config admission contract](config.md) owns the deadline and writer ordering.
+
+Plaintext entry in `src/cli/config-command.ts` is checked against the fresh set candidate. Import reads and validates its input before taking the synchronous config lock, then checks current mode and saves within that transaction. Existing plaintext-mode restoration, other settings, exits and the independent legacy flag retain their behavior. `tests/cli/cli-config-command.test.ts` covers canonical/normalized paths and import refusal without overwriting config bytes.
 
 Offline removal in `src/cli/provider.ts` snapshots GCP marker references before deletion and runs
 the [post-commit credential cleanup](providers/google.md#vertex-credential-markers) only after saving;
