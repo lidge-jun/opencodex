@@ -54,7 +54,7 @@ import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { captureAntigravityModelObservation, recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
-import { discoverAntigravitySiblings } from "./antigravity-discovery";
+import { antigravityActiveAccountCurrent, discoverAntigravitySiblings } from "./antigravity-discovery";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
@@ -63,7 +63,7 @@ import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
-import { fetchQoderModels } from "../../adapters/qoder/live-models";
+import { discoverQoderModels, markQoderDiscoveryCommitted, qoderDiscoveryJoinable, uncommittedQoderDiscovery } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "../../adapters/codebuddy/profiles";
 import { fetchCodeBuddyModels } from "../../adapters/codebuddy/live-models";
@@ -451,19 +451,26 @@ export async function fetchProviderModelsWithAuth(
     // fingerprint so an account switch cannot observe another account's roster, even if a caller
     // bypasses the normal config mutation path that clears provider caches.
     const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
-    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    const discoveryScope = `${name}\0${cacheGeneration}`;
+    // A finished run no gather has stored yet (the dashboard test stopped waiting for it) outranks
+    // a fresh cached roster; the cached roster stays as the fallback until this one is stored (#8115).
+    const unstored = uncommittedQoderDiscovery(profile, apiKey, discoveryScope);
+    const fresh = unstored ? null : getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
-    if (isModelsFetchCoolingDown(name) && scopedStale) {
+    // A run another caller started (the dashboard test) is joined even inside the failure
+    // cooldown: its late success is what the catalog re-sync after it is waiting for.
+    if (!unstored && isModelsFetchCoolingDown(name) && scopedStale && !qoderDiscoveryJoinable(profile, apiKey, discoveryScope)) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       ), "degraded");
     }
-    const live = await fetchQoderModels(profile, apiKey);
+    // Background discovery: waits for the full CLI bound, shared with any concurrent caller.
+    const live = unstored ?? await discoverQoderModels(profile, apiKey, discoveryScope);
     if (live.ok) {
       const discovered = live.models.map(id => ({
         id,
@@ -474,6 +481,7 @@ export async function fetchProviderModelsWithAuth(
       if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      markQoderDiscoveryCommitted(profile, apiKey, discoveryScope);
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
@@ -794,16 +802,14 @@ export async function fetchProviderModelsWithAuth(
     }
     if (antigravity) {
       if (getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
+      // A needsReauth/replacement of the active account stops every later sibling refresh and send.
+      const activeCurrent = () => isCurrentCacheGeneration() && (!auth.oauthAccountId
+        || antigravityActiveAccountCurrent(name, auth.oauthAccountId, apiKey, auth.oauthGeneration));
       const admitSiblings = resolveAuth.kind === "refreshing" && name === "google-antigravity"
         && prov.authMode === "oauth" && auth.oauthAccountId
-        ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir)
+        ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir, activeCurrent)
         : () => [];
-      if (!isCurrentCacheGeneration() || getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
-      const activeAccount = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
-      if (auth.oauthAccountId && (!activeAccount || activeAccount.paused || activeAccount.needsReauth
-        || activeAccount.credential.expires <= Date.now() || activeAccount.credential.access !== apiKey
-        || credentialGeneration(activeAccount.credential) !== auth.oauthGeneration))
-        return observed(withConfiguredRetention(configured), "degraded");
+      if (!activeCurrent() || getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
       const byId = new Map(antigravity.map(model => [model.id, model]));
       for (const model of admitSiblings()) if (!byId.has(model.id)) byId.set(model.id, model);
       const merged = [...byId.values()];

@@ -602,3 +602,18 @@ describe("sidecar abort propagation", () => {
     expect(seenAccount).toBe("pool_acc");
   });
 });
+
+for (const backend of ["search", "vision"] as const) for (const present of [false, true]) test(`${backend} uses selected installation metadata after mixed-case defaults, present=${present}`, async () => {
+  const key = "x-codex-installation-id";
+  let seen = new Headers();
+  globalThis.fetch = ((_, init) => { seen = new Headers(init?.headers); return Promise.resolve(sseText("done")); }) as typeof fetch;
+  const selected = headersForCodexAuthContext(new Headers(present ? { [key]: "caller-installation" } : {}), {
+    kind: "pool", accountId: "pool-a", generation: 1, writerGeneration: 0, accessToken: "pool-token", chatgptAccountId: "pool_acc",
+  });
+  const configured = { ...forwardProvider, headers: { "X-Codex-Installation-Id": "static-installation", "X-Oai-Attestation": "static-attestation" } };
+  if (backend === "search") await runWebSearch("query", { type: "web_search" }, configured, selected, { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 });
+  else await describeImage("data:image/png;base64,iVBORw0KGgo=", "high", "inspect", configured, selected, { model: "gpt-5.6-luna", timeoutMs: 30_000 });
+  expect(seen.get(key)).toBe(selected.get(key));
+  expect(seen.has(key)).toBe(present);
+  expect(seen.has("x-oai-attestation")).toBe(false);
+});

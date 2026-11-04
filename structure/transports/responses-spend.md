@@ -4,6 +4,17 @@ How the Responses data plane reserves credential hops and durable spend before d
 spent budget tells the client. Dispatch and retry behavior is in
 [Responses transport](responses.md) and [Responses failover](responses-failover.md).
 
+## Workflow physical-send ceiling
+
+`src/lib/workflow-budget.ts` atomically checks and claims one root slot at physical admission.
+`request-spend.ts` connects this count to both enforced and observe-only request budgets;
+reporter retries, concurrent requests and adapter-owned permits share the root's existing window.
+Unused dispatch permits consume no root sends, and cleanup cannot refund a claimed physical start.
+Observe-only reports reconcile those starts once; already-sent legacy reports remain recorded.
+Codex's bounded eight-attempt gated-model recovery may exceed its per-request allowance, but every
+retry still claims the shared root ceiling before replacing the previous upstream response.
+`tests/responses/responses-workflow-send-ceiling.test.ts` covers both spend modes and retry helpers.
+
 ## Prepaid initial sends
 
 `src/server/responses/core-combo.ts` derives each target scope before reserving its initial send.
@@ -368,12 +379,24 @@ identically with and without configured ceilings: observe-only still appends, se
 Two servers in one process and one directory share a reference-counted lease; that process cannot
 hold two directories at once. Sequential ownership is allowed and concurrent ownership is not:
 releasing the final reference discards the singleton, so a later directory replays its own
-journal instead of inheriting figures. A ledger records the ownership it was built under and
+journal instead of inheriting figures.
+Final-release hooks run before that discard while existing storage tokens remain valid; each hook
+is isolated from errors in the others. Acquiring another lease or minting storage during these
+hooks is refused. Releasing a non-final reference or releasing the same lease twice runs no hooks.
+Acquired hooks run once per new ownership generation, after the owner is recorded and before
+`acquireSpendLedgerOwner` returns; a hook error does not block acquisition, and a nested lease on an
+existing owner does not run them again. The durable Codex pool affinity store uses one to open and
+prune at startup ([Durable Codex Pool Affinity](../providers/codex-pool-affinity.md)).
+The ledger records the ownership it was built under and
 proves that exact identity on every accounting read and change, so a handle kept across a release
 and a reacquire of the same directory is refused rather than resuming over writes another owner
 may have made. File-backed journal and salt writers are owner-bound at construction, and a
 directory entry that is a link -- including one whose target does not exist -- is refused instead
-of followed. A separate process may use a separate directory. SQLite crash release permits the
+of followed. The owner database `spend-ledger-owner.sqlite` and its SQLite sidecars pass the same
+`src/lib/private-sqlite-path.ts` check before the file is created and before SQLite opens it: a link, any
+Windows reparse point, a directory or a hard link there fails acquisition with
+`SPEND_LEDGER_OWNER_UNAVAILABLE` without creating what it names. On Windows ARM64, whose Bun build
+cannot run the native attribute query, only the links and junctions `lstat` reports are refused. A separate process may use a separate directory. SQLite crash release permits the
 next owner without stale-PID or TTL reclamation.
 
 Every file check admits a ledger file only when it is a regular file, not a link, with exactly

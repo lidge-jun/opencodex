@@ -1,3 +1,4 @@
+import { clientFacingModelText, type ClientFacingModelLabel } from "../../lib/error-destination";
 /**
  * Pre-dispatch input admission (#1412).
  *
@@ -63,6 +64,8 @@ export interface InputAdmissionResult {
   estimatedTokens: number;
   /** Resolved ceiling, or null when nothing could be resolved (=> always admitted). */
   ceiling: number | null;
+  /** Actual shared context window when an input-only ceiling differs. */
+  contextWindow?: number | null;
   /** Output space reserved by the combo preflight; absent on the loose direct gate. */
   requiredOutputHeadroom?: number;
 }
@@ -310,6 +313,7 @@ export function checkComboTargetInputAdmission(
     estimatedTokens,
     ceiling,
     requiredOutputHeadroom,
+    ...(window !== ceiling ? { contextWindow: window } : {}),
   };
 }
 
@@ -325,8 +329,30 @@ export function checkInputAdmission(
   modelId: string,
   nativeContextCap?: NativeContextLimitsInput,
 ): InputAdmissionResult {
-  const ceiling = resolveInputCeiling(provider, providerName, modelId, nativeContextCap);
+  const { window, ceiling } = resolveContextLimits(provider, providerName, modelId, nativeContextCap);
   if (ceiling === null) return { admitted: true, estimatedTokens: 0, ceiling: null };
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
-  return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling };
+  return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling,
+    ...(window !== ceiling ? { contextWindow: window } : {}) };
+}
+
+export function inputAdmissionRefusalMessage(input: InputAdmissionResult, model: ClientFacingModelLabel): string {
+  const count = (value: number | null) => value !== null && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+  const label = clientFacingModelText(model);
+  const estimate = count(input.estimatedTokens);
+  const ceiling = count(input.ceiling);
+  if (input.contextWindow !== undefined && input.estimatedTokens > ceiling) {
+    const window = input.contextWindow === null ? "" : `; context window: ${count(input.contextWindow)} tokens`;
+    return `Estimated input (~${estimate} tokens) exceeds the input limit of ${label} (${ceiling} tokens${window}). `
+      + "Start a new session or choose a model with a larger input limit.";
+  }
+  const window = count(input.contextWindow ?? input.ceiling);
+  const inputLimit = input.contextWindow !== undefined ? `; input limit: ${ceiling} tokens` : "";
+  return input.requiredOutputHeadroom !== undefined
+    ? `Estimated input (~${estimate} tokens) plus ${count(input.requiredOutputHeadroom)} `
+      + `tokens of requested output headroom cannot fit the context window of ${label} `
+      + `(${window} tokens${inputLimit}).`
+    : `Estimated input (~${estimate} tokens) is far past the context window `
+      + `of ${label} (${window} tokens${inputLimit}). Start a new session or choose a `
+      + `model with a larger context window.`;
 }

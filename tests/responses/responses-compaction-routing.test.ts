@@ -1760,7 +1760,7 @@ describe("compaction combo recall after combo switch (#3891)", () => {
     expect(res.status).toBe(200);
     expect(logCtx.provider).toBe("combo");
     expect(logCtx.comboId).toBe("terra");
-    expect(logCtx.requestedModel).toBe("combo/terra");
+    expect(logCtx.requestedModel).toBe("gpt-5.6-terra");
     const json = await res.json() as { output?: Array<{ type?: string }> };
     expect((json.output ?? []).filter(item => item.type === "compaction").length).toBe(1);
   });

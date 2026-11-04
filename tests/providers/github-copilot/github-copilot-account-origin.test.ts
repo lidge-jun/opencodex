@@ -3,8 +3,8 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
-import { handleResponses } from "../../../src/server/responses";
+import { getAccountSet, saveCredential as persistCredential, setActiveAccount as selectAccount } from "../../../src/oauth/store";
+import { handleResponses as dispatchResponses } from "../../../src/server/responses";
 import { saveConfig } from "../../../src/config";
 import { setActiveProviderApiKey } from "../../../src/providers/api-keys";
 import type { OcxConfig } from "../../../src/types";
@@ -21,15 +21,82 @@ const originalHome = process.env.OPENCODEX_HOME;
 let home = "";
 let beforeBuildReturns: (() => Promise<void>) | undefined;
 let beforePacingReturns: (() => Promise<void>) | undefined;
+let currentCase: ReturnType<typeof createCaseLifetime>;
+function createCaseLifetime(cleanup: () => void) {
+  const controller = new AbortController();
+  const pending = new Set<Promise<unknown>>();
+  const responses = new Set<Response>();
+  let closed = false, closing: Promise<void> | undefined;
+  function track<T>(promise: Promise<T>): Promise<T> {
+    const observed = promise.finally(() => pending.delete(observed));
+    pending.add(observed);
+    // A timed-out test no longer awaits its work, but teardown still owns its rejection.
+    void observed.catch(() => {});
+    return observed;
+  }
+  return { controller, track, responses, get closed() { return closed; },
+    assertClosed() { if (!closed) throw new Error("previous case teardown did not settle"); },
+    close(): Promise<void> {
+      return closing ??= (async () => {
+        controller.abort();
+        while (pending.size) await Promise.allSettled([...pending]);
+        const failures: unknown[] = [];
+        for (const response of responses) {
+          try {
+            if (!response.bodyUsed) await response.body?.cancel();
+            responses.delete(response);
+          } catch (error) { failures.push(error); }
+        }
+        // A failed cancellation may still own a reader/producer. Keep its home and fence;
+        // nevertheless attempt the other bodies so one failure does not strand all of them.
+        if (failures.length) throw failures[0];
+        cleanup();
+        closed = true;
+      })();
+    },
+  };
+}
+function restoreCaseState(release: () => void, restore: Array<() => void>, removeHome: () => void): void {
+  const failures: unknown[] = [];
+  for (const step of [release, ...restore]) {
+    try { step(); } catch (error) { failures.push(error); }
+  }
+  // Restore independent globals after release failure, but never remove an uncertain live home.
+  if (failures.length) throw failures[0];
+  removeHome();
+}
+function handleResponses(...args: Parameters<typeof dispatchResponses>): Promise<Response> {
+  const owner = currentCase;
+  if (owner.controller.signal.aborted) return Promise.reject(owner.controller.signal.reason);
+  return owner.track(dispatchResponses(...args).then(response => {
+    owner.responses.add(response); owner.controller.signal.throwIfAborted(); return response;
+  }));
+}
+function responseText(response: Response): Promise<string> {
+  const owner = currentCase;
+  return owner.track(response.text().then(text => { owner.controller.signal.throwIfAborted(); return text; }));
+}
+function saveCredential(...args: Parameters<typeof persistCredential>) {
+  const owner = currentCase;
+  if (owner.controller.signal.aborted) return Promise.reject(owner.controller.signal.reason);
+  return owner.track(persistCredential(...args).then(value => { owner.controller.signal.throwIfAborted(); return value; }));
+}
+function setActiveAccount(...args: Parameters<typeof selectAccount>) {
+  const owner = currentCase;
+  if (owner.controller.signal.aborted) return Promise.reject(owner.controller.signal.reason);
+  return owner.track(selectAccount(...args).then(value => { owner.controller.signal.throwIfAborted(); return value; }));
+}
 const actualPacing = await import("../../../src/providers/request-pacing");
 const originalWaitForSlot = actualPacing.waitForProviderRequestSlot;
 mock.module("../../../src/providers/request-pacing", () => ({
   ...actualPacing,
   waitForProviderRequestSlot: async (...args: Parameters<typeof originalWaitForSlot>) => {
+    const owner = currentCase;
     const result = await originalWaitForSlot(...args);
+    if (args[3]?.aborted || owner.controller.signal.aborted) return result;
     const gate = beforePacingReturns;
     beforePacingReturns = undefined;
-    await gate?.();
+    if (gate) await owner.track(gate());
     return result;
   },
 }));
@@ -38,13 +105,15 @@ const originalResolveAdapter = actualAdapterResolver.resolveAdapter;
 mock.module("../../../src/server/adapter-resolve", () => ({
   ...actualAdapterResolver,
   resolveAdapter: (...args: Parameters<typeof originalResolveAdapter>) => {
+    const owner = currentCase;
     const adapter = originalResolveAdapter(...args);
     const build = adapter.buildRequest.bind(adapter);
     adapter.buildRequest = async (...buildArgs) => {
       const built = await build(...buildArgs);
+      if (buildArgs[1]?.abortSignal?.aborted || owner.controller.signal.aborted) return built;
       const gate = beforeBuildReturns;
       beforeBuildReturns = undefined;
-      await gate?.();
+      if (gate) await owner.track(gate());
       return built;
     };
     return adapter;
@@ -79,6 +148,7 @@ function request(wire: Wire, extra: Record<string, unknown> = {}): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal: currentCase.controller.signal,
     body: JSON.stringify({ model: `github-copilot/${model}`, input: "hello", stream: false, ...extra }),
   });
 }
@@ -188,12 +258,21 @@ function installFetch(options: {
   return { dispatches };
 }
 
-let releaseSpendHome: (() => void) | undefined;
-
 beforeEach(() => {
+  // A hook timeout must not install a new fetch/home while an old teardown is still draining.
+  currentCase?.assertClosed();
   beforeBuildReturns = undefined;
   beforePacingReturns = undefined;
   home = mkdtempSync(join(tmpdir(), "ocx-copilot-origin-"));
+  const ownedHome = home;
+  let releaseSpendHome: (() => void) | undefined;
+  currentCase = createCaseLifetime(() => restoreCaseState(
+    () => { releaseSpendHome?.(); },
+    [() => { globalThis.fetch = originalFetch; }, clearGenericFailoverHealth,
+      () => { if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = originalHome; }],
+    () => removeTreeWithRetry(ownedHome),
+  ));
   process.env.OPENCODEX_HOME = home;
   clearGenericFailoverHealth();
   // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
@@ -201,19 +280,78 @@ beforeEach(() => {
   releaseSpendHome = acquireOwnedSpendHome();
 });
 
-afterEach(() => {
-  // Released before this case's home is removed: an open lease inside a directory being
-  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
-  globalThis.fetch = originalFetch;
-  clearGenericFailoverHealth();
-  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = originalHome;
-  removeTreeWithRetry(home);
-});
+afterEach(async () => { await currentCase?.close(); });
 
 describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
+  test.each(["locked", "reject"] as const)("teardown attempts all bodies and retains the fence after %s cancellation", async mode => {
+    const firstError = new Error("fixture cancel failed");
+    let cleanupCalls = 0, otherCancels = 0;
+    const owner = createCaseLifetime(() => { cleanupCalls++; });
+    const first = new Response(new ReadableStream({ cancel() { if (mode === "reject") throw firstError; } }));
+    const reader = mode === "locked" ? first.body!.getReader() : undefined;
+    const second = new Response(new ReadableStream({ cancel() { otherCancels++; } }));
+    owner.responses.add(first); owner.responses.add(second);
+    try {
+      const closing = owner.close();
+      const failure = await closing.then(() => undefined, error => error);
+      if (mode === "reject") expect(failure).toBe(firstError);
+      else expect(failure).toBeInstanceOf(TypeError);
+      expect(owner.close()).toBe(closing);
+      expect(otherCancels).toBe(1);
+      expect(owner.responses.has(first)).toBe(true);
+      expect(owner.responses.has(second)).toBe(false);
+      expect(cleanupCalls).toBe(0);
+      expect(owner.closed).toBe(false);
+      expect(() => owner.assertClosed()).toThrow("did not settle");
+    } finally { if (reader) { await reader.cancel(); reader.releaseLock(); } }
+  });
+
+  test("release failure restores every independent global but preserves the home and first error", async () => {
+    const firstError = new Error("fixture release failed"), calls: string[] = [];
+    const owner = createCaseLifetime(() => restoreCaseState(
+      () => { calls.push("release"); throw firstError; },
+      [() => { calls.push("fetch"); }, () => { calls.push("health"); throw new Error("later failure"); },
+        () => { calls.push("home-env"); }],
+      () => { calls.push("remove-home"); },
+    ));
+    const closing = owner.close();
+    expect(await closing.then(() => undefined, error => error)).toBe(firstError);
+    expect(calls).toEqual(["release", "fetch", "health", "home-env"]);
+    expect(owner.close()).toBe(closing);
+    expect(owner.closed).toBe(false);
+    expect(() => owner.assertClosed()).toThrow("did not settle");
+  });
+
+  test.each(["pacing", "build"] as const)("teardown joins a held %s gate before replacing the case fetch", async phase => {
+    await seedAccounts();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const held = async () => { entered.resolve(); await release.promise; };
+    if (phase === "pacing") beforePacingReturns = held;
+    else beforeBuildReturns = held;
+    installFetch({ wire: "chat", statuses: [200], switchOn: "never" });
+    const ownedFetch = globalThis.fetch, ownedHome = home, owner = currentCase;
+    const pending = handleResponses(request("chat"), config("chat"), { model: "", provider: "" });
+    const settled = pending.then(() => {}, () => {});
+    try {
+      await Promise.race([entered.promise, pending.then(() => { throw new Error("request ended before fixture gate"); })]);
+      let finished = false;
+      const closing = owner.close();
+      void closing.then(() => { finished = true; });
+      expect(owner.close()).toBe(closing);
+      expect(owner.controller.signal.aborted).toBe(true);
+      expect(() => owner.assertClosed()).toThrow("previous case teardown did not settle");
+      await Promise.resolve();
+      expect(finished).toBe(false);
+      expect(globalThis.fetch).toBe(ownedFetch); expect(process.env.OPENCODEX_HOME).toBe(ownedHome);
+      release.resolve(); await closing; await settled;
+      expect(() => owner.assertClosed()).not.toThrow();
+      const next = installFetch({ wire: "chat", statuses: [200], switchOn: "never" });
+      await Promise.resolve();
+      expect(next.dispatches).toEqual([]);
+    } finally { release.resolve(); await owner.close(); await settled; globalThis.fetch = originalFetch; }
+  });
+
   test.each(["chat", "responses", "image", "web-search"] as const)("%s API-key dispatch uses a selection committed during pacing", async path => {
     const cfg = config("chat");
     cfg.defaultProvider = "fixture";
@@ -238,7 +376,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       model: "fixture/model", stream: path === "image" || path === "web-search",
       ...(path === "image" || path === "web-search" ? { tools: [{ type: path === "image" ? "image_generation" : "web_search" }] } : {}),
     }), cfg, { model: "", provider: "" });
-    expect(await response.text()).toContain("ok");
+    expect(await responseText(response)).toContain("ok");
     expect(sent).toEqual(["Bearer synthetic-b"]);
   });
 
@@ -267,7 +405,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
         { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
       ] }],
     }), cfg, { model: "", provider: "" });
-    expect(await response.text()).toContain("ok");
+    expect(await responseText(response)).toContain("ok");
     expect(sent).toEqual(["Bearer synthetic-anthropic-b", "Bearer synthetic-anthropic-b"]);
   });
 
@@ -278,7 +416,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     const cfg = config("chat");
     cfg.emptyCompletionRetry = true;
     const response = await handleResponses(request("chat"), cfg, { model: "", provider: "" });
-    expect(await response.text()).toContain("ok");
+    expect(await responseText(response)).toContain("ok");
     expect(observed.dispatches).toEqual([
       { origin: ACCOUNT_B_ORIGIN, authorization: bearer("copilot-access-b") },
       { origin: ACCOUNT_B_ORIGIN, authorization: bearer("copilot-access-b") },
@@ -299,7 +437,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     const response = await handleResponses(request("chat", {
       stream: true, tools: [{ type: path === "image" ? "image_generation" : "web_search" }],
     }), cfg, { model: "", provider: "" });
-    expect(await response.text()).toContain("ok");
+    expect(await responseText(response)).toContain("ok");
     expect(observed.dispatches).toEqual([{ origin: ACCOUNT_B_ORIGIN, authorization: bearer("copilot-access-b") }]);
   });
 
@@ -324,7 +462,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     const cfg = config("chat");
     cfg.webSearchSidecar = { enabled: true, backend: "exa", exaApiKey: "synthetic-search-key" };
     const response = await handleResponses(request("chat", { stream: true, tools: [{ type: "web_search" }] }), cfg, { model: "", provider: "" });
-    expect(await response.text()).toContain("ok after search");
+    expect(await responseText(response)).toContain("ok after search");
     expect(sent).toEqual(["Bearer copilot-access-b", "Bearer copilot-access-b"]);
     expect(bodies[1]!.messages.some(message => message.role === "tool")).toBe(true);
   });
@@ -337,7 +475,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     let sends = 0;
     globalThis.fetch = (async () => { sends++; return successResponse("chat"); }) as typeof fetch;
     const response = await handleResponses(request("chat", { model: "fixture/model" }), cfg, { model: "", provider: "" });
-    await response.text();
+    await responseText(response);
     expect(response.status).not.toBe(200);
     expect(sends).toBe(0);
   });
@@ -348,7 +486,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       beforePacingReturns = async () => { await setActiveAccount("github-copilot", accounts.b); };
       const observed = installFetch({ wire, statuses: [200], switchOn: "never" });
       const response = await handleResponses(request(wire), config(wire), { model: "", provider: "" });
-      await response.text();
+      await responseText(response);
       expect(response.status).toBe(200);
       expect(observed.dispatches).toEqual([{ origin: ACCOUNT_B_ORIGIN, authorization: bearer("copilot-access-b") }]);
     });
@@ -357,7 +495,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       beforeBuildReturns = async () => { await setActiveAccount("github-copilot", accounts.b); };
       const observed = installFetch({ wire, statuses: [200], switchOn: "never" });
       const response = await handleResponses(request(wire), config(wire), { model: "", provider: "" });
-      await response.text();
+      await responseText(response);
       expect(response.status).toBe(200);
       expect(observed.dispatches).toEqual([{ origin: ACCOUNT_B_ORIGIN, authorization: bearer("copilot-access-b") }]);
     });
@@ -371,7 +509,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       });
 
       const response = await handleResponses(request(wire), config(wire), { model: "", provider: "" });
-      await response.text();
+      await responseText(response);
 
       expect(response.status).toBe(200);
       expect(observed.dispatches).toEqual([{
@@ -390,7 +528,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       });
 
       const response = await handleResponses(request(wire), config(wire), { model: "", provider: "" });
-      await response.text();
+      await responseText(response);
 
       expect(response.status).toBe(200);
       expect(observed.dispatches).toEqual([
@@ -405,7 +543,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     const observed = installFetch({ wire: "chat", statuses: [429, 200], switchOn: "never" });
 
     const response = await handleResponses(request("chat"), config("chat"), { model: "", provider: "" });
-    await response.text();
+    await responseText(response);
 
     expect(response.status).toBe(200);
     expect(observed.dispatches).toEqual([

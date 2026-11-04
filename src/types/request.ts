@@ -181,6 +181,13 @@ export interface OcxParsedRequest {
    */
   _structuredOutput?: boolean;
   /**
+   * True for a Claude Messages `output_config.format` json_schema. Anthropic promises an answer
+   * that conforms to that schema, whatever `strict` the Responses translation states for
+   * OpenAI-compatible destinations, so an emulating adapter (Kiro) holds it to full conformance.
+   * Process-local; never forwarded.
+   */
+  _structuredOutputConformance?: boolean;
+  /**
    * True when the input carried `{type:"compaction_trigger"}` — Codex remote compaction v2 asking
    * this turn to produce a `{type:"compaction"}` output item. Routed adapters can't natively;
    * the server runs the model as a summarizer and the bridge emits a synthetic compaction item
@@ -414,7 +421,7 @@ export interface OcxRequestOptions {
    * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
    * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts.
    * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
-   * keeps rejecting structured output via `_structuredOutput`.
+   * emulates it through a private structured-output tool (src/adapters/kiro/structured-output.ts).
    */
   textFormat?: {
     type: "json_schema" | "json_object";

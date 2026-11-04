@@ -1,7 +1,7 @@
 import { isolateCodexShimEnvironment, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexShimAutoRestoreResult } from "../../src/codex/shim";
@@ -14,6 +14,7 @@ import {
 import { autoRestoreCodexShim, CODEX_SHIM_STATE_MAX_BYTES, installCodexShim } from "../../src/codex/shim";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { issueOrchestratedResultCapability } from "../../src/update/orchestrated-session.mjs";
 
 isolateCodexShimEnvironment();
 
@@ -53,6 +54,10 @@ describe("Codex shim CLI auto-restore policy", () => {
     expect(skipsCodexShimAutoRestore("system", ["system", "update", "check"])).toBe(false);
     // resolve is read-only inspection for embedding shells: a lookup made to populate a
     // consent surface must not trigger a shim repair side effect first.
+    for (const args of [["capabilities"], ["update", "--plan"], ["update", "--yes", "--json"], ["update", "--plan", "--bad"], ["update", "--not-after", "123"], ["sync"]]) {
+      expect(skipsCodexShimAutoRestore(args[0], args)).toBe(true);
+    }
+    expect(skipsCodexShimAutoRestore("update", ["update", "--tag", "latest"])).toBe(false);
     expect(skipsCodexShimAutoRestore("resolve", ["resolve"])).toBe(true);
     expect(skipsCodexShimAutoRestore("resolve", ["resolve", "--json"])).toBe(true);
     for (const command of ["status", "doctor"]) {
@@ -220,4 +225,23 @@ describe("Codex shim CLI auto-restore policy", () => {
       }
     });
   }, 30_000);
+
+  test("real orchestrated child entry does not repair a missing shim before admission", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ home, wrappers }) => {
+      rmSync(wrappers[0]);
+      const expected = Buffer.from(JSON.stringify({ home, cliRoot: home, servingRoot: null, runtimePid: null, planToken: "a".repeat(43) })).toString("base64url");
+      const resultDir = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-shim-result-")));
+      try {
+        const resultPath = join(resultDir, "result.json");
+        const { capability } = issueOrchestratedResultCapability(resultPath);
+        const result = spawnSync(process.execPath, [repoPath("src/cli/index.ts"), "update", "--version", "99.0.0",
+          "--orchestrated-expect", expected, "--orchestrated-result", resultPath], {
+          encoding: "utf8", env: { ...process.env, USERPROFILE: home, OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: capability, OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" },
+        });
+        expect(result.status).not.toBe(0);
+        expect(existsSync(wrappers[0])).toBe(false);
+      } finally { rmSync(resultDir, { recursive: true, force: true }); }
+    });
+  }, 30000);
 });

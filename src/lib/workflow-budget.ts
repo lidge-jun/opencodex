@@ -675,8 +675,8 @@ export function chargeWorkflowSends(
  * Atomically reserve one physical send under a root's live count ceiling.
  *
  * JavaScript runs this read-and-increment without an await, so concurrent request and retry
- * ladders cannot all observe the same remaining slot. Callers must refund the reservation when
- * the dispatch permit is released before use.
+ * ladders cannot all observe the same remaining slot. Call only at physical admission, after
+ * unused dispatch permits can be released; a claimed physical start remains counted.
  */
 export function reserveWorkflowSend(
   rootId: string | undefined,
@@ -691,25 +691,6 @@ export function reserveWorkflowSend(
   recordWindowedSends(state, now, 1);
   state.lastSeenMs = now;
   return true;
-}
-
-/** Return an unused physical-send reservation to its root workflow. */
-export function refundWorkflowSend(rootId: string | undefined, now: number = Date.now()): void {
-  if (!rootId) return;
-  const state = roots.get(rootId);
-  if (!state || windowedSends(state, now) <= 0) return;
-  const slotMs = windowSlotMs(state.windowMs);
-  const oldest = Math.floor(now / slotMs) - (WORKFLOW_WINDOW_SLOTS - 1);
-  let newest = -1;
-  for (let index = 0; index < WORKFLOW_WINDOW_SLOTS; index += 1) {
-    if ((state.sendSlotAt[index] ?? Number.NEGATIVE_INFINITY) < oldest) continue;
-    if ((state.sendSlotCount[index] ?? 0) <= 0) continue;
-    if (newest < 0 || state.sendSlotAt[index]! > state.sendSlotAt[newest]!) newest = index;
-  }
-  if (newest < 0) return;
-  state.sends = Math.max(0, state.sends - 1);
-  state.sendSlotCount[newest]!--;
-  state.lastSeenMs = now;
 }
 
 /**

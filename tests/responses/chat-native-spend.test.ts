@@ -19,6 +19,8 @@ import * as stateStores from "../../src/lib/state-store-registrations";
 import { translatorAggregateCurrentBytesForTests } from "../../src/lib/translator-budget";
 import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 
 let previousHome: string | undefined;
 let testDir = "";
@@ -62,6 +64,8 @@ afterEach(async () => {
   expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
   resetProviderRequestPacingForTest();
   clearKeyCooldowns();
+  resetWorkflowBudgetsForTest();
+  clearComboSelectionState(); clearComboTargetCooldowns();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -106,6 +110,33 @@ function mockConfig(baseUrl: string, providerOverrides: Partial<OcxProviderConfi
       },
     },
   } as OcxConfig;
+}
+
+for (const enforced of [false, true]) for (const combo of [false, true]) {
+  test(`native Chat workflow admissions count each retry once (spend=${enforced}, combo=${combo})`, async () => {
+    let sends = 0;
+    activeUpstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+      sends++;
+      return Response.json({ error: { message: "temporary fixture refusal" } }, { status: 503, headers: { "retry-after": "0" } });
+    } });
+    const config = mockConfig(new URL("/v1", activeUpstream.url).href, { transientRetryOn5xx: { attempts: 3 }, liveModels: false, models: ["test-model"] });
+    config.workflowBudget = { maxPhysicalSends: 2 };
+    if (enforced) config.spend = { pool: { maxTokens: 100_000 } };
+    if (combo) config.combos = { fixture: { strategy: "failover", targets: [{ provider: "mock", model: "test-model" }] } };
+    saveConfig(config);
+    activeServer = startServer(0);
+    const response = await fetch(new URL("/v1/chat/completions", activeServer.url), {
+      method: "POST", headers: { "content-type": "application/json", "x-codex-parent-thread-id": "native-count-root" },
+      body: JSON.stringify({ model: combo ? "combo/fixture" : "mock/test-model", messages: [{ role: "user", content: "fixture" }], max_tokens: 1 }),
+    });
+    await response.text();
+    expect(sends).toBe(2);
+    expect(workflowBudgetSnapshot("native-count-root")?.sends).toBe(2);
+    if (!combo) {
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+    }
+  }, 10_000);
 }
 
 test("native Chat refuses a physical send that exceeds the configured pool spend ceiling", async () => {

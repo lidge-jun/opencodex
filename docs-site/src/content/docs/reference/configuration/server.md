@@ -95,7 +95,7 @@ OpenCodex bounds how much one task may fan out. A task is the root conversation,
 | Field | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
 | `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
-| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, after which the task's new requests are refused for the rest of the 10-minute window. The count is checked when a request is admitted, so retries inside a request that was already admitted, and requests admitted concurrently, can take the total past the ceiling. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream send admissions, retries included, per 10-minute window. Every physical admission checks and claims a slot atomically, so concurrent requests and retries share the same ceiling. An unused dispatch permit consumes no slot; a claimed physical start remains counted even if it later fails. |
 | `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
 
 The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
@@ -806,7 +806,9 @@ native compaction model.
 
 OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
 `compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to
-`/v1/responses` with a `compaction_trigger` input item. Later conversation turns keep their
+`/v1/responses` with a `compaction_trigger` input item. With `codexClientCompaction` enabled,
+the local checkpoint prompt also matches when metadata specifies `compaction.implementation` as
+`"responses"`; it remains a normal text summary request. Later conversation turns keep their
 original routing and settings. Missing, malformed, or conflicting metadata does not activate the
 override, including on older clients without trigger metadata; when several copies of the
 metadata are supplied they must name the same trigger. WebSocket requests use each frame's

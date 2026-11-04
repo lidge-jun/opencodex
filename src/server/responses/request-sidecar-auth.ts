@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -111,7 +112,8 @@ export async function prepareResponsesSidecarAuth(
       // An unavailable/cooling/expired Multi credential disables the helper; it
       // must not turn a valid routed-provider request into a Codex-auth failure.
       if (
-        !(err instanceof CodexPoolAuthenticationError)
+        !(err instanceof CodexInstallationIdUnavailableError)
+        && !(err instanceof CodexPoolAuthenticationError)
         && !(err instanceof CodexAuthContextError)
         && !(err instanceof CodexAccountCooldownError)
         && !(err instanceof CodexThreadAffinityExpiredError)

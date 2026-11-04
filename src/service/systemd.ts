@@ -8,9 +8,9 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type D
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { systemdProperty } from "../service-manager-probe";
 import { writeServiceApiTokenFile, sh } from "./guards";
-import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
+import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments } from "./definition";
 import type { ServiceInstallCleanupOps } from "./orchestration";
-import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, writeServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, writeServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 
 /** The `--port <n>` baked into the installed systemd user unit. Linux only. */
@@ -26,12 +26,29 @@ export function systemdListenPort(deps: { readUnit?: () => string } = {}): numbe
   }
 }
 
+/**
+ * Quote one word for a systemd unit setting. systemd unquotes double-quoted words with C-style
+ * escapes (systemd.syntax), so backslash, double quote and line breaks are escaped, and it
+ * resolves `%` specifiers in every setting used here, so a literal `%` becomes `%%`.
+ */
 function systemdQuote(value: string): string {
   return `"${value
     .replace(/\\/g, "\\\\")
     .replace(/"/g, "\\\"")
     .replace(/%/g, "%%")
-    .replace(/\n/g, "\\n")}"`;
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")}"`;
+}
+
+/**
+ * Quote one ExecStart= word. On top of {@link systemdQuote}, ExecStart= expands `$NAME` and
+ * `${NAME}` from the unit environment before the program runs (systemd.service, "Command
+ * lines"), so a literal `$` must be written `$$`. Environment= does not expand variables,
+ * which is why this escape stays out of the shared quoting.
+ */
+function systemdExecQuote(value: string): string {
+  return systemdQuote(value).replace(/\$/g, "$$$$");
 }
 
 function systemdEnvironmentAssignment(name: string, value: string | undefined): string | null {
@@ -60,9 +77,16 @@ export function buildUnit(
   const launcher = deps.launcher ?? null;
   const log = logPath();
   const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "linux");
-  const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
+  // Resolve each home once: the default Codex home follows filesystem state (a retargeted
+  // ~/.codex link), so a second resolution could write two different homes into one unit.
+  const codexHomeValue = currentCodexHome();
+  const opencodexHomeValue = currentOpenCodexHome();
+  const codexHome = systemdEnvironmentAssignment("CODEX_HOME", codexHomeValue);
   const codexSqliteHome = systemdEnvironmentAssignment("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute());
-  const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
+  const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", opencodexHomeValue);
+  // The Environment= lines are a first pin only: ExecStart is /bin/sh -lc, so a login profile
+  // can re-export the homes after systemd supplies them. The command re-assigns both after
+  // profile initialization and before exec, with the same shell quoting the rest of the line uses.
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
     systemdEnvironmentAssignment(SERVICE_MANAGED_ENV, "1"),
@@ -82,7 +106,7 @@ export function buildUnit(
     opencodexHome,
     ...proxyEnv.map(({ name, value }) => systemdEnvironmentAssignment(name, value)),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = `${launcher ? buildServiceLauncherShellCommand(launcher) : buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
+  const command = `${pinnedServiceHomeShellAssignments(codexHomeValue, opencodexHomeValue)} ${launcher ? buildServiceLauncherShellCommand(launcher) : buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
   return `[Unit]
 Description=OpenCodex Proxy Server
 After=network-online.target
@@ -90,7 +114,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${systemdQuote("/bin/sh")} -lc ${systemdQuote(command)}
+ExecStart=${systemdExecQuote("/bin/sh")} -lc ${systemdExecQuote(command)}
 Restart=on-failure
 RestartSec=5
 ${envLines}

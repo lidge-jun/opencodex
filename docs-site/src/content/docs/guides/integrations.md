@@ -997,12 +997,13 @@ then picks the cheapest model from your picker list that reaches the tier:
 - When two or more of the other models have a published score in the role's domain, those models are
   tiered by distinct score values, without requiring a price; equal scores share a tier, and unscored models are left out. Scores come from
   [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
-  (below). The response's `capability` block names the source it used.
+  (below). Artificial Analysis no longer publishes a Coding or Agentic Index, so every domain is scored by
+  its Intelligence Index. The response's `capability` block names the source it used.
 - Other models with a known price are ranked by price and split evenly across the three tiers. With only
   one or two priced models, the dearest is frontier and the other, if any, is standard.
 - When tiering falls back to price, models with no price and no listed tier are not proposed. List them to include them.
 
-To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/api-reference)
+To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/data-api/docs)
 and set it as a literal, an `${ENV}` reference or a keychain reference:
 
 ```json
@@ -1013,14 +1014,16 @@ and set it as a literal, an `${ENV}` reference or a keychain reference:
 }
 ```
 
-opencodex reads it once per day, which stays inside the free tier's daily request limit. Its terms allow
+opencodex reads the free language model list (`/api/v2/language/models/free`) once per day, one request
+per page, which stays inside the free tier's daily request limit. Its terms allow
 using the data for your own decisions and forbid passing it on, so auto-assign keeps the scores
 internal: the response carries the tier each model got and the attribution, without the scores. If the
 key is absent or the read fails, auto-assign uses configured tiers and prices; `capability.error` reports
 why and the source attribution fields are null. A retired `huggingFace` setting is ignored.
 
-Artificial Analysis refuses HTTP redirects and limits each response body to 16 MiB with a 30-second
-request timeout. Credentials are sent only to its fixed API endpoint.
+Artificial Analysis refuses HTTP redirects, reads at most ten pages and 16 MiB in total, and gives each
+request a 30-second timeout; a longer list counts as a failed read. Credentials are sent only to its
+fixed API endpoint.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
@@ -1035,6 +1038,11 @@ Apply omits `effort` and leaves any existing effort pin as it was. A null propos
 ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
+
+The CLI's `--apply` accepts up to 50 changed roles in one history batch. A larger operation is
+refused before any role update; preview it and apply individual choices with `ocx agent roles set`.
+An interrupted operation reports confirmed writes and the unconfirmed request, and leaves earlier
+writes applied. See the [CLI apply and recovery contract](/reference/cli/agents/) before retrying.
 
 Under the table, **Change history** lists the newest changes a save, an auto-assign apply or `ocx agent roles set` wrote, newest first, in whole batches and never more than 50, so an Apply all is listed with every role it wrote or not at all, with each role's model and effort before and after. One Apply all is one entry. **Restore** writes the earlier values back through the same save, so a restore is listed too. A save never removes a model pin, so a role that had none keeps its current model and gets only its effort back. The history lives in `integrations/codex-agent-roles.jsonl` under the opencodex config directory, which retains at most 256 KiB and 1000 rows by dropping its oldest whole batches. Compaction targets 128 KiB and preserves a Restore together with its complete source batch when they fit both limits, making room by dropping unrelated older batches; history can still expire as later writes arrive. The writer captures the bounded history before appending so a Restore does not evict its own source at the retention boundary; the omo card's Restore center above tracks only `~/.omo/agent/models.json`. Each change records the Codex home it was made in, and only the current home's changes are listed or restored, so after pointing `CODEX_HOME` elsewhere the list starts empty and a Restore from another home's history is refused. If the history file cannot be read, the section says so in place of the list, and the role table keeps working.
 

@@ -160,6 +160,7 @@ import { productionDesktopColdStartDeps, runDesktopColdStart } from "./ensure-de
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
+import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
@@ -210,6 +211,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
@@ -606,6 +608,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
+        command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
@@ -781,7 +784,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   // one restart, because the toggle removed the fence and start wrote it back.
   if (shouldSyncGrokOnStart(config)) try {
     const { syncGrokConfig } = await import("../grok/sync");
-    const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    const r = await syncGrokConfig(port, config, {
+      ...(config.hostname ? { hostname: config.hostname } : {}),
+      admit: () => !shuttingDown && !cleaned && shouldSyncGrokOnStart(loadConfig()),
+    });
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!r.ok) console.error(`⚠️  ${r.message}`);
   } catch (err) {
@@ -1134,7 +1140,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
-  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig())) && !stoppingSibling && !connectedClientSkip;
+  // Client start never discharges a standalone update-handover receipt or reapplies routing.
+  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig()))
+    && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
@@ -1522,6 +1530,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 }
 
 async function handleUninstall() {
+  // Before every teardown step: an elevated run must not act on a home another account can change.
+  const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());
+  if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }
   /** Definitive "nothing is answering" on the endpoint this home would serve. */
   const proxyEndpointProvenDown = async (): Promise<boolean> => {
     try {
@@ -1676,7 +1687,8 @@ async function handleUninstall() {
   try {
     const { uninstallCodexShimAsync } = await import("../codex/shim");
     const r = await uninstallCodexShimAsync();
-    console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
+    if (r.refused) { failures.push("Codex autostart shim removed"); console.error(`⚠️  Codex autostart shim removed failed: ${r.message}`); }
+    else console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
   } catch (err) {
     failures.push("Codex autostart shim removed");
     console.error(`⚠️  Codex autostart shim removed failed: ${err instanceof Error ? err.message : String(err)}`);

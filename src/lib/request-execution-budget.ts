@@ -140,6 +140,10 @@ export type DispatchDecision =
  * send rather than merely describe one.
  */
 export interface RequestSendObserver {
+  /** Atomically claim the root workflow count at physical admission, before inference I/O. */
+  beforePhysicalSend?(): boolean;
+  /** Record an already-sent legacy receipt without booking its durable spend twice. */
+  recordWorkflowSend?(): void;
   /**
    * Book one physical send. False refuses the dispatch before the budget charges it.
    *
@@ -149,7 +153,7 @@ export interface RequestSendObserver {
    * would cross a ceiling never joins the total, the total stays just under, and the ceiling
    * never fires for any later request either.
    */
-  charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string }): boolean;
+  charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; workflowAlreadyCounted?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string }): boolean;
   /** Confirm the exact reservation once its dispatch is known. */
   readonly enforced?: boolean;
   readonly policyStarted?: boolean;
@@ -172,10 +176,12 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly physicalStarted?: number;
   readonly physicalLimit?: number;
   readonly spendEnforced?: boolean;
+  readonly workflowCountObserved?: boolean;
   readonly spendPolicyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(): number | undefined;
+  claimWorkflowSend?(): boolean;
   beginSpendProducer?(): { close(): void } | undefined;
   readonly logicalRequestId: string;
   readonly policyVersion: string;
@@ -264,6 +270,10 @@ interface SharedSendLedger {
 }
 
 const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>();
+/** Whether physical admission owns this budget's workflow accounting. */
+export function hasWorkflowSendObserver(budget: TransientSendBudget): boolean {
+  return (budget as RequestExecutionBudget).workflowCountObserved === true;
+}
 const dispatchSpendProofs = new WeakMap<SingleUseDispatchPermit, {
   owner: SharedSendLedger;
   claim(): SpendReservationProof | undefined;
@@ -281,6 +291,7 @@ export function reportDispatchSends(
   budget: TransientSendBudget,
   sends: number,
   permit?: SingleUseDispatchPermit,
+  workflowAlreadyCounted = false,
 ): void {
   const count = Number.isFinite(sends) ? Math.max(0, Math.trunc(sends)) : 0;
   if (count === 0) return;
@@ -288,7 +299,12 @@ export function reportDispatchSends(
   const prepaid = receipt && receipt.owner === sharedSendLedgers.get(budget as RequestExecutionBudget)
     && receipt.report() ? 1 : 0;
   // Unnamed, foreign, released or already-reported permits cannot consume another receipt.
-  budget.used += count - prepaid;
+  const counter = sharedSendLedgers.get(budget as RequestExecutionBudget);
+  if (!workflowAlreadyCounted && prepaid > 0) counter?.observer?.recordWorkflowSend?.();
+  if (workflowAlreadyCounted && counter && counter.observer?.enforced !== true) {
+    counter.spent += count - prepaid;
+    for (let index = prepaid; index < count; index++) counter.observer?.charge({ alreadySent: true, workflowAlreadyCounted: true });
+  } else budget.used += count - prepaid;
 }
 
 /** A helper owns its starts and can never consume another helper's receipts. */
@@ -319,7 +335,16 @@ export function createPhysicalSendReporter(
   let currentOrdinal: number | undefined;
   const report: PhysicalSendReporter = (sends) => {
     if (closed) return;
-    if (!producer) { if (observer?.enforced !== true) { reportDispatchSends(budget, sends, permit); telemetry?.(sends); } return; }
+    if (!producer) {
+      if (observer?.enforced === true) return;
+      const count = Number.isFinite(sends) ? Math.max(0, Math.trunc(sends)) : 0;
+      const admitted = Math.min(count, started - reported);
+      if (admitted > 0) reportDispatchSends(budget, admitted, permit, true);
+      if (count > admitted) reportDispatchSends(budget, count - admitted, permit);
+      reported += admitted;
+      telemetry?.(count);
+      return;
+    }
     const count = Math.min(Math.max(0, Math.trunc(sends)), started - reported);
     try { producer.report(count); }
     finally {
@@ -335,7 +360,11 @@ export function createPhysicalSendReporter(
     const selected = target();
     if ((budget as RequestExecutionBudget).startRequest) (budget as RequestExecutionBudget).startRequest!(selected);
     else observer?.startRequest?.(selected);
-    if (observer?.enforced !== true) return true;
+    if (observer?.enforced !== true) {
+      if (observer?.beforePhysicalSend?.() === false) return false;
+      started++;
+      return true;
+    }
     producer ??= observer.beginReporter?.();
     const receipt = permit && dispatchSpendProofs.get(permit);
     const proof = receipt?.owner === counter ? receipt?.claim() : undefined;
@@ -409,6 +438,7 @@ function createRequestExecutionBudgetWithLedger(
     get physicalStarted(): number { return counter.physicalStarted; },
     get physicalLimit(): number | undefined { return counter.physicalLimit; },
     get spendEnforced(): boolean { return observer?.enforced === true; },
+    get workflowCountObserved(): boolean { return observer?.beforePhysicalSend !== undefined; },
     get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
     get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return observer?.spendAdmissionPolicy; },
     startRequest(target) {
@@ -418,10 +448,14 @@ function createRequestExecutionBudgetWithLedger(
       }
     },
     beginSpendProducer() { return observer?.enforced ? observer.beginReporter?.() : undefined; },
+    claimWorkflowSend(): boolean {
+      budget.startRequest?.();
+      return observer?.beforePhysicalSend?.() ?? true;
+    },
     claimPhysicalSend(): number | undefined {
       budget.startRequest?.();
       if (observer?.enforced !== true || counter.physicalLimit === undefined) return undefined;
-      if (counter.physicalStarted >= counter.physicalLimit) return undefined;
+      if (counter.physicalStarted >= counter.physicalLimit || !budget.claimWorkflowSend!()) return undefined;
       return ++counter.physicalStarted;
     },
     get used(): number { return counter.spent; },
@@ -512,7 +546,7 @@ function createRequestExecutionBudgetWithLedger(
       let executing = false;
       let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
-        if (observer?.enforced !== true) return true;
+        if (observer?.enforced !== true) return budget.claimWorkflowSend!();
         const seed = observer.ensureSeed?.({ targetKey: intent.targetKey }, spendProof);
         if (!seed) return false;
         const ordinal = budget.claimPhysicalSend?.();

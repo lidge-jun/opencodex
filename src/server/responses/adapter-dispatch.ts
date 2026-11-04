@@ -1,3 +1,7 @@
+import { clientFacingModelText } from "../../lib/error-destination";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { markProxyError, carryProxyError } from "../../lib/client-error-body";
+import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
@@ -50,7 +54,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  SendBudgetExhaustedError,
+  SendBudgetExhaustedError, errorDestinationLabel,
   UpstreamRetryEvidenceError,
   prepareSameTarget429Wait,
   sleepWithAbort,
@@ -116,11 +120,11 @@ import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrap
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
+import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
-import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
-
+import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "logCtx" | "req">,
@@ -231,8 +235,6 @@ export async function prepareAdapterExchange(
     reserveCredentialHop,
     claimAmbiguousResend,
   } = sendBudgetState;
-
-
   let selfContainedJudgment: boolean | undefined;
   // On the Antigravity direct lane the raw body carries only settings; judge the body the bridge
   // would have sent, built only if an ambiguous reset actually asks.
@@ -364,6 +366,8 @@ export async function prepareAdapterExchange(
         code: "translation_buffer_limit",
       });
     }
+    const authRefusal = codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace);
+    if (authRefusal) return authRefusal;
     const msg = err instanceof Error ? err.message : String(err);
     return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
   }
@@ -394,13 +398,13 @@ export async function prepareAdapterExchange(
     const headers = new Headers(original.headers);
     headers.delete("content-length");
     headers.delete("content-encoding");
-    upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
+    upstreamResponse = carryProxyError(original, new Response(text, { status: original.status, statusText: original.statusText, headers }));
     return upstreamResponse;
   };
   const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
-  const genericRefetchCountsSends = () => options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
+  const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
     || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
@@ -451,7 +455,7 @@ export async function prepareAdapterExchange(
           targetKey: `${route.providerName}|${builtInitialRequest.url}|${route.modelId}`,
           countedExternally: true,
         });
-        if (!decision.allowed) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+        if (!decision.allowed) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
         handoffPermit = decision.permit;
       }
       const compactPrepaid = handoffPermit ?? (options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined);
@@ -486,7 +490,7 @@ export async function prepareAdapterExchange(
           });
           // Receipt mode books the physical send at executor admission instead of here.
           if (!deferredInitial && !receiptMode && compactPrepaid && !compactPrepaidUsed) {
-            if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+            if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
           // Key transport keeps this metadata pending until it binds the actual selection.
@@ -502,9 +506,9 @@ export async function prepareAdapterExchange(
               modelId: route.modelId,
               onPhysicalDispatch: () => {
                 if (deferredInitial) {
-                  if (!deferredInitial.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+                  if (!deferredInitial.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
                   if (compactPrepaid && !compactPrepaidUsed) {
-                    if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+                    if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
                     compactPrepaidUsed = true;
                   }
                 }
@@ -521,9 +525,9 @@ export async function prepareAdapterExchange(
         },
         {
           abortSignal: upstream.signal,
-          label: safeHostLabel(builtInitialRequest.url),
+          label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+          ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
@@ -555,7 +559,7 @@ export async function prepareAdapterExchange(
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
     if (refusal instanceof AdmissionModelDeniedError) {
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
-      return admissionModelDeniedResponse(refusal);
+      return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(refusal, logCtx));
     }
     const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -566,10 +570,10 @@ export async function prepareAdapterExchange(
     }
     // A pause committed during pacing is local admission policy, not a failed upstream.
     if (refusal instanceof OAuthAccountPausedError) {
-      return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
+      return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal)));
     }
     if (refusal instanceof OAuthLoginRequiredError) {
-      return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
+      return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)));
     }
     if (refusal instanceof AnthropicAccountCooldownError) {
       return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
@@ -580,7 +584,7 @@ export async function prepareAdapterExchange(
     // budget exists to stop. The passthrough path has answered 429 here since #4546.
     if (err instanceof SendBudgetExhaustedError) {
       return unboundPoolSpendRefusalResponse(logCtx)
-        ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message);
+        ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message));
     }
     const msg = describeUpstreamConnectFailure(err, connectMs);
     return formatErrorResponse(502, "upstream_error", msg);
@@ -607,7 +611,7 @@ export async function prepareAdapterExchange(
     let imageRetryAttempted = false;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     const thinkingSignatureRecovery = createAnthropicThinkingRecovery(
-      parsed, upstream.signal, opaqueBlobRecoveryGuard, () => !sendBudgetExhausted(),
+      parsed, upstream.signal, opaqueBlobRecoveryGuard, () => !sendBudgetExhausted(), logCtx,
     );
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
@@ -636,15 +640,14 @@ export async function prepareAdapterExchange(
       onDispatch?: () => void,
       preserveFailureResponse?: Response,
     ): Promise<Response | { failed: Response }> => {
-      let replacementAdmitted = false;
-      // The repair permit books the request ledger, but only the transient helper reports
-      // that send to the root workflow. The other two dispatch paths confirm it here, at
-      // their physical-send boundary, without booking the request ledger again.
+      let replacementAdmitted = false, dispatchConfirmed = false;
+      // Only budgets without a physical observer need this legacy workflow report.
       let fastDowngradeWorkflowCharged = false;
       const chargeFastDowngradeWorkflowSend = (): void => {
         if (recovery !== "anthropic-fast-downgrade" || fastDowngradeWorkflowCharged) return;
         fastDowngradeWorkflowCharged = true;
-        chargeWorkflowSends(sendBudgetState.workflowRootId, 1);
+        if (!sendBudgetState.adapterSendBudget || !hasWorkflowSendObserver(sendBudgetState.adapterSendBudget))
+          chargeWorkflowSends(sendBudgetState.workflowRootId, 1);
       };
       let retryRequest: AdapterRequest;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === parsed && transportState.sameTargetToken === transportState.transportToken) {
@@ -662,6 +665,8 @@ export async function prepareAdapterExchange(
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
         } catch (err) {
+          const authRefusal = options.abortSignal?.aborted ? undefined : codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
+          if (authRefusal) return { failed: authRefusal };
           // A rotated credential that cannot be shaped keeps the refusal it was meant to
           // replace. The image-tier rebuild is different: the request itself failed to shape,
           // and its established 413/400 build-error contract stays authoritative.
@@ -708,7 +713,7 @@ export async function prepareAdapterExchange(
               // an abort, a saturated queue, an expired slot or a removed provider, and none of
               // those reach the wire. Confirming earlier would hold the charge for a send that the
               // pacer refused.
-              onDispatch?.();
+              if (!dispatchConfirmed) { onDispatch?.(); dispatchConfirmed = true; }
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
                 abortSignal: upstream.signal,
@@ -775,14 +780,14 @@ export async function prepareAdapterExchange(
                 // counters and permits still wait for the physical executor after pacing.
                 if (pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                 const confirmDispatch = () => {
-                  if (refetchAllowance?.permit && !refetchPermitUsed) {
-                    if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+                  if (refetchAllowance?.permit && !refetchPermitUsed && (!onDispatch || refetchAllowance.permit !== prepaid)) {
+                    if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(retryRequest.url));
                     refetchPermitUsed = true;
                   }
                   if (!pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                   // Counted Combo/pool sends confirm at the physical executor; legacy
                   // helper paths retain their existing thunk admission boundary.
-                  onDispatch?.();
+                  if (!dispatchConfirmed) { onDispatch?.(); dispatchConfirmed = true; }
                   if (preserveFailureResponse) replacementAdmitted = true;
                   if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
                 };
@@ -794,7 +799,7 @@ export async function prepareAdapterExchange(
                   providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                     dispatchOverride: oauthDispatch(retryRequest),
                     onPhysicalDispatch: deferredRefetch ? () => {
-                      if (!deferredRefetch.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+                      if (!deferredRefetch.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(retryRequest.url));
                       confirmDispatch();
                     } : undefined,
                     providerName: route.providerName,
@@ -805,7 +810,7 @@ export async function prepareAdapterExchange(
               },
               {
                 abortSignal: upstream.signal,
-                label: safeHostLabel(retryRequest.url),
+                label: safeHostLabel(retryRequest.url), destination: errorDestinationLabel(retryRequest.url),
                 claimAmbiguousResend: claimPreHeaderResend,
                 ...(refetchAllowance
                   ? {
@@ -836,7 +841,7 @@ export async function prepareAdapterExchange(
           cleanupUpstreamAbort();
           upstream.abort();
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
-          return { failed: admissionModelDeniedResponse(scopeRefusal) };
+          return { failed: admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx)) };
         }
         const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -856,10 +861,10 @@ export async function prepareAdapterExchange(
         }
         const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
         if (refusal instanceof OAuthAccountPausedError) {
-          return { failed: formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal)) };
+          return { failed: markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal))) };
         }
         if (refusal instanceof OAuthLoginRequiredError) {
-          return { failed: formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)) };
+          return { failed: markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal))) };
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
           return { failed: anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx }) };
@@ -868,7 +873,7 @@ export async function prepareAdapterExchange(
         // this proxy rather than the provider it never reached.
         if (err instanceof SendBudgetExhaustedError) {
           return { failed: unboundPoolSpendRefusalResponse(logCtx)
-            ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message) };
+            ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message)) };
         }
         const msg = describeUpstreamConnectFailure(err, connectMs);
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
@@ -970,7 +975,7 @@ export async function prepareAdapterExchange(
             try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
             releaseCodexAuthContextProbeLease(admissionState.authCtx);
             return cancelled ? clientCancelledResponse()
-              : formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" });
+              : markProxyError(formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" }));
           }
           const failed = transportState.sentOAuthSnapshot;
           if (route.providerName === "google-antigravity" && !antigravityAuthRotationAttempted
@@ -1009,7 +1014,7 @@ export async function prepareAdapterExchange(
                       route.provider, transportState.activeAdapter.name);
                     sendBudgetState.pendingHopPermit = hop.permit;
                     const result = await rebuildAndRefetch("oauth-account-429", () => {
-                      if (!adapterOwnsDispatch) hop.permit?.use();
+                      if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
                     });
                     if ("failed" in result) return result.failed;
                     upstreamResponse = result;
@@ -1022,13 +1027,13 @@ export async function prepareAdapterExchange(
           }
           cleanupUpstreamAbort();
           if (err instanceof OAuthAccountPausedError) {
-            return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));
+            return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)));
           }
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+          return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err)));
         }
         if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
           cleanupUpstreamAbort();
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
+          return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required"))));
         }
         transportState.sentOAuthSnapshot = refreshed;
         transportState.replayOAuthCredentialSnapshot = {
@@ -1131,7 +1136,7 @@ export async function prepareAdapterExchange(
           });
           if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
           const result = await rebuildAndRefetch("key-401",
-            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+            billingHop ? () => { if (billingHop.permit?.use() === false) throw new SendBudgetExhaustedError(); } : undefined, failedResponse);
           if ("failed" in result) {
             if (result.failed !== failedResponse) return result.failed;
             break;
@@ -1169,7 +1174,7 @@ export async function prepareAdapterExchange(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy), config.cacheRetention);
           bindRouteReasoningReplayScope({ parsed, providerName: route.providerName, provider: route.provider, adapterName: transportState.activeAdapter.name });
           sendBudgetState.pendingHopPermit = hop.permit;
-          const result = await rebuildAndRefetch("key-401", () => { hop.permit?.use(); }, failedResponse);
+          const result = await rebuildAndRefetch("key-401", () => { if (hop.permit?.use() === false) throw new SendBudgetExhaustedError(); }, failedResponse);
           if ("failed" in result) {
             if (result.failed !== failedResponse) return result.failed;
             break;
@@ -1212,7 +1217,7 @@ export async function prepareAdapterExchange(
           let result: Response | { failed: Response };
           try {
             result = await rebuildAndRefetch("anthropic-fast-downgrade", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             });
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1332,7 +1337,7 @@ export async function prepareAdapterExchange(
           });
           if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
           const result = await rebuildAndRefetch("key-429",
-            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+            billingHop ? () => { if (billingHop.permit?.use() === false) throw new SendBudgetExhaustedError(); } : undefined, failedResponse);
           if ("failed" in result) {
             if (result.failed !== failedResponse) return result.failed;
             break;
@@ -1411,7 +1416,7 @@ export async function prepareAdapterExchange(
           try {
             result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401"
               : upstreamResponse.status === 403 ? "oauth-account-403" : "anthropic-oauth-429",
-              () => { if (!adapterOwnsDispatch) hop.permit?.use(); });
+              () => { if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError(); });
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
           }
@@ -1518,7 +1523,7 @@ export async function prepareAdapterExchange(
             // and settling here first would hand it a dead permit, which it reads as an
             // exhausted request and stops sending on.
             result = await rebuildAndRefetch("oauth-account-429", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             }, upstreamResponse);
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1623,7 +1628,7 @@ export async function prepareAdapterExchange(
             // and settling here first would hand it a dead permit, which it reads as an
             // exhausted request and stops sending on.
             result = await rebuildAndRefetch("oauth-account-429", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             });
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1646,7 +1651,7 @@ export async function prepareAdapterExchange(
             cleanupUpstreamAbort();
             upstream.abort();
             releaseCodexAuthContextProbeLease(admissionState.authCtx);
-            return admissionModelDeniedResponse(scopeRefusal);
+            return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx));
           }
          // A throw before the send — snapshot fetch, credential application, adapter
           // resolution — must hand the reservation back. Without this the ladder charges the
@@ -1735,7 +1740,7 @@ export async function prepareAdapterExchange(
           let result: Response | { failed: Response };
           try {
             result = await rebuildAndRefetch("oauth-account-403", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             }, failedResponse);
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1881,15 +1886,16 @@ export async function prepareAdapterExchange(
         cleanupUpstreamAbort();
       }
       if (upstreamResponse.status === 413) {
+        if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
-          ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
+          ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
           : jsonContextOverflowResponse();
       }
       const policyRefusal = rewriteUpstreamPolicyRefusal({
         status: upstreamResponse.status,
         errorText,
         stream: clientRequestedStream,
-        modelId: parsed._responseModelId ?? parsed.modelId,
+        modelId: clientFacingModelText(options.clientModelLabel),
         // The same host check covers the openai-chat wire: both xAI hosts serve Chat too.
         destinationIsXai: isXaiResponsesDestination(route.provider),
         translatorBudget,

@@ -1,7 +1,9 @@
 import { createInferenceSendBudget } from "../inference/context";
 import type { ResponsesRequestContext } from "./core-options";
-import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, reportDispatchSends } from "../../lib/request-execution-budget";
+import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, hasWorkflowSendObserver, reportDispatchSends } from "../../lib/request-execution-budget";
 import {
+  chargeWorkflowSends,
+  reserveWorkflowSend,
   workflowSendCeilingReached,
   workflowSpendCeilingReached,
 } from "../../lib/workflow-budget";
@@ -58,6 +60,7 @@ export function createResponsesSendBudget(
   // sends once per child seven hundred times, so every send charged to the request is charged
   // to the root as well (#4546).
   const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const physicalWorkflowAccounting = hasWorkflowSendObserver(sendBudget);
   // A child that owns its Combo booking settles that exact permit through the reporter, even
   // when its caller handed ownership over only as `comboInitialSend`.
   const inheritedPermit = options.compactionRecoveryPermit ?? options.comboDispatchPermit
@@ -73,20 +76,41 @@ export function createResponsesSendBudget(
     targetSendsUsed += charged;
     if (charged > 0) initialPermit = undefined;
   };
-  const recordTransientSends = (used: number, permit?: SingleUseDispatchPermit): void => {
+  const recordTransientSends = (used: number, permit?: SingleUseDispatchPermit, workflowAlreadyCounted = false): void => {
     const charged = Math.max(0, used);
     noteTargetSends(charged);
-    reportDispatchSends(sendBudget, charged, permit);
+    reportDispatchSends(sendBudget, charged, permit, workflowAlreadyCounted);
     options.onCompactionRecoverySendsReported?.(charged);
+    if (!physicalWorkflowAccounting && !workflowAlreadyCounted) chargeWorkflowSends(workflowRootId, charged);
   };
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
   // Capture at helper creation, before another leg can replace the pending handoff.
-  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) =>
-    createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
+  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) => {
+    let unreportedWorkflowStarts = 0;
+    const reporter = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
       identityId: logCtx.accountLogLabel }), permit, charged => {
       noteTargetSends(Math.max(0, charged));
       options.onCompactionRecoverySendsReported?.(charged);
+      const prepaid = Math.min(unreportedWorkflowStarts, Math.max(0, charged));
+      unreportedWorkflowStarts -= prepaid;
+      if (!physicalWorkflowAccounting) chargeWorkflowSends(workflowRootId, charged - prepaid);
     });
+    if (workflowRootId && !physicalWorkflowAccounting) {
+      const beforeSend = reporter.beforeSend, close = reporter.close;
+      let closed = false;
+      reporter.beforeSend = () => {
+        const policy = currentWorkflowBudgetPolicy();
+        // Check before a legacy permit's admission can spend it. No await separates this
+        // read from the atomic claim, and the reporter owns the later accounting receipt.
+        if (closed || workflowSendCeilingReached(workflowRootId, policy) || beforeSend?.() === false
+          || !reserveWorkflowSend(workflowRootId, policy)) return false;
+        unreportedWorkflowStarts++;
+        return true;
+      };
+      reporter.close = () => { closed = true; close?.(); };
+    }
+    return reporter;
+  };
   // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
   // dropping the record to make room would hand the fan-out a fresh allowance, which is the
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
@@ -319,18 +343,27 @@ export function createResponsesSendBudget(
       remainingTransientSendBudget(cap) + (initialPermit ? 1 : 0)),
     /** At final executor admission, settle only the owning booking or reserve this send. */
     noteInitialDispatch: (prepaid = initialPermit): void => {
+      const policy = currentWorkflowBudgetPolicy();
+      if (!physicalWorkflowAccounting && workflowSendCeilingReached(workflowRootId, policy)) {
+        prepaid?.release();
+        throw new SendBudgetExhaustedError();
+      }
       if (prepaid) {
-        if (!prepaid.assumeCharge()) throw new SendBudgetExhaustedError();
+        if (!prepaid.assumeCharge()) { prepaid.release(); throw new SendBudgetExhaustedError(); }
         if (prepaid === initialPermit) initialPermit = undefined;
       } else if (adapterSendBudget && (options.comboInitialSend || options.compactionRecoveryPermit)) {
         const decision = adapterSendBudget.reserveDispatch({ sendClass: "transient",
           targetKey: adapterSendBudget.lastTargetKey ?? `${logCtx.provider}/${logCtx.model}` });
-        if (!decision.allowed || !decision.permit.use()) throw new SendBudgetExhaustedError();
+        if (!decision.allowed) throw new SendBudgetExhaustedError();
+        if (!decision.permit.use()) { decision.permit.release(); throw new SendBudgetExhaustedError(); }
       } else {
         // Legacy direct callers can prebook without handing over a permit; keep their reporter.
-        noteTransientSends(1);
+        if (adapterSendBudget?.claimWorkflowSend && !adapterSendBudget.claimWorkflowSend()) throw new SendBudgetExhaustedError();
+        if (!physicalWorkflowAccounting && !reserveWorkflowSend(workflowRootId, policy)) throw new SendBudgetExhaustedError();
+        recordTransientSends(1, pendingHopPermit ?? inheritedPermit, true);
         return;
       }
+      if (!physicalWorkflowAccounting && !reserveWorkflowSend(workflowRootId, policy)) throw new SendBudgetExhaustedError();
       targetSendsUsed += 1;
       options.onCompactionRecoverySendsReported?.(1);
     },
@@ -387,11 +420,13 @@ function adapterDispatchBudgetView(
   return {
     get physicalStarted() { return budget.physicalStarted; },
     get physicalLimit() { return budget.physicalLimit; },
+    get workflowCountObserved() { return budget.workflowCountObserved; },
     get spendEnforced() { return budget.spendEnforced; },
     get spendPolicyStarted() { return budget.spendPolicyStarted; },
     get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
     startRequest: target => budget.startRequest?.(target),
     claimPhysicalSend: () => budget.claimPhysicalSend?.(),
+    claimWorkflowSend: () => budget.claimWorkflowSend?.() ?? true,
     beginSpendProducer: () => budget.beginSpendProducer?.(),
     get used(): number { return budget.used; },
     set used(next: number) { budget.used = next; },

@@ -1,5 +1,15 @@
 {
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
-  "inbound-body-budget.test.ts": "server"
+  "inbound-body-budget.test.ts": "server",
+  "claude-bridge-pool-session.test.ts": "claude-integration",
+  "claude-bridge-pool-dispatch.test.ts": "claude-integration",
+  "admitted-http-turn.test.ts": "server",
+  "server-native-final-log.test.ts": "server",
+  "server-ollama-route-policy.test.ts": "server",
+  "server-ollama-inbound.test.ts": "server",
+  "server-ollama-inbound-lifecycle.test.ts": "server",
+  "server-ollama-inbound-errors.test.ts": "server",
+  "protocol-trace-suppression.test.ts": "server",
+  "responses-ollama-codec.test.ts": "responses"
 }
