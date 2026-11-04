@@ -76,12 +76,16 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
 
 const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/i;
 
-/** Negation in the clause that contains a match, from the clause start through its end. */
+/** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
-  const clauseStart = Math.max(
-    text.lastIndexOf(".", start), text.lastIndexOf(";", start), text.lastIndexOf(",", start),
-  ) + 1;
-  return NEGATED_CONTEXT_VERDICT.test(text.slice(clauseStart, end));
+  if (NEGATED_CONTEXT_VERDICT.test(text.slice(start, end))) return true;
+  // Phrase matches can begin at the verb and omit its negating auxiliary (`does not exceed`).
+  // Check only a directly attached negator so unrelated wording such as `No tokens remain and
+  // the model's context window is full` still counts as an affirmed overflow verdict.
+  const before = text.slice(Math.max(0, start - 48), start);
+  return /\b(?:not|no|never|neither|nor)\s*$/i.test(before)
+    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|may|might|must)\s+(?:not|never)\s*$/i.test(before)
+    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn|mustn)['’]t\s*$/i.test(before);
 }
 
 function hasAffirmedVerdict(text: string, verdict: RegExp): boolean {
@@ -164,7 +168,9 @@ export function isDefiniteContextOverflow(status: number, message: string, match
       { owner: record, value: record.last_error },
     ].find(candidate => typeof candidate.value === "string");
     if (!errorTextSource || typeof errorTextSource.value !== "string") return false;
-    if (isParameterValidationRecord(errorTextSource.owner)) return false;
+    // A string-valued leaf can sit inside `response.error` while the outer envelope carries
+    // the validation code. Check both records before trusting the leaf's context wording.
+    if (isParameterValidationRecord(record) || isParameterValidationRecord(errorTextSource.owner)) return false;
     text = errorTextSource.value.trim();
   }
   return false;
