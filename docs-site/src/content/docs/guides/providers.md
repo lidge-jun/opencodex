@@ -1776,11 +1776,15 @@ dashboard or `custom` in `ocx init` and enter the base URL. See the
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …).
 
 For Claude models reached through the translated Chat adapter, opencodex flattens tool-schema root
-`oneOf`, `anyOf`, and `allOf` to an object so Anthropic does not reject the turn. Matching uses the
-upstream model id, including provider-prefixed `claude-*` names, rather than applying to every model
-on the gateway. Nested schemas retain their existing normalization. Root flattening is lossy:
-branch constraints are removed and later definitions of the same property win, so tools must still
-validate their arguments. Existing Zen and Azure schema compatibility rules remain in effect.
+`oneOf`, `anyOf`, and `allOf` into an object. This uses the actual upstream model id whose final
+slash-separated segment starts with `claude-` (case-insensitive), not every model on the gateway.
+Nested schemas retain their existing normalization. Root required fields are retained; `allOf`
+branch required fields are merged, while `oneOf`/`anyOf` branch required fields are not promoted.
+Local root-branch references are followed for at most 64 references across the schema; unresolved,
+cyclic, external, over-budget references or referenced compositions leave the root composition intact
+and may be rejected upstream. Nested references are preserved. Flattening is lossy: branch constraints
+disappear and later property definitions win, so tools must validate arguments. Existing Zen and
+Azure schema compatibility rules remain in effect.
 
 ## Approval reviewer per provider
 

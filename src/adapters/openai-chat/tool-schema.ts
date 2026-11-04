@@ -37,6 +37,26 @@ function sanitizeZenToolParameters(value: unknown): unknown {
   return out;
 }
 
+/** Read only root-branch ref chains; never expand property schemas or literal data. */
+function claudeRootBranchLayers(branch: Record<string, unknown>, root: Record<string, unknown>, budget: { remaining: number }): Record<string, unknown>[] | undefined {
+  if (typeof branch.$ref === "string" && ["oneOf", "anyOf", "allOf"].some(key => Array.isArray(branch[key]))) return undefined;
+  const layers = [branch];
+  const seen = new Set<object>([branch]);
+  let current = branch;
+  // One budget across all branches bounds repeated references as well as long chains.
+  while (typeof current.$ref === "string") {
+    if (budget.remaining-- <= 0) return undefined;
+    const target = lookupLocalJsonPointer(root, current.$ref);
+    if (!target || typeof target !== "object" || Array.isArray(target) || seen.has(target)) return undefined;
+    seen.add(target);
+    current = target as Record<string, unknown>;
+    if (["oneOf", "anyOf", "allOf"].some(key => Array.isArray(current[key]))) return undefined;
+    layers.push(current);
+  }
+  // Referenced fields first, then referring siblings; later branches still win.
+  return layers.reverse();
+}
+
 function ensureZenRootObjectSchema(schema: unknown, sanitizeNested = true): Record<string, unknown> {
   const obj = schema && typeof schema === "object" && !Array.isArray(schema)
     ? schema as Record<string, unknown>
@@ -50,8 +70,9 @@ function ensureZenRootObjectSchema(schema: unknown, sanitizeNested = true): Reco
     return rootObjectType && base.type === "object" ? base : { ...base, type: "object" };
   }
 
-  const props: Record<string, unknown> = {};
+  const props: Record<string, unknown> = sanitizeNested ? {} : Object.create(null);
   const required = new Set<string>();
+  const refBudget = { remaining: 64 };
   if (obj.properties && typeof obj.properties === "object") {
     Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(obj.properties) : obj.properties);
   }
@@ -64,12 +85,17 @@ function ensureZenRootObjectSchema(schema: unknown, sanitizeNested = true): Reco
     const mergeRequired = key === "allOf";
     for (const variant of variants) {
       if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
-      const rec = variant as Record<string, unknown>;
-      if (rec.properties && typeof rec.properties === "object") {
-        Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(rec.properties) : rec.properties);
-      }
-      if (mergeRequired && Array.isArray(rec.required)) {
-        for (const entry of rec.required) if (typeof entry === "string") required.add(entry);
+      const branch = variant as Record<string, unknown>;
+      const layers = sanitizeNested ? [branch] : claudeRootBranchLayers(branch, obj, refBudget);
+      // Keep the unsupported schema visible to the provider rather than losing arguments.
+      if (!layers) return { ...obj, type: "object" };
+      for (const rec of layers) {
+        if (rec.properties && typeof rec.properties === "object") {
+          Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(rec.properties) : rec.properties);
+        }
+        if (mergeRequired && Array.isArray(rec.required)) {
+          for (const entry of rec.required) if (typeof entry === "string") required.add(entry);
+        }
       }
     }
   }
@@ -99,7 +125,7 @@ const AZURE_CHAT_FORBIDDEN_ROOT_KEYS = ["oneOf", "anyOf", "allOf", "enum", "cons
  * front Claude behind a Chat Completions wire (new-api / EasyRouter style relays) forward the
  * schema as-is, so a Codex MCP tool with a union root fails the whole turn. The provider-wide
  * adapter cannot be split per model, so decide on the upstream model id: Claude ids get the
- * same root flattening the native Anthropic adapter applies; every other model is untouched.
+ * inline root flattening plus bounded local branch-ref handling; other models are untouched.
  */
 function isClaudeModelId(modelId: string | undefined): boolean {
   if (typeof modelId !== "string") return false;
