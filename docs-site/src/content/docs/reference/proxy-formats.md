@@ -506,11 +506,9 @@ Logged `POST /v1/messages` replies carry the same OCX request-history id in **bo
 streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
 metadata from `request-id` to join future transcripts to that OCX history row.
 
-On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
-`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
-`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
-Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
-response headers are readable through CORS alongside existing exposed headers.
+Upstream request IDs are omitted. Logged Messages replies expose only the proxy's
+`request-id` and `x-opencodex-request-id`; these headers remain readable through CORS
+alongside existing exposed headers.
 
 No OCX id is added to authentication, origin, drain or active-turn refusals that have no
 request-log owner, or to count_tokens. Streaming headers identify the turn's eventual

@@ -91,7 +91,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
     return markProxyError(formatErrorResponse(415, "invalid_request_error", err.message));
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)));
+    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)), "inbound");
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid JSON body"));
@@ -102,7 +102,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
 
 export function comboUnavailableResponse(
   message: string,
-  options?: { retryAfter?: string | null },
+  options?: { retryAfter?: string | null; presentation?: "combo" },
 ): Response {
   const headers = new Headers({ "Content-Type": "application/json" });
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
@@ -113,13 +113,14 @@ export function comboUnavailableResponse(
       error: { message, type: "server_error", code: "combo_unavailable" },
     }),
     { status: 503, headers },
-  ));
+  ), options?.presentation);
 }
 
 
 export function comboUnavailable(comboId: string, now = Date.now(), reasons?: ComboExclusionReasons): Response {
   return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
+    presentation: reasons === undefined ? undefined : "combo",
   });
 }
 
@@ -156,7 +157,7 @@ export function anthropicPoolCooldownResponse(
 ): Response {
   if (refusal.usageLimit !== null && !options.comboAttempt) {
     if (options.logCtx) options.logCtx.errorCode = "usage_limit_reached";
-    return markProxyError(formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds));
+    return markProxyError(formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds), refusal.usageLimit.resetsAt === null ? undefined : "usage");
   }
   return markProxyError(formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
     refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }));

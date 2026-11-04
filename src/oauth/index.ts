@@ -453,6 +453,13 @@ export function listOAuthProviders(): string[] {
 import { OAuthAccountUnusableError, OAuthLoginSupersededError, OAuthAccountPausedError, OAuthLoginRequiredError, OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, OAuthReauthIdentityMismatchError, OAuthReauthIdentityUnverifiedError, UnsupportedOAuthProviderError } from "./oauth-errors";
 export { OAuthAccountPausedError, OAuthLoginRequiredError, OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, OAuthReauthIdentityMismatchError, OAuthReauthIdentityUnverifiedError, UnsupportedOAuthProviderError } from "./oauth-errors";
 /** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
+export function publicOAuthErrorPresentation(error: unknown): import("../lib/client-error-body").ProxyErrorPresentation | undefined {
+  if (error instanceof OAuthLoginRequiredError) return "oauth_login";
+  if (error instanceof AntigravityProjectDiscoveryError) return "discovery";
+  if (error instanceof MuseLoginError && error.kind === "validation-http" && error.status !== undefined) return "muse_http";
+  return undefined;
+}
+
 export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
   if (error instanceof AntigravityProjectDiscoveryError) return error.publicMessage;
   if (error instanceof MuseLoginError) return museLoginErrorMessage(error.kind, error.status);

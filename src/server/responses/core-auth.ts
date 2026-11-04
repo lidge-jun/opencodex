@@ -464,7 +464,7 @@ export function poolCredentialRefreshIncompleteResponse(args: {
   ));
   const headers = new Headers(response.headers);
   headers.set("Retry-After", "1");
-  return markProxyError(new Response(response.body, { status: response.status, headers }));
+  return markProxyError(new Response(response.body, { status: response.status, headers }), "pool_refresh");
 }
 
 
