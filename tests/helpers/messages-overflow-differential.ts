@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
-import { applicableMessagesOverflowFixtures, messagesOverflowLanes } from "./messages-overflow-cases";
+import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash } from "./messages-overflow-cases";
 const [mode, scratch, output] = process.argv.slice(2) as [string, string, string];
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 const base = mode === "--generate-base";
@@ -59,6 +60,17 @@ const { runMessagesOverflowCase } = await import("./messages-overflow-case");
 const { upstreamMessagesRequestIdHeaders } = await import("../../src/server/messages-response-headers");
 if (base && upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture" }))["request-id"] !== "req_fixture") throw new Error("Baseline modules were not loaded");
 const rows = [];
+const decisions: Record<string, boolean>[] = [];
+const types: (string | null)[] = [];
+const codes: (string | null)[] = [];
+const mediaTypes: (string | null)[] = [];
+const outcomes: Record<string, unknown[]> = {};
+function intern<T>(values: T[], value: T): number {
+  const serialized = JSON.stringify(value);
+  const index = values.findIndex(item => JSON.stringify(item) === serialized);
+  if (index >= 0) return index;
+  return values.push(value) - 1;
+}
 for (const lane of messagesOverflowLanes) for (const input of applicableMessagesOverflowFixtures(lane)) {
   const observations = new Map<string, boolean[]>();
   (globalThis as any).__messagesOverflowRecord = (tag: string, value: boolean) => {
@@ -74,7 +86,28 @@ for (const lane of messagesOverflowLanes) for (const input of applicableMessages
     if (values.some(value => value !== values[0])) throw new Error(`Inconsistent ${tag} decisions for ${lane}/${input.id}`);
     internalDecisions[tag] = values[0]!;
   }
-  rows.push({ lane, input, [base ? "base" : "head"]: { ...result, internalDecisions } });
+  if (base) {
+    const id = messagesOverflowCaseId(lane, input);
+    if (Object.hasOwn(outcomes, id)) throw new Error(`Duplicate case id: ${lane}/${input.id}`);
+    // Outcome-only tuples keep the base fixture small; dictionaries retain exact compared values.
+    const outcome: unknown[] = [messagesOverflowLanes.indexOf(lane), result.status, result.clientRecognizes,
+      intern(decisions, internalDecisions), input.classification[lane], intern(types, result.type ?? null),
+      intern(codes, result.code ?? null), intern(mediaTypes, result.mediaType), result.clientError];
+    if (input.classification[lane] === "success" || input.fixedLocal) {
+      const bytes = Buffer.from(result.text, "utf8");
+      outcome.push(createHash("sha256").update(bytes).digest("hex"), bytes.byteLength);
+    }
+    outcomes[id] = outcome;
+  } else rows.push({ lane, input, head: { ...result, internalDecisions } });
 }
 delete (globalThis as any).__messagesOverflowRecord;
-await Bun.write(output, JSON.stringify({ schemaVersion: 6, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");
+if (base) {
+  const header = { schemaVersion: 7, baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec", caseTableSha256: messagesOverflowCaseTableHash(),
+    columns: ["lane", "status", "clientRecognizes", "decisions", "class", "type", "code", "mediaType", "clientError", "bodySha256?", "bodyLength?"],
+    lanes: messagesOverflowLanes, decisions, types, codes, mediaTypes };
+  const lines = Object.entries(outcomes).map(([id, outcome]) => `${JSON.stringify(id)}:${JSON.stringify(outcome)}`);
+  // Three outcome entries per line keep the generated JSON below the unchanged line ratchet.
+  const groups = [];
+  for (let index = 0; index < lines.length; index += 3) groups.push(lines.slice(index, index + 3).join(","));
+  await Bun.write(output, `${JSON.stringify(header).slice(0, -1)},"outcomes":{\n${groups.join(",\n")}\n}}\n`);
+} else await Bun.write(output, JSON.stringify({ schemaVersion: 7, rows }) + "\n");

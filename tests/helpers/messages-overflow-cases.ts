@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 export const messagesOverflowLanes = ["passthrough", "count_tokens", "native-http", "native-fold", "native-fold-builtin", "translated-http", "translated-fold", "translated-json", "converter", "direct-stream", "direct-fold", "direct-collector", "local-envelope"] as const;
 export type MessagesOverflowLane = typeof messagesOverflowLanes[number];
 export interface MessagesOverflowFixture { id: string; status?: number; type?: string; message: string; code?: string | null; rawBody?: string; mediaType?: string; lanes?: readonly MessagesOverflowLane[]; roleValue?: unknown; localBranch?: string; fixedLocal?: boolean; fault?: string; other?: string; responseStatus?: string; toolGuard?: boolean; messageStop?: boolean; prefix?: string; eventLanes?: readonly MessagesOverflowLane[]; recovery: Partial<Record<MessagesOverflowLane, boolean>>; classification: Partial<Record<MessagesOverflowLane, "error" | "success">> }
@@ -621,3 +622,17 @@ export const messagesOverflowFixtures: MessagesOverflowFixture[] = [
   {"id":"sweep-connect-other","message":"ordinary input zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e","other":"input is too long for requested model zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e","fault":"connect","classification":{"passthrough":"error","count_tokens":"error"},"recovery":{"passthrough":false,"count_tokens":false}},
 ];
 export const applicableMessagesOverflowFixtures = (lane: MessagesOverflowLane) => messagesOverflowFixtures.filter(input => Object.hasOwn(input.classification, lane));
+
+/** Stable row keys survive table reordering; collisions are rejected by the generator and test. */
+export function messagesOverflowCaseId(lane: MessagesOverflowLane, input: MessagesOverflowFixture): string {
+  return createHash("sha256").update(JSON.stringify([lane, input.id])).digest("hex").slice(0, 16);
+}
+
+/** Sort object keys, preserve array order, and hash the entire committed input/expectation table. */
+export function messagesOverflowCaseTableHash(): string {
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, canonical(item)]))
+      : value;
+  return createHash("sha256").update(JSON.stringify(canonical({ lanes: messagesOverflowLanes, cases: messagesOverflowFixtures }))).digest("hex");
+}
