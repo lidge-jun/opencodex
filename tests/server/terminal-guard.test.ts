@@ -89,6 +89,36 @@ describe("terminal guard", () => {
     expect(analysis.reason).toBe("recent_tool_activity");
   });
 
+  test("passes a completion summary that follows tool results in the same turn", () => {
+    const request = parsed("Create hello.txt containing hi, then reply DONE.");
+    request.context.messages.push(
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "exec_command", arguments: {} }], timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_1", toolName: "exec_command", content: "exit 0", isError: false, timestamp: 3 },
+    );
+
+    for (const text of ["DONE", "I've updated calc.py and both tests pass.", "已经完成了。"]) {
+      const analysis = analyzeTerminalTurn(request, [{ type: "text_delta", text }, { type: "done" }]);
+      expect(analysis.decision).toBe("pass");
+      expect(analysis.reason).toBe("recent_tool_activity");
+    }
+  });
+
+  test("still continues a plan announcement that stalls after tool results in the same turn", () => {
+    const request = parsed("Fix the failing test in calc.py");
+    request.context.messages.push(
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "exec_command", arguments: {} }], timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_1", toolName: "exec_command", content: "1 failed", isError: false, timestamp: 3 },
+    );
+
+    const analysis = analyzeTerminalTurn(request, [
+      { type: "text_delta", text: "Let me fix the add function next." },
+      { type: "done" },
+    ]);
+
+    expect(analysis.decision).toBe("continue");
+    expect(analysis.reason).toBe("suspicious_no_tool");
+  });
+
   test("continues when the last assistant message was a plan-only stop after earlier tools", () => {
     const request = parsed("继续");
     request.context.messages = [

@@ -82,6 +82,18 @@ function recentTurnHasToolActivity(parsed: OcxParsedRequest): boolean {
   return false;
 }
 
+// Tool calls or results after the latest user message mean this turn already executed tools, so a
+// text-only completion summary closes it; only a renewed plan announcement is still suspicious.
+function toolActivitySinceLatestUser(parsed: OcxParsedRequest): boolean {
+  for (let i = parsed.context.messages.length - 1; i >= 0; i -= 1) {
+    const message = parsed.context.messages[i];
+    if (message.role === "user") return false;
+    if (message.role === "toolResult") return true;
+    if (message.role === "assistant" && message.content.some(part => part.type === "toolCall")) return true;
+  }
+  return false;
+}
+
 function assistantText(events: readonly AdapterEvent[]): string {
   return events
     .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta")
@@ -104,6 +116,9 @@ export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly A
   }
   if (PLAN_ONLY_REQUEST_RE.test(userText)) {
     return { decision: "pass", reason: "no_actionable_request", assistantText: text, userText, hasToolCall };
+  }
+  if (toolActivitySinceLatestUser(parsed) && !PLAN_INTENT_RE.test(text)) {
+    return { decision: "pass", reason: "recent_tool_activity", assistantText: text, userText, hasToolCall };
   }
   if (EXPLICIT_CONTINUE_RE.test(userText) && recentTurnHasToolActivity(parsed)) {
     return { decision: "pass", reason: "recent_tool_activity", assistantText: text, userText, hasToolCall };
