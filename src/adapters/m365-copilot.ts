@@ -5,7 +5,7 @@ import { namespacedToolName } from "../types";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { M365_COPILOT_BASE_URL } from "../providers/m365-copilot-models";
 import { m365CopilotClaims } from "../oauth/m365-copilot";
-import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { SendBudgetExhaustedError, providerErrorDestinationLabel } from "../lib/upstream-retry";
 import { estimateTokens } from "../lib/token-estimate";
 import { formatMessages, formatToolResponse, parseToolCalls, isProseDocument, fabricatedToolResponseAt, truncateAtFabricatedToolResponse, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
 import { defaultFramingForModel } from "./m365-copilot/fenced";
@@ -81,7 +81,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
           beforeSend: () => {
             incoming.beforePhysicalSend?.();
             const admission = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: "m365-copilot|" + parsed.modelId + "|" + digest(claims.oid + claims.tid) });
-            if (admission && !admission.allowed || admission?.allowed && !admission.permit.use()) throw new SendBudgetExhaustedError("m365-copilot");
+            if (admission && !admission.allowed || admission?.allowed && !admission.permit.use()) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("m365-copilot"));
             incoming.onPhysicalSend?.({ ordinal: 1 });
           },
         });
