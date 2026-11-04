@@ -28,6 +28,13 @@ test("SSE fallback has a status-independent closed type and literal code", () =>
   expect(JSON.parse(messagesSseErrorPayload('{"error":{"type":"unknown","code":"unknown"}}')).error.type).toBe("api_error");
   expect(JSON.parse(messagesSseErrorPayload('{"error":{"type":"billing_error","code":"rate_limit_exceeded"}}')).error).toEqual({ type: "billing_error", code: "rate_limit_exceeded", message: "The provider rate limit was reached; retry later." });
 });
+test("a non-object error member falls back to the top-level type and code", () => {
+  for (const nested of ["null", "\"x\"", "1", "[]"]) {
+    const error = JSON.parse(messagesSseErrorPayload('{"type":"rate_limit_error","code":"rate_limit_exceeded","error":' + nested + '}')).error;
+    expect(error.type).toBe("rate_limit_error");
+    expect(error.code).toBe("rate_limit_exceeded");
+  }
+});
 test("OVERSIZE-1M has the independently authored exact fixed output", () => {
   expect(messagesSseOversizePayload()).toBe('{"type":"error","error":{"type":"api_error","message":"The provider stream reported an error."}}');
 });

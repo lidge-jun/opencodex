@@ -11,7 +11,9 @@ const overLimit = markProxyError({ message: "The provider stream reported an err
 export function messagesSseErrorPayload(data: string): string {
   let parsed: unknown;
   try { parsed = JSON.parse(data); } catch { parsed = undefined; }
-  const body = record(parsed), error = body.error !== undefined ? record(body.error) : body;
+  const body = record(parsed), nested = body.error;
+  // A null, scalar or array error member carries no fields; read the top-level ones, as the buffered paths do.
+  const error = nested !== null && typeof nested === "object" && !Array.isArray(nested) ? nested as Rec : body;
   return JSON.stringify(ownedAnthropicErrorPayload({ status: 502,
     type: typeof error.type === "string" ? error.type : "api_error",
     code: typeof error.code === "string" ? error.code : undefined,
