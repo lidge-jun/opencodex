@@ -307,6 +307,17 @@ describe("Pi serializer (accept criterion 2)", () => {
     ]);
   });
 
+  test("preserves nested provider model slashes in Pi selectors", () => {
+    const provider = piConfig(ctx({ models: [
+      { namespaced: "openrouter/openrouter/free", provider: "openrouter", id: "openrouter/free" },
+      { namespaced: "anthropic/org/model", provider: "anthropic", id: "org/model" },
+    ] })).providers.opencodex!;
+    expect(provider.models.map(model => model.id)).toEqual([
+      "anthropic/org/model",
+      "openrouter/openrouter/free",
+    ]);
+  });
+
   test("provider envelope names the OpenAI-compatible dialect and the loopback placeholder", () => {
     const provider = piConfig().providers.opencodex!;
     expect(provider.baseUrl).toBe(BASE_URL);

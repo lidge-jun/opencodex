@@ -50,7 +50,9 @@ Generated Pi providers enable `compat.sendSessionAffinityHeaders`. Keep this fla
 Generated Pi providers also set `compat.supportsDeveloperRole` to `false`, so Pi sends its system prompt as `system` instead of `developer`. OpenCodex forwards Chat Completions roles as sent, and several OpenAI-compatible upstreams reject `developer` with a 400; every upstream accepts `system`.
 
 Model ids are the proxy's canonical selectors, so routed models appear as `provider/model`
-(`anthropic/claude-opus-5`) and native OpenAI slugs stay unprefixed (`gpt-5.6-sol`). The `name`
+(`anthropic/claude-opus-5`) and retain every slash in the upstream model slug (for example,
+`openrouter/openrouter/free` selects provider `openrouter`, model `openrouter/free`). Native OpenAI
+slugs stay unprefixed (`gpt-5.6-sol`). The `name`
 suffix — `(anthropic)`, `(native)`, `(routed)` — is what makes two same-named models from
 different upstreams distinguishable in Pi's picker.
 
