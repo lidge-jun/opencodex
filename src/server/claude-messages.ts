@@ -384,7 +384,7 @@ async function anthropicNativePassthrough(
     return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error", { code: "header_timeout" });
   }
   if (result.kind === "error") {
-    const originalMessage = result.error instanceof Error ? result.error.message : typeof result.error === "string" ? result.error : "";
+    const originalMessage = result.error instanceof Error ? result.error.message : String(result.error);
     return fail(502, "non_stream", "anthropic passthrough failed: upstream connection error", "api_error", { code: "connect_failed" }, "anthropic passthrough failed: upstream connection error", `anthropic passthrough failed: ${originalMessage}`);
   }
   const upstream = result.upstream;
@@ -606,7 +606,7 @@ function translationFailure(err: unknown, logCtx: RequestLogContext, logIds: { r
   const status = overflow ? 413 : unavailable ? 503 : err instanceof AnthropicRequestError ? 400 : 500;
   if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
   if (unavailable) return desktopMappingUnavailableResponse(err);
-  const originalMessage = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const originalMessage = err instanceof Error ? err.message : String(err);
   const clientMessage = overflow ? "request translation buffer exceeded the safe limit"
     : err instanceof Error && isProxyError(err) ? err.message : "The proxy could not translate the Messages request.";
   const code = overflow ? "translation_buffer_limit" : undefined;
@@ -1416,7 +1416,7 @@ async function handleClaudeMessagesWithBudget(
         return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
           evidence: { status: 413, message: error.message }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
       }
-      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+      const message = error instanceof Error ? error.message : String(error);
       const legacy = anthropicErrorBody(502, message, "api_error");
       return ownedAnthropicErrorResponse({ status: 502, type: "api_error", evidence: { status: 502, message },
         contract: "transport_failed", overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
@@ -1607,7 +1607,7 @@ export async function handleClaudeCountTokens(
   } catch (err) {
     if (err instanceof DesktopModelMappingUnavailableError) return desktopMappingUnavailableResponse(err);
     if (err instanceof AnthropicRequestError) return anthropicErrorResponse(400, isProxyError(err) ? err.message : "Invalid JSON body");
-    const originalMessage = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+    const originalMessage = err instanceof Error ? err.message : String(err);
     const legacy = anthropicErrorBody(500, originalMessage);
     return ownedAnthropicErrorResponse({ status: 500, evidence: { status: 500 },
       localError: markProxyError({ message: "The proxy could not read the Messages request." }),

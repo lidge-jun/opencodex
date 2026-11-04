@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
@@ -24,7 +23,13 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
     let source = base ? git("show", `72e80d280:${path}`) : readFileSync(repoPath(path), "utf8");
     if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
       "const upstream = await handleResponses(internalReq, {",
-      "const upstream = globalThis.__messagesReplayResponse ? globalThis.__messagesReplayResponse() : await handleResponses(internalReq, {") + "\nexport { desktopMappingUnavailableResponse as __messagesSweepDesktop, translationFailure as __messagesSweepTranslation, claudeInboundDisabled as __messagesSweepDisabled };\n";
+      "const upstream = globalThis.__messagesReplayResponse ? globalThis.__messagesReplayResponse() : await handleResponses(internalReq, {");
+    if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
+      "message = await collectAnthropicMessage(anthropicSse,",
+      "if (globalThis.__messagesCollectorStream) await anthropicSse.cancel();\n      message = await collectAnthropicMessage(globalThis.__messagesCollectorStream ?? anthropicSse,");
+    if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
+      "body = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));",
+      "if (globalThis.__messagesReadFailure) throw globalThis.__messagesReadFailure.value;\n    body = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));") + "\nexport { desktopMappingUnavailableResponse as __messagesSweepDesktop, translationFailure as __messagesSweepTranslation, claudeInboundDisabled as __messagesSweepDisabled };\n";
     if (path === "src/claude/outbound.ts") {
       source = replaceOnce(source, "  const text = overflow ? claudePromptTooLongMessage(message) : message;",
         '  globalThis.__messagesOverflowRecord("writer", overflow);\n  const text = overflow ? claudePromptTooLongMessage(message) : message;');
@@ -94,15 +99,14 @@ for (const lane of messagesOverflowLanes) for (const input of applicableMessages
       intern(decisions, internalDecisions), input.classification[lane], intern(types, result.type ?? null),
       intern(codes, result.code ?? null), intern(mediaTypes, result.mediaType), result.clientError];
     if (input.classification[lane] === "success" || input.fixedLocal) {
-      const bytes = Buffer.from(result.text, "utf8");
-      outcome.push(createHash("sha256").update(bytes).digest("hex"), bytes.byteLength);
+      outcome.push(result.bodySha256, result.bodyLength);
     }
     outcomes[id] = outcome;
   } else rows.push({ lane, input, head: { ...result, internalDecisions } });
 }
 delete (globalThis as any).__messagesOverflowRecord;
 if (base) {
-  const header = { schemaVersion: 7, baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec", caseTableSha256: messagesOverflowCaseTableHash(),
+  const header = { schemaVersion: 8, baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec", caseTableSha256: messagesOverflowCaseTableHash(),
     columns: ["lane", "status", "clientRecognizes", "decisions", "class", "type", "code", "mediaType", "clientError", "bodySha256?", "bodyLength?"],
     lanes: messagesOverflowLanes, decisions, types, codes, mediaTypes };
   const lines = Object.entries(outcomes).map(([id, outcome]) => `${JSON.stringify(id)}:${JSON.stringify(outcome)}`);
@@ -110,4 +114,4 @@ if (base) {
   const groups = [];
   for (let index = 0; index < lines.length; index += 3) groups.push(lines.slice(index, index + 3).join(","));
   await Bun.write(output, `${JSON.stringify(header).slice(0, -1)},"outcomes":{\n${groups.join(",\n")}\n}}\n`);
-} else await Bun.write(output, JSON.stringify({ schemaVersion: 7, rows }) + "\n");
+} else await Bun.write(output, JSON.stringify({ schemaVersion: 8, rows }) + "\n");

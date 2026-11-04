@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +6,7 @@ import { ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES } from "../../src/lib/clie
 import { fixturePath, helperPath, repoRoot } from "../helpers/repo-root";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash, type MessagesOverflowFixture } from "../helpers/messages-overflow-cases";
 
-type Observation = { status: number; clientError: boolean; envelopeType?: string; mediaType: string | null; type?: string; code?: string | null; text: string; clientRecognizes: boolean; compactionSentence: boolean; internalDecisions: Record<string, boolean> };
+type Observation = { status: number; bodySha256: string; bodyLength: number; clientError: boolean; envelopeType?: string; mediaType: string | null; type?: string; code?: string | null; text: string; clientRecognizes: boolean; compactionSentence: boolean; internalDecisions: Record<string, boolean> };
 type Row = { lane: typeof messagesOverflowLanes[number]; input: MessagesOverflowFixture; head: Observation };
 // Dictionary indexes retain every comparison without repeating input data or error bodies.
 type Outcome = [lane: number, status: number, clientRecognizes: boolean, decisions: number, classification: "error" | "success",
@@ -23,7 +22,7 @@ const cases = messagesOverflowLanes.flatMap(lane => applicableMessagesOverflowFi
 const head = new Map<string, Row>();
 const key = (row: Pick<Row, "lane" | "input">) => messagesOverflowCaseId(row.lane, row.input);
 beforeAll(async () => {
-  expect(golden.schemaVersion).toBe(7);
+  expect(golden.schemaVersion).toBe(8);
   expect(golden.columns).toEqual(["lane", "status", "clientRecognizes", "decisions", "class", "type", "code", "mediaType", "clientError", "bodySha256?", "bodyLength?"]);
   expect(golden.lanes).toEqual(messagesOverflowLanes);
   expect(new Set(cases.map(key)).size).toBe(cases.length);
@@ -66,10 +65,9 @@ for (const base of cases) test(`${base.lane}/${base.input.id}: origin/dev client
   expect(after.internalDecisions).toEqual(before.internalDecisions);
   const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
   if (classification === "success" || base.input.fixedLocal) {
-    const bytes = Buffer.from(after.text, "utf8");
     expect(before.bodySha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(createHash("sha256").update(bytes).digest("hex")).toBe(before.bodySha256);
-    expect(bytes.byteLength).toBe(before.bodyLength);
+    expect(after.bodySha256).toBe(before.bodySha256);
+    expect(after.bodyLength).toBe(before.bodyLength);
   }
   if (classification === "success") {
     expect(after.mediaType).toBe(before.mediaType);
@@ -85,4 +83,19 @@ for (const base of cases) test(`${base.lane}/${base.input.id}: origin/dev client
   expect(ANTHROPIC_ERROR_TYPES.has(after.type ?? "")).toBe(true);
   if (ANTHROPIC_ERROR_TYPES.has(before.type ?? "")) expect(after.type).toBe(before.type);
   expect(after.code).toBe(typeof before.code === "string" && before.code !== "thread_unsupported_request" && ANTHROPIC_ERROR_CODES.has(before.code) ? before.code : undefined);
+});
+
+for (const lane of ["passthrough", "count_tokens"] as const) for (const pair of ["id", "utf8"]) test(`${lane}: raw ${pair} outcomes differ`, async () => {
+  const left = cases.find(row => row.lane === lane && row.input.id === `raw-parity-${pair}-a`)!;
+  const right = cases.find(row => row.lane === lane && row.input.id === `raw-parity-${pair}-b`)!;
+  const { observeMessagesOverflowBody } = await import("../helpers/messages-overflow-case");
+  const body = (input: MessagesOverflowFixture) => new Response(input.rawBytes ? new Uint8Array(input.rawBytes) : input.rawBody!);
+  const a = await observeMessagesOverflowBody(body(left.input), lane, left.input);
+  const b = await observeMessagesOverflowBody(body(right.input), lane, right.input);
+  expect(a.bodyLength).toBeGreaterThan(0);
+  expect(a.bodyLength).toBe(b.bodyLength);
+  expect(a.bodySha256).not.toBe(b.bodySha256);
+  if (pair === "id") expect(golden.outcomes[key(left)]![9]).not.toBe(golden.outcomes[key(right)]![9]);
+  // The baseline proxy already decodes upstream UTF-8; compare its real returned bytes separately.
+  else expect(golden.outcomes[key(left)]![9]).toBe(golden.outcomes[key(right)]![9]);
 });

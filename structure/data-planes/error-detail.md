@@ -385,7 +385,9 @@ independent of replacement-message length. Request logging and combo evidence re
 
 Special-code and catch returns inspect their baseline-rendered message before choosing a fixed
 sentence. This includes collected buffer errors, transport reads, policy failures and request
-translation. Fixed local budget and guard refusals retain their original wording. The inbound
+translation. Catch diagnostics retain the baseline Error.message/String(thrown) conversion
+only as internal evidence; converted text never becomes owned client wording. A failed
+conversion propagates as it does on the original path. Fixed local budget and guard refusals retain their original wording. The inbound
 Messages and direct IR codecs use `messagesRolePresentation` in `src/lib/messages-error-body.ts`
 to preserve recovery recognition and failed JSON-role coercion status without displaying the role.
 The legacy envelope stays in the combo-evidence side channel, separate from the owned response.

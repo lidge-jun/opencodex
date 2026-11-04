@@ -456,7 +456,7 @@ export async function collectAnthropicMessageResponse(
       return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
         evidence: { status: 413, message: error.message }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
-    const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+    const message = error instanceof Error ? error.message : String(error);
     const legacy = anthropicErrorBody(502, message, "api_error");
     return ownedAnthropicErrorResponse({ status: 502, type: "api_error", evidence: { status: 502, message },
       contract: "transport_failed", overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
