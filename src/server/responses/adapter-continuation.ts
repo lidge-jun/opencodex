@@ -1,4 +1,4 @@
-import { proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
+import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
@@ -696,7 +696,7 @@ export function createAdapterContinuations(
     }
 
     if (!response.ok) {
-      if (route.providerName === "kiro") response = await normalizeFinalKiroHttpError(response, upstream.signal);
+      if (route.providerName === "kiro") response = carryProxyError(response, await normalizeFinalKiroHttpError(response, upstream.signal));
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
       const message = normalized.cyberPolicy

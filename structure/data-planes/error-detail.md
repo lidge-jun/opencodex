@@ -404,7 +404,10 @@ HTTP workflow refusals enter the same Messages projection at
 
 Only buffered/folded Messages consumers receive a legacy-record sink; streaming delivery does
 not retain those records. Adapter iterator-read failures alone carry transport provenance;
-writer and terminal-hook faults retain the generic proxy-failure presentation. Successful buffered
+writer and terminal-hook faults retain the generic proxy-failure presentation. The Responses SSE
+converter likewise distinguishes reader.read failures from frame-processing and output faults.
+Kiro continuation HTTP normalization carries local ownership and presentation metadata before
+registering the terminal error. Successful buffered
 passthrough retains guarded usage accounting, then returns its original body before error
 inspection or serialization.
 

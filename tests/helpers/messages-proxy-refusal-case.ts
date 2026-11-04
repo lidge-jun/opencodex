@@ -60,9 +60,34 @@ if (kind.startsWith("native-pacing")) {
   model = `fixture/${KEY}`; config.providers.fixture.models = [KEY];
   config.apiKeys = [{ id: "scoped", name: "fixture", key: "synthetic-scope", createdAt: "2026-01-01T00:00:00Z", allowedModels: ["other"], allowedProviders: [] }];
 } else if (kind === "copilot") {
-  const { CopilotAutoHttpError } = await import("../../src/providers/github-copilot-auto");
-  const error = new CopilotAutoHttpError(403);
-  produced = (markProxyError as any)(formatErrorResponse(error.status, "authentication_error", error.message), "copilot"); absent = "403";
+  (await import("./owned-spend-home")).acquireOwnedSpendHome();
+  const calls: string[] = []; (globalThis as any).__copilotCalls = calls;
+  const executor = (async (url: string | URL | Request) => {
+    const path = new URL(String(url)).pathname; calls.push(path);
+    if (path === "/models") return Response.json({ data: [{ id: "gpt-4o", model_picker_enabled: false, supported_endpoints: ["/chat/completions"] }] });
+    if (path === "/models/session") return Response.json({ error: KEY }, { status: 403 });
+    throw new Error("Unexpected Copilot fixture dispatch");
+  }) as typeof fetch;
+  config = { defaultProvider: "github-copilot", providers: { "github-copilot": { adapter: "openai-chat", authMode: "key", apiKey: "synthetic", baseUrl: "https://api.githubcopilot.com", models: ["auto"], fetch: executor } } };
+  globalThis.fetch = executor; model = "github-copilot/auto"; absent = "403";
+} else if (kind === "kiro-continuation") {
+  const { createAdapterContinuations } = await import("../../src/server/responses/adapter-continuation");
+  const { createTranslatorBudget } = await import("../../src/lib/translator-budget");
+  const { AdmissionModelDeniedError, admissionModelDeniedResponse } = await import("../../src/server/admission-model-scope");
+  const { clientFacingModelLabel } = await import("../../src/lib/error-destination");
+  const { encodeAnthropicMessageSse } = await import("../../src/protocols/encoders/messages");
+  const translatorBudget = createTranslatorBudget(); const logCtx = {}; const parsed: any = { modelId: "fixture", stream: true, options: {}, context: { messages: [] } };
+  const route = { providerName: "kiro", modelId: "fixture", provider: { adapter: "anthropic", authMode: "key", apiKey: "synthetic", baseUrl: "https://kiro.fixture.test" } };
+  const refused = admissionModelDeniedResponse(new AdmissionModelDeniedError(clientFacingModelLabel(KEY), { providerName: "kiro", modelId: "fixture" }));
+  let fetched = 0;
+  const continuations = createAdapterContinuations({ options: {}, config: { providers: {} }, logCtx } as any,
+    { route, translatorBudget, inboundWire: "messages", parsed, selectedForwardHeaders: new Headers() } as any,
+    { activeAdapter: { name: "anthropic", buildRequest: () => ({ url: route.provider.baseUrl, method: "POST", headers: {}, body: "{}" }), fetchResponse: async () => { fetched++; return refused; } }, imageTierBias: 0, oauthDispatch() {}, noteRoutedAttemptSend() {} } as any,
+    {} as any, { sendBudgetExhausted: () => false } as any,
+    { upstream: new AbortController(), connectMs: 0, rateLimitPolicy: null, thinkingSignatureRecovery: { prepareHttp: async () => false } } as any);
+  const response = new Response(encodeAnthropicMessageSse(continuations.fetchTerminalGuardContinuation(parsed), { model: "fixture", translatorBudget, proxyErrorContext: logCtx }));
+  const text = await response.text(); translatorBudget.dispose();
+  console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent: KEY, code: null, fetched })); process.exit(0);
 } else if (kind === "discovery" || kind === "muse") {
   const oauth = await import("../../src/oauth");
   const { AntigravityProjectDiscoveryError } = await import("../../src/oauth/antigravity-discovery-diagnostics");
@@ -140,4 +165,4 @@ const direct = kind === "sink-direct" ? await (async () => {
 const chat = kind === "chat-roster" ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "fixture" }], stream: false }) }), config, logCtx) : undefined;
 const response = chat ?? direct ?? (["roster-count", "body-overflow-count"].includes(kind) ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, logCtx, kind === "scope-direct" ? { requestId: crypto.randomUUID(), start: Date.now(), admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined));
 const text = await response.text();
-console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set((globalThis as any).__observedSinks ?? [])].reduce((n: number, sink: any) => n + (sink.delivered?.length ?? 0), 0), expectedBody, usage: logCtx.usage }));
+console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set((globalThis as any).__observedSinks ?? [])].reduce((n: number, sink: any) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: (globalThis as any).__copilotCalls, usage: logCtx.usage }));

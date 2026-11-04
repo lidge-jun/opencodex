@@ -28,3 +28,22 @@ for (const source of ["writer", "reader", "hook"] as const) test(`adapter ${sour
   expect((await new Response(body).text()).length).toBeGreaterThan(0);
   expect(transport).toBe(source === "reader");
 });
+
+for (const source of ["reader", "processor"] as const) for (const overflow of [false, true]) test(`converter ${source} fault overflow=${overflow}`, async () => {
+  const { responsesSseToAnthropicSse } = await import("../../src/claude/outbound");
+  const { CLIENT_ERROR_CONTRACTS, CLAUDE_CONTEXT_OVERFLOW_MESSAGE } = await import("../../src/lib/client-error-body");
+  const diagnostic = `${overflow ? "prompt is too long" : "fixture fault"} zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e`;
+  let processed = 0;
+  const upstream = source === "reader" ? new ReadableStream<Uint8Array>({ pull() { throw new Error(diagnostic); } })
+    : new Response('event: response.output_item.done\ndata: {"item":{"type":"reasoning","id":"r_fixture","encrypted_content":"fixture-opaque"}}\n\n').body!;
+  const response = new Response(responsesSseToAnthropicSse(upstream, "fixture", { translatorBudget: createTestTranslatorBudget(), pingIntervalMs: 0,
+    nativeReasoningTagFor() { if (processed++ === 0) throw new Error(diagnostic); return undefined; } }));
+  const text = await response.text();
+  expect(response.status).toBe(200); expect(text.length).toBeGreaterThan(0);
+  expect(text).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
+  const payload = text.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6))).find(row => row.type === "error");
+  expect(payload.error.type).toBe("api_error");
+  expect(payload.error.message).toBe(overflow ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : source === "reader" ? CLIENT_ERROR_CONTRACTS.transport_failed : "The provider failed to complete the request.");
+  expect(payload.error.message.toLowerCase().includes("prompt is too long")).toBe(overflow);
+  if (source === "processor") expect(processed).toBeGreaterThan(0);
+});

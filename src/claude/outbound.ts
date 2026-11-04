@@ -925,9 +925,12 @@ export function responsesSseToAnthropicSse(
 
       reader = upstream.getReader();
       void (async () => {
+        let readingUpstream = false;
         try {
           for (;;) {
+            readingUpstream = true;
             const { done, value } = await reader.read();
+            readingUpstream = false;
             if (done) break;
             const decodedReservation = translatorBudget.reserveTransient(value.byteLength, { kind: "live_transient" });
             let decodedCommitted = false;
@@ -1043,7 +1046,7 @@ export function responsesSseToAnthropicSse(
           if (isTranslatorBudgetExceededError(err)) {
             try { await reader.cancel(err); } catch { /* already closed */ }
             fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit", true);
-          } else fail(500, err instanceof Error ? err.message : String(err), false, undefined, false, "transport_failed");
+          } else fail(500, err instanceof Error ? err.message : String(err), false, undefined, false, readingUpstream ? "transport_failed" : undefined);
         } finally {
           releaseThinkingBuffer(open);
           translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
