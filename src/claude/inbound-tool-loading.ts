@@ -11,22 +11,27 @@ export function appendOnlyToolLoadingMatches(value: unknown, model: string): boo
     pattern.endsWith("*") ? model.startsWith(pattern.slice(0, -1)) : model === pattern);
 }
 
-/** Replay client discovery in place, using only definitions still declared by this request. */
-export function appendLoadedToolDefinitions(body: Rec, raw: Rec): Rec {
-  if (!Array.isArray(body.tools) || !Array.isArray(body.input) || !Array.isArray(raw.tools)
-    || !Array.isArray(raw.messages)) return body;
+/** Client discovery evidence in the original Messages body (shared by the Responses and Chat projections). */
+export interface ClientToolDiscovery {
+  /** Tools the client declared with `defer_loading: true`. */
+  deferred: Set<string>;
+  /** Every tool name the assistant has called. */
+  used: Set<string>;
+  /** Deferred tool -> the ToolSearch call id whose successful result first loaded it. */
+  loadAt: Map<string, string>;
+}
 
-  const declared = new Map<string, Rec>();
+/**
+ * Read discovery evidence: a successful structured ToolSearch `tool_reference` for a deferred tool
+ * this request still declares and has not called before that result. Returns null when the
+ * client body is not the expected shape or reuses a tool_use id, so callers send it unchanged.
+ */
+export function readClientToolDiscovery(raw: Rec, isDeclared: (name: string) => boolean): ClientToolDiscovery | null {
+  if (!Array.isArray(raw.tools) || !Array.isArray(raw.messages)) return null;
   const deferred = new Set<string>();
-  for (const tool of body.tools) {
-    if (!isRec(tool) || tool.type !== "function" || typeof tool.name !== "string") continue;
-    if (declared.has(tool.name)) return body;
-    declared.set(tool.name, tool);
-  }
   for (const tool of raw.tools) {
     if (isRec(tool) && tool.defer_loading === true && typeof tool.name === "string") deferred.add(tool.name);
   }
-
   const calls = new Map<string, string>();
   const used = new Set<string>();
   const loadAt = new Map<string, string>();
@@ -36,7 +41,7 @@ export function appendLoadedToolDefinitions(body: Rec, raw: Rec): Rec {
       if (!isRec(block)) continue;
       if (message.role === "assistant" && block.type === "tool_use"
         && typeof block.id === "string" && typeof block.name === "string") {
-        if (calls.has(block.id)) return body;
+        if (calls.has(block.id)) return null;
         calls.set(block.id, block.name);
         used.add(block.name);
       }
@@ -46,12 +51,28 @@ export function appendLoadedToolDefinitions(body: Rec, raw: Rec): Rec {
       for (const reference of block.content) {
         if (!isRec(reference) || reference.type !== "tool_reference" || typeof reference.tool_name !== "string") continue;
         const name = reference.tool_name;
-        if (declared.has(name) && deferred.has(name) && !used.has(name) && !loadAt.has(name)) {
+        if (isDeclared(name) && deferred.has(name) && !used.has(name) && !loadAt.has(name)) {
           loadAt.set(name, block.tool_use_id);
         }
       }
     }
   }
+  return { deferred, used, loadAt };
+}
+
+/** Replay client discovery in place, using only definitions still declared by this request. */
+export function appendLoadedToolDefinitions(body: Rec, raw: Rec): Rec {
+  if (!Array.isArray(body.tools) || !Array.isArray(body.input)) return body;
+
+  const declared = new Map<string, Rec>();
+  for (const tool of body.tools) {
+    if (!isRec(tool) || tool.type !== "function" || typeof tool.name !== "string") continue;
+    if (declared.has(tool.name)) return body;
+    declared.set(tool.name, tool);
+  }
+  const discovery = readClientToolDiscovery(raw, name => declared.has(name));
+  if (!discovery) return body;
+  const { deferred, used, loadAt } = discovery;
   // Discovery must remain callable; this optimization does not create a search capability.
   if (!declared.has("ToolSearch") || deferred.has("ToolSearch")) return body;
 

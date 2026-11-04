@@ -64,6 +64,8 @@ export interface OcxClaudeCodeConfig {
    * Applies only after routing settles on a direct openai-responses route; combos and policies are skipped.
    */
   appendOnlyToolLoadingModels?: string[];
+  /** Opt-in direct openai-chat routes (same syntax): one stable `use_loaded_tool` dispatcher across ToolSearch loads. */
+  chatToolDispatchModels?: string[];
   /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
   compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */

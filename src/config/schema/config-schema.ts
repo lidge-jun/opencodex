@@ -437,9 +437,12 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown; chatToolDispatchModels?: unknown };
     if (claude.appendOnlyToolLoadingModels !== undefined && !isAppendOnlyToolLoadingModels(claude.appendOnlyToolLoadingModels)) {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "appendOnlyToolLoadingModels"], message: "appendOnlyToolLoadingModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
+    }
+    if (claude.chatToolDispatchModels !== undefined && !isAppendOnlyToolLoadingModels(claude.chatToolDispatchModels)) {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "chatToolDispatchModels"], message: "chatToolDispatchModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
     }
     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
