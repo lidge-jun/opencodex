@@ -17,10 +17,13 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
 {
   const existing = base ? new Set(git("ls-tree", "-r", "--name-only", "72e80d280", "--", "src").trim().split("\n")) : new Set<string>();
   const changed = base ? git("diff", "--name-only", "72e80d280", "--", "src").trim().split("\n").filter(path => existing.has(path))
-    : ["src/claude/outbound.ts", "src/server/messages-native.ts", "src/protocols/encoders/messages.ts"];
+    : ["src/server/claude-messages.ts", "src/claude/outbound.ts", "src/server/messages-native.ts", "src/protocols/encoders/messages.ts"];
   const overlays = new Map<string, string>();
   for (const path of changed) {
     let source = base ? git("show", `72e80d280:${path}`) : readFileSync(repoPath(path), "utf8");
+    if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
+      "const upstream = await handleResponses(internalReq, {",
+      "const upstream = globalThis.__messagesReplayResponse ? globalThis.__messagesReplayResponse() : await handleResponses(internalReq, {") + "\nexport { desktopMappingUnavailableResponse as __messagesSweepDesktop, translationFailure as __messagesSweepTranslation, claudeInboundDisabled as __messagesSweepDisabled };\n";
     if (path === "src/claude/outbound.ts") {
       source = replaceOnce(source, "  const text = overflow ? claudePromptTooLongMessage(message) : message;",
         '  globalThis.__messagesOverflowRecord("writer", overflow);\n  const text = overflow ? claudePromptTooLongMessage(message) : message;');
@@ -62,9 +65,10 @@ for (const lane of messagesOverflowLanes) for (const input of applicableMessages
     const values = observations.get(tag) ?? []; values.push(value); observations.set(tag, values);
     return value;
   };
+  if (input.fault) process.stderr.write(`fixture ${lane}/${input.id}\n`);
   const result = await runMessagesOverflowCase(lane, input);
   const passthrough = lane === "passthrough" || lane === "count_tokens";
-  if (!passthrough && input.rawBody === undefined && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
+  if (!passthrough && input.rawBody === undefined && !input.fault && !input.localBranch && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
   const internalDecisions: Record<string, boolean> = {};
   for (const [tag, values] of observations) {
     if (values.some(value => value !== values[0])) throw new Error(`Inconsistent ${tag} decisions for ${lane}/${input.id}`);
@@ -73,4 +77,4 @@ for (const lane of messagesOverflowLanes) for (const input of applicableMessages
   rows.push({ lane, input, [base ? "base" : "head"]: { ...result, internalDecisions } });
 }
 delete (globalThis as any).__messagesOverflowRecord;
-await Bun.write(output, JSON.stringify({ schemaVersion: 5, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");
+await Bun.write(output, JSON.stringify({ schemaVersion: 6, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");

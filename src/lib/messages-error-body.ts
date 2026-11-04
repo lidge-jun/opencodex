@@ -1,6 +1,6 @@
 import {
   ANTHROPIC_ERROR_CODES, ANTHROPIC_ERROR_TYPES, CLAUDE_CONTEXT_OVERFLOW_MESSAGE,
-  CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, type ClientErrorContract,
+  CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, attachComboFailureEvidence, type ClientErrorContract,
 } from "./client-error-body";
 import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamCondition, type UpstreamConditionEvidence } from "./upstream-condition";
 
@@ -15,6 +15,29 @@ export function messagesOverflowPresentation(baselineMessage: unknown): boolean 
   if (typeof baselineMessage !== "string") return false;
   const message = baselineMessage.toLowerCase();
   return message.includes("prompt is too long") || message.includes("input is too long for requested model");
+}
+
+/** Preserve the former JSON role display decision without rendering caller values. */
+export function messagesRolePresentation(role: unknown): { overflow: boolean; coercionFailed: boolean } {
+  let overflow = false;
+  const active = new WeakSet<unknown[]>();
+  const stack: { array: unknown[]; index: number }[] = [];
+  let value = role;
+  for (;;) {
+    if (typeof value === "string") overflow ||= messagesOverflowPresentation(value);
+    else if (Array.isArray(value)) {
+      if (!active.has(value)) { active.add(value); stack.push({ array: value, index: 0 }); }
+    } else if (value !== null && typeof value === "object" && Object.hasOwn(value, "toString")) {
+      return { overflow: false, coercionFailed: true };
+    }
+    let next = false;
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]!;
+      if (frame.index < frame.array.length) { value = frame.array[frame.index++]; next = true; break; }
+      active.delete(frame.array); stack.pop();
+    }
+    if (!next) return { overflow, coercionFailed: false };
+  }
 }
 
 export function isMessagesErrorEnvelope(value: unknown): value is Rec {
@@ -57,8 +80,9 @@ export function ownedAnthropicErrorPayload(options: OwnedAnthropicErrorOptions):
       ?? upstreamConditionMessage(classifyUpstreamCondition(options.evidence) ?? "upstream_failed");
   return { type: "error", error: { type, message, ...(code ? { code } : {}) } };
 }
-export function ownedAnthropicErrorResponse(options: OwnedAnthropicErrorOptions): Response {
-  return Response.json(ownedAnthropicErrorPayload(options), { status: options.status });
+export function ownedAnthropicErrorResponse(options: OwnedAnthropicErrorOptions, legacy?: Rec): Response {
+  const response = Response.json(ownedAnthropicErrorPayload(options), { status: options.status, headers: { "Content-Type": "application/json" } });
+  return legacy === undefined ? response : attachComboFailureEvidence(response, JSON.stringify(legacy));
 }
 /** Admission and presentation use separate numbers; this bounds display only. */
 export function boundedMessagesDisplayCount(value: number): string | undefined {

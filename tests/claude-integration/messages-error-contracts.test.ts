@@ -2,8 +2,8 @@ import { expect, test, spyOn } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES, markProxyError, isProxyError } from "../../src/lib/client-error-body";
-import { ownedAnthropicErrorPayload, messagesUnknownEndpointMessage } from "../../src/lib/messages-error-body";
+import { OPENAI_ERROR_TYPES, OPENAI_ERROR_CODES, ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES, comboFailureEvidence, markProxyError, isProxyError } from "../../src/lib/client-error-body";
+import { ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesUnknownEndpointMessage } from "../../src/lib/messages-error-body";
 import { collectAnthropicMessage, responsesSseToAnthropicSse } from "../../src/claude/outbound";
 import { collectAnthropicMessageResponse, encodeAnthropicMessageSse } from "../../src/protocols/encoders/messages";
 import type { MessagesFailureVerdictSink } from "../../src/claude/failure-verdict";
@@ -171,9 +171,9 @@ test("C1/C2 ingress constructors have explicit producer rows and local identity"
   expect(local.message).toBe("Claude Desktop model mapping is unavailable; refresh model discovery or reapply the connected hub profile");
 });
 const envelopeWriterRows = [
-  ["src/claude/outbound.ts", 5, "shared baseline helpers, original verdict and incomplete presentation construction"],
+  ["src/claude/outbound.ts", 6, "shared baseline helpers, original verdict and incomplete/unfinished presentation construction"],
   ["src/protocols/encoders/messages.ts", 4, "original verdict construction and fixed local collection failures"],
-  ["src/server/messages-native.ts", 3, "mapped local fail, original combo and fold presentation envelopes"],
+  ["src/server/messages-native.ts", 4, "local/evidence legacy formatters, original combo and fold envelopes"],
   ["src/server/claude-messages.ts", 30, "mapped local ingress/bypass constructors, original combo and defensive JSON presentation envelopes"],
   ["src/server/index/serve-options.ts", 4, "fixed endpoint auth/origin bypasses"],
   ["src/server/messages-native-tool-guard.ts", 1, "deferred local guard terminal"],
@@ -198,8 +198,8 @@ test("W1/W3 envelope writers are covered by explicit dispositions", () => {
 
 const nativeFailRows = [
   {
-    "call": "return fail(400, error instanceof Error && isProxyError(error) ? error.message : \"The proxy could not translate the Messages request.\", \"invalid_request_error\");",
-    "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
+    "call": "return fail(400, error instanceof Error && isProxyError(error) ? error.message : \"The proxy could not translate the Messages request.\", \"invalid_request_error\", undefined, message);",
+    "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
   },
   {
     "call": "const response = fail(429, message, \"rate_limit_error\");",
@@ -238,8 +238,8 @@ const nativeFailRows = [
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
-    "call": "if (error instanceof NativeOAuthModelRouteError) return fail(400, \"Invalid Anthropic model routes\", \"invalid_request_error\");",
-    "disposition": "fixed local literal at the mapped native producer"
+    "call": "if (error instanceof NativeOAuthModelRouteError) return fail(400, \"Invalid Anthropic model routes\", \"invalid_request_error\", undefined, error.message);",
+    "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
   },
   {
     "call": "return fail(401, publicOAuthAuthenticationErrorMessage(error), \"authentication_error\");",
@@ -274,8 +274,8 @@ const nativeFailRows = [
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
-    "call": "if (sendError instanceof NativeOAuthModelRouteError) return fail(400, \"Invalid Anthropic model routes\", \"invalid_request_error\");",
-    "disposition": "fixed local literal at the mapped native producer"
+    "call": "if (sendError instanceof NativeOAuthModelRouteError) return fail(400, \"Invalid Anthropic model routes\", \"invalid_request_error\", undefined, sendError.message);",
+    "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
   },
   {
     "call": "return fail(400, sendError.message, \"invalid_request_error\", \"unsupported_feature\");",
@@ -302,8 +302,8 @@ const nativeFailRows = [
     "disposition": "guard-owned undeclared-tool refusal"
   },
   {
-    "call": "if (localMessage !== undefined) return fail(502, localMessage, \"api_error\");",
-    "disposition": "identity-registered tap diagnostic reconstructed from closed detail and bounded count"
+    "call": "if (localMessage !== undefined) return fail(502, localMessage, \"api_error\", undefined, text);",
+    "disposition": "fixed producer display with original diagnostic used only for baseline recovery selection"
   },
   {
     "call": "if (req.signal.aborted) return fail(499, \"Client cancelled request\", \"api_error\");",
@@ -343,4 +343,20 @@ test("W2 local fail calls each retain a producer disposition", () => {
     .filter(line => /\bfail\(/.test(line)).map(line => line.trim());
   expect(calls).toEqual(nativeFailRows.map(row => row.call));
   expect(nativeFailRows.every(row => row.disposition.length > 0)).toBe(true);
+});
+
+for (const [name, values] of [["OpenAI types", OPENAI_ERROR_TYPES], ["OpenAI codes", OPENAI_ERROR_CODES], ["Anthropic types", ANTHROPIC_ERROR_TYPES], ["Anthropic codes", ANTHROPIC_ERROR_CODES]] as const) test(`${name} vocabulary table matches the source`, () => {
+  const row = readFileSync(repoPath("structure/data-planes/error-detail.md"), "utf8").split("\n").find(line => line.startsWith(`| ${name} |`))!;
+  const members = [...row.matchAll(/`([^`]+)`/g)].map(match => match[1]!);
+  expect(members.sort()).toEqual([...values.keys()].sort());
+});
+
+test("owned response retains the baseline envelope for internal evidence", async () => {
+  const message = `prompt is too long ${sentinel}`;
+  const legacy = { type: "error", error: { type: "request_too_large", code: "translation_buffer_limit", message } };
+  const response = ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit", evidence: { status: 413, message }, overflow: true }, legacy);
+  const text = await response.text();
+  expect(text.length).toBeGreaterThan(0); expect(text).not.toContain(sentinel);
+  expect(response.status).toBe(413); expect(response.headers.get("content-type")).toBe("application/json");
+  expect(comboFailureEvidence(response)).toBe(JSON.stringify(legacy));
 });

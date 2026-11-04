@@ -1,4 +1,5 @@
-import { markProxyError } from "../lib/client-error-body";
+import { messagesRolePresentation } from "../lib/messages-error-body";
+import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, markProxyError } from "../lib/client-error-body";
 /**
  * Claude Code inbound: Anthropic Messages API request -> internal /v1/responses body.
  *
@@ -469,7 +470,11 @@ function translateAnthropicRequest(
         input.push({ type: "message", role: "developer", content: [{ type: "input_text", text }] });
       }
     }
-    else throw markProxyError(new AnthropicRequestError("unsupported message role: unsupported"));
+    else {
+      const role = messagesRolePresentation(msg.role);
+      if (role.coercionFailed) throw markProxyError(new TypeError("unsupported message role: unsupported"));
+      throw markProxyError(new AnthropicRequestError(role.overflow ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "unsupported message role: unsupported"));
+    }
   }
 
   const body: Rec = {

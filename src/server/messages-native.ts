@@ -1,6 +1,6 @@
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
-import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
+import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
 import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
@@ -42,7 +42,7 @@ import {
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
 import { effortFromOutputConfig, resolveInboundModel } from "../claude/inbound";
-import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
+import { anthropicErrorBody, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
@@ -376,19 +376,23 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       attempt.usage = usage;
     }
   };
-  const fail = (status: number, message: string, type?: string, code?: string): Response => {
+  const fail = (status: number, message: string, type?: string, code?: string, originalMessage = message): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
-    return anthropicErrorResponse(status, safeMessage, type, code);
+    const legacy = anthropicErrorBody(status, redactSecretString(originalMessage), type, code);
+    return ownedAnthropicErrorResponse({ status, type, code, evidence: { status, message: originalMessage },
+      localError: markProxyError({ message: safeMessage }), overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
   };
-  const failEvidence = (status: number, message: string, type: string, contract?: "transport_failed", overflow = false, rawError?: Rec): Response => {
+  const failEvidence = (status: number, message: string, type: string, contract?: "transport_failed", overflow?: boolean, rawError?: Rec, legacyBody?: Rec): Response => {
     finishLog(status, message);
-    return Response.json(ownedAnthropicErrorPayload({ status, type, evidence: { status, message, type: typeof rawError?.type === "string" ? rawError.type : undefined, code: typeof rawError?.code === "string" ? rawError.code : undefined }, contract, overflow }), { status });
+    const legacy = legacyBody ?? anthropicErrorBody(status, redactSecretString(message), type);
+    return ownedAnthropicErrorResponse({ status, type, evidence: { status, message, type: typeof rawError?.type === "string" ? rawError.type : undefined, code: typeof rawError?.code === "string" ? rawError.code : undefined }, contract,
+      overflow: overflow ?? messagesRelayedOverflowPresentation("", legacy) }, legacy);
   };
   const preparationFailure = (error: unknown): Response => {
     const message = error instanceof Error ? error.message : String(error);
     finishLog(400, message);
-    return fail(400, error instanceof Error && isProxyError(error) ? error.message : "The proxy could not translate the Messages request.", "invalid_request_error");
+    return fail(400, error instanceof Error && isProxyError(error) ? error.message : "The proxy could not translate the Messages request.", "invalid_request_error", undefined, message);
   };
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
@@ -464,7 +468,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       const localRefusal = localOAuthFailure(error);
       if (localRefusal) return localRefusal;
       if (error instanceof NativeOAuthSelectionChangedError) return fail(409, error.message, "api_error");
-      if (error instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error");
+      if (error instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error", undefined, error.message);
       return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
     }
   } else {
@@ -871,7 +875,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const localRefusal = localOAuthFailure(sendError);
     if (localRefusal) return localRefusal;
     if (sendError instanceof NativeOAuthSelectionChangedError) return fail(409, sendError.message, "api_error");
-    if (sendError instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error");
+    if (sendError instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error", undefined, sendError.message);
     if (sendError instanceof NativeOpaqueStateRefusal) {
       logCtx.errorCode = "unsupported_feature";
       return fail(400, sendError.message, "invalid_request_error", "unsupported_feature");
@@ -988,14 +992,14 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             ["stream_ended_early", "anthropic passthrough upstream stream ended before message_stop"],
             ["stream_failed", "The proxy could not reach or read the provider."],
           ]).get(logCtx.failureDetail?.code ?? "");
-          if (localMessage !== undefined) return fail(502, localMessage, "api_error");
+          if (localMessage !== undefined) return fail(502, localMessage, "api_error", undefined, text);
         }
         const legacy = anthropicErrorBody(baselineOverflow ? 400 : 502,
           redactSecretString(baselineOverflow ? claudePromptTooLongMessage(text) : text),
           baselineOverflow ? "invalid_request_error" : "api_error");
         const overflow = messagesOverflowPresentation((legacy.error as Rec).message);
-        if (baselineOverflow) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error);
-        return failEvidence(502, text, "api_error", undefined, overflow, error);
+        if (baselineOverflow) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error, legacy);
+        return failEvidence(502, text, "api_error", undefined, overflow, error, legacy);
       }
       finishLog(200);
       const collected = collectorVerdictSink.collected ?? message;

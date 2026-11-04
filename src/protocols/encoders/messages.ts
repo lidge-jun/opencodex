@@ -1,5 +1,5 @@
 import type { UpstreamConditionEvidence } from "../../lib/upstream-condition";
-import { ownedAnthropicErrorPayload, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../../lib/messages-error-body";
+import { ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../../lib/messages-error-body";
 import { markProxyError, isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import { admitMessagesFailure, type MessagesFailureVerdictSink } from "../../claude/failure-verdict";
 /**
@@ -27,7 +27,6 @@ import {
   anthropicErrorBody,
   anthropicErrorType,
   isThroughputLimitText,
-  anthropicErrorResponse,
   anthropicFailedStatus,
   anthropicIncompleteOutcome,
   anthropicUsage,
@@ -453,9 +452,14 @@ export async function collectAnthropicMessageResponse(
     message = await collectAnthropicMessage(stream, model, translatorBudget, collectorVerdictSink);
   } catch (error) {
     if (isTranslatorBudgetExceededError(error)) {
-      return anthropicErrorResponse(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+      const legacy = anthropicErrorBody(413, error.message, "request_too_large", "translation_buffer_limit");
+      return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
+        evidence: { status: 413, message: error.message }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
-    return anthropicErrorResponse(502, "The proxy could not reach or read the provider.", "api_error");
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+    const legacy = anthropicErrorBody(502, message, "api_error");
+    return ownedAnthropicErrorResponse({ status: 502, type: "api_error", evidence: { status: 502, message },
+      contract: "transport_failed", overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
   }
   const legacy = collectorVerdictSink.collected ?? message;
   const isError = legacy.type === "error";
@@ -463,12 +467,10 @@ export async function collectAnthropicMessageResponse(
     ? (legacy as { error: { code?: unknown; message?: unknown } }).error
     : undefined;
   if (translatedError?.code === "translation_buffer_limit") {
-    return anthropicErrorResponse(
-      413,
-      "upstream translation buffer exceeded the safe limit",
-      "request_too_large",
-      "translation_buffer_limit",
-    );
+    const originalMessage = typeof translatedError.message === "string" ? translatedError.message : "upstream translation buffer exceeded the safe limit";
+    const legacy = anthropicErrorBody(413, originalMessage, "request_too_large", "translation_buffer_limit");
+    return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
+      evidence: { status: 413, message: originalMessage }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
   }
   const baselineOverflow = isError && translatedError?.code === "context_length_exceeded";
   const status = isError ? (baselineOverflow ? 400 : 502) : 200;

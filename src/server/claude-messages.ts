@@ -1,5 +1,5 @@
-import { ownedAnthropicErrorPayload, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
-import { isProxyError, markProxyError, carryProxyError, attachComboFailureEvidence, comboFailureEvidence } from "../lib/client-error-body";
+import { ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
+import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, isProxyError, markProxyError, carryProxyError, attachComboFailureEvidence, comboFailureEvidence } from "../lib/client-error-body";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { clientFacingModelLabel, clientFacingModelText } from "../lib/error-destination";
 import { classifyUpstreamCondition } from "../lib/upstream-condition";
@@ -220,7 +220,7 @@ async function readAnthropicBody(req: Request, budget: TranslatorBudget, maxByte
     return await readJsonRequestBody(req, budget, maxBytes);
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) throw err;
-    throw markProxyError(new AnthropicRequestError("Invalid JSON body"));
+    throw markProxyError(new AnthropicRequestError(err instanceof Error && messagesOverflowPresentation(err.message) ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "Invalid JSON body"));
   }
 }
 
@@ -345,11 +345,13 @@ async function anthropicNativePassthrough(
   // Locally generated diagnostics are fixed text plus validated guard limits. Runtime
   // fetch errors retain their existing client response but use a fixed stored reason.
   const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string,
-    detail: FailureDetail, storedReason = message) => {
+    detail: FailureDetail, storedReason = message, originalMessage = message) => {
     const safeMessage = redactSecretString(message);
     recordLocalFailureDetail(logCtx, storedReason, detail);
     finalize(status, { closeReason });
-    return anthropicErrorResponse(status, safeMessage, type);
+    const legacy = anthropicErrorBody(status, redactSecretString(originalMessage), type);
+    return ownedAnthropicErrorResponse({ status, type, evidence: { status }, localError: markProxyError({ message: safeMessage }),
+      overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
   };
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
@@ -382,7 +384,8 @@ async function anthropicNativePassthrough(
     return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error", { code: "header_timeout" });
   }
   if (result.kind === "error") {
-    return fail(502, "non_stream", "anthropic passthrough failed: upstream connection error", "api_error", { code: "connect_failed" }, "anthropic passthrough failed: upstream connection error");
+    const originalMessage = result.error instanceof Error ? result.error.message : typeof result.error === "string" ? result.error : "";
+    return fail(502, "non_stream", "anthropic passthrough failed: upstream connection error", "api_error", { code: "connect_failed" }, "anthropic passthrough failed: upstream connection error", `anthropic passthrough failed: ${originalMessage}`);
   }
   const upstream = result.upstream;
 
@@ -603,12 +606,14 @@ function translationFailure(err: unknown, logCtx: RequestLogContext, logIds: { r
   const status = overflow ? 413 : unavailable ? 503 : err instanceof AnthropicRequestError ? 400 : 500;
   if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
   if (unavailable) return desktopMappingUnavailableResponse(err);
-  return anthropicErrorResponse(
-    status,
-    overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error && isProxyError(err) ? err.message : "The proxy could not translate the Messages request.",
-    overflow ? "request_too_large" : undefined,
-    overflow ? "translation_buffer_limit" : undefined,
-  );
+  const originalMessage = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const clientMessage = overflow ? "request translation buffer exceeded the safe limit"
+    : err instanceof Error && isProxyError(err) ? err.message : "The proxy could not translate the Messages request.";
+  const code = overflow ? "translation_buffer_limit" : undefined;
+  const type = overflow ? "request_too_large" : undefined;
+  const legacy = anthropicErrorBody(status, overflow ? clientMessage : originalMessage, type, code);
+  return ownedAnthropicErrorResponse({ status, type, code, evidence: { status, message: originalMessage },
+    localError: markProxyError({ message: clientMessage }), overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
 }
 
 /**
@@ -974,12 +979,16 @@ async function handleClaudeMessagesWithBudget(
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 404, { closeReason: "non_stream" });
-      return anthropicErrorResponse(404, "Unknown routing policy", "invalid_request_error");
+      const legacy = anthropicErrorBody(404, err.message, "invalid_request_error");
+      return ownedAnthropicErrorResponse({ status: 404, type: "invalid_request_error", evidence: { status: 404 },
+        localError: markProxyError({ message: "Unknown routing policy" }), overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       logCtx.routeDecision = err.trace;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 404, { closeReason: "non_stream" });
-      return anthropicErrorResponse(404, "No eligible candidates for policy profile", "invalid_request_error");
+      const legacy = anthropicErrorBody(404, err.message, "invalid_request_error");
+      return ownedAnthropicErrorResponse({ status: 404, type: "invalid_request_error", evidence: { status: 404 },
+        localError: markProxyError({ message: "No eligible candidates for policy profile" }), overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
     /* unknown model: let handleResponses shape the 404 */
   }
@@ -1403,9 +1412,14 @@ async function handleClaudeMessagesWithBudget(
       message = await collectAnthropicMessage(anthropicSse, clientFacingModelText(clientModelLabel), translatorBudget, failureVerdictSink);
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) {
-        return anthropicErrorResponse(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+        const legacy = anthropicErrorBody(413, error.message, "request_too_large", "translation_buffer_limit");
+        return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
+          evidence: { status: 413, message: error.message }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
       }
-      return anthropicErrorResponse(502, "The proxy could not reach or read the provider.", "api_error");
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+      const legacy = anthropicErrorBody(502, message, "api_error");
+      return ownedAnthropicErrorResponse({ status: 502, type: "api_error", evidence: { status: 502, message },
+        contract: "transport_failed", overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
     const legacy = failureVerdictSink.collected ?? message;
     const isError = legacy.type === "error";
@@ -1413,12 +1427,10 @@ async function handleClaudeMessagesWithBudget(
       ? (legacy as { error: { code?: unknown; message?: unknown } }).error
       : undefined;
     if (translatedError?.code === "translation_buffer_limit") {
-      return anthropicErrorResponse(
-        413,
-        "upstream translation buffer exceeded the safe limit",
-        "request_too_large",
-        "translation_buffer_limit",
-      );
+      const originalMessage = typeof translatedError.message === "string" ? translatedError.message : "upstream translation buffer exceeded the safe limit";
+      const legacy = anthropicErrorBody(413, originalMessage, "request_too_large", "translation_buffer_limit");
+      return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
+        evidence: { status: 413, message: originalMessage }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
     // A declared client refusal keeps its 4xx: as a 502 Claude Code retries a verdict that cannot
     // change. Server classes and rate limits keep the 502 this path has always answered. A 400
@@ -1446,12 +1458,10 @@ async function handleClaudeMessagesWithBudget(
   if (status === "failed") {
     const error = (json as { error?: { message?: string; type?: string; code?: string } }).error;
     if (error?.code === "translation_buffer_limit") {
-      return anthropicErrorResponse(
-        413,
-        "upstream translation buffer exceeded the safe limit",
-        "request_too_large",
-        "translation_buffer_limit",
-      );
+      const originalMessage = error.message ?? "upstream translation buffer exceeded the safe limit";
+      const legacy = anthropicErrorBody(413, originalMessage, "request_too_large", "translation_buffer_limit");
+      return ownedAnthropicErrorResponse({ status: 413, type: "request_too_large", code: "translation_buffer_limit",
+        evidence: { status: 413, message: originalMessage }, overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
     const originalMessage = typeof error?.message === "string" ? error.message : "";
     if (error && isContextOverflowError(error, originalMessage)) {
@@ -1597,7 +1607,11 @@ export async function handleClaudeCountTokens(
   } catch (err) {
     if (err instanceof DesktopModelMappingUnavailableError) return desktopMappingUnavailableResponse(err);
     if (err instanceof AnthropicRequestError) return anthropicErrorResponse(400, isProxyError(err) ? err.message : "Invalid JSON body");
-    return anthropicErrorResponse(500, "The proxy could not read the Messages request.");
+    const originalMessage = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+    const legacy = anthropicErrorBody(500, originalMessage);
+    return ownedAnthropicErrorResponse({ status: 500, evidence: { status: 500 },
+      localError: markProxyError({ message: "The proxy could not read the Messages request." }),
+      overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
   } finally { translatorBudget.dispose(); }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return anthropicErrorResponse(400, "request body must be a JSON object");

@@ -1156,7 +1156,10 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
       overflow: messagesOverflowPresentation((legacy.error as Rec).message), contract: "stream_incomplete" });
   }
   if (body.status === "completed" && body.end_turn === false && !sawToolUse) {
-    return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529 }, localError: markProxyError({ message: "upstream turn ended without a final answer" }) });
+    const message = "upstream turn ended without a final answer";
+    const legacy = anthropicErrorBody(529, message, "overloaded_error");
+    return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529 },
+      localError: markProxyError({ message }), overflow: messagesOverflowPresentation((legacy.error as Rec).message) });
   }
   const stopReason = body.status === "incomplete" && details.reason === "max_output_tokens"
     ? "max_tokens"

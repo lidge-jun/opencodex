@@ -1,4 +1,13 @@
 import { saveCredential } from "../../src/oauth/store";
+import { messagesConversationToIr } from "../../src/protocols/codecs/messages-ir";
+import { DesktopModelMappingUnavailableError } from "../../src/claude/inbound-records";
+import { messageThreadUnsupportedResponse } from "../../src/claude/message-threads";
+import { workflowRefusalResponse } from "../../src/server/workflow-refusal";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { AnthropicAccountCooldownError } from "../../src/oauth/anthropic-routing";
+import { OAuthAccountPausedError } from "../../src/oauth/oauth-errors";
+import { NativeOAuthModelRouteError } from "../../src/server/messages-native-oauth";
+import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { saveConfig } from "../../src/config";
 import { handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { collectAnthropicMessageResponse, encodeAnthropicMessageSse, foldAnthropicMessage } from "../../src/protocols/encoders/messages";
@@ -24,18 +33,57 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
   const tail = (fixture.messageStop || fixture.id.startsWith("frame-complete-")) ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "";
   const prefix = fixture.prefix ? `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: fixture.prefix } })}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n` : "";
   const error = { ...(fixture.type ? { type: fixture.type } : {}), ...(fixture.status !== undefined ? { status: fixture.status } : {}), message: `${fixture.message} ${overflowSentinel}`, ...(fixture.code !== undefined ? { code: fixture.code } : {}) };
+  const makeFault = () => {
+    const fault = fixture.fault;
+    const value = fault === "budget" ? new TranslatorBudgetExceededError("live_transient", 1024)
+      : fault === "send-budget" ? new SendBudgetExhaustedError()
+      : fault === "usage-limit" ? new AnthropicAccountCooldownError(2, undefined, { resetsAt: 0 })
+      : fault === "paused" ? new OAuthAccountPausedError()
+      : fault === "model-route" ? new NativeOAuthModelRouteError(`Invalid Anthropic model routes: ${fixture.message}`)
+      : new Error(fixture.message);
+    if (fault === "read-budget") Object.assign(value, { code: "translation_buffer_limit" });
+    Object.assign(value, { detail: fixture.other });
+    return value;
+  };
+  const bodyStream = (text: string) => fixture.fault?.startsWith("read")
+    ? (() => { let sent = false; return new ReadableStream<Uint8Array>({ pull(controller) { if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(text.slice(0, 1) || ": fixture\n\n")); } else controller.error(makeFault()); } }); })() : new Response(text).body!;
+  const responseEvent = fixture.responseStatus === "unfinished" ? "response.completed" : fixture.responseStatus === "incomplete" ? "response.incomplete" : "response.failed";
+  const responseRecord = fixture.responseStatus === "unfinished" ? { status: "completed", end_turn: false, message: fixture.message, detail: fixture.other } : fixture.responseStatus === "incomplete" ? { status: "incomplete", incomplete_details: { reason: "other", message: fixture.message, detail: fixture.other } }
+    : (lane === "converter" || lane === "translated-fold") && fixture.rawBody ? JSON.parse(fixture.rawBody) : { error: { ...error, ...(fixture.other ? { detail: fixture.other } : {}) } };
+  const previousFetch = globalThis.fetch; let changedFetch = false;
   let response: Response;
   let upstream: ReturnType<typeof Bun.serve> | undefined;
   let release: (() => void) | undefined;
   let translatorBudget: TranslatorBudget | undefined;
   try {
-    if (["converter", "direct-stream", "direct-fold", "direct-collector"].includes(lane)) {
-      const events = () => (async function* () { yield { ...error, type: "error", errorType: fixture.type } as AdapterEvent; })();
+    if (lane === "local-envelope") {
+      const hooks = await import("../../src/server/claude-messages") as any;
+      const branch = fixture.localBranch;
+      const error = Object.assign(new Error(fixture.message), { detail: fixture.other, ...(branch?.startsWith("read-budget-") ? { code: "translation_buffer_limit" } : {}) });
+      if (branch?.startsWith("read-") || branch?.startsWith("role-") || branch?.startsWith("policy-")) {
+        const body = { model: "fixture/wire-model", max_tokens: 16, messages: [{ role: fixture.roleValue ?? fixture.message, content: "fixture" }], metadata: { detail: fixture.other } };
+        if (branch.startsWith("policy-")) { body.model = `policy/${fixture.message}`; body.messages[0]!.role = "user"; }
+        if (branch === "role-ir") {
+          translatorBudget = createTranslatorBudget();
+          try { messagesConversationToIr(body, undefined, translatorBudget, "wire-model"); throw new Error("Role fixture was unexpectedly accepted"); }
+          catch (error) { response = hooks.__messagesSweepTranslation(error, { model: "fixture", provider: "fixture" }); }
+        } else {
+          const req = new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" }, body: branch.startsWith("read-") ? new ReadableStream({ pull(controller) { controller.error(error); } }) : JSON.stringify(body) });
+          const config = { defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", baseUrl: "http://127.0.0.1:1", apiKey: "fixture", models: ["wire-model"], fetch: async () => { throw new Error("Local input fixture must not send"); } } }, ...(branch === "policy-empty" ? { routingProfiles: { [fixture.message]: { candidates: [] } } } : {}) } as unknown as OcxConfig;
+          response = branch.endsWith("count") ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, { model: "fixture", provider: "fixture" });
+        }
+      } else response = branch === "desktop" ? hooks.__messagesSweepDesktop(new DesktopModelMappingUnavailableError())
+        : branch === "thread" ? messageThreadUnsupportedResponse()
+        : branch === "workflow" ? workflowRefusalResponse("workflow-spend-exhausted")
+        : branch === "disabled" ? hooks.__messagesSweepDisabled({ providers: {}, apiSurfaces: { messages: { enabled: false } } })
+        : hooks.__messagesSweepTranslation(branch === "translation-budget" ? new TranslatorBudgetExceededError("live_transient", 1024) : error, { model: "fixture", provider: "fixture" });
+    } else if (["converter", "direct-stream", "direct-fold", "direct-collector"].includes(lane)) {
+      const events = () => (async function* () { if (fixture.fault) throw makeFault(); yield (fixture.responseStatus === "unfinished" ? { type: "done", endTurn: false } : fixture.responseStatus === "incomplete" ? { type: "incomplete", reason: "other", message: fixture.message } : { ...error, type: "error", errorType: fixture.type }) as AdapterEvent; })();
       translatorBudget = createTranslatorBudget();
       if (lane === "direct-fold") response = await foldAnthropicMessage(events(), { model: "fixture", translatorBudget });
-      else if (lane === "direct-collector") response = await collectAnthropicMessageResponse(new Response(`${prefix}event: error\ndata: ${fixture.rawBody ?? JSON.stringify({ type: "error", error })}\n\n${tail}`).body!, "fixture", translatorBudget);
+      else if (lane === "direct-collector") response = await collectAnthropicMessageResponse(bodyStream(`${prefix}event: error\ndata: ${fixture.rawBody ?? JSON.stringify({ type: "error", error: { ...error, ...(fixture.other ? { detail: fixture.other } : {}) } })}\n\n${tail}`), "fixture", translatorBudget);
       else response = new Response(lane === "converter"
-        ? responsesSseToAnthropicSse(new Response(`event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: fixture.rawBody ? JSON.parse(fixture.rawBody) : { error } })}\n\n`).body!, "fixture", { translatorBudget, pingIntervalMs: 0 })
+        ? responsesSseToAnthropicSse(bodyStream(`event: ${responseEvent}\ndata: ${JSON.stringify({ type: responseEvent, response: responseRecord })}\n\n`), "fixture", { translatorBudget, pingIntervalMs: 0 })
         : encodeAnthropicMessageSse(events(), { model: "fixture", translatorBudget }));
     } else {
       const passthrough = lane === "passthrough" || lane === "count_tokens";
@@ -44,23 +92,33 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       const builtin = lane === "native-fold-builtin";
       const nativeFold = lane === "native-fold" || builtin;
       const reply = () => {
-        if (nativeFold || lane.endsWith("fold")) return new Response(native
-          ? `${prefix}event: error\ndata: ${fixture.rawBody ?? JSON.stringify({ type: "error", error })}\n\n${tail}`
-          : `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: fixture.rawBody ? JSON.parse(fixture.rawBody) : { error } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+        if (fixture.toolGuard) {
+          const name = fixture.id.endsWith("phrase") ? fixture.message : "undeclared_fixture";
+          return nativeFold ? new Response(`event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "fixture", name, input: {} } })}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`, { headers: { "content-type": "text/event-stream" } })
+            : Response.json({ type: "message", content: [{ type: "tool_use", id: "fixture", name, input: {} }], detail: fixture.other });
+        }
+        if (nativeFold || lane.endsWith("fold")) return new Response(bodyStream(native
+          ? `${prefix}event: error\ndata: ${fixture.rawBody ?? JSON.stringify({ type: "error", error: { ...error, ...(fixture.other ? { detail: fixture.other } : {}) } })}\n\n${tail}`
+          : `event: ${responseEvent}\ndata: ${JSON.stringify({ type: responseEvent, response: responseRecord })}\n\n`), { headers: { "content-type": "text/event-stream" } });
         if (fixture.rawBody !== undefined) return new Response(fixture.rawBody, { status: fixture.status ?? 200, headers: { "content-type": fixture.mediaType ?? "application/json" } });
-        if (lane === "translated-json") return Response.json({ status: "failed", error });
-        return Response.json({ type: "error", error }, { status: fixture.status ?? 400 });
+        if (lane === "translated-json") return new Response(bodyStream(JSON.stringify((fixture.responseStatus === "incomplete" || fixture.responseStatus === "unfinished") ? responseRecord : { status: "failed", error: { ...error, ...(fixture.other ? { detail: fixture.other } : {}) } })), { headers: { "content-type": "application/json" } });
+        if (fixture.fault?.startsWith("read")) return new Response(bodyStream(""), { headers: { "content-type": "application/json" } });
+        return Response.json({ type: "error", error: { ...error, ...(fixture.other ? { detail: fixture.other } : {}) } }, { status: fixture.status ?? 400 });
       };
       upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: reply });
       if (builtin) await saveCredential("anthropic", { access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 3600000, source: "oauth", accountId: "synthetic-account" });
       let mockSends = 0;
+      if (passthrough && fixture.fault === "connect") { changedFetch = true; globalThis.fetch = (async () => { mockSends++; throw makeFault(); }) as typeof fetch; }
       const providerName = builtin ? "anthropic" : "fixture";
       const config = (passthrough ? { providers: {}, claudeCode: { anthropicBaseUrl: upstream.url.toString() } }
-        : { defaultProvider: providerName, providers: { [providerName]: { adapter: native ? "anthropic" : "openai-responses", baseUrl: builtin ? "https://api.anthropic.com" : upstream.url.toString(), authMode: builtin ? "oauth" : "key", apiKey: "fixture", ...(builtin ? { fetch: async () => { mockSends++; return reply(); } } : {}), allowPrivateNetwork: true, models: ["wire-model"] } }, protocols: { rollout: { managedMessagesNative: native, managedMessagesNativeOAuth: builtin } } }) as OcxConfig;
+        : { defaultProvider: providerName, providers: { [providerName]: { adapter: native ? "anthropic" : "openai-responses", baseUrl: builtin ? "https://api.anthropic.com" : upstream.url.toString(), authMode: builtin ? "oauth" : "key", apiKey: "fixture", ...((builtin || fixture.fault) ? { fetch: async () => { mockSends++; if (fixture.fault && !fixture.fault.startsWith("read")) throw makeFault(); return reply(); } } : {}), allowPrivateNetwork: true, models: ["wire-model"] } }, protocols: { rollout: { managedMessagesNative: native, managedMessagesNativeOAuth: builtin } } }) as OcxConfig;
+      let replayCalls = 0;
+      if (fixture.fault?.startsWith("read") && lane.startsWith("translated")) (globalThis as any).__messagesReplayResponse = () => { replayCalls++; return lane === "translated-http" ? new Response(bodyStream(""), { status: 400, headers: { "content-type": "application/json" } }) : reply(); };
       saveConfig(config);
-      const request = new Request(`http://localhost/v1/messages${lane === "count_tokens" ? "/count_tokens" : ""}`, { method: "POST", headers: { "content-type": "application/json", ...(passthrough ? { authorization: "Bearer sk-ant-oat01-fixture" } : {}) }, body: JSON.stringify({ model: passthrough ? "claude-sonnet-4-6" : `${providerName}/wire-model`, max_tokens: 16, stream: false, messages: [{ role: "user", content: "fixture" }] }) });
+      const request = new Request(`http://localhost/v1/messages${lane === "count_tokens" ? "/count_tokens" : ""}`, { method: "POST", headers: { "content-type": "application/json", ...(passthrough ? { authorization: "Bearer sk-ant-oat01-fixture" } : {}) }, body: JSON.stringify({ model: passthrough ? "claude-sonnet-4-6" : `${providerName}/wire-model`, max_tokens: 16, stream: false, messages: [{ role: "user", content: "fixture" }], ...(fixture.toolGuard ? { tools: [] } : {}) }) });
       response = lane === "count_tokens" ? await handleClaudeCountTokens(request, config) : await handleClaudeMessages(request, config, { model: "fixture", provider: "fixture" });
-      if (builtin && mockSends === 0) throw new Error("Builtin fixture did not use its local fetch callback");
+      if (fixture.fault?.startsWith("read") && lane.startsWith("translated")) { if (!replayCalls) throw new Error("Replay fixture did not exercise its response boundary"); }
+      else if ((builtin || fixture.fault) && mockSends === 0) throw new Error("Builtin fixture did not use its local fetch callback");
     }
     const text = (await response.text()).replace(/msg_(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g, "msg_fixture");
     const stream = lane === "converter" || lane === "direct-stream";
@@ -75,5 +133,5 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       clientRecognizes: clientError && clientRecognizesOverflow(message),
       compactionSentence: payload?.error?.message === compactionSentence };
 
-  } finally { translatorBudget?.dispose(); release?.(); await upstream?.stop(true); }
+  } finally { if (changedFetch) globalThis.fetch = previousFetch; delete (globalThis as any).__messagesReplayResponse; translatorBudget?.dispose(); release?.(); await upstream?.stop(true); }
 }

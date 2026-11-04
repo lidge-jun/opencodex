@@ -1,4 +1,5 @@
-import { markProxyError } from "../../lib/client-error-body";
+import { messagesRolePresentation } from "../../lib/messages-error-body";
+import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, markProxyError } from "../../lib/client-error-body";
 /**
  * Anthropic Messages -> IR, directly (the Antigravity direct lane).
  *
@@ -436,7 +437,11 @@ export function messagesConversationToIr(
     else if (message.role === "system") {
       const text = systemMessageText(message.content);
       if (text.length > 0) pushDeveloper(text);
-    } else throw markProxyError(new AnthropicRequestError("unsupported message role: unsupported"));
+    } else {
+      const role = messagesRolePresentation(message.role);
+      if (role.coercionFailed) throw markProxyError(new TypeError("unsupported message role: unsupported"));
+      throw markProxyError(new AnthropicRequestError(role.overflow ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "unsupported message role: unsupported"));
+    }
   }
 
   const system = anthropicSystemLayout(raw.system, cc);

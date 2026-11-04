@@ -323,8 +323,13 @@ terminal objects retain their prior decisions. Tests cover these boundaries in
 | --- | --- |
 | OpenAI types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`, `server_error`, `upstream_error`, `insufficient_quota`, `client_cancelled`, `cyber_policy`, `model_not_allowed_for_key`, `api_error`, `overloaded_error` |
 | OpenAI codes | `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `invalid_request_error`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable` |
-| Anthropic types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error` |
-| Anthropic codes | The union of Anthropic types and OpenAI codes above. |
+| Anthropic types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error`, `send_budget_exhausted` |
+| Anthropic codes | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error`, `send_budget_exhausted`, `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable`, `desktop_model_mapping_unavailable`, `thread_unsupported_request` |
+
+The Anthropic code set is the union of Anthropic types, OpenAI codes,
+`desktop_model_mapping_unavailable` and `thread_unsupported_request`. The locally constructed
+thread refusal retains `thread_unsupported_request` only in `error.details.error_code`; the
+normalized general envelope does not copy that reserved extension into `error.code`.
 
 ## Messages error bodies and headers
 
@@ -333,6 +338,11 @@ in `src/lib/client-error-body.ts`. Buffered native errors, caller-forward Messag
 translated replies, the Responses converter and the direct encoder use fixed condition or contract text.
 The writers are `src/server/claude-messages.ts`, `src/server/messages-native.ts`,
 `src/claude/outbound.ts` and `src/protocols/encoders/messages.ts`.
+Special-code and catch returns build the baseline envelope before choosing a fixed sentence.
+Buffer-limit records keep 413 and their code while retaining baseline recovery recognition.
+Fixed proxy budget, guard, usage and unfinished-turn sentences retain their wording; upstream
+messages and native transport/model-route diagnostics select recovery from their original display.
+The response helper keeps that baseline envelope in the shared combo-evidence side channel.
 Only object identity or producer registration retains local wording. Ingress constructors mark fixed
 sentences individually; rejected roles and tool-block prefixes use fixed placeholders. Original client
 model selectors use the brand in `src/lib/error-destination.ts`; configured destination strings do not
@@ -372,6 +382,13 @@ of JSON parsing, so scalar, array, malformed and empty payloads cannot suppress 
 The direct sink in `src/protocols/encoders/adapter-events.ts` acknowledges successful enqueue through an
 optional callback. Failure admission charges the legacy frame size, keeping buffer-limit decisions
 independent of replacement-message length. Request logging and combo evidence retain original records separately.
+
+Special-code and catch returns inspect their baseline-rendered message before choosing a fixed
+sentence. This includes collected buffer errors, transport reads, policy failures and request
+translation. Fixed local budget and guard refusals retain their original wording. The inbound
+Messages and direct IR codecs use `messagesRolePresentation` in `src/lib/messages-error-body.ts`
+to preserve recovery recognition and failed JSON-role coercion status without displaying the role.
+The legacy envelope stays in the combo-evidence side channel, separate from the owned response.
 
 The native streaming relay, tool-guard frames, shared-tap tails and native overflow SSE rewrite retain
 their existing byte behavior. `tests/claude-integration/messages-native-stream-parity.test.ts` executes

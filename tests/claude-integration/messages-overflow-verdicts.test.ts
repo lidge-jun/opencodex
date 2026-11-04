@@ -12,7 +12,7 @@ const golden = JSON.parse(readFileSync(fixturePath("messages-overflow-decisions.
 const head = new Map<string, Row>();
 const key = (row: Row) => `${row.lane}/${row.input.id}`;
 beforeAll(async () => {
-  expect(golden.schemaVersion).toBe(5);
+  expect(golden.schemaVersion).toBe(6);
   expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
   const scratch = mkdtempSync(join(tmpdir(), "ocx-overflow-decisions-"));
   try {
@@ -37,7 +37,7 @@ for (const base of golden.rows) test(`${key(base)}: origin/dev client recovery`,
   expect(["error", "success"]).toContain(classification);
   if (["native-fold", "native-fold-builtin", "direct-collector"].includes(base.lane)) {
     expect(classification).toBe("error");
-    expect(base.input.eventLanes).toContain(base.lane);
+    if (!base.input.fault) expect(base.input.eventLanes).toContain(base.lane);
   }
   expect(before.clientRecognizes).toBe(base.input.recovery[base.lane as typeof messagesOverflowLanes[number]]);
   expect(after.clientRecognizes).toBe(base.input.recovery[base.lane as typeof messagesOverflowLanes[number]]);
@@ -50,6 +50,12 @@ for (const base of golden.rows) test(`${key(base)}: origin/dev client recovery`,
     if (passthrough) expect(after.clientRecognizes).toBe(false);
     return;
   }
+  if (base.input.fixedLocal) {
+    expect(after.text).toBe(before.text);
+    expect(after.text.length).toBeGreaterThan(0);
+    expect(after.text).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
+    return;
+  }
   expect(after.envelopeType).toBe("error");
   if (base.input.eventLanes?.includes(base.lane as typeof messagesOverflowLanes[number]) || before.status < 200 || before.status >= 300) {
     expect(after.text.length).toBeGreaterThan(0);
@@ -58,5 +64,5 @@ for (const base of golden.rows) test(`${key(base)}: origin/dev client recovery`,
   if (before.clientError) expect(after.compactionSentence).toBe(before.clientRecognizes);
   expect(ANTHROPIC_ERROR_TYPES.has(after.type ?? "")).toBe(true);
   if (ANTHROPIC_ERROR_TYPES.has(before.type ?? "")) expect(after.type).toBe(before.type);
-  expect(after.code).toBe(typeof before.code === "string" && ANTHROPIC_ERROR_CODES.has(before.code) ? before.code : undefined);
+  expect(after.code).toBe(typeof before.code === "string" && before.code !== "thread_unsupported_request" && ANTHROPIC_ERROR_CODES.has(before.code) ? before.code : undefined);
 });
