@@ -383,6 +383,44 @@ function normalizedFailureCode(code?: string | null): string {
 }
 
 /**
+ * xAI can reject a model/account effort rung with this exact vendor envelope. It is target-local
+ * evidence for a combo: the same model may accept a lower rung, or a later target may accept the
+ * request. Keep the match exact so unrelated invalid arguments stay terminal.
+ */
+function isExactInvalidReasoningEffortRefusal(status: number, message: string, code?: string | null): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  const outerCode = normalizedFailureCode(code);
+  if (!["", "invalid_request_error", "invalid_argument"].includes(outerCode)) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return false; }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const root = payload as Record<string, unknown>;
+    if (normalizedFailureCode(typeof root.code === "string" ? root.code : undefined) === "invalid_argument"
+      && root.error === "Invalid reasoning effort."
+      && (root.type === undefined || root.type === "invalid_request_error")
+      && (root.param === undefined || root.param === "reasoning_effort" || root.param === "reasoning.effort")) return true;
+    const error = root.error;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+    const record = error as Record<string, unknown>;
+    const errorCode = normalizedFailureCode(typeof record.code === "string" ? record.code : undefined);
+    if (record.type === "upstream_error" && typeof record.message === "string"
+      && record.message.startsWith("Provider error 400: ")
+      && ["", "invalid_request_error", "invalid_argument"].includes(errorCode)) {
+      text = record.message;
+      continue;
+    }
+    return record.type === "invalid_request_error"
+      && record.message === "Invalid reasoning effort."
+      && ["", "invalid_request_error", "invalid_argument"].includes(errorCode)
+      && (record.param === undefined || record.param === "reasoning_effort" || record.param === "reasoning.effort");
+  }
+  return false;
+}
+
+/**
  * A spent account window, by structured code or upstream prose. Status is deliberately not
  * consulted: the ChatGPT Codex backend reports a depleted plan window as HTTP 502
  * `upstream_server_error` carrying `The usage limit has been reached`, never the documented 429,
@@ -509,6 +547,7 @@ const PROVIDER_SCOPED_FAILURE_CODES = new Set([
  * Image rejection requires `param: input` and an exact model-scoped prefix.
  */
 function isRequestLocalTargetIncompatibility(status: number, message: string, code?: string | null): boolean {
+  if (isExactInvalidReasoningEffortRefusal(status, message, code)) return true;
   if (status !== 400 || message.length > 16_384) return false;
   const genericCodes = new Set(["", "invalid_request_error", "unsupported_parameter", "unsupported_value"]);
   if (!genericCodes.has(normalizedFailureCode(code))) return false;

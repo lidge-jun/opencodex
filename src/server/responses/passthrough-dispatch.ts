@@ -1051,7 +1051,8 @@ export async function preparePassthroughExchange(
     }
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
-    // At most one reasoning-effort downgrade per request.
+    // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
+    // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     /** Rebind the refreshed wire before transferring this request to the Chat pipeline. */
     function bindRefreshedAdapter(refreshedAdapter: typeof transportState.adapter) {
@@ -1812,15 +1813,14 @@ export async function preparePassthroughExchange(
         continue passthroughRecovery;
       }
     }
-    // Reasoning-effort downgrade: a rung the catalog still advertises can be refused upstream --
-    // the metadata records the model's ladder, not this account's entitlement (a Muse Code
-    // subscription gates max on muse-spark-1.3-contributor, for example). Learn the refusal so
-    // later turns clamp before dispatch, then replay once at the next lower published rung
-    // instead of failing the turn; requestedEffort/effectiveEffort keep both values in usage.
-    if (!reasoningEffortDowngradeGuard.attempted) {
+    // A rung the catalog advertises can still be refused upstream -- metadata describes the
+    // model's ladder, not this account's entitlement. Learn each refusal so later turns clamp
+    // before dispatch. Direct requests repair once; combo candidates may retry the next lower
+    // published rung until it works, the ladder ends, or the send budget is spent.
+    if (options.comboAttempt || !reasoningEffortDowngradeGuard.attempted) {
       const rejectionText = await reasoningEffortRejectionText(
         upstreamResponse,
-        reasoningEffortDowngradeGuard.attempted,
+        false,
         upstream.signal,
       );
       const downgrade = rejectionText === undefined

@@ -617,9 +617,8 @@ export async function prepareAdapterExchange(
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
-    // At most one reasoning-effort downgrade per request. This sits outside the recovery loop
-    // below for the same reason the two guards above do: a guard declared inside it is reset by
-    // every `continue recovery`, which would let one turn walk the whole ladder down.
+    // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
+    // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     // At most one Anthropic fast-mode downgrade per request, for the same reason.
     const anthropicFastDowngradeGuard: { attempted: boolean } = { attempted: false };
@@ -1832,12 +1831,12 @@ export async function prepareAdapterExchange(
           continue recovery;
         }
       }
-      // Reasoning-effort downgrade, mirroring the passthroughRecovery loop above: learn the
-      // refused rung, then replay once at the next published one.
-      if (!reasoningEffortDowngradeGuard.attempted) {
+      // Learn a refused rung and retry at the next published one. Direct requests are limited
+      // to one repair; combo candidates may continue down the finite ladder within the send budget.
+      if (options.comboAttempt || !reasoningEffortDowngradeGuard.attempted) {
         const rejectionText = await reasoningEffortRejectionText(
           upstreamResponse,
-          reasoningEffortDowngradeGuard.attempted,
+          false,
           upstream.signal,
         );
         const downgrade = rejectionText === undefined
