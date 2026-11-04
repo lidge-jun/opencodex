@@ -92,8 +92,11 @@ The built-in Claude model seeds advertise text and image input for both `anthrop
 Explicit per-model input-modality overrides remain authoritative; unknown models are not assumed
 image-capable. This applies across integrations wherever the client's configuration supports image
 capability metadata: OpenClaw exports a declared `input` array, and Kimi Code exports
-`capabilities: ["image_in"]` only for image-capable models. OpenClaw omits `input` when no supported
-modalities are declared; Kimi omits `capabilities` for unknown or text-only models. Clients without
+`capabilities: ["image_in"]` only for image-capable models, adding `"thinking"` when the model
+declares an effort ladder. Kimi Code also receives that ladder as `support_efforts` (limited to
+`low`, `medium`, `high`, `xhigh` and `max`, in that order) and the declared default as
+`default_effort` when it is in the ladder. OpenClaw omits `input` when no supported modalities are
+declared; Kimi omits `capabilities` for models that declare neither image input nor an effort ladder. Clients without
 a supported capability field keep their existing configuration shape. After updating opencodex,
 regenerate or refresh the client configuration managed by opencodex to receive the updated metadata.
 
@@ -650,6 +653,8 @@ On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is 
 If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
 still runs, and only the resulting final answer is displayed. Progress accompanying a real
 tool call remains visible. A normal private final answer needs no completion retry.
+
+When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
 
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
@@ -1445,7 +1450,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
 - **Windows executables:** Each preset launches its CLI's native executable (`qoder.exe` or `qodercli.exe` for Global, `qodercn.exe` or `qoderclicn.exe` for CN) when one is on PATH. Within one PATH folder the `.exe` wins over a same-name `.cmd`, and a later candidate name such as `qoderclicn.exe` anywhere on PATH wins over `qodercn.cmd`; an earlier PATH folder that holds only `qodercn.cmd` still shadows a later folder's `qodercn.exe`. Qoder turns pass empty `--tools` and `--setting-sources` values to keep the CLI's built-in tools and local settings out, and a dispatcher that forwards through PowerShell drops those empty values. When only such a dispatcher is found, the turn fails before the CLI starts with `cli_dispatcher_drops_empty_args`; add the folder holding the native executable to PATH (the official CN installer places it in `%USERPROFILE%\.qoder-cn\bin\qoderclicn`) and retry. A dispatcher that passes arguments straight through, such as an npm shim, keeps working.
-- **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
+- **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed. The CLI starts a full agent runtime first, so background catalog discovery allows each run up to 30 seconds, and concurrent callers of the same provider share one run per token. The dashboard connection test waits at most 8 seconds: past that it reports the provider as still discovering rather than failed, and when the run succeeds the catalog is re-synced without a proxy restart. Codex sessions that are already running keep their previous model list until they restart: restart Codex, or run `ocx system codex-restart --yes`, which restarts Codex app-servers (the CLI reference describes what it keeps and what it relaunches).
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
 - **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
@@ -1832,6 +1837,16 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
+
+**Kimi Coding Plan quota.** Account login and API-key providers on the canonical
+`https://api.kimi.com/coding/v1` endpoint read `/usages`. Plans that report
+`usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
+`limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
+The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed
+percentage; invalid ratios are ignored. Empty or unusable `usages` containers do not hide
+usable monthly data in another supported envelope. Any reported reset time is retained.
+Existing 5-hour, weekly, and total subscription-credit
+windows remain separate, and an absent monthly window is not shown as 0%.
 
 **Abliteration credits.** A provider of any name whose `baseUrl` is
 `https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads

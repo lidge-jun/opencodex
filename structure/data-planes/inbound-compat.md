@@ -8,7 +8,7 @@ retain their previous allowance. No disabled header clock detaches client cancel
 Thinking enablement is separate from strength: `src/responses/schema.ts` accepts the OCX `reasoning.enabled` boolean and `src/responses/parser.ts` retains it as `options.thinkingEnabled`, independently of `options.reasoning`. Chat `thinking.type` and Anthropic `thinking.type` preserve this choice through their inbound translators; the existing Anthropic disabled-effort sentinel remains for legacy destinations. `src/clients/reasoning-controls.ts` decodes effort-only client aliases for declared toggle-only models before strength caps run. Route fallback restores the original choice alongside effort in `src/server/effort-policy.ts`; a cleared strength list does not clear a thinking switch. Regression coverage lives in `tests/responses/responses-parser.test.ts`, `tests/responses/chat-inbound-reasoning-none.test.ts`, `tests/claude-integration/claude-inbound.test.ts`, and `tests/codex-integration/effort-policy.test.ts`.
 
 The names used for these paths (native, translated, legacy bridge) and the declared per-feature
-dispositions are owned by [Protocol Paths](protocol-paths.md).
+dispositions are owned by [Protocol Paths](protocol-paths.md). The Ollama-compatible `/api/*` routes are owned by [Ollama-Compatible Inbound](ollama-inbound.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
@@ -361,12 +361,12 @@ Stream headers precede final accounting; they identify the row owned by the turn
 attest to successful persistence. Authentication, origin, drain and active-turn rejections
 without a request-log owner, and count_tokens, receive no OCX correlation id.
 
-`src/server/messages-response-headers.ts` retains only an upstream `request-id` matching
-`req_[A-Za-z0-9_-]{1,128}` on native delivered results and upstream HTTP errors. At the final
-HTTP boundary, `src/server/index/startup-warnings.ts` moves this diagnostic value into
-`x-opencodex-upstream-request-id` and assigns the OCX id to `request-id`. Missing or nonconforming
-upstream ids are omitted; translated adapter ids are not inferred. The standard/custom OCX
-headers and the optional upstream header are exposed through CORS alongside existing names.
+`src/server/messages-response-headers.ts` omits upstream request IDs. At the final HTTP boundary,
+`src/server/index/startup-warnings.ts` assigns the OCX ledger id to `request-id` and keeps
+`x-opencodex-request-id`, removing the upstream diagnostic header and its existing exposure token.
+The proxy correlation headers remain exposed through CORS alongside other existing names.
+The [Messages error and header contract](error-detail.md#messages-error-bodies-and-headers)
+also covers buffered errors, literal type/code rendering and original collector evidence.
 `tests/claude-integration/messages-request-id-endpoint.test.ts` covers the protocol boundary;
 `tests/claude-integration/messages-request-id-headers.test.ts` covers header and stream identity.
 Responses retains its existing custom-header contract.
@@ -374,8 +374,8 @@ Responses retains its existing custom-header contract.
 ## Claude context rejection
 
 Claude Messages preserves the classified `context_length_exceeded` error (`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, `src/server/claude-messages.ts`): one streaming `invalid_request_error` terminal, or HTTP 400 without a retry hint when collected or failed-JSON.
-`anthropicErrorBody` words that envelope as Anthropic does (`prompt is too long: ...`, counts only when the upstream states both), because Claude Code compacts reactively only on that wording; a throughput limit the classifier files under that code (`per minute`, `rate limit`, `quota`, `TPM`) keeps its text.
-The native Messages lane (`src/server/messages-native.ts`) does the same for a configured provider's own 400/413 or streamed `invalid_request_error` refusal without changing the envelope shape; the stream rewrite sits after the log tap so stall timing still reads raw bytes, and Anthropic pools skip it.
+Buffered and converted error writers use the fixed `CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after their original overflow-versus-throughput decision; type/code presence and final status follow each lane's original decision, independently of message replacement.
+The configured native streaming lane retains its separate `claudeOverflowSsePayload` rewrite after the log tap, so stall timing and observers read the original bytes; Anthropic pools skip that rewrite. Final client enqueue applies [first-field error-response normalization](error-detail.md#messages-error-bodies-and-headers), emitting eligible final errors with only the closed declaration, data and terminator under its 1 MiB bound; leading comments and within-bound non-error rename replay retain their bytes. FOLD-502 changes the native collected-error final status only; OVERSIZE-1M changes over-bound error data/recognition with issued status unchanged. Buffered native refusals use the fixed wording without adding a code.
 This adds no recovery send or context pruning; replay refusal and translation-buffer limits keep their handling.
 History: `devlog/_plan/261009_claude_1m_default/010_prompt_too_long_envelope.md`.
 
@@ -388,6 +388,23 @@ allocation supplies the lane. `src/server/responses/core.ts` applies it only at 
 canonical Go transport, including combo selection and failover. No Go-only replay header
 reaches non-Go destinations. Shared system cache keys never become conversation identity.
 The request-scoped fallback is stable across retries and distinct across client requests.
+
+The Messages bridge carries a separate private Codex pool identity without changing replay headers.
+It requires admission and excludes spawn markers, any ingress parent or thread header (even empty)
+and a replay with a complete pool key. Explicit session_id then session-id aliases win; conflicting,
+empty-only or invalid aliases block derivation. Otherwise the metadata session (the uuid form of the
+metadata-derived prompt_cache_key), then the Claude session header, supplies the value; a system-derived
+cohort key never does. Every value, aliases included, is HMAC-keyed with a process-local secret over its
+admission scope (loopback, or the principal a remote caller must have), so no caller can name another
+scope's pool key, not even as a complete pair. A caller-supplied complete pair stays unscoped.
+
+The identity is selection-only: session-id and thread-id are completed for Codex account selection
+(final and alternate-account), selection previews, recovery and the route-independent pool key used
+as state-binding fallback. Every upstream header set (first send, 401 refresh, alternate-account retry)
+is built from the uncompleted headers, so the wire is unchanged and no synthesized pair or digest is
+forwarded. Non-Codex routes, Anthropic passthrough, request logs, reasoning replay, Go lanes and adapter
+fingerprints are unchanged. claude-bridge-pool-session.test.ts and claude-bridge-pool-dispatch.test.ts
+cover the rules, the wire contract, 401 refresh and alternate-account failover.
 
 Claude metadata also supplies a private native-session value. Only the final canonical ChatGPT
 attempt receives it, in copied forwarding headers; an explicit underscore session, hyphenated
@@ -579,3 +596,5 @@ it. The dual_header `x-openai-agent-assertion` is outside `FORWARD_HEADERS` and 
 `forwardClientHeaders`. It is carried only for canonical-forward Direct when the outbound Bearer is
 the caller's original one, and is dropped under a pool override. Coverage:
 `tests/server/agent-assertion-auth.test.ts` and `tests/responses/agent-assertion-routes.test.ts`.
+
+Chat upstream error responses use [the owned client-body contract](error-detail.md#client-error-bodies-chat). Native and translated local refusals retain producer provenance; upstream-derived failures select fixed wording. Undeclared-tool refusals share one fixed sentence without the tool name across Chat, Messages and Responses. Choice error normalization preserves all other ordinary relay fields.

@@ -301,3 +301,105 @@ describe("native compact moves a surviving transient 5xx to one alternate accoun
     expect(failures(WORK)).toBe(1);
   });
 });
+
+test.each([false, true])("caller-owned compact Pool-to-main retry scrubs continuation (affinity=%s)", async enabled => {
+  const { fakeChatGptJwt } = await import("../helpers/agent-task-recovery");
+  const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
+  const { peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
+  const bearer = fakeChatGptJwt("caller-test");
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "test-session", "thread-id": "test-thread" });
+  const config = poolConfig({ codexAccounts: [{ id: WORK, label: WORK }], pausedCodexAccountIds: ["__main__"], codexPool: { requestOwnedAffinity: enabled } });
+  const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+  const first = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  const second = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  expect(first.affinityDecision?.move).toBe(enabled ? "new_bind" : "unbound");
+  expect(second.affinityDecision?.move).toBe(enabled ? "reused" : "unbound");
+  expect(first.kind).toBe("pool");
+  rememberServingConversationStateIssuer(second);
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sends.push(new Headers(init?.headers).get("authorization"));
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    if (sends.length === 1) config.pausedCodexAccountIds = [];
+    return sends.length === 1 ? overloadedOnce() : compacted();
+  }) as typeof fetch;
+  const makeRequest = () => new Request("http://localhost/v1/responses/compact", {
+    method: "POST", headers,
+    body: JSON.stringify({ model: "gpt-5.5", previous_response_id: "opaque-previous", input: [{ role: "user", content: "continue" }] }),
+  });
+  const response = await handleResponsesCompact(makeRequest(), config, { model: "", provider: "" });
+  expect(sends.length).toBe(2);
+  expect(response.status).toBe(200);
+  expect(sends).toEqual(["Bearer work-access", `Bearer ${bearer}`]);
+  expect(bodies[1]?.previous_response_id).toBeUndefined();
+  expect(peekConversationStateIssuer(first.conversationStateKey!)).toBe("__main__");
+  config.pausedCodexAccountIds = ["__main__"];
+  sends = []; bodies.length = 0;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sends.push(new Headers(init?.headers).get("authorization"));
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return compacted();
+  }) as typeof fetch;
+  const next = await handleResponsesCompact(makeRequest(), config, { model: "", provider: "" });
+  expect(next.status).toBe(200);
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(bodies[0]?.previous_response_id).toBeUndefined();
+});
+
+test("caller-owned compact scrubs Pool to manually pinned main and back", async () => {
+  const { fakeChatGptJwt } = await import("../helpers/agent-task-recovery");
+  const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
+  const bearer = fakeChatGptJwt("pin-caller");
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "session", "thread-id": "thread" });
+  const config = poolConfig({ codexAccounts: [{ id: WORK, label: WORK }], pausedCodexAccountIds: ["__main__"], codexPool: { requestOwnedAffinity: true } });
+  const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+  const first = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  const second = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+  expect(first.kind).toBe("pool"); rememberServingConversationStateIssuer(second);
+  const { resetCodexRoutingForManualSelection } = await import("../../src/codex/routing/active-account");
+  resetCodexRoutingForManualSelection("__main__");
+  config.activeCodexAccountId = "__main__"; config.activeCodexAccountPinned = "__main__"; config.pausedCodexAccountIds = [];
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return compacted();
+  }) as typeof fetch;
+  const request = (input: unknown = [{ role: "user", content: "continue" }]) => new Request("http://localhost/v1/responses/compact", {
+    method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", previous_response_id: "opaque", input }),
+  });
+  const refusal = await handleResponsesCompact(request([{ role: "user", file_id: "opaque" }]), config, { model: "", provider: "" });
+  expect(refusal.status).toBe(400); expect(bodies).toHaveLength(0);
+  const pinned = await handleResponsesCompact(request(), config, { model: "", provider: "" });
+  expect(pinned.status).toBe(200); expect(bodies[0]?.previous_response_id).toBeUndefined();
+  config.activeCodexAccountId = WORK; config.activeCodexAccountPinned = undefined; config.pausedCodexAccountIds = ["__main__"];
+  const back = await handleResponsesCompact(request(), config, { model: "", provider: "" });
+  expect(back.status).toBe(200); expect(bodies[1]?.previous_response_id).toBeUndefined();
+});
+
+test("caller-owned compact main 429 releases only its conversation binding", async () => {
+  const { fakeChatGptJwt } = await import("../helpers/agent-task-recovery");
+  const { getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const { getCodexQuotaHealthSnapshot } = await import("../../src/codex/routing");
+  const bearer = fakeChatGptJwt("owned-compact-failure");
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "s", "thread-id": "t" });
+  const config = poolConfig({ codexAccounts: [{ id: WORK, label: WORK }], pausedCodexAccountIds: [WORK], codexPool: { requestOwnedAffinity: true } });
+  const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+  const first = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  const second = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  expect(first.kind).toBe("main"); expect(first.affinityDecision?.move).toBe("new_bind");
+  expect(second.affinityDecision?.move).toBe("reused");
+  config.pausedCodexAccountIds = [];
+  let status = 200;
+  globalThis.fetch = (async () => status === 200 ? compacted() : Response.json({ error: { message: "quota exceeded" } }, { status: 429, headers: { "retry-after": "600" } })) as typeof fetch;
+  const makeRequest = () => new Request("http://localhost/v1/responses/compact", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: [{ role: "user", content: "continue" }] }) });
+  expect((await handleResponsesCompact(makeRequest(), config, { model: "", provider: "" })).status).toBe(200);
+  expect(getThreadAffinity(first.affinityKey!, "shared")?.accountId).toBe("__main__");
+  status = 429;
+  expect((await handleResponsesCompact(makeRequest(), config, { model: "", provider: "" })).status).toBe(429);
+  expect(getThreadAffinity(first.affinityKey!, "shared")).toBeUndefined();
+  expect(getCodexQuotaHealthSnapshot("__main__", "shared")).toBeNull();
+  const next = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  expect(next.affinityDecision?.move).toBe("rebound");
+  expect(next.affinityDecision?.reason).toBe("quota_refusal");
+});

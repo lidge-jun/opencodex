@@ -64,6 +64,8 @@ kaldırılır), bu da Codex'in bir Varsayılan mod oturumunu duraklatmasına ve
 akışta geliştirilme aşamasındadır ve yalnızca yeni oturumlara uygulanır; yüklü
 Codex derlemesi bayrağı henüz tanımadığında anahtar yüksek sesle başarısız olur.
 
+Codex CLI güncellemesi kurulumu kullanırken özellik komutu çalıştırılmadan önce `codex_cli_selection_busy` ve `retryable: true` ile HTTP 503 döner. Güncelleme bitince yeniden deneyin; yapılandırma yazma hataları 502 döndürmeye devam eder.
+
 ## Kadro ve rehberlik
 
 Geçerli v2 kadrosu, yapılandırılmış, seçicide görünen, önceliğe göre sıralanmış,
@@ -263,3 +265,10 @@ Yapılandırılmış sınırlar, model effort sabitlemesi olmayan uygun yerel Ch
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
+
+## V1 eşitlemesi sırasında CLI güncellemeleri
+
+`multiAgentMode: "v1"` eşitlemesinin Codex'in genel v2 geçersiz kılmasını kapatması
+gerekiyorsa, devam eden bir Codex CLI güncellemesi eşitlemeyi geçici olarak reddedebilir.
+Güncelleme bittikten sonra yeniden deneyin. Zaten v1 kullanan bir Codex dizini, yerel
+özellik komutu gerekmediği için güncelleme sırasında da eşitlenebilir.

@@ -155,6 +155,8 @@ canonical ChatGPT Codex 路由的上游只接受 SSE，因此僅對上游請求�
 `object: "chat.completion.chunk"`、choice delta、帶有 `finish_reason` 的終端 choice 與
 `data: [DONE]` 的 SSE 物件。Tool-call 與 usage 資訊在來源事件帶有它們時被轉譯回來。
 
+此端點的錯誤回應與串流錯誤框架使用由代理撰寫的訊息。代理會將供應商的失敗歸類為固定狀態，例如觸發速率限制、配額或額度耗盡、超出上下文視窗、模型無法使用、所在地區不受支援或需要帳戶驗證，並回傳該狀態對應的固定訊息。政策拒絕、重送拒絕與代理限制各有固定訊息。HTTP 狀態、`error.type`、`error.code` 與 `Retry-After` 的意義不變，因此依 `context_length_exceeded`、`insufficient_quota` 或 `rate_limit_exceeded` 等代碼分支的用戶端行為與先前相同。
+
 由於內部執行路徑基於 Responses，供應商 adapter 可施加較窄的功能集。例如，所選 adapter 無法表示的請求功能以錯誤回傳，而非靜默變更其意義。
 
 ## `POST /v1/messages` 與 `count_tokens`

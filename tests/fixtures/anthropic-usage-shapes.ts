@@ -29,3 +29,14 @@ export const noResetGrant = {
   weekly_resets_at: weeklyReset, cooldown_until: null, next_grant_id: null,
   event_props: { tier: "claude_max_20x", billing: "google_play" },
 };
+
+export const maxTeamInactiveWeeklyUsage = {
+  five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 55, resets_at: weeklyReset },
+  limits: [{ kind: "session", percent: 0, resets_at: null, is_active: true },
+    { kind: "weekly_all", percent: 55, resets_at: weeklyReset, is_active: false }],
+};
+export const maxTeamInactiveSessionUsage = {
+  five_hour: { utilization: 40, resets_at: weeklyReset }, seven_day: { utilization: 56, resets_at: weeklyReset },
+  limits: [{ kind: "session", percent: 40, resets_at: weeklyReset, is_active: false },
+    { kind: "weekly_all", percent: 56, resets_at: weeklyReset, is_active: true }],
+};

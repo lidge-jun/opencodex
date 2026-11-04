@@ -173,6 +173,8 @@ OpenCodex 会在有界限制内验证终止流，再将其折叠为客户端请�
 非流式输出的 `object: "chat.completion"`。流式输出使用 SSE 对象，`object: "chat.completion.chunk"`、
 choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。工具调用和 usage 信息会在源事件携带它们时被转换回去。
 
+该端点的错误响应和流式错误帧使用由代理撰写的消息。代理会把提供方的失败归类为固定状态，例如触发速率限制、配额或额度耗尽、超出上下文窗口、模型不可用、所在地区不受支持或需要账户验证，并返回该状态对应的固定消息。策略拒绝、重放拒绝和代理限制各有固定消息。HTTP 状态、`error.type`、`error.code` 和 `Retry-After` 的含义保持不变，因此依据 `context_length_exceeded`、`insufficient_quota` 或 `rate_limit_exceeded` 等代码分支的客户端行为与之前相同。
+
 由于内部执行路径基于 Responses，因此提供方适配器可以施加更窄的特性集。例如，若请求中的某个特性无法被所选适配器表示，它会作为错误返回，而不是静默改变其含义。
 
 ## `POST /v1/messages` 和 `count_tokens`

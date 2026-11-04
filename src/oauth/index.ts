@@ -144,7 +144,7 @@ export type OAuthActiveTokenObservation =
 
 const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
-interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean; retirementDeferredLogged?: boolean }
+interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean; retirementDeferredLogged?: boolean; requireUsable?: boolean }
 const tokenRefreshes = new Map<string, OAuthTokenRefreshFlight>();
 export class OAuthTokenRefreshBusyError extends Error {
   readonly code = "OAUTH_TOKEN_REFRESH_BUSY";
@@ -156,6 +156,8 @@ export class OAuthTokenRefreshStaleError extends Error {
   readonly retryable = true;
   constructor() { super("OAuth token refresh owner became stale"); this.name = "OAuthTokenRefreshStaleError"; }
 }
+/** Known pre-dispatch cancellation; independent waiters may acquire a new owner. */
+class OAuthDiscoveryRefreshCancelledError extends OAuthTokenRefreshStaleError {}
 
 /** Focused owner-identity tests only. Synthetic owners retain no account data. */
 export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; startedAt?: number; flightId?: string; dispatched?: boolean }>): {
@@ -187,9 +189,9 @@ export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; 
 }
 const XAI_PERMANENT_FAILURE_TTL_MS=30_000;
 const permanentRefreshFailures=new Map<string,number>();
-interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
+interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; requireUsableAccount?: boolean }
 interface AnthropicRefreshDeps { resolveIdentity?: AnthropicIdentityResolver; intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
-interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
+interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; authorityCurrent?: () => boolean; requireUsableAccount?: boolean }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 export function sweepExpiredXaiPermanentFailureVerdicts(now=Date.now()):number{let removed=0;for(const[key,until]of permanentRefreshFailures){if(until>now)continue;permanentRefreshFailures.delete(key);removed+=1;}return removed;}
@@ -448,71 +450,16 @@ export function getOAuthCredentialApiBaseUrl(provider: string): string | undefin
 export function listOAuthProviders(): string[] {
   return Object.keys(OAUTH_PROVIDERS).filter(isPublicOAuthProvider);
 }
-
-export class UnsupportedOAuthProviderError extends Error {
-  constructor(provider: string) {
-    super(`Unsupported OAuth provider in config: ${provider}`);
-    this.name = "UnsupportedOAuthProviderError";
-  }
-}
-
-export class OAuthLoginRequiredError extends Error {
-  readonly provider: string;
-
-  constructor(provider: string) {
-    super(`Not logged in to ${provider}. Run: ocx login ${provider}`);
-    this.name = "OAuthLoginRequiredError";
-    this.provider = provider;
-  }
-}
-
-/** An operator-paused account is temporarily unavailable, not an invalid login. */
-export class OAuthAccountPausedError extends Error {
-  constructor() {
-    super("OAuth account is paused. Resume it in account settings and retry.");
-    this.name = "OAuthAccountPausedError";
-  }
-}
-
-export class OAuthProviderPublicationError extends Error {
-  constructor(provider?: string, credentialWritten = true) {
-    super(provider !== "anthropic2" ? "OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login."
-      : credentialWritten ? "Anthropic Pool 2 credential was saved as an orphan auth row, but the provider entry was not written. Repair the persisted config or resolve the provider/account namespace collision, then retry login."
-      : "Anthropic Pool 2 login did not start because the config file is missing or could not be written; no credential was saved. Repair the persisted config, then retry login.");
-    this.name = "OAuthProviderPublicationError";
-  }
-}
-
-/** A local configuration conflict found before any credential is written; its text is fixed. */
-export class OAuthProviderNamespaceCollisionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "OAuthProviderNamespaceCollisionError";
-  }
-}
-
-export class OAuthReauthIdentityMismatchError extends Error {
-  constructor() {
-    super("Signed-in account does not match the selected account. Sign in with the same account.");
-    this.name = "OAuthReauthIdentityMismatchError";
-  }
-}
-
-export class OAuthReauthIdentityUnverifiedError extends Error {
-  constructor() {
-    super("Could not verify signed-in account identity for reauth.");
-    this.name = "OAuthReauthIdentityUnverifiedError";
-  }
-}
-
-class OAuthLoginSupersededError extends Error {
-  constructor() {
-    super("OAuth login was superseded before credential persistence");
-    this.name = "OAuthLoginSupersededError";
-  }
-}
-
+import { OAuthAccountUnusableError, OAuthLoginSupersededError, OAuthAccountPausedError, OAuthLoginRequiredError, OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, OAuthReauthIdentityMismatchError, OAuthReauthIdentityUnverifiedError, UnsupportedOAuthProviderError } from "./oauth-errors";
+export { OAuthAccountPausedError, OAuthLoginRequiredError, OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, OAuthReauthIdentityMismatchError, OAuthReauthIdentityUnverifiedError, UnsupportedOAuthProviderError } from "./oauth-errors";
 /** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
+export function publicOAuthErrorPresentation(error: unknown): import("../lib/client-error-body").ProxyErrorPresentation | undefined {
+  if (error instanceof OAuthLoginRequiredError) return "oauth_login";
+  if (error instanceof AntigravityProjectDiscoveryError) return "discovery";
+  if (error instanceof MuseLoginError && error.kind === "validation-http" && error.status !== undefined) return "muse_http";
+  return undefined;
+}
+
 export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
   if (error instanceof AntigravityProjectDiscoveryError) return error.publicMessage;
   if (error instanceof MuseLoginError) return museLoginErrorMessage(error.kind, error.status);
@@ -632,6 +579,8 @@ async function resolveAccessSnapshotForAccount(
   rejectedGeneration?: string,
   requireUsableAccount = false,
   oauthProvider = provider,
+  authorityCurrent?: () => boolean,
+  retryCancelledDiscovery = true,
 ): Promise<OAuthAccessSnapshot> {
   const def = OAUTH_PROVIDERS[oauthProvider];
   if (!def) throw new UnsupportedOAuthProviderError(oauthProvider);
@@ -661,6 +610,7 @@ async function resolveAccessSnapshotForAccount(
   // no replacement starts until the old consumers have actually released enough capacity.
   const waiter = tokenRefreshWaiters.tryAcquire();
   if (!waiter) throw new OAuthTokenRefreshBusyError();
+  let unrestrictedRetry = false;
   try {
     if (existing && replacedStaleFlight) {
       // A replacement would wait for this owner's lock anyway. Keep its registry slot
@@ -675,7 +625,10 @@ async function resolveAccessSnapshotForAccount(
     }
     if (existing) {
       logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });
-      return await existing.promise;
+      const joined = await existing.promise;
+      // The owner may not have required usability; a mark that landed meanwhile still rejects us.
+      if (requireUsableAccount && getAccountCredentialWithStatus(provider, accountId)?.needsReauth) throw new OAuthAccountUnusableError(provider);
+      return joined;
     }
     if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) {
       for (const [staleKey, stale] of tokenRefreshes) {
@@ -691,12 +644,14 @@ async function resolveAccessSnapshotForAccount(
       abort,
       flightId: randomUUID(),
       dispatched: false,
+      requireUsable: requireUsableAccount,
     };
     const refresh = (async (): Promise<OAuthAccessSnapshot> => {
-      const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
+      const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight, authorityCurrent, requireUsableAccount);
       const persistedRow = getAccountCredentialWithStatus(provider, accountId);
       if (!persistedRow) throw new OAuthLoginRequiredError(provider);
       if (persistedRow.paused === true) throw new OAuthAccountPausedError();
+      if (requireUsableAccount && persistedRow.needsReauth) throw new OAuthAccountUnusableError(provider);
       const persisted = persistedRow.credential;
       if (persisted.access !== accessToken) {
         throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
@@ -715,7 +670,13 @@ async function resolveAccessSnapshotForAccount(
     flight.promise = refresh;
     tokenRefreshes.set(key, flight);
     return await refresh;
+  } catch (error) {
+    // An unrestricted caller that joined a usable-only owner is not bound by that owner's rejection.
+    if (!requireUsableAccount && error instanceof OAuthAccountUnusableError) unrestrictedRetry = true;
+    else if (authorityCurrent || !retryCancelledDiscovery || !(error instanceof OAuthDiscoveryRefreshCancelledError)) throw error;
   } finally { waiter.release(); }
+  if (unrestrictedRetry) return resolveAccessSnapshotForAccount(provider, accountId, rejectedGeneration, false, oauthProvider, authorityCurrent, retryCancelledDiscovery);
+  return resolveAccessSnapshotForAccount(provider, accountId, rejectedGeneration, requireUsableAccount, oauthProvider, undefined, false);
 }
 
 export async function getValidAccessTokenSnapshot(
@@ -773,9 +734,9 @@ export async function getValidAccessTokenForAccount(provider: string, accountId:
 export async function getValidAccessSnapshotForAccount(
   provider: string,
   accountId: string,
-  opts: { requireUsableAccount?: boolean } = {},
+  opts: { requireUsableAccount?: boolean; authorityCurrent?: () => boolean } = {},
 ): Promise<OAuthAccessSnapshot> {
-  return resolveAccessSnapshotForAccount(provider, accountId, undefined, opts.requireUsableAccount === true);
+  return resolveAccessSnapshotForAccount(provider, accountId, undefined, opts.requireUsableAccount === true, provider, opts.authorityCurrent);
 }
 
 /** Terminal refresh failures (revoked/rotated-away grants) — retrying cannot succeed. */
@@ -839,7 +800,7 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
   };
 }
-export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const row=getAccountCredentialWithStatus(provider,accountId);if(!row)throw new OAuthLoginRequiredError(provider);if(row.paused)throw new OAuthAccountPausedError();const stored=row.credential;const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
+export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const row=getAccountCredentialWithStatus(provider,accountId);if(!row)throw new OAuthLoginRequiredError(provider);if(row.paused)throw new OAuthAccountPausedError();if(deps.requireUsableAccount&&row.needsReauth)throw new OAuthAccountUnusableError(provider);const stored=row.credential;const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead,keepReauthMarkedAfterDispatch:!row.needsReauth});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
 
 /**
@@ -1030,6 +991,9 @@ export async function refreshGenericAccountWithLock(
     const row = getAccountCredentialWithStatus(provider, accountId);
     if (!row) throw new OAuthLoginRequiredError(provider);
     if (row.paused) throw new OAuthAccountPausedError();
+    // A usable-account caller rechecks needsReauth here: a mark committed while it waited must
+    // stop the refresh before the stored refresh token is sent.
+    if (deps.requireUsableAccount && row.needsReauth) throw new OAuthAccountUnusableError(provider);
     const stored = row.credential;
     if (
       credentialGeneration(stored) !== credentialGeneration(callerCredential)
@@ -1040,11 +1004,14 @@ export async function refreshGenericAccountWithLock(
     }
     const generation = credentialGeneration(stored);
     try {
+      if (deps.authorityCurrent && !deps.authorityCurrent()) throw new OAuthDiscoveryRefreshCancelledError();
       const refreshed = await def.refresh(stored.refresh, deps.signal, stored, accountId);
       const fresh = merged(refreshed, stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
+        // A mark that landed after this flight read the row is newer than the refresh: keep it.
+        keepReauthMarkedAfterDispatch: !row.needsReauth,
         ...(provider === "devin" ? { assertOwnership: (store: AuthStore) => {
           if (store[provider]?.accounts.find(row => row.id === accountId)?.paused) throw new OAuthAccountPausedError();
           assertDevinCliAdoptionOwnership(store, provider, accountId, refreshed);
@@ -1138,10 +1105,12 @@ async function refreshAndPersistAccessToken(
   signal?: AbortSignal,
   flight?: OAuthRefreshFlightEvidence,
   replacedStaleFlight?: OAuthRefreshFlightEvidence,
+  authorityCurrent?: () => boolean,
+  requireUsableAccount = false,
 ): Promise<string> {
-  if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred, { signal });
+  if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred, { signal, requireUsableAccount });
   if (isAnthropicOAuthInstance(provider)) return refreshAnthropicAccountWithLock(provider, accountId, def, cred, { signal, flight, replacedStaleFlight });
-  return refreshGenericAccountWithLock(provider, accountId, def, cred, { signal });
+  return refreshGenericAccountWithLock(provider, accountId, def, cred, { signal, authorityCurrent, requireUsableAccount });
 }
 
 /** Resolve discovery credentials only for the caller-owned configured OAuth row. */

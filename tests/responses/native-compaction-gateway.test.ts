@@ -117,6 +117,19 @@ describe("native gateway transport", () => {
     expect((await calls[0]!.json()).model).toBe("some-model");
   });
 
+  test("configured gateway turn state survives when no account changed", async () => {
+    let sent: Request | undefined;
+    globalThis.fetch = (async (url, init) => {
+      sent = new Request(url, init);
+      return Response.json({ object: "response.compaction", output: [compactItem] });
+    }) as typeof fetch;
+    const provider = { ...gateway, supportsNativeCompactEndpoint: true, headers: { "x-codex-turn-state": "configured" } };
+    const config = { ...getDefaultConfig(), defaultProvider: "gw", providers: { gw: provider } };
+    const response = await handleResponsesCompact(compactionRequest(baseCompactionBody()), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(sent?.headers.get("x-codex-turn-state")).toBe("configured");
+  });
+
   test.each([
     { replay: undefined, blob: nativeBlob },
     { replay: true, blob: encodeCompactionSummary("Portable retained task fixture.") },

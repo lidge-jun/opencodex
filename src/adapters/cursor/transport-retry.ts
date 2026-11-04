@@ -2,7 +2,7 @@ import type { CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactory, CursorTransportFactoryInput } from "./transport";
 import type { RequestExecutionBudget } from "../../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../../usage/log";
-import { SendBudgetExhaustedError, abortError, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstream-retry";
+import { SendBudgetExhaustedError, providerErrorDestinationLabel, abortError, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstream-retry";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { isCursorRootEnvelopeError, safeCursorErrorMessage } from "./cursor-errors";
 
@@ -113,7 +113,7 @@ export async function runCursorTurnWithRetry(
       targetKey: CURSOR_BUDGET_TARGET_KEY,
     });
     if (decision && (!decision.allowed || !decision.permit.use())) {
-      throw new SendBudgetExhaustedError(CURSOR_BUDGET_TARGET_KEY);
+      throw new SendBudgetExhaustedError(providerErrorDestinationLabel(CURSOR_BUDGET_TARGET_KEY));
     }
     execution.onPhysicalSend?.({
       ordinal: attempt + 1,

@@ -6,10 +6,13 @@ import type { CodexThreadLineage } from "../lineage";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeLease } from "../../routing/probe-lease";
 import { clearPoolRecoveryState } from "../../routing/probe-lease";
+import { identityFence, adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordThreadAccountDeleted, recordAccountPinsCleared, recordAllCleared, recordThreadsCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
+export { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "./thread-affinity-store";
 
 export type ThreadAffinityEntry = {
   accountId: string;
   generation: number;
+  identityFence?: string;
   createdAt: number;
   lastUsedAt: number;
   // Last time the bound account's quota threshold was re-evaluated for this
@@ -86,7 +89,9 @@ export type CodexAffinityMove =
   /** There was no live binding; this request established one. */
   | "new_bind"
   /** The binding was released without a replacement on this request. */
-  | "cleared";
+  | "cleared"
+  /** No binding was established for this selection. */
+  | "unbound";
 
 /**
  * Why. A move is the expensive event -- it discards the prompt-cache prefix warmed on the old
@@ -95,6 +100,10 @@ export type CodexAffinityMove =
  */
 export type CodexAffinityReason =
   | "healthy"
+  /** The request had no usable conversation key. */
+  | "no_conversation"
+  /** A caller-owned credential did not opt into affinity. */
+  | "request_owned"
   | "quota_headroom"
   | "quota_refusal"
   | "transient"
@@ -194,15 +203,32 @@ let threadAffinityEntryTotal = 0;
  * Which pool account minted the conversation's carried OpenAI state
  * (`previous_response_id`, encrypted reasoning, provider conversation/file ids).
  * Keyed by the same affinity key as {@link threadAccountMap}, bounded the same
- * way, and process-local — raw account ids never reach a log.
+ * way. Durable rows use a separate keyed digest; raw account ids never reach a log.
  */
 type ConversationStateIssuerEntry = {
   accountId: string;
   lastUsedAt: number;
+  fence?: string;
+  storedAccountId?: string;
+  storedFence?: string | null;
 };
 const conversationStateIssuerMap = new Map<string, ConversationStateIssuerEntry>();
 
-export function clearThreadAccountMap(): void {
+export function registerThreadAffinityLiveState(): void {
+registerCodexAffinityLiveState({
+  thread: (key, scope) => threadAccountMap.get(key)?.get(scope as ThreadAffinityScope),
+  issuer: key => {
+    const entry = conversationStateIssuerMap.get(key);
+    return entry && { accountId: entry.storedAccountId ?? entry.accountId, fence: entry.storedAccountId ? entry.storedFence ?? undefined : entry.fence, lastUsedAt: entry.lastUsedAt };
+  },
+  clearLive: () => { threadAccountMap.clear(); threadAffinityEntryTotal = 0; conversationStateIssuerMap.clear(); },
+});
+}
+registerThreadAffinityLiveState();
+
+export function clearThreadAccountMap(options: { preserveConversationStateIssuers?: boolean } = {}): void {
+  if (options.preserveConversationStateIssuers) recordThreadsCleared();
+  else recordAllCleared();
   threadAccountMap.clear();
   threadAffinityEntryTotal = 0;
   // A refresh cooldown is per-account runtime state learned alongside these bindings. Leaving it
@@ -213,10 +239,13 @@ export function clearThreadAccountMap(): void {
   // going away. A held account nobody may probe because of a lease issued against the previous
   // roster is a recovery that never starts.
   clearPoolRecoveryState();
-  conversationStateIssuerMap.clear();
+  // A manual account switch clears routing affinity, not the issuer of carried state. The next
+  // account needs that record to scrub or refuse account-bound continuation.
+  if (!options.preserveConversationStateIssuers) conversationStateIssuerMap.clear();
 }
 
 export function clearConversationStateIssuerMap(): void {
+  recordIssuersCleared();
   conversationStateIssuerMap.clear();
 }
 
@@ -224,6 +253,7 @@ export function clearThreadAccountMapForAccount(
   accountId: string,
   reason: CodexAffinityReason = "unusable",
 ): void {
+  recordAccountPinsCleared(accountId);
   for (const [threadId, affinities] of threadAccountMap) {
     for (const [scope, entry] of affinities) {
       if (entry.accountId === accountId && affinities.delete(scope)) {
@@ -239,6 +269,7 @@ function pruneConversationStateIssuers(now: number): void {
   for (const [key, entry] of conversationStateIssuerMap) {
     if (now - entry.lastUsedAt > CODEX_THREAD_AFFINITY_IDLE_TTL_MS) {
       conversationStateIssuerMap.delete(key);
+      recordIssuerDelete(key);
     }
   }
   while (conversationStateIssuerMap.size > CODEX_THREAD_AFFINITY_MAX_ENTRIES) {
@@ -252,22 +283,30 @@ function pruneConversationStateIssuers(now: number): void {
     }
     if (!oldestKey) break;
     conversationStateIssuerMap.delete(oldestKey);
+    recordIssuerDelete(oldestKey);
   }
 }
 
 /**
  * Record the pool account that just issued carried conversation state for this
- * binding key. In-memory only; the id is never written to a request log.
+ * binding key. Persisted when an anchor is available; the id is never logged.
  */
 export function rememberConversationStateIssuer(
   bindingKey: string,
   accountId: string,
   now = Date.now(),
+  credential?: { generation: number; chatgptAccountId: string },
 ): void {
   if (!bindingKey.trim() || !accountId.trim()) return;
   if (!admissibleAffinityComponent(bindingKey) || !admissibleAffinityComponent(accountId)) return;
   pruneConversationStateIssuers(now);
-  conversationStateIssuerMap.set(bindingKey, { accountId, lastUsedAt: now });
+  const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
+  const fence = record?.credential && record.deletedAt == null && credential
+    && record.generation === credential.generation && record.credential.chatgptAccountId === credential.chatgptAccountId
+    ? identityFence(record.quotaHistoryIdentity) : undefined;
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) recordIssuerDelete(bindingKey);
+  else if (accountId !== CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER) recordIssuerSet(bindingKey, accountId, fence ?? null, now);
+  conversationStateIssuerMap.set(bindingKey, { accountId, lastUsedAt: now, fence });
   pruneConversationStateIssuers(now);
 }
 
@@ -278,10 +317,23 @@ export function peekConversationStateIssuer(
 ): string | undefined {
   if (!bindingKey.trim() || !admissibleAffinityComponent(bindingKey)) return undefined;
   pruneConversationStateIssuers(now);
-  const entry = conversationStateIssuerMap.get(bindingKey);
+  recordIssuerTouch(bindingKey);
+  let entry = conversationStateIssuerMap.get(bindingKey);
+  if (!entry) {
+    const stored = adoptStoredIssuer(bindingKey, now);
+    if (stored !== undefined) {
+      entry = { accountId: stored.issuer, lastUsedAt: now, storedAccountId: stored.storedAccountId, storedFence: stored.storedFence };
+      conversationStateIssuerMap.set(bindingKey, entry);
+      pruneConversationStateIssuers(now);
+    }
+  }
   if (!entry) return undefined;
   entry.lastUsedAt = now;
   return entry.accountId;
+}
+
+export function peekConversationStateStoredIssuerAccount(bindingKey: string): string | undefined {
+  return conversationStateIssuerMap.get(bindingKey)?.storedAccountId;
 }
 
 /**
@@ -294,7 +346,7 @@ export function peekConversationStateIssuer(
 const pendingReleaseReasons = new Map<string, CodexAffinityReason>();
 const MAX_PENDING_RELEASE_REASONS = 4096;
 
-function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
+export function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
   if (threadId === null) return;
   if (!pendingReleaseReasons.has(threadId) && pendingReleaseReasons.size >= MAX_PENDING_RELEASE_REASONS) {
     const oldest = pendingReleaseReasons.keys().next();
@@ -341,7 +393,23 @@ function getThreadAffinityForScope(
   scope: ThreadAffinityScope,
 ): ThreadAffinityEntry | undefined {
   if (!admissibleAffinityComponent(threadId)) return undefined;
+  recordThreadTouch(threadId, scope);
+  if (!threadAccountMap.get(threadId)?.get(scope)) adoptThreadAffinities(threadId, Date.now(), scope);
   return threadAccountMap.get(threadId)?.get(scope);
+}
+
+function adoptThreadAffinities(threadId: string, now: number, scopeName?: ThreadAffinityScope): void {
+  for (const row of adoptStoredThreadRows(threadId, now, scopeName)) {
+    const record = readCodexAccountRecord(row.accountId);
+    if (!record?.credential || record.deletedAt != null || identityFence(record.quotaHistoryIdentity) !== row.fence) continue;
+    const scope = row.scope as ThreadAffinityScope;
+    const affinities = threadAccountMap.get(threadId) ?? new Map<ThreadAffinityScope, ThreadAffinityEntry>();
+    if (affinities.has(scope)) continue;
+    affinities.set(scope, { accountId: row.accountId, generation: record.generation, identityFence: row.fence, createdAt: row.createdAt, lastUsedAt: row.lastUsedAt, lastReevalAt: now });
+    threadAccountMap.set(threadId, affinities);
+    threadAffinityEntryTotal += 1;
+  }
+  pruneLruThreadAffinities();
 }
 
 export function getThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): ThreadAffinityEntry | undefined {
@@ -359,6 +427,7 @@ export function getModelDetourAffinity(
 
 function deleteThreadAffinityForScope(threadId: string, scope: ThreadAffinityScope): void {
   if (!admissibleAffinityComponent(threadId)) return;
+  recordThreadDelete(threadId, scope);
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   if (affinities.delete(scope)) {
@@ -383,10 +452,12 @@ export function deleteModelDetourAffinity(
 /** Remove only the matching failed account's affinities for one thread. */
 export function deleteThreadAffinitiesForAccount(threadId: string, accountId: string): void {
   if (!admissibleAffinityComponent(threadId) || !admissibleAffinityComponent(accountId)) return;
+  recordThreadAccountDeleted(threadId, accountId);
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   for (const [scope, entry] of affinities) {
     if (entry.accountId === accountId && affinities.delete(scope)) {
+      recordThreadDelete(threadId, scope);
       threadAffinityEntryTotal = Math.max(0, threadAffinityEntryTotal - 1);
     }
   }
@@ -459,6 +530,7 @@ function pruneExpiredThreadAffinities(now: number): void {
   for (const [threadId, affinities] of threadAccountMap) {
     for (const [scope, entry] of affinities) {
       if (isThreadAffinityExpired(entry, now) && affinities.delete(scope)) {
+        recordThreadDelete(threadId, scope);
         threadAffinityEntryTotal = Math.max(0, threadAffinityEntryTotal - 1);
       }
     }
@@ -502,15 +574,21 @@ function bindThreadAffinityForScope(
   const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
   if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return;
   pruneExpiredThreadAffinities(now);
+  recordThreadTouch(threadId, scope);
   const affinities = threadAccountMap.get(threadId) ?? new Map<ThreadAffinityScope, ThreadAffinityEntry>();
   const previous = affinities.get(scope);
-  affinities.set(scope, {
+  const fence = identityFence(record?.quotaHistoryIdentity);
+  const entry: ThreadAffinityEntry = {
     accountId,
     generation: accountId === MAIN_CODEX_ACCOUNT_ID ? 0 : record!.generation,
+    identityFence: fence,
     createdAt: previous?.createdAt ?? now,
     lastUsedAt: now,
     lastReevalAt: now,
-  });
+  };
+  if (fence) recordThreadBind(threadId, scope, { scope, accountId, fence, createdAt: entry.createdAt, lastUsedAt: now });
+  else recordThreadDelete(threadId, scope);
+  affinities.set(scope, entry);
   if (!previous) threadAffinityEntryTotal += 1;
   threadAccountMap.set(threadId, affinities);
   pruneLruThreadAffinities();
@@ -540,14 +618,14 @@ export function bindModelDetourAffinity(
 export function getThreadAffinityScopes(
   threadId: string,
 ): ReadonlyMap<ThreadAffinityScope, ThreadAffinityEntry> | undefined {
+  adoptThreadAffinities(threadId, Date.now());
   return threadAccountMap.get(threadId);
 }
 
 /**
  * Move one scope's binding from the pre-#4546 RAW parent key onto the key this thread uses now.
  *
- * Bindings and the key that derives them are process-local, so an ordinary restart already
- * discards every binding and there is nothing to migrate. The case this exists for is the
+ * Legacy raw-parent keys are process-local and are not persisted. The case this exists for is the
  * narrow one: a code swap under a live conversation, where the map still holds entries made by
  * the old rule. Rebinding those cold is precisely the defect the lineage work exists to prevent,
  * so the conversation keeps its account and the legacy entry is retired in the same step.
