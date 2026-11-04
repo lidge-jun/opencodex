@@ -636,7 +636,7 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 **오류 분류:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-그 밖의 5xx는 `api_error`예요. `Retry-After`는 그대로 유지해요.
+그 밖의 5xx는 `api_error`예요. `Retry-After`는 정수 초로 보내며(HTTP 날짜는 남은 초로 바꿔요) 최대 8일로 제한해요.
 
 ## 프롬프트 캐싱과 토큰 사용량
 

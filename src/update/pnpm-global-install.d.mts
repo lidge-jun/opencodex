@@ -1,5 +1,7 @@
 export interface PnpmRunResult {
   status: number | null;
+  processTreeExited?: boolean;
+  groupExited?: boolean;
   stdout?: string | Uint8Array | null;
   stderr?: string | Uint8Array | null;
 }
@@ -119,6 +121,10 @@ export type PnpmGlobalUpdateResult =
       ok: false;
       phase: "preflight" | "install" | "rollback";
       rolledBack?: boolean;
+      uncertain?: boolean;
+      processTreeExited?: boolean;
+      /** True only when a rollback transaction restored and verified the previous version. */
+      rollbackPerformed?: boolean;
       activePath?: string;
       globalDir?: string;
       globalBinDir?: string;

@@ -1418,7 +1418,7 @@ test("chat-native redacts structured provider errors before returning them", asy
     });
     const text = await response.text();
     expect(response.status).toBe(401);
-    expect(text).toContain("Bearer [REDACTED]");
+    expect(text).toContain("The provider rejected the configured credentials.");
     expect(text).not.toContain("opaquecredential123456");
   } finally {
     await server.stop(true);
@@ -1460,7 +1460,7 @@ test("chat-native preserves a structured cyber_policy type on JSON and SSE failu
     expect(jsonResponse.status).toBe(400);
     expect(jsonResponse.headers.get("retry-after")).toBeNull();
     await expect(jsonResponse.json()).resolves.toMatchObject({
-      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+      error: { type: "server_error", code: "cyber_policy", message: "Request blocked by the upstream cybersecurity policy." },
     });
 
     const sseResponse = await request(true);
@@ -1468,7 +1468,7 @@ test("chat-native preserves a structured cyber_policy type on JSON and SSE failu
     const sseText = await sseResponse.text();
     expect(sseText).toContain('"type":"server_error"');
     expect(sseText).toContain('"code":"cyber_policy"');
-    expect(sseText).toContain("Authorization: Bearer [REDACTED]");
+    expect(sseText).toContain("Request blocked by the upstream cybersecurity policy.");
     expect(sseText).not.toContain("chatnativesecret123456");
     expect(sseText).not.toContain("data: [DONE]");
   } finally {
@@ -2326,15 +2326,17 @@ test("POST /v1/chat/completions logs native cyber terminals as 400 cyber_policy"
       }),
     });
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain("blocked");
+    expect(await response.text()).toContain("Request blocked by the upstream cybersecurity policy.");
     const entry = getRequestLogEntries().findLast(e => e.inboundProtocol === "chat");
     expect(entry).toMatchObject({
       status: 400,
       errorCode: "cyber_policy",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: "blocked",
+      upstreamCondition: "request_rejected",
     });
+    // The row keeps the classified condition only, never the provider's words.
+    expect(entry?.upstreamError).toBeUndefined();
   } finally {
     await server.stop(true);
     await upstream.stop(true);
@@ -2384,7 +2386,7 @@ test("responsesSseToChatCompletionsSse emits error frame on response.failed (no 
 
   const text = await new Response(stream).text();
   expect(text).toContain('"error"');
-  expect(text).toContain("upstream exploded");
+  expect(text).toContain("The provider failed to complete the request.");
   expect(text).not.toContain("[error]");
   expect(text).not.toContain("data: [DONE]");
 
@@ -2685,7 +2687,7 @@ test("non-streaming /v1/chat/completions returns error status on upstream failur
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     const json = await response.json() as { error?: { message?: string; type?: string }; choices?: unknown };
-    expect(json.error?.message ?? "").toContain("provider blew up");
+    expect(json.error?.message ?? "").toBe("The provider failed to complete the request.");
     expect(json.choices).toBeUndefined();
   } finally {
     await server.stop(true);
@@ -2744,7 +2746,7 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
     // Stream opens with 200, then body carries an error frame and ends without [DONE].
     expect(response.status).toBe(200);
     const text = await response.text();
-    expect(text).toContain("stream boom");
+    expect(text).toContain("The provider failed to complete the request.");
     expect(text).toContain('"error"');
     expect(text).not.toContain("[error]");
     expect(text).not.toContain("data: [DONE]");
@@ -3026,14 +3028,14 @@ test("stall incomplete becomes an error frame with no [DONE] (WP3)", async () =>
   expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "stop")).toBe(false);
 });
 
-test("adapter_eof incomplete surfaces the upstream message and no [DONE] (WP3)", async () => {
+test("adapter_eof incomplete uses fixed wording and no [DONE] (WP3)", async () => {
   const frames = [
     `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "adapter_eof", message: "upstream closed mid-turn" } } })}\n\n`,
   ];
   const { raw, chunks } = await convertResponsesFrames(frames);
   const errorChunk = chunks.find(chunk => (chunk as { error?: { message?: string } }).error !== undefined) as
     { error: { message: string } } | undefined;
-  expect(errorChunk?.error.message).toBe("upstream closed mid-turn");
+  expect(errorChunk?.error.message).toBe("The provider stream ended before the request completed.");
   expect(raw).not.toContain("[DONE]");
 });
 
@@ -3317,7 +3319,7 @@ test("/v1/chat/completions non-OK upstream preserves top-level structured cyber_
     expect(response.status).toBe(400);
     expect(response.headers.get("retry-after")).toBeNull();
     await expect(response.json()).resolves.toMatchObject({
-      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+      error: { type: "server_error", code: "cyber_policy", message: "Request blocked by the upstream cybersecurity policy." },
     });
   } finally {
     await server.stop(true);
@@ -3380,7 +3382,7 @@ test("/v1/chat/completions non-OK upstream preserves structured model_not_found"
     expect(json.error).toMatchObject({
       code: "model_not_found",
       type: "invalid_request_error",
-      message: "Request failed",
+      message: "The requested model is not available from the provider.",
     });
   } finally {
     await server.stop(true);
@@ -3506,7 +3508,7 @@ test("/v1/chat/completions status:failed replay preserves structured cyber_polic
     });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+      error: { type: "server_error", code: "cyber_policy", message: "Request blocked by the upstream cybersecurity policy." },
     });
   } finally {
     await server.stop(true);
@@ -3571,7 +3573,7 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
     expect(json.error).toMatchObject({
       code: "model_not_found",
       type: "invalid_request_error",
-      message: "Request failed",
+      message: "The requested model is not available from the provider.",
     });
   } finally {
     await server.stop(true);

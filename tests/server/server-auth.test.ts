@@ -3895,9 +3895,10 @@ describe("server local API auth", () => {
         errorCode: "cyber_policy",
         terminalStatus: "failed",
         closeReason: "terminal",
-        upstreamError: message,
+        upstreamCondition: "request_rejected",
         attempts: [expect.objectContaining({ status: 400, errorCode: "cyber_policy" })],
       });
+      expect(JSON.stringify(logs.at(-1))).not.toContain(message);
     } finally {
       await server.stop(true);
       await upstream.stop(true);

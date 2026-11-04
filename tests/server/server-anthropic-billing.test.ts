@@ -414,7 +414,14 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
       headers: { "content-type": "text/event-stream" },
     }));
     const response = await send(lane, config, undefined, undefined, true);
-    expect(await response.text()).toContain(kind === "text" ? "billing recovered" : "billing_tool");
+    const text = await response.text();
+    if (lane === "translated" && kind === "tool") {
+      expect(response.status).toBe(200);
+      const failed = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(frame => frame.type === "response.failed");
+      expect(failed).toBeDefined();
+      expect(failed.response.error).toMatchObject({ type: "server_error", code: "upstream_server_error", message: expect.stringContaining("undeclared client tool") });
+      expect(text).not.toContain("billing_tool");
+    } else expect(text).toContain(kind === "text" ? "billing recovered" : "billing_tool");
     expect(seen).toHaveLength(1);
     expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
   });

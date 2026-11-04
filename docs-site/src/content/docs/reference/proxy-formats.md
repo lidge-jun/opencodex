@@ -383,8 +383,10 @@ and EOFs keep their existing incomplete behavior.
 Explicit incomplete reasons use the same vocabulary in adapter-backed responses and native
 Responses JSON, SSE, and WebSocket delivery:
 output-limit aliases such as `length` and `max_tokens` become `max_output_tokens`, and refusal/filter
-aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with the
-provider's message, retryability, and usage. Direct Chat and Messages encoders apply the same mapping.
+aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with
+retryability and usage. Responses and Messages output keep the provider's message; Chat Completions
+failures use a proxy-written message instead. Direct Chat and Messages encoders apply the same
+reason mapping.
 
 On the pending `dev` implementation for #4112, a final upstream HTTP 413 on this surface
 is classified as `invalid_request_error` / `context_length_exceeded`. Non-streaming callers
@@ -621,6 +623,14 @@ Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE 
 `object: "chat.completion.chunk"`, choice deltas, a terminal choice with `finish_reason`, and
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
 them.
+
+Error responses and streamed error frames on this endpoint use proxy-written messages. The proxy
+classifies a provider failure into a fixed condition, such as rate limited, quota or credits
+exhausted, context window exceeded, model unavailable, location not supported, or account
+verification required, and returns the fixed message for that condition. Policy refusals, replay
+refusals, and proxy limits have their own fixed messages. The HTTP status, `error.type`,
+`error.code`, and `Retry-After` keep their meaning, so clients that branch on codes such as
+`context_length_exceeded`, `insufficient_quota`, or `rate_limit_exceeded` behave as before.
 
 If a streaming Chat request receives a complete JSON Responses result upstream, the proxy
 synthesizes SSE from the converted completion. It preserves answer and reasoning content,

@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../src/adapters/kiro-constants";
@@ -7,8 +7,11 @@ import { saveConfig } from "../../src/config";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { saveCredential } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
+import * as resolver from "../../src/server/adapter-resolve";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { clearRequestLogsForTests, getRequestLogEntries, type RequestLogEntry } from "../../src/server/request-log";
-import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/log";
+import { readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -281,3 +284,51 @@ describe("Kiro usage reaches the ledger as Kiro reported it, on every inbound wi
     });
   }
 });
+
+for (const component of ["userinfo", "path", "query"] as const) for (const stream of [false, true]) {
+  test(`Kiro local send-budget refusal bounds the destination ${component} stream=${stream}`, async () => {
+    const key = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+    const baseUrl = component === "userinfo" ? `https://${key}:fixture@provider.example.test/`
+      : component === "path" ? `https://provider.example.test/${key}` : `https://provider.example.test/?key=${key}`;
+    const config = { port: 0, hostname: "127.0.0.1", defaultProvider: "fixture", providers: { fixture: {
+      adapter: "kiro", baseUrl, authMode: "key", apiKey: "ksk_fixture", models: ["claude-sonnet-4.5"], liveModels: false,
+    } } } as OcxConfig;
+    const originalResolve = resolver.resolveAdapter;
+    let attempts = 0; let sentUrl = "";
+    const refused = createRequestExecutionBudget({ maxTotalModelSends: 0, baseSendAllowance: 0, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
+    const adapterSpy = spyOn(resolver, "resolveAdapter").mockImplementation((provider, cache, id) => {
+      const adapter = originalResolve(provider, cache, id);
+      if (provider.adapter !== "kiro") return adapter;
+      const fetchResponse = adapter.fetchResponse!.bind(adapter);
+      return { ...adapter, fetchResponse(request, context) { sentUrl = request.url; attempts++; return fetchResponse(request, { ...context, sendBudget: refused }); } };
+    });
+    try {
+      const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture/claude-sonnet-4.5", stream,
+          messages: [{ role: "user", content: "fixture question" }] }) }), config, { model: "", provider: "" },
+        { requestId: `destination-${component}-${stream}`, start: Date.now() });
+      const body = await response.text();
+      expect(attempts).toBe(1);
+      expect(sentUrl).toContain(key);
+      expect(refused.used).toBe(0);
+      expect(response.status).toBe(429);
+      const error = JSON.parse(body).error;
+      expect(error).toBeDefined();
+      expect(error.type).toBe("rate_limit_error");
+      expect(error.code).toBe("rate_limit_exceeded");
+      expect(error.message).toContain("request send budget exhausted before dispatch");
+      const { memory, persisted } = await finalRow();
+      const raw = readFileSync(usageLogPath(), "utf8").trim().split("\n").map(line => JSON.parse(line)).find(row => row.requestId === memory.requestId);
+      expect(raw).toBeDefined();
+      for (const row of [memory, persisted, raw]) {
+        expect(row.status).toBe(429);
+        expect(row.errorCode).toBe("rate_limit_exceeded");
+      }
+      expect(body).not.toContain(key);
+      expect(JSON.stringify(memory)).not.toContain(key);
+      expect(JSON.stringify(persisted)).not.toContain(key);
+      expect(JSON.stringify(raw)).not.toContain(key);
+    } finally { adapterSpy.mockRestore(); }
+  });
+}

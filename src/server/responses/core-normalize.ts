@@ -156,6 +156,7 @@ export async function applyFinalRouteRequestNormalization(args: {
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
   // their existing response.model contract even when their public and wire model ids differ.
+  // Request preparation assigns the original client label separately for synthetic turns.
   const responseModelId = parsed.modelId;
   const preserveAnthropicResponseModel = route.providerName === "anthropic"
     || route.provider.adapter === "anthropic";

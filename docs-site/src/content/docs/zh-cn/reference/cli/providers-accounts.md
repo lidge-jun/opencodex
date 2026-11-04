@@ -200,7 +200,7 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 `auto` 会清除手动选择，让 Pool 重新按自身策略分配工作 — 但如果某个 Codex 账号的 id 恰为 `auto`，则精确 id 匹配优先；`ocx account clear <provider>` 始终恢复自动选择。Codex 账号可以用 `ocx account alias` 设置的别名代替 id 来指定；`priority`、`pause`、`resume`、`clear-cooldown`、`remove` 和 `alias` 同样如此。对于 Codex 账号，`auto`、`main` 和 `__main__` 为保留字（不区分大小写），不能设为别名。OAuth 账号和 API 密钥的显示名称仍遵循原有规则。
 
 选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
-Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
+Codex Pool 选择会清除 affinity，并从下一次请求开始生效，包括已有可见任务的请求；带会话 ID 的请求（包括常规 Codex CLI 和 App 轮次及子代理），或锚定到直接父任务的无会话请求，其绑定在关闭时最后一次 affinity 保存成功的情况下，代理正常重启后可保留，空闲时间最长为 24 小时。更深层的无会话链和 Codex App 主登录的绑定仅保存在内存中，重启后会重新分配；驱逐、账号删除、重新登录、崩溃或 affinity 重置仍可能使任务变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
 遇到 **401/403** 时，App 登录会清除该账户的进程内 affinity 并要求重新认证。
 遇到 **429** 时，它会遵循 `Retry-After`、启动账户 cooldown、清除 affinity，
 并可将请求切换到另一个符合条件的 Pool 账户。即使 `autoSwitchThreshold: 0`，
