@@ -1,3 +1,4 @@
+import type { FailureVerdictSink } from "../../chat/failure-verdict";
 /**
  * Adapter delivery straight into a Chat or Messages client's wire (PF-09).
  *
@@ -215,6 +216,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
       recorder?.noteRelayedEvent(observation);
     },
   };
+  const failureVerdictSink: FailureVerdictSink = {};
   const encodeOptions = {
     model: encoder.model,
     translatorBudget,
@@ -224,7 +226,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     hooks,
   };
   const encoded = encoder.protocol === "chat"
-    ? encodeChatCompletionSse(events, encodeOptions)
+    ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink, proxyErrorContext: logCtx, get localUpstream() { return input.localUpstream; } })
     : encodeAnthropicMessageSse(events, {
       ...encodeOptions,
       get localUpstream() { return input.localUpstream; },
@@ -238,7 +240,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
   } else {
     // The routed turn always streams internally; a non-streaming client gets the fold.
     response = encoder.protocol === "chat"
-      ? await collectChatCompletionResponse(tracked, encoder.model, translatorBudget)
+      ? await collectChatCompletionResponse(tracked, encoder.model, translatorBudget, failureVerdictSink)
       : await collectAnthropicMessageResponse(tracked, encoder.model, translatorBudget);
   }
   return attachClientWireLog(markClientWire(response, encoder.protocol), log);

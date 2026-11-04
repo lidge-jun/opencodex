@@ -91,9 +91,9 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     const urls: string[] = [];
     globalThis.fetch = Object.assign(async (input: string | URL | globalThis.Request) => {
       urls.push(String(input));
-      return Response.json({ data: [
-        { name: "small", evaluations: { artificial_analysis_coding_index: 66 } },
-        { name: "big", evaluations: { artificial_analysis_coding_index: 58 } },
+      return Response.json({ pagination: { page: 1, page_size: 200, total_pages: 1, has_more: false }, data: [
+        { name: "small", evaluations: { artificial_analysis_intelligence_index: 66 } },
+        { name: "big", evaluations: { artificial_analysis_intelligence_index: 58 } },
       ] });
     }, { preconnect: originalFetch.preconnect }) as typeof fetch;
     answer = { text: JSON.stringify({ roles: { explorer: { ...sized("frontier", "glance"), domain: "coding" } } }) };
@@ -105,7 +105,7 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
         { ...deps, loadCodexRoleCapability: undefined },
       );
       const body = await response!.json();
-      expect(urls).toEqual(["https://artificialanalysis.ai/api/v2/data/llms/models"]);
+      expect(urls).toEqual(["https://artificialanalysis.ai/api/v2/language/models/free?page=1"]);
       expect(body.capability.name).toBe("Artificial Analysis");
       expect(body.capability.domains.coding).toEqual([{ model: "stub/small", tier: expect.any(String) }, { model: "stub/big", tier: expect.any(String) }]);
       expect(body.proposals.find((row: { role: string }) => row.role === "explorer")).toMatchObject({ tierSource: "measured", proposedModel: "stub/small" });
@@ -127,7 +127,7 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
       );
       expect(response!.status).toBe(200);
       const body = await response!.json();
-      expect(requests).toEqual(withAnalysis ? ["https://artificialanalysis.ai/api/v2/data/llms/models"] : []);
+      expect(requests).toEqual(withAnalysis ? ["https://artificialanalysis.ai/api/v2/language/models/free?page=1"] : []);
       expect(body.capability.error).toBe(withAnalysis ? "Artificial Analysis could not be read" : "benchmark data was unavailable: no Artificial Analysis key is configured");
       expect(body.capability).toMatchObject({ name: null, url: null, license: null, publishedAt: null });
       expect(body.capability.domains).toEqual({});

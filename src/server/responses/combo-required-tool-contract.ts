@@ -45,7 +45,14 @@ export function hasMandatoryToolChoice(rawBody: unknown): boolean {
 export function chatCanPreserveMandatoryToolChoice(rawBody: unknown, provider: OcxProviderConfig, modelId: string): boolean {
   if (!hasMandatoryToolChoice(rawBody)) return true;
   if (modelInList(provider.autoToolChoiceOnlyModels, modelId)) return false;
-  const mapped = mapToolChoice((rawBody as Record<string, unknown>).tool_choice);
+  const choice = (rawBody as Record<string, unknown>).tool_choice;
+  if (choice && typeof choice === "object" && !Array.isArray(choice)) {
+    const selector = choice as Record<string, unknown>;
+    // Chat function names cannot preserve the selected MCP server's ownership.
+    if (selector.type === "allowed_tools" && Array.isArray(selector.tools)
+      && selector.tools.some(tool => tool && typeof tool === "object" && tool.type === "mcp")) return false;
+  }
+  const mapped = mapToolChoice(choice);
   return mapped === "required" || (!!mapped && typeof mapped === "object");
 }
 

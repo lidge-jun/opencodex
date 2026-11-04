@@ -89,7 +89,7 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal at the adapter", () => {
       expect(JSON.parse(text)).toEqual({ error: {
         type: "invalid_request_error",
         code: "model_not_in_plan",
-        message: "Command Code refused the model \"" + REFUSED_MODEL + "\": this account's plan does not include it (MODEL_NOT_IN_PLAN). "
+        message: "Command Code refused the requested model: this account's plan does not include it (MODEL_NOT_IN_PLAN). "
           + "Choose a model the plan includes or change the Command Code plan; retrying this request will not succeed.",
       } });
       expectNoCanary(text);
@@ -248,7 +248,8 @@ describe("plan refusal through the sidecar loops", () => {
       expect(isVerifiedModelNotInPlanResponse(response)).toBe(true);
       const error = JSON.parse(body).error;
       expect(error.code).toBe(MODEL_NOT_IN_PLAN_CODE);
-      expect(error.message).toContain('"' + REFUSED_MODEL + '"');
+      expect(error.message).toContain("Command Code refused the requested model");
+      expect(error.message).not.toContain(REFUSED_MODEL);
       expect(error.message).toContain("will not succeed");
       expectNoCanary(body);
     });

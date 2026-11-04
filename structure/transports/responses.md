@@ -128,6 +128,7 @@ Function-call wrappers around freeform bodies are restored by
 `exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+An unwrapped executable body may carry one extra `{"input":string}` object, removed once, never recursively.
 
 #### Schema-bound flat shell repair
 
@@ -146,25 +147,24 @@ A prefix that can still become a complete outer fence stays held so completion n
 bytes already published in a delta; a body that is not shaped like a wrapper object remains
 progressive, and JSON escapes emit only complete decoded units.
 
-Which wrapper applies is decided by scanning the prefix as JSON rather than matching it against
-a literal opening. `JSON.parse` decides the completed input, and it cares about neither property
+Which wrapper applies is decided by scanning the prefix as JSON rather than matching it against a
+literal opening. `JSON.parse` decides the completed input, and it cares about neither property
 order nor how a name is spelled, so a canonical key arriving after other properties or written
 with an escape is the same wrapper and has to preview as one (#5151). The buffering policy that
-follows is: an own `input` with a string value streams progressively, because completion gives
-it precedence over everything else in the object whatever its position; an `input` with a
-non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
-all publish their own bytes, because that is what completion returns for them; every other
-object HOLDS until it closes, because a key that has not arrived yet can still change the
-answer. Fallback fields decide at that close rather than from a parse: they only unwrap as the
-single string field, so the scan keeps a last-wins table of the members it already walked and
-consults it once — one string fallback field releases its value as `input`, anything else
-streams the raw text byte-exact through whatever trailing whitespace follows. Classification is
-bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which keeps the work per delta from growing with
-the arguments. Past the bound nothing is previewed at all: the authoritative parse still
-unwraps the wrapper at completion, so the bound costs preview and never agreement. Because the
-close resolves from the member table instead of `JSON.parse`, fragmented trailing whitespace
-and deltas that happen to end on a brace can never reparse a growing provider-controlled
-buffer.
+follows is: an own string `input` streams progressively (completion prefers it to any other
+member) unless its executable body could still be a nested wrapper (a nested non-string `input` holds only while a later string duplicate can follow). A non-string `input`, a text
+that is not an object, and an object `JSON.parse` can no longer accept all publish their own
+bytes, because that is what completion returns for them; every other object HOLDS until it closes,
+because a key that has not arrived yet can still change the answer. Fallback fields decide at that
+close rather than from a parse: they only unwrap as the single string field, so the scan keeps a
+last-wins table of the members it already walked and consults it once — one string fallback field
+releases its value as `input`, anything else streams the raw text byte-exact through whatever
+trailing whitespace follows. Classification is bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which
+keeps the work per delta from growing with the arguments. Past the bound nothing is previewed at
+all: the authoritative parse still unwraps the wrapper at completion, so the bound costs preview
+and never agreement. Because the close resolves from the member table instead of `JSON.parse`,
+fragmented trailing whitespace and deltas that happen to end on a brace can never reparse a
+growing provider-controlled buffer.
 
 What that policy costs is worth stating plainly, because it is a real narrowing. A body that IS
 a parseable JSON object but not a wrapper — `{"code":1}` or `{"code":"a","script":"b"}` — now
@@ -175,7 +175,7 @@ restoration has held exactly these bodies since #5047 and this is the two paths 
 new restriction invented for one of them. Bodies that are not objects, which is what an `exec`
 program or an `apply_patch` envelope actually looks like, are unaffected and still stream.
 
-Routed restoration keeps its hold for an unrecognized JSON object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid only after a valid prefix was emitted remain bounded exceptions for ordinary freeform tools. Routed `apply_patch` narrows that boundary: after an exact canonical `*** Begin Patch` line resolves, `src/responses/apply-patch-envelope.ts` exposes only bytes that delimiter normalization cannot rewrite.
+Routed restoration keeps its hold for an unrecognized JSON object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid only after a valid prefix was emitted remain bounded exceptions for ordinary freeform tools. Routed `apply_patch` narrows that boundary: after an exact canonical `*** Begin Patch` line resolves, `src/responses/apply-patch-envelope.ts` exposes only bytes that delimiter normalization cannot rewrite, identifying a rewritable terminal decoration from a bounded suffix rather than rescanning the accumulated patch. Both raw arguments and decoded JSON wrappers supply at most 64 trailing characters to that suffix check.
 A possible decorated terminal marker and the line break behind it remain held until authoritative. If a late-invalid or duplicate-key wrapper makes the completed repaired input disagree with an emitted canonical patch prefix, the routed rewrite fails closed before input-done, item-done, or completed output rather than publishing a rewound executable call.
 
 Codex-private tool fields are removed at the same boundary from one table
@@ -288,7 +288,7 @@ alone never opt a gateway in. Response-tier evidence is governed by `src/provide
 
 ### Response-tier observation authority
 
-`src/providers/fastwire.ts` copies a defined authority flag into `AttemptTierOutcome`. With false, an eligible serialized priority request remains `fastOutcome: applied` and `confirmation: assumed`: the parameter was sent, while actual scheduling is unconfirmed. Neither a `default` nor a `priority` echo can confirm or deny Fast; sanitized `responseServiceTier` remains for inspection, while local capability and wire failures still downgrade. Logs and persisted attempts retain the flag, and `src/usage/cost.ts` uses requested-tier estimation without promoting an untrusted echo or a confirmed label to response-confirmed pricing. Official API and undeclared destinations retain legacy response judgments.
+`src/providers/fastwire.ts` copies a defined authority flag into `AttemptTierOutcome`. With false, an eligible serialized priority request remains `fastOutcome: applied` and `confirmation: assumed`: the parameter was sent, while actual scheduling is unconfirmed. Neither a `default` nor a `priority` echo can confirm or deny Fast; a closed-member `responseServiceTier` ([service tier and model identity](../data-planes/error-detail.md#service-tier-and-model-identity)) remains for inspection, while local capability and wire failures still downgrade. Logs and persisted attempts retain the flag, and `src/usage/cost.ts` uses requested-tier estimation without promoting an untrusted echo or a confirmed label to response-confirmed pricing. Official API and undeclared destinations retain legacy response judgments.
 
 Anthropic Fast eligibility and downgrade recovery use the [Responses failover contract](responses-failover.md#anthropic-fast-downgrade-recovery). The [instance runtime contract](../providers/anthropic-account-pool.md#instance-scoped-runtime) governs Anthropic pool selection, physical-send ownership and continuation recovery.
 
@@ -432,7 +432,7 @@ Final-route normalization in `src/server/responses/core-normalize.ts` decodes cl
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery (including [Anthropic thinking-signature recovery](anthropic-thinking-recovery.md)) and the shared continuation retry counter. Initial and rebuilt adapter budget refusals retain the HTTP 413 [byte-accounting contract](byte-accounting.md#request-copy-accounting); ordinary build errors remain 400. |
 | `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; Anthropic routed summaries pass through `src/responses/compaction-summary.ts` before either bridge. A streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
-Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`, `core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`, `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
+Direct Chat delivery preserves the live `localUpstream` getter when adding collector/provenance options, so replacement routes retain their own stall policy. Local preflight/auth responses and tool-guard messages carry process-local ownership through the pipeline and lifetime wrappers for the [Chat client error contract](../data-planes/error-detail.md#client-error-bodies-chat); Responses wire bytes retain their existing formatting. Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`, `core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`, `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
 and small composition contracts, including [finite model-refusal evidence](../providers-and-adapters.md#combo-model-refusal-evidence). Existing public helper names are re-exported by `core.ts`. After an admitted Anthropic OAuth pool rotation, `adapter-dispatch.ts` rebinds reasoning replay to the committed credential snapshot; `adapter-continuation.ts` rebinds both its continuation clone and the outer request that persists the response. The replacement send strips the previous account's private state, while persisted ownership and the next turn follow the serving account. Codex alternate-account sends in `core-codex-account.ts` record `oauth-account-402` for HTTP 402 quota recovery, `oauth-account-429` for HTTP 429 rate-limit recovery, and `transient-5xx` for transient recovery, preserving the first response's wire status when sealing its attempt; gated-model moves keep their existing unattributed kind.
 Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; cancellation permanently fences the request holder so recovery cannot install a late lease after abort cleanup. `core.ts` and `core-lifetime.ts` release the lease on returned-body completion, error, or cancellation, outside the inner admission `finally`.
 
@@ -578,7 +578,7 @@ Opt-in translated Responses text-only token-limit completion follows [the text c
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
-from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
+from the same events. Both bridge forms and the shared undeclared-tool guard use a fixed refusal sentence without the upstream tool name. Synthetic watchdog/EOF origin follows the [Chat error contract](../data-planes/error-detail.md#client-error-bodies-chat). `buildResponseJSON` records a buffered delivery on the attempt unless the
 caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they
 count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in

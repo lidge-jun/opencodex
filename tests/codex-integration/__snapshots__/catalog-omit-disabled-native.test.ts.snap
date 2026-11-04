@@ -17,3 +17,5 @@ exports[`upgraded gpt-6-luna after 2 convergence passes (unnamed) 1`] = `"cad289
 exports[`upgraded gpt-6-luna after 1 retained sync passes (unnamed) 1`] = `"4b7e6430befcb01070fee32c962d0478412a7000112deab41c9da2bed5ce758b"`;
 
 exports[`upgraded gpt-6-luna after 2 retained sync passes (unnamed) 1`] = `"cad289facd9854199bb0247d1ed25f02c00bd782ef7e0842ebccb32706ae3003"`;
+
+exports[`upgraded gpt-6-luna after 1 retained sync passes (unnamed) 2`] = `"4b7e6430befcb01070fee32c962d0478412a7000112deab41c9da2bed5ce758b"`;

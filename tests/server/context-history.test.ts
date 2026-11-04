@@ -130,6 +130,15 @@ describe("context relay contract",()=>{
     const r=await handleContextHistory(req, config, logContext(), "alpha/notes/v2/write_file", undefined, keyAdmission);
     expect(r.status).toBe(403);expect(await r.text()).toBe('{"error":"feature denied"}');expect(r.headers.get("retry-after")).toBe("7");expect(calls).toBe(1);
   });
+  test("regenerates retry advice instead of relaying upstream bytes",async()=>{
+    const numericKey="73915028461739205817";
+    for(const [raw,expected] of [[numericKey,"691200"],["must-not-echo",null]] as const){
+      setFetch(async()=>new Response('{"error":"slow down"}',{status:429,headers:{"retry-after":raw}}));
+      const req=new Request("http://localhost/v1/alpha/notes/v2/write_file",{method:"POST",headers:{authorization:"Bearer test","content-type":"application/json"},body:JSON.stringify({context:{session_id:"s"}})});
+      const r=await handleContextHistory(req, config, logContext(), "alpha/notes/v2/write_file", undefined, keyAdmission);
+      expect(r.status).toBe(429);expect(r.headers.get("retry-after")).toBe(expected);
+    }
+  });
   test("rejects malformed context before any account selection",async()=>{
     const req=new Request("http://localhost/v1/alpha/notes/v2/write_file",{method:"POST",headers:{authorization:"Bearer test","content-type":"application/json"},body:"{}"});
     expect((await handleContextHistory(req, config, logContext(), "alpha/notes/v2/write_file", undefined, keyAdmission)).status).toBe(400);expect(selection).toBeUndefined();

@@ -100,7 +100,7 @@ for (const offline of [false, true]) describe(`systemd home decoding (${offline 
 
   test.each([
     ["unknown escape", 'Environment="CODEX_HOME=/fixture/\\q"'],
-    ["unsupported tab escape", 'Environment="CODEX_HOME=/fixture/\\t"'],
+    ["unsupported hex escape", 'Environment="CODEX_HOME=/fixture/\\x41"'],
     ["systemd specifier", 'Environment="CODEX_HOME=%h/.codex"'],
     ["single trailing percent", 'Environment="CODEX_HOME=/fixture/50%"'],
     ["unclosed quote", 'Environment="CODEX_HOME=/fixture/.codex'],

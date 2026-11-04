@@ -1,8 +1,11 @@
+import { formatClientRetryAfter } from "../lib/client-retry-after";
+import { requestOwnedAffinityKey, honestAffinityDecision, callerOwnedFallbackAffinityDecision, captureRequestOwnedAffinityBindings, type RequestOwnedBindingSnapshot } from "./request-owned-affinity";
+import { requestOwnedMainPinState, mainCreditsHoldResetAt, callerMatchesObservedMain } from "./request-owned-main-pin";
+export { requestOwnedMainPinState } from "./request-owned-main-pin";
 import type { OcxRuntimeProviderConfig } from "./auth-context-provider";
 export type { OcxRuntimeProviderConfig } from "./auth-context-provider";
 export { stripCodexRuntimeProviderFields } from "./auth-context-provider";
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
-import { hasSpendableCodexCredits } from "./quota-types";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
@@ -40,9 +43,7 @@ import type { NativeMainStartupBlockReason } from "./native-profile-startup";
 import { waitForMainAccountPolicyBinding } from "./main-account-policy-wait";
 import {
   codexQuotaScopeForModel,
-  computeCodexUsageScore,
   getCodexQuotaHealthSnapshot,
-  isEffectiveCodexAccountPinned,
   releaseCodexQuotaProbeLease,
   releaseCodexQuotaScopeProbeLease,
   tryAcquireCodexQuotaProbeLease,
@@ -74,8 +75,8 @@ import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse, formatUsageLimitReachedResponse } from "../bridge";
 import { nextCodexPoolRecoveryAt } from "./routing/pool-recovery";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, isValidWhamHistoryObservation, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
-import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
+import { getAccountQuota, isValidWhamHistoryObservation, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
+import { codexAccountUsesCreditsAfterLimit } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { isolateCodexPoolAccountHeaders } from "./forward-transport-headers";
@@ -85,7 +86,6 @@ import {
   resolveMainAccountHardLockThresholds,
   getMainAccountHardLockStatus,
   isMainAccountHardLockEnabled,
-  isMainAccountHardLocked,
 } from "./main-account-hard-lock";
 import {
   captureMainAccountIdentityGeneration,
@@ -102,66 +102,8 @@ import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupport
 import type { DataPlaneAdmission } from "../server/auth-cors";
 import { getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUserIdClaims, type MainReserveAuthorization } from "./reserve-availability";
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
-import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { CODEX_MAIN_DUPLICATE_ACTION, configuredCodexMainDuplicate } from "./collision-identity";
 import { AgentAssertionUnsupportedError, authorizationCredential, hasAgentAssertionAuthorization } from "../lib/authorization-scheme";
-
-/**
- * A request-owned bearer cannot inspect the physical main credential for its plan, but cached
- * WHAM usage is still valid routing evidence for the same logical main account. Score it with
- * the conservative unknown-plan rule: an unobserved governing window preserves the pin, while
- * any known weekly/monthly/short value at the threshold releases it through the ordinary Pool
- * path. This keeps the keyring boundary intact instead of reading auth.json just to classify a
- * request that already brought its own credential (#3157).
- */
-function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
-  const threshold = getEffectiveCodexAutoSwitchThreshold(config, MAIN_CODEX_ACCOUNT_ID);
-  if (threshold <= 0) return true;
-  const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID), undefined, Date.now(), codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID));
-  return usage >= CODEX_UNKNOWN_USAGE_SCORE || usage < threshold;
-}
-
-/**
- * Whether a request carrying its OWN main credential still serves on main because the operator
- * manually pinned it (#3166), split from the surrounding resolution so request preview can ask
- * the identical question (#4850).
- *
- * Exported for exactly one reason: two copies of this fence is how #4850 happened. Final
- * authentication honoured the ownership boundary while request preview, computing its fence from
- * recovery and drain state alone, still handed pool eligibility the default liveness probe and
- * opened the physical `auth.json` twice per spawn. A predicate one caller can forget is a
- * predicate the other caller will eventually disagree with.
- *
- * Read-free by construction, which is what makes it usable on the fenced side. Every input is
- * config, policy, or in-memory runtime state: the pin fields, the paused list, the cached quota
- * score, the main policy quota the hard lock and the credits switch read, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
- * credential record in `main-account-cache.ts`. Nothing here opens a file.
- *
- * `candidate` is the pin before the hard-lock question, because the caller still owes the
- * pending-binding check that only final authentication can fail closed on.
- */
-export function requestOwnedMainPinState(
-  headers: Headers,
-  config: OcxConfig,
-  policy: CodexAuthPolicyConfig,
-  requestScopedMainCredential: boolean,
-  fixedAccountId: string | undefined,
-  quotaScope?: CodexQuotaScope,
-): { candidate: boolean; preserve: boolean } {
-  const candidate = requestScopedMainCredential
-    && fixedAccountId === undefined
-    && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
-    && isEffectiveCodexAccountPinned(config)
-    && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
-    && requestOwnedMainPinHasQuotaHeadroom(config);
-  return {
-    candidate,
-    preserve: candidate && !(callerMatchesObservedMain(headers)
-      && (isMainAccountHardLocked(policy)
-        || mainCreditsHoldResetAt(policy) !== undefined
-        || getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope)?.cooldownUntil)),
-  };
-}
 
 /**
  * One conversation tree keys as ONE cohort (#4780).
@@ -247,12 +189,12 @@ export function requestOwnedMainCredentialIsLive(inputs: {
 }
 
 /**
- * May this request own Pool affinity state at all?
+ * May this request use stored-credential Pool lineage?
  *
- * Two credentials authenticate outside the Pool: an exact account selector (including the
- * Reserve pin) and a request-owned main bearer, which exists for one request and must never
- * fold into durable account state. Neither may read or write a binding, so neither may read
- * or write LINEAGE either.
+ * Two credentials authenticate outside stored Pool state: an exact account selector (including
+ * Reserve) and a request-owned main bearer, which must never fold into durable account state.
+ * Neither may read or write a stored-credential binding or lineage. The optional request-owned
+ * affinity namespace is separate from this predicate.
  *
  * Exported so that a preview asks the question with the code that answers it, instead of a
  * restatement that can drift. It drifted once already: preview read a family relation from raw
@@ -272,6 +214,15 @@ export function codexPoolStateEligible(
   );
 }
 
+/** Shared affinity derivation for final authentication and both request previews. */
+export function codexRequestAffinityKey(headers: Headers, config: OcxConfig, policy: CodexAuthPolicyConfig | undefined, options: CodexPoolStateEligibility = {}): string | undefined {
+  if (options.accountId !== undefined || requiresReserveAuthorization(policy, options.modelId, options.admission)) return undefined;
+  if (options.requestScopedMainCredential === true && hasCallerCodexBearer(headers)) {
+    return config.codexPool?.requestOwnedAffinity === true ? requestOwnedAffinityKey(headers) : undefined;
+  }
+  return codexPoolAffinityKey(headers);
+}
+
 /**
  * The lineage a PREVIEW is allowed to see: read-only, and only for a request that may hold Pool
  * state. Recording is left to the resolution that actually binds, so a preview can never leave a
@@ -289,7 +240,7 @@ export function previewCodexPoolLineage(
 
 export type CodexAuthContext =
   | {
-      kind: "main"; accountId: null; reserveAuthorization?: MainReserveAuthorization;
+      kind: "main"; accountId: null; reserveAuthorization?: MainReserveAuthorization; affinityKey?: string; conversationStateKey?: string; affinityDecision?: CodexAffinityDecision; affinityBindingSnapshot?: RequestOwnedBindingSnapshot;
       /** Captured for the observed main credential actually selected for upstream. */
       mainQuotaDispatch?: MainQuotaDispatch;
     }
@@ -304,7 +255,7 @@ export type CodexAuthContext =
       /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
       fixedAccount?: boolean;
       /** Pool binding key; the Desktop fallback is an opaque process-local HMAC. */
-      affinityKey?: string;
+      affinityKey?: string; conversationStateKey?: string;
       /**
        * Set when this request was admitted through an active quota cooldown as
        * the account's single probe. Must be echoed into the upstream outcome so
@@ -338,7 +289,7 @@ export type CodexAuthContext =
       chatgptAccountId: string;
       /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
       fixedAccount?: boolean;
-      affinityKey?: string; // See `pool.affinityKey`.
+      affinityKey?: string; conversationStateKey?: string; // See `pool.affinityKey`.
       /** See `pool.probeLeaseId`. */
       probeLeaseId?: string;
       quotaScope?: CodexQuotaScope;
@@ -786,12 +737,6 @@ export function createCodexAuthDispatchGuard(
   };
 }
 
-function mainCreditsHoldResetAt(config: Pick<OcxConfig, "creditCodexAccountIds">): number | undefined {
-  if (codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
-    && hasSpendableCodexCredits(getMainPolicyQuota())) return undefined;
-  return codexUsageLimitResetAt(getMainPolicyQuota(), undefined, Date.now());
-}
-
 function assertMainAccountPolicy(
   config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "creditCodexAccountIds" | "codexUseRemainingQuotaAccountIds"> | undefined,
 ): void {
@@ -805,15 +750,6 @@ function assertMainAccountPolicy(
   // Only an admitted request is opencodex's own use of the main account. Counting a refused one
   // would hide outside usage from the warning exactly while the lock is holding.
   noteMainAccountActivity();
-}
-
-/** No auth-file I/O: an unsigned claim alone never identifies a caller as stored main. */
-function callerMatchesObservedMain(headers: Headers): boolean {
-  const bearer = authorizationCredential(headers);
-  if (!bearer) return false;
-  const effectiveAccountId = headers.get("chatgpt-account-id")
-    ?? extractAccountId(undefined, bearer);
-  return matchesMainQuotaCredential(bearer, effectiveAccountId);
 }
 
 /** Constant-time digest comparison so bearer bytes never drive branch timing. */
@@ -990,7 +926,8 @@ export function cooldownErrorResponse(
   const res = formatErrorResponse(429, "rate_limit_error", cooldownErrorMessage(err, accountSelector));
   const headers = new Headers(res.headers);
   if (!(err instanceof CodexReserveUnavailableError)) {
-    headers.set("Retry-After", String(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000))));
+    const advice = formatClientRetryAfter(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000)));
+    if (advice !== undefined) headers.set("Retry-After", advice);
   }
   return new Response(res.body, { status: res.status, headers });
 }
@@ -1282,6 +1219,8 @@ async function resolveCodexAuthContextUnannotated(
       directSelectionAdmission.release();
     }
   };
+  const affinityKey = codexRequestAffinityKey(headers, config, policy, { accountId: fixedAccountId, modelId: options.modelId, admission: options.admission, requestScopedMainCredential });
+  const conversationStateKey = affinityKey ?? (requestScopedMainCredential && fixedAccountId === undefined && !reserve ? requestOwnedAffinityKey(headers) : undefined);
   // Pool discovery excludes request-owned main credentials by design: they must never be folded
   // into stored-account entitlement, affinity, or persistence state. An effective manual main pin
   // is the one exception where that exclusion is selection evidence in the opposite direction.
@@ -1294,7 +1233,7 @@ async function resolveCodexAuthContextUnannotated(
         options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel
       )(headers, options.modelId);
     if (callerEntitled && preserveRequestOwnedMainPin()) {
-      return { kind: "main", accountId: null };
+      return { kind: "main", accountId: null, ...(mode === "pool" && conversationStateKey ? { conversationStateKey } : {}) };
     }
   }
   // An explicit namespace binding is stronger than the provider's default mode. It must use the
@@ -1309,19 +1248,24 @@ async function resolveCodexAuthContextUnannotated(
   }
   // A caller bearer can still accompany a request that selects a configured Pool account. Do not
   // let that request read, delete, or create a file-main affinity binding while deciding whether a
-  // stored account is available; only the stored credential selected below may own Pool state.
-  const affinityKey = poolStateEligible(fixedAccountId, requestScopedMainCredential)
-    ? codexPoolAffinityKey(headers)
-    : undefined;
-  // The thread's family relation, recorded under the same condition as the key itself. A
-  // first-placing child consults it; a request-owned or fixed credential never enters Pool
-  // state, so it never enters lineage either.
-  const lineage = affinityKey !== undefined
+  // stored account is available. Optional caller-owned bindings use a separate namespace; fixed
+  // selectors never own a binding.
+  // A first-placing child consults its thread's family relation. Fixed and request-owned
+  // credentials never enter stored Pool lineage, even when request-owned affinity is enabled.
+  const lineage = affinityKey !== undefined && poolStateEligible(fixedAccountId, requestScopedMainCredential)
     ? recordCodexThreadLineage(headers)
     : undefined;
   // Why this request is on this account, carried to the request log so a move reads as an event
   // instead of something inferred from account labels across lines (#4546).
   let affinityDecision: CodexAffinityDecision | undefined;
+  const resolveKeyedCallerMain = async (fallbackReason?: "cooldown" | "unusable"): Promise<CodexAuthContext> => {
+    const withheld = requestScopedMainCredential && config.codexPool?.requestOwnedAffinity !== true;
+    const decision = fallbackReason ? callerOwnedFallbackAffinityDecision(affinityDecision, affinityKey, quotaScope, options.modelId, withheld, fallbackReason)
+      : honestAffinityDecision(affinityDecision, affinityKey, MAIN_CODEX_ACCOUNT_ID, quotaScope, options.modelId, withheld);
+    const affinityBindingSnapshot = captureRequestOwnedAffinityBindings(affinityKey, quotaScope, options.modelId);
+    const context = await resolveCallerOwnedMainContext();
+    return context.kind === "main" ? { ...context, ...(affinityBindingSnapshot ? { affinityBindingSnapshot } : {}), ...(affinityKey ? { affinityKey } : {}), ...(conversationStateKey ? { conversationStateKey } : {}), ...(decision ? { affinityDecision: decision } : {}) } : context;
+  };
   // The half-open trial this request was granted, if it is the one allowed to test a held
   // account. Declared out here because the release paths below and the returned context are on
   // opposite sides of several throws (#4701).
@@ -1470,17 +1414,17 @@ async function resolveCodexAuthContextUnannotated(
       throw new CodexRecoveryWithheldError(resolution.accountId, resolution.retryAt, resolution.detourAccountId);
     }
     const selected = resolution.status === "selected" ? resolution.accountId : null;
-    affinityDecision = resolution.affinity;
+    affinityDecision = selected ? honestAffinityDecision(resolution.affinity, affinityKey, selected, quotaScope, options.modelId, requestScopedMainCredential && config.codexPool?.requestOwnedAffinity !== true) : resolution.affinity;
     transientProbe = resolution.status === "selected" ? resolution.transientProbe : undefined;
     // Main now takes part in ordering when the request carries its own main bearer (#5019), so
     // selection can name it outright rather than only through the no-candidate fallback below.
     // Serve that selection from the credential the request arrived with: the read fence above
     // forbids this request from claiming, reading or reconciling the stored main profile, and a
-    // request-owned credential owns no Pool state, so there is nothing here to claim, prime or
-    // cool down. Hand back any trial first -- no Pool account is being sent to.
+    // request-owned credential owns no shared health state, so there is nothing here to claim,
+    // prime or cool down. Hand back any trial first -- no Pool account is being sent to.
     if (selected === MAIN_CODEX_ACCOUNT_ID && requestScopedMainCredential) {
       releaseTransientProbeGrant();
-      const context = await resolveCallerOwnedMainContext();
+      const context = await resolveKeyedCallerMain();
       console.info("[codex] Pool selected caller-owned main credential.");
       return context;
     }
@@ -1500,7 +1444,7 @@ async function resolveCodexAuthContextUnannotated(
         && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
       ) {
-        const context = await resolveCallerOwnedMainContext();
+        const context = await resolveKeyedCallerMain("unusable");
         console.info("[codex] Pool used caller-owned main credential: no selectable stored account.");
         return context;
       }
@@ -1667,7 +1611,7 @@ async function resolveCodexAuthContextUnannotated(
         && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
         && !callerIsCooledPoolAccount(headers, config, accountId)) {
-        const context = await resolveCallerOwnedMainContext();
+        const context = await resolveKeyedCallerMain("cooldown");
         console.info("[codex] Pool used caller-owned main credential: stored account cooldown.");
         return context;
       }
@@ -1727,6 +1671,7 @@ async function resolveCodexAuthContextUnannotated(
       chatgptAccountId: token.chatgptAccountId,
       ...(fixedAccountId !== undefined ? { fixedAccount: true } : {}),
       ...(affinityKey ? { affinityKey } : {}),
+      ...(conversationStateKey ? { conversationStateKey } : {}),
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),
@@ -1750,6 +1695,7 @@ async function resolveCodexAuthContextUnannotated(
       chatgptAccountId: token.chatgptAccountId,
       ...(fixedAccountId !== undefined ? { fixedAccount: true } : {}),
       ...(affinityKey ? { affinityKey } : {}),
+      ...(conversationStateKey ? { conversationStateKey } : {}),
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),

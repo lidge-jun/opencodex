@@ -57,7 +57,7 @@ import { observeOutbound } from "../../usage/cache-diagnostic";
 import { normalizeMuseToolCatalog } from "./muse-tool-catalog";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
-import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
+import { isKimiCodingResponsesHttpsUrl, stripKimiEmptyAssistantMessages } from "./empty-assistant";
 import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
 
 /**
@@ -358,12 +358,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // OpenCode Go speaks the same dialect, which the final model id and URL identify.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
-        // xAI, Meta and Azure answer 400 for `output.encrypted_content` instead of ignoring it;
-        // Codex Desktop asks for it on every turn (#7878).
+        // xAI, Meta, Azure and Kimi Code (#8075) answer 400 for `output.encrypted_content`
+        // instead of ignoring it; Codex Desktop asks for it on every turn (#7878).
         // Azure also rejects this exact include entry, including on plain Responses routes.
         const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
           || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
-        if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses) {
+        if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses
+          || isKimiCodingResponsesHttpsUrl(url)) {
           outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search

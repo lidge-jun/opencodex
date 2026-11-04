@@ -1,3 +1,4 @@
+import { UNDECLARED_TOOL_CALL_MESSAGE } from "../lib/client-error-body";
 import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
@@ -494,7 +495,7 @@ function buildResponseJSONWithBudget(
         ) {
           errorEvent = {
             type: "error",
-            message: `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
+            message: UNDECLARED_TOOL_CALL_MESSAGE,
             status: 502,
             errorType: "upstream_error",
           };

@@ -42,6 +42,20 @@ describe("full uninstall command", () => {
     expect(cli).not.toContain("rmSync(getConfigDir()");
   });
 
+  test("an elevated-run refusal exits before the first teardown step", async () => {
+    const cli = await readText("src/cli/index.ts");
+    const body = cli.slice(cli.indexOf("async function handleUninstall()"));
+    const refusal = body.indexOf("const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());");
+    const exit = body.indexOf("if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }");
+    expect(refusal).toBeGreaterThan(0);
+    expect(exit).toBeGreaterThan(refusal);
+    // Nothing before the check: every step that stops, removes or rewrites anything comes after the exit.
+    expect(body.slice(0, refusal).split("\n").filter(line => line.trim() && !line.trim().startsWith("//"))).toEqual(["async function handleUninstall() {"]);
+    for (const step of ["await runStep(", "stopServiceIfInstalledDetailed", "uninstallServiceDetailed", "restoreNativeCodexAsync", "revertSystemEnv", "uninstallCodexShimAsync", "removeOwnedConfigAfterDesktopCleanup"]) {
+      expect(body.indexOf(step)).toBeGreaterThan(exit);
+    }
+  });
+
   test("CLI exposes explicit legacy history recovery command", async () => {
     const dispatch = await readText("src/cli/dispatch.ts");
     const cli = await readText("src/cli/index.ts");

@@ -154,7 +154,7 @@ timer. Requests already sent upstream retain their original credentials.
 
 ### Filtering request logs
 
-Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution.
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
 
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
@@ -300,6 +300,14 @@ they have been synchronized. See
 ## Remote Hub sessions, keys, and usage
 
 In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
+
+### Applying a Codex CLI update over HTTP
+
+The CLI-update HTTP API has no dashboard job UI. Its apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action.
+
+For standalone local pairing, open the dashboard at its configured literal `http://127.0.0.1:<port>` or `http://[::1]:<port>` origin. Use the existing local pairing form in **Connect → API Keys** or Remote Link setup: run the displayed `ocx gui pair --origin "<browser-origin>"` command locally, then redeem its one-time code in that form. Pairing does not apply an update; a subsequent confirmed API request is still required. A server configured with hostname `localhost`, a wildcard bind, or a connected-client role cannot issue this local pairing authority. Remote pairing does not remove the apply route's trusted-loopback requirement.
+
+Without an eligible HTTP pairing path, use `ocx system codex-cli-update plan` followed by `ocx system codex-cli-update apply --plan-id <32-hex> --yes` locally. This uses the same durable job owner without a GUI session. Pairing proves authority to write the protected configuration home, not human identity or protection from unrestricted same-user processes.
 
 ### Reading an existing API key
 

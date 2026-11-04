@@ -1,38 +1,107 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { handleResponses } from "../../src/server/responses";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { createTempHome } from "../helpers/temp-home";
 
-test("direct translated Chat rejects an unrepresentable computer_use choice before send", async () => {
-  let sends = 0;
-  const provider: OcxProviderConfig = {
-    adapter: "openai-chat",
-    baseUrl: "https://chat.fixture.invalid/v1",
-    apiKey: "fixture-key",
-    fetch: (async () => {
-      sends += 1;
-      throw new Error("unexpected upstream send");
-    }) as typeof fetch,
+const clientTool = { type: "function", name: "shell", parameters: { type: "object", properties: {} } };
+const mcpTool = { type: "mcp", server_label: "remote", server_url: "https://mcp.fixture.invalid/mcp" };
+const mcpChoice = { type: "allowed_tools", mode: "required", tools: [{ type: "mcp", server_label: "remote", name: "shell" }] };
+const originalFetch = globalThis.fetch;
+let home: ReturnType<typeof createTempHome>;
+let releaseHome: () => void;
+
+beforeEach(() => {
+  home = createTempHome("ocx-direct-chat-choice-");
+  releaseHome = acquireOwnedSpendHome();
+  clearResponseStateForTests();
+  globalThis.fetch = (() => { throw new Error("unexpected network access in tool-choice fixture"); }) as typeof fetch;
+});
+
+afterEach(async () => {
+  globalThis.fetch = originalFetch;
+  await flushResponseState();
+  clearResponseStateForTests();
+  closeRequestHistoryIndex();
+  releaseHome();
+  home.remove();
+});
+
+function fixture() {
+  const sent: Array<{ provider: string; body: Record<string, unknown> }> = [];
+  const send = (provider: string) => (async (_input, init) => {
+    sent.push({ provider, body: JSON.parse(String(init?.body)) });
+    return Response.json(provider === "chat" ? {
+      id: "chat_fixture", object: "chat.completion", model: "model",
+      choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null,
+        tool_calls: [{ id: "call_fixture", type: "function", function: { name: "shell", arguments: "{}" } }],
+      } }],
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+    } : {
+      id: "resp_fixture", object: "response", status: "completed", model: "model",
+      output: [{ id: "computer_fixture", type: "computer_call", status: "completed" }],
+      usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
+    });
+  }) as typeof fetch;
+  const config: OcxConfig = {
+    port: 0, defaultProvider: "chat", multiAgentGuidanceEnabled: false,
+    providers: {
+      chat: { adapter: "openai-chat", baseUrl: "https://api.openai.com/v1", authMode: "key",
+        apiKey: "fixture-key", models: ["model"], liveModels: false, fetch: send("chat") },
+      responses: { adapter: "openai-responses", baseUrl: "https://responses.fixture.invalid/v1", authMode: "key",
+        apiKey: "fixture-key", models: ["model"], liveModels: false, fetch: send("responses") },
+    },
+    routingProfiles: { tools: { candidates: [{ provider: "chat", model: "model" }, { provider: "responses", model: "model" }] } },
   };
-  const config = {
-    port: 0,
-    defaultProvider: "fixture",
-    providers: { fixture: provider },
-  } as OcxConfig;
-  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+  return { config, sent };
+}
+
+function request(toolChoice: unknown, tools: unknown[], model = "chat/model"): Request {
+  return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "fixture/model",
-      input: "Use the computer only.",
-      tools: [
-        { type: "computer_use" },
-        { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
-      ],
-      tool_choice: { type: "computer_use" },
-    }),
-  }), config, { model: "", provider: "" });
+    body: JSON.stringify({ model, input: "Use the selected tool.", stream: false, store: false, tools, tool_choice: toolChoice }),
+  });
+}
 
+test("direct translated Chat rejects an unrepresentable computer_use choice before send", async () => {
+  const { config, sent } = fixture();
+  const response = await handleResponses(request({ type: "computer_use" }, [{ type: "computer_use" }, clientTool]), config, {});
   expect(response.status).toBe(400);
   expect(await response.text()).toContain("mandatory tool_choice cannot be preserved");
-  expect(sends).toBe(0);
+  expect(sent).toEqual([]);
+});
+
+test("native Chat cannot replace a required named MCP tool with a same-named client function", async () => {
+  const { config, sent } = fixture();
+  const response = await handleResponses(request(mcpChoice, [mcpTool, clientTool]), config, {});
+  expect(response.status, await response.text()).toBe(400);
+  expect(sent).toEqual([]);
+});
+
+test.each(["required", { type: "function", name: "shell" }, {
+  type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "shell" }],
+}])("representable client tool choice %j reaches Chat unchanged", async choice => {
+  const { config, sent } = fixture();
+  const response = await handleResponses(request(choice, [clientTool]), config, {});
+  const body = await response.json();
+  expect(response.status).toBe(200);
+  expect(body.status).toBe("completed");
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.provider).toBe("chat");
+  expect(sent[0]!.body.tool_choice).toEqual(choice === "required" ? "required" : { type: "function", function: { name: "shell" } });
+});
+
+test("a policy skips incompatible Chat and preserves the mandatory selector for Responses", async () => {
+  const { config, sent } = fixture();
+  const choice = { type: "computer_use" };
+  const log: RequestLogContext = {};
+  const response = await handleResponses(request(choice, [{ type: "computer_use" }, clientTool], "policy/tools"), config, log);
+  expect(response.status, await response.text()).toBe(200);
+  expect(log.routeDecision?.selected.provider).toBe("chat");
+  expect(sent.map(row => row.provider)).toEqual(["responses"]);
+  expect(sent[0]!.body.tool_choice).toEqual(choice);
 });
