@@ -1076,7 +1076,12 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     // would fail at call time instead, so the row is dropped.
     if (input === null) continue;
     const entry: PiModelEntry = {
-      id: model.namespaced,
+      // Pi's model id is sent back verbatim as the proxy selector. Keep the full
+      // upstream slug after its provider namespace; flattening nested slashes turns
+      // valid IDs such as `openrouter/free` into a different, unroutable selector.
+      id: model.native || !model.provider || model.namespaced.endsWith("--fast")
+        ? model.namespaced
+        : `${model.provider}/${model.id ?? model.namespaced.slice(model.provider.length + 1)}`,
       name: exportModelLabel(model),
       input,
     };
