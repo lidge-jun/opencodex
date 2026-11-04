@@ -12,14 +12,14 @@ function git(...args: string[]): string {
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 if (mode === "--generate-base") {
   // Overlay exact git-show bytes at the original module identities so relative imports resolve identically.
-  const existing = new Set(git("ls-tree", "-r", "--name-only", "72e80d280", "--", "src").trim().split("\n"));
-  const changed = git("diff", "--name-only", "72e80d280", "--", "src").trim().split("\n").filter(path => existing.has(path));
+  const existing = new Set(git("ls-tree", "-r", "--name-only", "895a85989", "--", "src").trim().split("\n"));
+  const changed = [...new Set(["src/server/messages-native.ts", "src/server/messages-native-tool-guard.ts", "src/server/messages-shared.ts", "src/server/claude-messages.ts", "src/server/sse-payload-rewrite.ts", "src/lib/messages-error-body.ts", ...git("diff", "--name-only", "895a85989", "--", "src").trim().split("\n").filter(path => existing.has(path))])];
   if (!changed.length) throw new Error("The differential fixture requires changed baseline modules");
   const overlays = new Map<string, string>();
   for (const path of changed) {
     const target = join(scratch, "baseline", path);
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, git("show", `72e80d280:${path}`));
+    writeFileSync(target, git("show", `895a85989:${path}`));
     overlays.set(repoPath(path), target);
   }
   const filter = new RegExp(`^(?:${[...overlays.keys()].map(path => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`);
@@ -81,7 +81,7 @@ try {
     }
   }
 } finally { release(); }
-if (mode === "--generate-base" && overlayProbe["request-id"] !== "req_fixture") {
+if (mode === "--generate-base" && overlayProbe["request-id"] !== undefined) {
   throw new Error("Baseline module overlay did not execute the original header writer");
 }
-await Bun.write(output, JSON.stringify({ ...(mode === "--generate-base" ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), results }, null, 2) + "\n");
+await Bun.write(output, JSON.stringify({ ...(mode === "--generate-base" ? { baseCommit: "895a859893147d3056ebd1881ec398ab03b037d2" } : {}), results }, null, 2) + "\n");

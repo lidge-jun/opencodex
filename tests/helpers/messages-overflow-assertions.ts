@@ -1,3 +1,4 @@
+import { messagesFold502Cases } from "./messages-sse-fold-exceptions";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,7 +63,12 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   expect(current.input).toEqual(base.input);
   const after = current.head;
   expect(after.text.length).toBeGreaterThan(0);
-  expect(after.status).toBe(expected.status);
+  const fold502 = (base.lane === "native-fold" || base.lane === "native-fold-builtin") && messagesFold502Cases.has(base.input.id);
+  if (fold502) {
+    expect(before.status).toBe(200);
+    expect(base.input.eventLanes).toContain(base.lane);
+  }
+  expect(after.status).toBe(fold502 ? 502 : expected.status);
   const classification = base.input.classification[base.lane];
   expect(["error", "success"]).toContain(classification);
   expect(classification).toBe(before.classification);

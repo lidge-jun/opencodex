@@ -1,3 +1,5 @@
+import { MessagesSseFrameContext, messagesSseEchoRenamedError, messagesSseFrameHooks } from "../lib/messages-sse-error-presentation";
+import { createMessagesSseErrorFilter } from "./messages-sse-error-filter";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
 import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
@@ -237,7 +239,7 @@ function messageStartWithModel(frame: string, model: string): string | undefined
  * (`responsesSseToAnthropicSse` is given the requested model). Works on bytes: frames before and
  * including `message_start` are split on the blank line, and everything after is relayed as is.
  */
-function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
+function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -272,7 +274,9 @@ function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string): Re
         pending = pending.subarray(end);
         const rewritten = messageStartWithModel(decoder.decode(frame), model);
         if (rewritten !== undefined) {
-          controller.enqueue(encoder.encode(rewritten));
+          const bytes = encoder.encode(rewritten);
+          if (messagesSseEchoRenamedError(decoder.decode(frame))) frames.register(bytes, { echoRenamedError: true });
+          controller.enqueue(bytes);
           scanning = false;
         } else {
           controller.enqueue(frame);
@@ -868,7 +872,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     }
     if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
     if (sendError instanceof NativeMessagesSpendRefusal) {
-      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
+      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx, undefined, undefined, logCtx.spendRefusalDetail);
       finishLog(429);
       return refusal;
     }
@@ -925,16 +929,18 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
-    const echoed = echoRequestedModel(renamed, requestedModel);
+    const frames = new MessagesSseFrameContext();
+    const echoed = echoRequestedModel(renamed, requestedModel, frames);
     let toolRefusal: string | undefined;
     const source = clientDeclaredEmptyToolCatalog
       ? guardNativeMessagesEmptyToolCatalog(echoed, translatorBudget, message => {
         toolRefusal = message;
         logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
-      }, declaredInlineTools)
+      }, declaredInlineTools, frames)
       : echoed;
     if (requestedStream) {
       transferTurnToStream();
+      const clientFilter = createMessagesSseErrorFilter(frames);
       const relayed = tapAnthropicSseForLog(source, logCtx, (status, meta) => {
         try {
           cleanupAbort();
@@ -944,12 +950,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         } finally {
           releaseStreamTurn();
         }
-      }, bodyGuard);
+      }, bodyGuard, frames, nativeInstance ? clientFilter : undefined);
       // A configured Messages provider words an oversized-input refusal its own way; Claude Code
       // compacts only on Anthropic's wording (devlog/_plan/261009_claude_1m_default/010). The
       // rewrite buffers whole frames, so it sits after the tap: stall detection keeps timing raw
       // upstream bytes. Real Anthropic pools refuse pre-stream in that wording and keep one relay.
-      const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget);
+      const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget, messagesSseFrameHooks(frames), clientFilter);
       return retainUpstreamMessagesRequestId(new Response(clientStream, {
         status: 200,
         headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", Connection: "keep-alive" },
@@ -1001,7 +1007,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         if (baselineOverflow) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error, legacy);
         return failEvidence(502, text, "api_error", undefined, overflow, error, legacy);
       }
-      finishLog(200);
+      const finalStatus = collectorVerdictSink.collectedErrorEvent ? 502 : 200;
+      finishLog(finalStatus);
       const collected = collectorVerdictSink.collected ?? message;
       const originalError = isRec(collected.error) ? collected.error : {};
       const clientMessage = collectorVerdictSink.collectedErrorEvent ? ownedAnthropicErrorPayload({ status: 200,
@@ -1010,7 +1017,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         overflow: messagesRelayedOverflowPresentation(JSON.stringify(collected), collected),
         evidence: { status: 200, message: typeof originalError.message === "string" ? originalError.message : undefined },
       }) : message;
-      return retainUpstreamMessagesRequestId(Response.json(clientMessage), response.headers);
+      return retainUpstreamMessagesRequestId(Response.json(clientMessage, { status: finalStatus }), response.headers);
     } catch (error) {
       cleanupAbort();
       upstream.abort();

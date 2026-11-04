@@ -49,12 +49,18 @@ export function isMessagesErrorEnvelope(value: unknown): value is Rec {
     && (typeof (error as Rec).type === "string" || typeof (error as Rec).message === "string"));
 }
 /** Match the SDK's diagnostic selection on the parsed body or non-JSON response text. */
+function messagesErrorDiagnostic(value: unknown, fallback: string | undefined): string | undefined {
+  const message = value !== null && typeof value === "object" && Object.hasOwn(value, "message")
+    ? (value as Rec).message : undefined;
+  return message ? typeof message === "string" ? message : JSON.stringify(message)
+    : value ? JSON.stringify(value) : fallback;
+}
 export function messagesRelayedOverflowPresentation(text: string, parsed: unknown): boolean {
-  const message = parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, "message")
-    ? (parsed as Rec).message : undefined;
-  const diagnostic = message ? typeof message === "string" ? message : JSON.stringify(message)
-    : parsed ? JSON.stringify(parsed) : text;
-  return messagesOverflowPresentation(diagnostic);
+  return messagesOverflowPresentation(messagesErrorDiagnostic(parsed, text));
+}
+/** The pinned SSE APIError uses the parsed-or-raw whole body and no HTTP fallback. */
+export function messagesSseErrorOverflowPresentation(data: string, parsed: unknown): boolean {
+  return messagesOverflowPresentation(messagesErrorDiagnostic(parsed ?? data, undefined) || "(no status code or body)");
 }
 
 export interface OwnedAnthropicErrorOptions {

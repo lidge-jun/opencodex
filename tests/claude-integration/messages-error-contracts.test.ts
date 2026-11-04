@@ -107,19 +107,9 @@ const deferred = [
     "end": "/**\n * Responses usage",
     "sha256": "debec1dd561804ca1797ec69f87924dbd5589cd0266e8b971c585031a01134bd"
   },
-  {
-    "path": "src/server/messages-native.ts",
-    "start": "    if (requestedStream) {",
-    "end": "    // A non-streaming caller",
-    "sha256": "aed716f6eae51deb5b82a36868f2e637f203ed1b7f4126299d4e5be7e272ed37"
-  },
-  {
-    "path": "src/server/messages-native-tool-guard.ts",
-    "start": "",
-    "end": "",
-    "sha256": "377d586464436b7f02d3af2a3ce1007202647f5f425b16a5b0987b4d43fe9f21"
-  }
+
 ];
+// Native streaming and guard are now covered by the 895a85989 SSE differential contract.
 for (const entry of deferred) test(`deferred baseline bytes: ${entry.path} ${entry.start}`, () => {
   const source = readFileSync(repoPath(entry.path), "utf8");
   const section = entry.start ? source.slice(source.indexOf(entry.start), source.indexOf(entry.end, source.indexOf(entry.start))) : source;

@@ -412,14 +412,49 @@ registering the terminal error. Successful buffered
 passthrough retains guarded usage accounting, then returns its original body before error
 inspection or serialization.
 
-The native streaming relay, tool-guard frames, shared-tap tails and native overflow SSE rewrite retain
-their existing byte behavior. `tests/claude-integration/messages-native-stream-parity.test.ts` executes
-the current modules against `tests/fixtures/messages-native-stream-parity.json`, including
-configured/builtin stream bytes, settlement callbacks, usage and cancellation. Normal runs need no
-git history or network. The helper's explicit --generate-base mode requires baseline 72e80d280,
-loads its exact modules through a temporary overlay, and checks original header-writer behavior
-before recording the golden. Fixture inputs use fixed synthetic IDs; observations omit timestamps
-and compare client bytes without rewriting them.
+`src/server/messages-native-tool-guard.ts`, `src/server/messages-shared.ts` and
+`src/server/sse-payload-rewrite.ts` carry complete-frame construction identity.
+Native and passthrough Messages SSE apply error-response normalization after echo, guard,
+accounting tap and the existing configured-only overflow rewrite. The final enqueue stage in
+`src/server/messages-sse-error-filter.ts` introduces no stream queue, timer or possible-prefix hold.
+Only a block whose first non-comment field is exactly `event:error` or `event: error` is eligible.
+Every other block retains its original bytes, chunk boundaries and logical enqueue turns, including
+later error declarations, data/id/retry-first blocks and ordinary events above 1 MiB. Leading
+comments do not consume first-field eligibility and retain their bytes. Final contained errors emit
+only the closed error declaration, data fields and terminator; all other post-declaration fields
+are omitted, including with empty data. Within-bound non-error renames retain their original fields.
+
+One eligible block holds at most 1 MiB of original suffix bytes, including interleaved fields.
+Within the bound, a final non-error rename replays those bytes unchanged with the permitted suffix
+delay. A final error uses one full JSON parse and the shared private diagnostic selector in
+`src/lib/messages-error-body.ts`: truthy top-level message, otherwise whole-value serialization,
+with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain generic SDK dispatch.
+`src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
+complete-frame construction identity. The single pre-echo flag authorizes owned data under the
+existing message_start name; guard replacements retire that flag. Local guard and tap products
+keep their original observer bytes and separate fixed client products. Stall/cap text omits numbers;
+reader errors omit exception suffixes. Guard callbacks, tap accounting/settlement, budgets,
+collectors, combo evidence and request-log decisions consume the original evidence.
+
+The two accepted exceptions are FOLD-502 (native collected explicit errors that formerly returned
+proxy-built 200 envelopes now return/log 502, preserving their presentation) and OVERSIZE-1M
+(eligible suffixes above 1 MiB force api_error, no code, and the fixed sentence
+"The provider stream reported an error.", with no compaction phrase and unchanged issued status).
+An above-bound rename also forces that error; it cannot recover discarded data. The hold releases
+at the boundary, cancellation, read error or failed enqueue, without another admission limit.
+Native workflow refusals carry spend detail into the existing fixed workflow/unbound presentation.
+
+`tests/fixtures/messages-sse-895a85989.json` records actual base status, raw-byte hashes/lengths,
+compressed bytes, enqueue/read traces, pinned SDK 4f27519/Claude Code 2.1.288 recognition and original
+observer facts. Its generation-only helper overlays exact 895a85989 git-show modules; normal tests
+require no git. `tests/claude-integration/messages-native-stream-parity.test.ts` retains every
+success/internal row and explicitly lists the ten changed error-response normalization rows.
+`tests/server/messages-sse-error-filter.test.ts`,
+`tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
+first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
+`tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
+`tests/claude-integration/messages-sse-continuation.test.ts` checks later-event and EOF delivery after
+a suppressed split-CRLF continuation; pull completion depends on actual client output.
 The converter and direct encoder own their separate terminal writers.
 `tests/claude-integration/messages-error-normalization.test.ts` and
 `tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.

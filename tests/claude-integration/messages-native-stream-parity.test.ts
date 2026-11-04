@@ -11,7 +11,7 @@ beforeAll(async () => {
   const scratch = mkdtempSync(join(tmpdir(), "ocx-messages-parity-"));
   try {
     const golden = JSON.parse(readFileSync(fixturePath("messages-native-stream-parity.json"), "utf8"));
-    expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
+    expect(golden.baseCommit).toBe("895a859893147d3056ebd1881ec398ab03b037d2");
     outcomes.base = golden.results;
     for (const mode of ["head"]) {
       const home = join(scratch, mode); mkdirSync(join(home, "ocx"), { recursive: true }); mkdirSync(join(home, "codex"));
@@ -23,12 +23,25 @@ beforeAll(async () => {
       outcomes[mode] = fixture.results;
     }
   } finally { rmSync(scratch, { recursive: true, force: true }); }
-}, 30000);
+});
 for (const lane of ["tap", "native-fixture", "native-anthropic"]) for (const scenario of cases) {
-  test(`${lane} ${scenario}: executable 72e80d280 parity`, () => {
+  test(`${lane} ${scenario}: executable 895a85989 parity`, () => {
     const key = `${lane}-${scenario}`;
     const base = outcomes.base![key]!; const head = outcomes.head![key]!;
-    expect(base).toBeDefined(); expect(head).toEqual(base);
+    expect(base).toBeDefined();
+    const { bytes: baseBytes, ...baseFacts } = base;
+    const { bytes: headBytes, ...headFacts } = head;
+    expect(headFacts).toEqual(baseFacts);
+    // Changed client rows only: owned overflow data; fixed throughput/stall/cap/read wording.
+    const changed = lane !== "tap" && ["overflow", "throughput", "cap", "stall", "read-error"].includes(scenario);
+    if (changed) {
+      expect(headBytes.length).toBeGreaterThan(0);
+      expect(headBytes).not.toBe(baseBytes);
+      expect(headBytes).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
+      if (scenario === "stall") expect(headBytes).not.toContain("1s");
+      if (scenario === "cap") expect(headBytes).not.toContain("32 bytes");
+      if (scenario === "read-error") expect(headBytes).not.toContain("fixture stream read failure");
+    } else expect(headBytes).toBe(baseBytes);
     if (scenario === "cancel") expect(head.bytes).toBe(""); else expect(head.bytes.length).toBeGreaterThan(0);
     if (lane === "tap") {
       expect(head.calls).toHaveLength(1);
@@ -39,7 +52,7 @@ for (const lane of ["tap", "native-fixture", "native-anthropic"]) for (const sce
       expect(head.settlements![0]!.status).toBe(scenario === "cancel" ? 499 : ["overflow", "throughput", "complete"].includes(scenario) ? 200 : 502);
     }
     if (scenario === "overflow") expect(head.bytes).toContain("prompt is too long");
-    if (scenario === "throughput") expect(head.bytes).toContain("too many tokens per minute");
+    if (scenario === "throughput") expect(head.bytes).toContain(lane === "tap" ? "too many tokens per minute" : "The provider rate limit was reached; retry later.");
     if (scenario === "guard" && lane !== "tap") expect(head.bytes).toContain("undeclared_tool_call");
     if (["cancel", "cap", "stall"].includes(scenario)) expect(head.cancelled.length).toBeGreaterThan(0);
   });
