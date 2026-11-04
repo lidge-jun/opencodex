@@ -12,6 +12,7 @@ import {
   type SpawnFn,
 } from "../../src/adapters/claude-cli/adapter";
 import { CLAUDE_REPLAY_SYSTEM_PROMPT } from "../../src/adapters/claude-cli/stable-replay";
+import { satisfiesOpenAiStrictSchema } from "../../src/adapters/anthropic-output-schema";
 import { baseScopedEnv } from "../../src/adapters/coding-agent/turn";
 import { CLAUDE_CLI_PROFILE, clearClaudeCliBinaryCache } from "../../src/adapters/claude-cli/profiles";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
@@ -1111,11 +1112,11 @@ describe("Issue #6469 — offline fixtures", () => {
 
   test("3. refusal: model refusal surfaces as an error, not fabricated output", async () => {
     const events = await run(adapterWith([
-      enc.encode('{"type":"result","subtype":"success","is_error":true,"message":"refusal","usage":{"input_tokens":2,"output_tokens":0}}\n'),
+      enc.encode('{"type":"result","subtype":"success","is_error":true,"result":"refusal","usage":{"input_tokens":2,"output_tokens":0}}\n'),
     ]), parsed());
     const err = events.find(e => e.type === "error");
     expect(err).toBeDefined();
-    expect(err).toMatchObject({ type: "error" });
+    expect(err).toMatchObject({ type: "error", message: "refusal" });
     expect(events.filter(e => e.type === "text_delta")).toEqual([]);
   });
 
@@ -1315,29 +1316,17 @@ describe("Issue #6469 — offline fixtures", () => {
     expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
   });
 
-  test("8b. invalid Core JSON instance surfaced as plain text, not rejected against schema", async () => {
-    const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema } } });
-    const invalidInstance = "{not-valid-json";
-    const stdout = [
-      systemInit,
-      enc.encode(textDelta(invalidInstance)),
-      enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
-    ];
-    const events = await run(adapterWith(stdout), schemaRequest);
-    const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
-    expect(text).toBe(invalidInstance);
-    expect(events.some(e => e.type === "error")).toBe(false);
-    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
-  });
-
   test("9. enum/const constraints ignored — output violating them still passed as plain text", async () => {
     const enumSchema = {
       type: "object",
-      properties: { status: { type: "string", enum: ["ok", "fail"] } },
-      required: ["status"],
+      properties: {
+        status: { type: "string", enum: ["ok", "fail"] },
+        code: { type: "string", const: "exact" },
+      },
+      required: ["status", "code"],
     };
     const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: enumSchema } } });
-    const violating = JSON.stringify({ status: "not-allowed" });
+    const violating = JSON.stringify({ status: "not-allowed", code: "wrong" });
     const stdout = [
       systemInit,
       enc.encode(textDelta(violating)),
@@ -1427,28 +1416,29 @@ describe("Issue #6469 — offline fixtures", () => {
       type: "object",
       properties: { answer: { type: "string" } },
       required: ["answer"],
-      additionalProperties: false,
     };
+    expect(satisfiesOpenAiStrictSchema(uncertifiable)).toBe(false);
     const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: uncertifiable, strict: true } } });
     const stdout = [
       systemInit,
-      enc.encode(textDelta('{"answer":"42","extra":"ignored"}')),
+      enc.encode(textDelta('{"answer":"42"}')),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
     ];
     const events = await run(adapterWith(stdout), schemaRequest);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
-    expect(text).toBe('{"answer":"42","extra":"ignored"}');
+    expect(text).toBe('{"answer":"42"}');
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
   test("15. oversized output surfaced as plain text without truncation", async () => {
+    const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema } } });
     const big = "x".repeat(50_000);
     const stdout = [
       systemInit,
       enc.encode(textDelta(big)),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
     ];
-    const events = await run(adapterWith(stdout), parsed());
+    const events = await run(adapterWith(stdout), schemaRequest);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
     expect(text).toBe(big);
     expect(text.length).toBe(50_000);
@@ -1456,6 +1446,7 @@ describe("Issue #6469 — offline fixtures", () => {
   });
 
   test("16. deeply nested JSON output surfaced as plain text without depth limits", async () => {
+    const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema } } });
     let nested: any = { value: "leaf" };
     for (let i = 0; i < 200; i++) nested = { wrapper: nested };
     const deep = JSON.stringify(nested);
@@ -1464,7 +1455,7 @@ describe("Issue #6469 — offline fixtures", () => {
       enc.encode(textDelta(deep)),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
     ];
-    const events = await run(adapterWith(stdout), parsed());
+    const events = await run(adapterWith(stdout), schemaRequest);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
     expect(text).toBe(deep);
     expect(events.some(e => e.type === "error")).toBe(false);
@@ -1502,13 +1493,18 @@ describe("Issue #6469 — offline fixtures", () => {
   });
 
   test("19. failure order — protocol error after tool calls does not replay or erase exposed calls", async () => {
+    let spawnCount = 0;
     const stdout = [
       systemInit,
       enc.encode(claudeCliToolFrame(0, "tu_1", CLAUDE_CLI_MCP_TOOL, '{"path":"a"}')),
       enc.encode(claudeCliToolFrame(1, "tu_2", CLAUDE_CLI_MCP_TOOL, '{"path":"b"}')),
       enc.encode("not-json\n"),
     ];
-    const events = await run(adapterWith(stdout), claudeCliToolRequest());
+    const events = await run(createClaudeCliAdapter(provider(), {
+      spawn: () => { spawnCount++; return fakeChild(stdout, { exitCode: 0 }) as unknown as ChildProcess; },
+      which: () => "/opt/homebrew/bin/claude",
+      killGraceMs: 20,
+    }), claudeCliToolRequest());
     const starts = events.filter(e => e.type === "tool_call_start");
     expect(starts).toHaveLength(2);
     expect(starts.map(e => (e as { id: string }).id)).toEqual(["tu_1", "tu_2"]);
@@ -1519,19 +1515,7 @@ describe("Issue #6469 — offline fixtures", () => {
     expect(err).toBeDefined();
     expect(err).toMatchObject({ code: "protocol_error" });
     expect(events.some(e => e.type === "done")).toBe(false);
-  });
-
-  test("20. refusal case — refusal surfaces as error with no fabricated output", async () => {
-    const stdout = [
-      systemInit,
-      enc.encode('{"type":"result","subtype":"success","is_error":true,"result":"I cannot help with that","usage":{"input_tokens":2,"output_tokens":0}}\n'),
-    ];
-    const events = await run(adapterWith(stdout), parsed());
-    const err = events.find(e => e.type === "error");
-    expect(err).toBeDefined();
-    expect(err).toMatchObject({ type: "error", message: "I cannot help with that" });
-    expect(events.filter(e => e.type === "text_delta")).toEqual([]);
-    expect(events.some(e => e.type === "done")).toBe(false);
+    expect(spawnCount).toBe(1);
   });
 });
 
