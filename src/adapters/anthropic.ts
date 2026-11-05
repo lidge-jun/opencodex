@@ -119,6 +119,24 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
   applyCacheControlToLast(blocks, cc);
 }
 
+/**
+ * Move text to the head of the first user turn. Returns false when the first message is not a
+ * user turn, so the caller can keep the text in the top-level system array.
+ */
+function prependTextToFirstUserMessage(messages: unknown[], text: string): boolean {
+  const first = messages[0] as Record<string, unknown> | undefined;
+  if (!first || first.role !== "user") return false;
+  if (typeof first.content === "string") {
+    first.content = [{ type: "text", text }, { type: "text", text: first.content }];
+    return true;
+  }
+  if (Array.isArray(first.content)) {
+    first.content = [{ type: "text", text }, ...(first.content as unknown[])];
+    return true;
+  }
+  return false;
+}
+
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
@@ -1076,10 +1094,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       };
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
-        body.system = [
-          { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [{ type: "text", text: system }] : []),
-        ];
+        // Anthropic's OAuth overage classifier treats caller instructions carried in the
+        // top-level `system` array as third-party traffic, so the caller's own system text
+        // travels as the first block of the first user turn instead.
+        const callerSystem = (parsed.context.systemPrompt ?? []).join("\n\n");
+        body.system = [{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }];
+        if (system) {
+          if (!(callerSystem && prependTextToFirstUserMessage(messages, system))) {
+            (body.system as Array<Record<string, unknown>>).push({ type: "text", text: system });
+          }
+        }
       } else if (system) {
         body.system = [{ type: "text", text: system }];
       }
