@@ -166,6 +166,13 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
           );
         }
         expect(existsSync(join(home, "ocx.pid"))).toBe(true);
+        // The record must state the scope the listener actually bound, and this home configured
+        // no hostname at all: publishing the raw config value would leave the optional field out
+        // and make every guarded stop read the record as unknown. Assert presence, not a literal,
+        // because a default bind may answer on 0.0.0.0 while still meaning loopback.
+        const published = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+        expect(typeof published.hostname).toBe("string");
+        expect(published.hostname).not.toBe("");
         const injected = readFileSync(codexConfig, "utf8");
         if (approved) {
           expect(injected).toContain(`base_url = "http://127.0.0.1:${port}/v1"`);

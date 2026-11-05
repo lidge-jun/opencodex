@@ -152,6 +152,12 @@ unreadable command line in the approved proxy's supervision chain (or surviving 
 stopped manager) leaves wrapper ownership unknown, so the guarded stop cannot report success.
 Missing or unreadable evidence blocks the guarded stop.
 
+The tracked runtime record states the bind scope the listener actually bound, so a default
+install records `127.0.0.1` even though it configures no hostname. When a record still omits
+the optional `hostname`, the guarded stop does not compare bind scope: PID and port still must
+match exactly, and the hostname is compared as a bind scope — so `0.0.0.0` and the loopback it
+defaults to agree — only when the record provides one.
+
 ### `ocx restart`
 
 When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
