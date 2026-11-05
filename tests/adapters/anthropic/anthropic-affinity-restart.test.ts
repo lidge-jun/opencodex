@@ -217,6 +217,28 @@ test("pausing an unrelated inactive account confirms an outstanding selection re
     expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
   } finally { confirmation.mockRestore(); }
 }, 20_000);
+
+test.each([false, true])("pause reset retry preserves pool strategy without an active change (paused: %p)", async paused => {
+  const { a, b } = await seed();
+  const strategyConfig = { ...config, anthropicAccountPool: { ...config.anthropicAccountPool, autoSwitchThreshold: 70 } };
+  await saveCredential("anthropic", { access: "fixture-access-C", refresh: "fixture-refresh-C",
+    expires: Date.now() + 3_600_000, accountId: "C" });
+  const c = getAccountSet("anthropic")!.accounts.find(row => row.id !== a && row.id !== b)!.id;
+  await setActiveAccount("anthropic", a);
+  await promoteAnthropicActiveAccount(a, captureOAuthAccountSelection("anthropic"), { config });
+  const { setAccountPaused } = await import("../../../src/oauth/store");
+  await setAccountPaused("anthropic", c, paused);
+  setCachedProviderAccountQuotaForTests("anthropic", a, { fiveHourPercent: 80 });
+  setCachedProviderAccountQuotaForTests("anthropic", b, { fiveHourPercent: 10 });
+  setCachedProviderAccountQuotaForTests("anthropic", c, { fiveHourPercent: 95 });
+  const before = captureOAuthAccountSelection("anthropic");
+  const response = await accountMutation("pause", { provider: "anthropic", accountId: c, paused, retryAffinityReset: true });
+  expect(response?.status).toBe(200);
+  expect(await response!.json()).toMatchObject({ activeAccountId: a, activeAccountChanged: false, paused });
+  expect(captureOAuthAccountSelection("anthropic")?.accountId).toBe(before?.accountId);
+  expect(getAccountSet("anthropic")!.accounts.find(row => row.id === c)?.paused === true).toBe(paused);
+  expect(resolveAnthropicAccountForSession("new-session-after-reset-retry", strategyConfig).accountId).toBe(b);
+}, 20_000);
 test.each([false, true])("deleted reset target remains retryable across publication failure and restart (restart before delete: %p)", async restartBeforeDelete => {
   const { a, b } = await seed();
   await saveCredential("anthropic", { access: "fixture-access-C", refresh: "fixture-refresh-C",

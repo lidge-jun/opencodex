@@ -654,9 +654,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
     let affinityReset: Promise<boolean> | undefined;
     // Explicit retries rebuild reset intent after a server restart lost the in-memory marker.
-    if (anthropicRouting && (result.activeAccountChanged || body.retryAffinityReset === true)) {
+    if (anthropicRouting && result.activeAccountChanged) {
       anthropicRouting.resetAnthropicRoutingForManualSelection(result.activeAccountId);
       affinityReset = anthropicRouting.flushAnthropicManualSelectionReset();
+    } else if (anthropicRouting && body.retryAffinityReset === true) {
+      affinityReset = anthropicRouting.resetAnthropicSessionAffinityConfirmed();
     }
     if (result.activeAccountChanged) {
       if (!anthropicRouting) {
