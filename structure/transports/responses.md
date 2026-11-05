@@ -20,7 +20,7 @@ Responses-compatible streaming output. Every Responses serializer projects unref
 
 The `openai-responses` adapter preserves caller `User-Agent` unless provider headers own it, in either auth mode.
 Final route capability normalization removes rejected reasoning effort and toggle fields from the native passthrough body when those fields were parsed into options, before custom gateway-object serialization.
-`forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, or `user-agent`.
+`forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`, `x-codex-window-id`, or `x-codex-installation-id`. The Codex identifiers are copied only when present and explicitly selected, including native compact fallback; no identifiers are generated and arbitrary `x-codex-*` names remain refused.
 Provider headers win case-insensitively; arbitrary names are rejected on load/write and ignored at runtime.
 Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented. Upstream WebSocket reasoning-inclusion headers follow the [native prelude and connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 

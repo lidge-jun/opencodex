@@ -188,7 +188,26 @@ An explicitly configured provider `User-Agent` remains authoritative regardless 
 if the caller sends none, OpenCodex does not invent one. Additional caller metadata can be selected
 with `forwardClientHeaders`; provider `headers` win for this option, and credential or transport-owned
 names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
-Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
+Only `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`,
+`x-codex-window-id`, and `x-codex-installation-id` are supported by `forwardClientHeaders`;
+arbitrary names and wildcard prefixes are rejected on load/write and ignored at runtime.
+
+For a custom gateway that requires original Codex client metadata (for example, a sub2api
+account with `codex_cli_only` enabled), opt in on that provider:
+
+```json
+{
+  "forwardClientHeaders": [
+    "originator", "user-agent", "x-codex-app-version", "x-client-request-id",
+    "x-codex-window-id", "x-codex-installation-id"
+  ]
+}
+```
+
+This preserves only values the client actually sends, including across native compact fallback.
+The identifiers may correlate requests from the same client; enable them only for a trusted
+destination that needs them. Missing identifiers are never generated, and connection tests or
+model discovery do not acquire a Codex identity through this option.
 
 ### Native compaction on custom gateways
 
