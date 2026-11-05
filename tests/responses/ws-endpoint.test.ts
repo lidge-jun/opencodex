@@ -17,6 +17,7 @@ import {
 } from "../../src/server/index/live-sideband";
 import { RESPONSE_TTL_MS } from "../../src/responses/state";
 import type { ServerWebSocket } from "bun";
+import { buildResponsesTransport } from "../../src/adapters/openai-responses/transport";
 
 function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
   const sent: string[] = [];
@@ -299,6 +300,47 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(types).not.toContain("response.completed");
     expect(types).not.toContain("response.incomplete");
     expect(terminals).toEqual(["failed"]);
+  });
+
+  test("preserves original client identity through the WebSocket handoff to a key-auth provider", () => {
+    const userAgent = "T3 Code/0.166.0 (Mac OS; arm64) unknown (T3 Code; 0.1.6)";
+    const inbound = new Headers({
+      "user-agent": userAgent,
+      originator: "T3 Code",
+      "x-codex-app-version": "0.1.6",
+      "x-codex-window-id": "original-window",
+      authorization: "Bearer caller-secret",
+      cookie: "session=caller-secret",
+      "chatgpt-account-id": "caller-account",
+      "x-unrelated-client-header": "do-not-forward",
+    });
+    const selected = selectForwardHeaders(inbound);
+    const incoming = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: selected, body: "{}",
+    });
+    const built = buildResponsesTransport({
+      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode: "key",
+      forwardClientHeaders: ["originator", "user-agent", "x-codex-app-version", "x-codex-window-id"],
+    }, { headers: incoming.headers });
+    const outgoing = new Headers(built.headers);
+    expect(outgoing.get("user-agent")).toBe(userAgent);
+    expect(outgoing.get("originator")).toBe("T3 Code");
+    expect(outgoing.get("x-codex-app-version")).toBe("0.1.6");
+    expect(outgoing.get("x-codex-window-id")).toBe("original-window");
+    expect(outgoing.get("authorization")).toBe("Bearer provider-secret");
+    for (const name of ["cookie", "chatgpt-account-id", "x-unrelated-client-header"]) {
+      expect(outgoing.has(name)).toBe(false);
+    }
+    const defaultTransport = buildResponsesTransport({
+      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode: "key",
+    }, { headers: selected });
+    const defaultHeaders = new Headers(defaultTransport.headers);
+    expect(defaultHeaders.get("user-agent")).toBe(userAgent);
+    expect(defaultHeaders.has("x-codex-app-version")).toBe(false);
+    expect(defaultHeaders.has("x-codex-window-id")).toBe(false);
+    const absent = selectForwardHeaders(new Headers());
+    expect(absent.has("user-agent")).toBe(false);
+    expect(absent.has("x-codex-app-version")).toBe(false);
   });
 
   test("stores only allowlisted inbound headers and emits only safe response headers", () => {

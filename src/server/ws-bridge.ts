@@ -130,6 +130,13 @@ export function selectForwardHeaders(
     const value = headers.get(name);
     if (value !== null) selected.set(name, value);
   }
+  // WS turns rebuild an HTTP request from this snapshot. Keep original client
+  // identity available for the same per-provider policy used by HTTP requests.
+  // These are not credentials and do not extend the outbound provider allowlist.
+  for (const name of ["user-agent", "x-codex-app-version"]) {
+    const value = headers.get(name);
+    if (value !== null) selected.set(name, value);
+  }
   if (codexOverride) {
     selected.set("authorization", `Bearer ${codexOverride.accessToken}`);
     selected.set("chatgpt-account-id", codexOverride.chatgptAccountId);

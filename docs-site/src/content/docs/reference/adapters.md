@@ -205,6 +205,8 @@ account with `codex_cli_only` enabled), opt in on that provider:
 ```
 
 This preserves only values the client actually sends, including across native compact fallback.
+WebSocket clients retain their original `User-Agent` and app-version metadata through the
+handshake, with the same provider forwarding policy as HTTP clients.
 The identifiers may correlate requests from the same client; enable them only for a trusted
 destination that needs them. Missing identifiers are never generated, and connection tests or
 model discovery do not acquire a Codex identity through this option.
