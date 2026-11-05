@@ -1,8 +1,7 @@
 /**
  * Claude OAuth (Pro/Max) requests carry the caller's own system prompt as the first block of the
- * first user turn. Anthropic's overage classifier reads the top-level `system` array as the
- * client identity, and caller text there makes it bill the turn as third-party traffic. The
- * top-level array stays the Claude Code identity for every request.
+ * first user turn. A captured OpenCode request was rejected with instructions in top-level
+ * system and accepted after relocation. Proxy-owned tool guidance stays in system.
  */
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
@@ -13,7 +12,7 @@ const CALLER_SYSTEM = "You are an AI agent running in OpenCode, a coding agent h
 
 interface WireBlock { type: string; text?: string; cache_control?: unknown }
 interface WireMessage { role: string; content: string | WireBlock[] }
-interface WireBody { system: WireBlock[]; messages: WireMessage[] }
+interface WireBody { system: WireBlock[]; messages: WireMessage[]; tools?: unknown[] }
 
 /** Fixture provider; `oauth` unless a case overrides it. */
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -102,13 +101,44 @@ describe("anthropic oauth caller system shape", () => {
     expect(texts(body.messages[0]?.content)).toEqual(["hello"]);
   });
 
-  test("a first turn that is not a user message keeps the text in the top-level array", async () => {
+  test("an assistant-leading history gets a separate initial instruction turn", async () => {
     const body = await bodyOf(parsed([
       { role: "assistant", content: [{ type: "text", text: "prefill" }], timestamp: 0 },
       { role: "user", content: "hello", timestamp: 0 },
     ], [CALLER_SYSTEM]));
 
-    expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION, CALLER_SYSTEM]);
+    expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION]);
+    expect(body.messages.map(message => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(body.messages.map(message => texts(message.content))).toEqual([[CALLER_SYSTEM], ["prefill"], ["hello"]]);
+  });
+
+  test("caller relocation leaves tool declarations and the proxy tool contract unchanged", async () => {
+    const request = parsed([{ role: "user", content: "hello", timestamp: 0 }]);
+    request.context.tools = [{ name: "read", description: "Read a file", parameters: { type: "object", properties: {} } }];
+    const baseline = await bodyOf(request);
+    const body = await bodyOf({ ...request, context: { ...request.context, systemPrompt: [CALLER_SYSTEM] } });
+    expect(texts(body.system)).toEqual(texts(baseline.system));
+    expect(texts(body.system)[1]).toContain("Tool contract:");
+    expect(texts(body.messages[0]?.content)).toEqual([CALLER_SYSTEM, "hello"]);
+    expect(body.tools).toEqual(baseline.tools);
+  });
+
+  test("an assistant-leading tool exchange retains adjacent call and result messages", async () => {
+    const request = parsed([
+      { role: "assistant", content: [{ type: "toolCall", id: "toolu_read", name: "read", arguments: {} }], timestamp: 0 },
+      { role: "toolResult", toolCallId: "toolu_read", toolName: "read", content: "file contents", isError: false, timestamp: 0 },
+    ], [CALLER_SYSTEM]);
+    const body = await bodyOf(request);
+    expect(body.messages.map(message => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(texts(body.messages[0]?.content)).toEqual([CALLER_SYSTEM]);
+    expect(body.messages[1]?.content).toEqual([expect.objectContaining({ type: "tool_use", id: "toolu_read" })]);
+    expect(body.messages[2]?.content).toEqual([expect.objectContaining({ type: "tool_result", tool_use_id: "toolu_read", content: "file contents" })]);
+    expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION]);
+  });
+
+  test("multiple caller instruction blocks retain their order", async () => {
+    const body = await bodyOf(parsed([{ role: "user", content: "hello", timestamp: 0 }], [CALLER_SYSTEM, "Workspace instructions"]));
+    expect(texts(body.messages[0]?.content)).toEqual([CALLER_SYSTEM + "\n\nWorkspace instructions", "hello"]);
   });
 
   test("an API-key provider keeps the caller system in the top-level array", async () => {

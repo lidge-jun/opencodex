@@ -130,21 +130,24 @@ function applyCacheControlToLeadText(blocks: Array<Record<string, unknown>>, cc:
 }
 
 /**
- * Move text to the head of the first user turn. Returns false when the first message is not a
- * user turn, so the caller can keep the text in the top-level system array.
+ * Prepend caller instructions without inserting text into a tool-result turn. Assistant-leading
+ * histories get a separate initial user turn, leaving existing call/result pairs adjacent.
  */
-function prependTextToFirstUserMessage(messages: unknown[], text: string): boolean {
+function prependTextToFirstUserMessage(messages: unknown[], text: string): void {
   const first = messages[0] as Record<string, unknown> | undefined;
-  if (!first || first.role !== "user") return false;
+  if (!first || first.role !== "user") {
+    messages.unshift({ role: "user", content: [{ type: "text", text }] });
+    return;
+  }
   if (typeof first.content === "string") {
     first.content = [{ type: "text", text }, { type: "text", text: first.content }];
-    return true;
+    return;
   }
   if (Array.isArray(first.content)) {
     first.content = [{ type: "text", text }, ...(first.content as unknown[])];
-    return true;
+    return;
   }
-  return false;
+  messages.unshift({ role: "user", content: [{ type: "text", text }] });
 }
 
 type PromptCachingOptions = {
@@ -801,7 +804,8 @@ function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
-): { system: string | undefined; messages: unknown[] } {
+  relocateCallerSystem = false,
+): { system: string | undefined; callerSystem: string | undefined; messages: unknown[] } {
   // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
   // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
   const pendingReplay = new Map(serverReplay);
@@ -828,7 +832,11 @@ function messagesToAnthropicFormat(
     undefined,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
-  const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
+  const callerParts = parsed.context.systemPrompt ?? [];
+  const callerSystem = relocateCallerSystem && callerParts.length
+    ? identifyRoutedModel(callerParts.join("\n\n"), parsed.modelId) || undefined
+    : undefined;
+  const systemParts = [...(relocateCallerSystem ? [] : callerParts), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
   const system = systemParts.length
     ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
     : undefined;
@@ -970,7 +978,7 @@ function messagesToAnthropicFormat(
     messages.push({ role: "user", content: "(continue)" });
   }
 
-  return { system, messages };
+  return { system, callerSystem, messages };
 }
 
 function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
@@ -1083,8 +1091,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       // Only api.anthropic.com runs Anthropic's server tools, so only it gets their history back.
-      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
-        usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined);
+      const { system, callerSystem, messages } = messagesToAnthropicFormat(parsed, toolNames,
+        usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined, isOAuth);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -1119,17 +1127,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let relocatedCallerSystem = false;
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
-        // Anthropic's OAuth overage classifier treats caller instructions carried in the
-        // top-level `system` array as third-party traffic, so the caller's own system text
-        // travels as the first block of the first user turn instead.
-        const callerSystem = (parsed.context.systemPrompt ?? []).join("\n\n");
-        body.system = [{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }];
-        if (system) {
-          if (callerSystem && prependTextToFirstUserMessage(messages, system)) {
-            relocatedCallerSystem = true;
-          } else {
-            (body.system as Array<Record<string, unknown>>).push({ type: "text", text: system });
-          }
+        // A captured OpenCode request was rejected with caller instructions in top-level
+        // system, but accepted with those instructions in user content. Keep the proxy-owned
+        // tool contract in system, matching the existing Codex Responses request shape.
+        body.system = [
+          { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
+          ...(system ? [{ type: "text", text: system }] : []),
+        ];
+        if (callerSystem) {
+          prependTextToFirstUserMessage(messages, callerSystem);
+          relocatedCallerSystem = true;
         }
       } else if (system) {
         body.system = [{ type: "text", text: system }];
