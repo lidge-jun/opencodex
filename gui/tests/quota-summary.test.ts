@@ -40,6 +40,47 @@ describe("quota summary", () => {
     expect(rows[0]!.windows.find(window => window.id === "quota.weeklyLimit")?.resetAt).toBe(now + 3_600_000);
   });
 
+  test("critical exhausted credits take precedence over normal recurring windows", () => {
+    const reports = freshQuotaReportsFromResponse([
+      {
+        provider: "commandcode",
+        label: "Command Code",
+        updatedAt: now,
+        quota: {
+          weeklyPercent: 7,
+          creditsUsd: { used: 10, limit: 10, remaining: 0, percent: 100 },
+          updatedAt: now,
+        },
+      },
+      {
+        provider: "both-critical",
+        label: "Both Critical",
+        updatedAt: now,
+        quota: {
+          weeklyPercent: 95,
+          creditsUsd: { used: 10, limit: 10, remaining: 0, percent: 100 },
+          updatedAt: now,
+        },
+      },
+      {
+        provider: "normal-credits",
+        label: "Normal Credits",
+        updatedAt: now,
+        quota: {
+          weeklyPercent: 7,
+          creditsUsd: { used: 5, limit: 10, remaining: 5, percent: 50 },
+          updatedAt: now,
+        },
+      },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => [row.label, row.headline.id, row.headline.percent, row.severity])).toEqual([
+      ["Command Code", "quotaSummary.credits", 100, "critical"],
+      ["Both Critical", "quota.weeklyLimit", 95, "critical"],
+      ["Normal Credits", "quota.weeklyLimit", 7, "normal"],
+    ]);
+  });
+
   test("providers without a measured window or with a stale probe are hidden", () => {
     const reports = freshQuotaReportsFromResponse([
       { provider: "empty", updatedAt: now, quota: {} },

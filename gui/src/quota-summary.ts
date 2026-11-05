@@ -86,11 +86,22 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
 function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undefined {
   const measured = windows.filter(window => window.modelId === undefined && window.percent !== undefined);
   const byId = new Map(measured.map(window => [window.id, window]));
+  let regular: QuotaSummaryWindow | undefined;
   for (const id of HEADLINE_ORDER) {
     const hit = byId.get(id);
-    if (hit) return hit;
+    if (hit) {
+      regular = hit;
+      break;
+    }
   }
-  return measured[0];
+  if (!regular) {
+    regular = measured.find(window => window.id !== "quotaSummary.credits");
+  }
+  const credits = byId.get("quotaSummary.credits");
+  if (credits && credits.severity === "critical" && regular?.severity !== "critical") {
+    return credits;
+  }
+  return regular ?? measured[0];
 }
 
 /**
