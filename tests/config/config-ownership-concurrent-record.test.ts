@@ -410,7 +410,16 @@ describe("concurrent first registrations on an absent home (#8093)", () => {
       "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
       "writeFileSync(" + JSON.stringify(join(signals, rel + ".ready")) + ", \"\");",
       "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(go) + ") && Date.now() < until) Bun.sleepSync(2);",
-      "process.exit(recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, rel)) + ") ? 0 : 2);",
+      // Match the bounded caller retry used by childScript above.
+      "let code = 1;",
+      "for (let attempt = 0; attempt < 400; attempt++) {",
+      "  try { code = recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, rel)) + ") ? 0 : 2; break; }",
+      "  catch (error) {",
+      "    if (error && error.code === \"CONFIG_OWNERSHIP_LOCK_UNAVAILABLE\") { Bun.sleepSync(5); continue; }",
+      "    console.error(error); break;",
+      "  }",
+      "}",
+      "process.exit(code);",
     ].join("\n");
     const children = names.map(name => Bun.spawn([process.execPath, "-e", script(name)], { stderr: "inherit" }));
     const deadline = Date.now() + BARRIER_MS;
