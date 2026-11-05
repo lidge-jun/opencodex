@@ -845,10 +845,11 @@ test("a pool whose every account refuses on spent quota answers the usage limit 
   expect(sent).toHaveLength(2);
   expect(JSON.parse(text).error).toMatchObject({
     type: "rate_limit_error",
-    message: `All Anthropic OAuth accounts have reached their usage limit; the first one resets at ${new Date(resetSeconds * 1000).toISOString()}`,
+    message: "The configured account usage limit was reached. Wait for its reset or adjust the usage limits before retrying.",
   });
+  expect(text.length).toBeGreaterThan(0); expect(text).not.toContain(new Date(resetSeconds * 1000).toISOString().replace(".000Z", "Z"));
   expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(7_000);
-  expect(response.headers.get("request-id")).toBe("req_fixture_spent");
+  expect(response.headers.get("request-id")).toBeNull();
   expect(row.protocolTrace?.mode).toBe("native");
 });
 

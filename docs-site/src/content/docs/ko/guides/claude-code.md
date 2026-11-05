@@ -397,9 +397,7 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 **연결 → Claude**에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
 요약을 시작하기 전에 채팅 오류가 발생해요.
 
-컨텍스트 초과 오류를 정규화할 때는 제공자 오류 메시지의 첫 65,536 UTF-16 코드 단위만 사용해요.
-뒤쪽 진단 내용이나 토큰 수는 별도 잘림 표시 없이 빠질 수 있어요.
-자세한 제한과 토큰 수 처리 조건은 [영문 가이드](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)를 참고하세요.
+Messages 오류 응답 정규화에서는 제공자 문구나 토큰 수 대신 고정 문구를 사용해요. 인식된 컨텍스트 초과는 `prompt is too long: The request exceeds the model's context window.`로 전달해요. 스트림의 첫 필드가 오류 이벤트인 블록에는 1 MiB 한도가 적용돼요. 한도를 넘으면 압축 문구 없는 고정 오류를 보내요. 자세한 범위와 두 예외는 [영문 가이드](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)를 참고하세요.
 
 1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 압축 값은 실행 슬롯 표식에서 항상
 우선하며, 프록시는 **사용자가 지정한** 값을 기준으로 어떤 모델에 안전하게 표식을 붙일지 결정해요.

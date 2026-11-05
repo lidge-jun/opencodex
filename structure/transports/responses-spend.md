@@ -24,9 +24,10 @@ starts with an unseen root and verifies its ceiling and lease cleanup in both sp
 
 Workflow refusals constructed inside native Messages keep the Anthropic `{ type: "error", error: { type, message, code } }`
 envelope, HTTP status, local-refusal header and its CORS exposure. Projection preserves process-local proxy
-provenance and any non-replayable marker. This applies both when the spend observer records the denial and
+provenance, workflow presentation scope and any non-replayable marker. This applies both when the spend observer records the denial and
 when the request's physical limit refuses before the root observer can record it; the latter still names
 an exhausted live root accurately. `tests/responses/responses-spend-contract-c.test.ts` covers both paths.
+`tests/claude-integration/messages-sse-workflow-refusal.test.ts` pins the approved bound and unbound spend messages.
 
 ## Prepaid initial sends
 

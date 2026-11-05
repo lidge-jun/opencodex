@@ -773,7 +773,7 @@ test("native openai-responses Claude route logs cyber terminals as 400 cyber_pol
       }),
     });
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain("blocked");
+    expect(await response.text()).toContain("The provider rejected the request.");
     const entry = getRequestLogEntries().findLast(e => e.surface === "claude");
     expect(entry).toMatchObject({
       status: 400,

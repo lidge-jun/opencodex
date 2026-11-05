@@ -1,3 +1,4 @@
+import { publicOAuthErrorPresentation } from "../../oauth";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
@@ -350,7 +351,7 @@ export async function prepareResponsesTransport(
     if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(error, logCtx));
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = markProxyError(formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
-      error.message));
+      error.message), "copilot");
     const advice = formatClientRetryAfter(error.retryAfter);
     if (advice !== undefined) response.headers.set("retry-after", advice);
     return response;
@@ -954,7 +955,7 @@ export async function prepareResponsesTransport(
         const bodySize = checkOutboundBodySize(rebuilt.body, config.maxUpstreamBodyBytes);
         if (!bodySize.admitted) {
           rebuilt.releaseBodyObservation?.();
-          return markProxyError(formatErrorResponse(413, "outbound_body_too_large", describeOutboundBodyRefusal(bodySize)));
+          return markProxyError(formatErrorResponse(413, "outbound_body_too_large", describeOutboundBodyRefusal(bodySize)), "outbound");
         }
         const headers = new Headers(dispatchInit.headers);
         for (const name of Object.keys(wireRequest.headers)) headers.delete(name);
@@ -992,7 +993,7 @@ export async function prepareResponsesTransport(
     try {
       if (anthropicInstance !== undefined && anthropicRouting!.isAnthropicAccountPoolEnabled(config)) {
         const routeResult = resolveAnthropicModelRouteForInstance(anthropicInstance, config, route.modelId);
-        if (routeResult.error) return markProxyError(formatErrorResponse(400, "invalid_request_error", `Invalid Anthropic model routes: ${routeResult.error}`));
+        if (routeResult.error) return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid Anthropic model routes"));
         anthropicRouteDecision = routeResult.decision;
         const selection = anthropicRouting!.resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision, route.modelId);
         if (!selection.accountId) {
@@ -1030,7 +1031,7 @@ export async function prepareResponsesTransport(
         // A usable listing (or not-yet-discovered) sibling replaces it, or the request is refused.
         const modelRoute = routeAntigravityModel(config, route.providerName,
           proposedAccountId ?? oauthSelection?.accountId, route.modelId, undefined, requestState.inboundSelector);
-        if (modelRoute.kind === "refuse") { projectLocalModelRefusalLog(logCtx, requestState.inboundSelector); return markProxyError(formatErrorResponse(403, "permission_error", modelRoute.message)); }
+        if (modelRoute.kind === "refuse") { projectLocalModelRefusalLog(logCtx, requestState.inboundSelector); return markProxyError(formatErrorResponse(403, "permission_error", modelRoute.message), "roster"); }
         const routedAccountId = modelRoute.kind === "reroute" ? modelRoute.accountId : proposedAccountId;
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
@@ -1098,7 +1099,7 @@ export async function prepareResponsesTransport(
         // Resolution fallbacks can still land on an omitting account; answer with the refusal
         // here, since the commit below would only report it as a changed selection.
         const unlisted = antigravityModelRefusal(config, route.providerName, resolved.accountId, route.modelId, undefined, requestState.inboundSelector);
-        if (unlisted) { projectLocalModelRefusalLog(logCtx, requestState.inboundSelector); return markProxyError(formatErrorResponse(403, "permission_error", unlisted)); }
+        if (unlisted) { projectLocalModelRefusalLog(logCtx, requestState.inboundSelector); return markProxyError(formatErrorResponse(403, "permission_error", unlisted), "roster"); }
         const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return markProxyError(formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request"));
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
@@ -1180,16 +1181,16 @@ export async function prepareResponsesTransport(
           400,
           "invalid_request_error",
           `${redactSecretString(err.message)}. Remove or reconfigure provider '${safeProviderName}' in the OpenCodex configuration.`,
-        ));
+        ), "config");
       }
       if (err instanceof OAuthTokenRefreshBusyError) {
         return options.abortSignal?.aborted || req.signal.aborted ? clientCancelledResponse()
           : markProxyError(formatErrorResponse(503, "server_error", err.message, { retryAfter: "1" }));
       }
       if (err instanceof OAuthAccountPausedError) {
-        return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)));
+        return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
       }
-      return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err)));
+      return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
     }
   }
   // Key-auth twin of the OAuth preference above: pick a warm key BEFORE the first attempt when

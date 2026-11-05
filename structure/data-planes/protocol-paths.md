@@ -524,7 +524,7 @@ terminal and applies the body stall and size guards; a non-streaming caller gets
 (or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
 translated lane answers (`message_start.message.model` in the first 64 KiB); explicit empty catalogs apply the
 [declared-tool guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire). Upstream errors answer in Anthropic shape with the translated lane's status
-policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
+policy (transient 5xx as 529, replay refusals kept non-retryable), with [Messages error normalization](error-detail.md#messages-error-bodies-and-headers). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
 `tests/adapters/anthropic/anthropic-beta-allowlist.test.ts`,

@@ -1,3 +1,4 @@
+import { normalizeMessagesProxyRefusal } from "../lib/messages-error-body";
 import { withCors, type RequestPolicyView } from "./auth-cors";
 import { runAdmittedBodyWork } from "./inbound-body-admission";
 import { tryAdmitTurn, type ActiveTurnLease } from "./lifecycle";
@@ -32,7 +33,7 @@ export function createAdmittedHttpTurn(
     catch (error) { lease.release(); throw error; }
     if (workflow && !workflow.admitted) {
       lease.release();
-      return withCors(map(workflowDecisionRefusalResponse(workflow, undefined, refusalLog)), req, policy);
+      return withCors(await normalizeMessagesProxyRefusal(req, map(workflowDecisionRefusalResponse(workflow, undefined, refusalLog))), req, policy);
     }
     if (workflow?.admitted) lease.attach(workflow.lease);
     try {

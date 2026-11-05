@@ -1,4 +1,4 @@
-import { isProxyError, markProxyError } from "../lib/client-error-body";
+import { carryProxyError, isProxyError, markProxyError } from "../lib/client-error-body";
 import { sharedPoolContinuityDenial } from "../lib/spend-reservation-ledger";
 import { markResponseNonReplayable } from "../lib/upstream-retry";
 /**
@@ -109,7 +109,7 @@ export function workflowRefusalResponse(
   refusal.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
   // No Combo target has an allowance after a root send denial; do not classify it as quota.
   if (reason === "workflow-sends-exhausted") markResponseNonReplayable(refusal);
-  return markProxyError(refusal);
+  return markProxyError(refusal, reason === "workflow-spend-exhausted" && spend && Object.hasOwn({ root: 1, identity: 1, pool: 1 }, spend.scope) ? (spend.includesUnboundPoolHistory ? "workflow_unbound" : "workflow") : undefined);
 }
 
 /** Preserve only a locally constructed workflow refusal across response projections. */
@@ -121,7 +121,7 @@ export function carryWorkflowRefusal(source: Response, target: Response): Respon
   if (!exposed?.split(",").some(name => name.trim().toLowerCase() === WORKFLOW_LOCAL_REFUSAL_HEADER)) {
     target.headers.set("Access-Control-Expose-Headers", exposed ? `${exposed}, ${WORKFLOW_LOCAL_REFUSAL_HEADER}` : WORKFLOW_LOCAL_REFUSAL_HEADER);
   }
-  return markProxyError(target);
+  return carryProxyError(source, target);
 }
 
 /** Distinguish an exhausted live root from the request's independent send allowance. */
