@@ -213,6 +213,7 @@ export function createRequestSpendTracker(
         recordWorkflowRefusalEvent(rootId, reason, Date.now(), detail);
         return;
   };
+  /** Record a refused root claim here, including its counter, log and event; callers must not repeat it. */
   const claimWorkflowSend = (): boolean => {
     if (reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) return true;
     refusals++;

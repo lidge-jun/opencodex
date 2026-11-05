@@ -176,11 +176,13 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly physicalStarted?: number;
   readonly physicalLimit?: number;
   readonly spendEnforced?: boolean;
+  /** True when physical admission owns this budget's root workflow accounting. */
   readonly workflowCountObserved?: boolean;
   readonly spendPolicyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(): number | undefined;
+  /** Claim one root workflow send at physical admission; false refuses the send. */
   claimWorkflowSend?(): boolean;
   beginSpendProducer?(): { close(): void } | undefined;
   readonly logicalRequestId: string;
@@ -281,6 +283,7 @@ interface SameTargetRecoveryScope {
 }
 export interface BoundedSameTargetRecovery {
   readonly workflowCountObserved: boolean;
+  /** Reserve an additional same-target send within the fixed, shared recovery grant. */
   reserve(): DispatchDecision;
 }
 const sameTargetRecoveries = new WeakMap<object, { targetKey: string; recovery: BoundedSameTargetRecovery }>();
@@ -300,7 +303,12 @@ export function claimDispatchSpendProof(budget: RequestExecutionBudget, permit?:
   return proof && proof.owner === sharedSendLedgers.get(budget) ? proof.claim() : undefined;
 }
 
-/** Reports actual sends against only the named permit on this shared ledger. */
+/**
+ * Reports actual sends against only the named permit on this shared ledger.
+ * `workflowAlreadyCounted` marks starts already charged at physical admission:
+ * non-enforced observers then record request-ledger spend without charging the root again.
+ * Enforced sends remain reconciled through their producer's claimed starts.
+ */
 export function reportDispatchSends(
   budget: TransientSendBudget,
   sends: number,
@@ -334,6 +342,11 @@ export function rebindPhysicalSend(budget: TransientSendBudget | undefined, targ
   if (!(budget as RequestExecutionBudget | undefined)?.spendEnforced) return true;
   return activePhysicalReporters.getStore()?.bind?.(target) ?? true;
 }
+/**
+ * Bind observations to this helper's starts and matching permit receipt.
+ * `beforeSend` refuses disallowed starts. Producer-backed reports are capped to
+ * unreported starts; excess legacy reports remain charged as observed sends.
+ */
 export function createPhysicalSendReporter(
   budget: TransientSendBudget,
   target: () => SpendScopes & { targetKey?: string },
