@@ -5,8 +5,13 @@ function readOriginal(path: string): string {
   const exported = process.env.MESSAGES_RED_SOURCE && join(process.env.MESSAGES_RED_SOURCE, relative(repoPath(), path));
   return readFileSync(exported && existsSync(exported) ? exported : path, "utf8");
 }
+function replaceOnce(path: string, anchor: string, replacement: string): string {
+  const source = readOriginal(path);
+  if (source.split(anchor).length !== 2) throw new Error("Messages refusal fixture anchor changed");
+  return source.replace(anchor, replacement);
+}
 if (process.env.MESSAGES_RED_SOURCE) {
-  const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !path.endsWith("server/claude-messages.ts") && !path.endsWith("claude/failure-verdict.ts"));
+  const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !["server/claude-messages.ts", "claude/failure-verdict.ts"].some(excluded => path.replaceAll("\\", "/").endsWith(excluded)));
   const filter = new RegExp("^(?:" + paths.map(path => repoPath(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$");
   Bun.plugin({ name: "935199a98 red source", setup(build) {
     build.onLoad({ filter }, ({ path }) => ({ contents: readOriginal(path), loader: "ts" }));
@@ -14,9 +19,9 @@ if (process.env.MESSAGES_RED_SOURCE) {
 }
 const kind = process.argv[2]!;
 Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
-  build.onLoad({ filter: /src\/server\/claude-messages\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("const upstream = await handleResponses(internalReq, {", "const upstream = globalThis.__localRefusalReply ?? await handleResponses(internalReq, {"), loader: "ts" }));
-  build.onLoad({ filter: /src\/server\/messages-native\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);", "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);"), loader: "ts" }));
-  build.onLoad({ filter: /src\/claude\/failure-verdict\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("  if (sink) (sink.delivered", "  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n  if (sink) (sink.delivered"), loader: "ts" }));
+  build.onLoad({ filter: /src[\\/]server[\\/]claude-messages\.ts$/ }, ({ path }) => ({ contents: replaceOnce(path, "const upstream = await handleResponses(internalReq, {", "const upstream = globalThis.__localRefusalReply ?? await handleResponses(internalReq, {"), loader: "ts" }));
+  build.onLoad({ filter: /src[\\/]server[\\/]messages-native\.ts$/ }, ({ path }) => ({ contents: replaceOnce(path, "const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);", "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { globalThis.__nativePacingPreflightObserved = true; throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);"), loader: "ts" }));
+  build.onLoad({ filter: /src[\\/]claude[\\/]failure-verdict\.ts$/ }, ({ path }) => ({ contents: replaceOnce(path, "  if (sink) (sink.delivered", "  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n  if (sink) (sink.delivered"), loader: "ts" }));
 } });
 const { handleClaudeMessages, handleClaudeCountTokens } = await import("../../src/server/claude-messages");
 const { markProxyError } = await import("../../src/lib/client-error-body");
@@ -165,4 +170,4 @@ const direct = kind === "sink-direct" ? await (async () => {
 const chat = kind === "chat-roster" ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "fixture" }], stream: false }) }), config, logCtx) : undefined;
 const response = chat ?? direct ?? (["roster-count", "body-overflow-count"].includes(kind) ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, logCtx, kind === "scope-direct" ? { requestId: crypto.randomUUID(), start: Date.now(), admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined));
 const text = await response.text();
-console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set((globalThis as any).__observedSinks ?? [])].reduce((n: number, sink: any) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: (globalThis as any).__copilotCalls, usage: logCtx.usage }));
+console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set((globalThis as any).__observedSinks ?? [])].reduce((n: number, sink: any) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: (globalThis as any).__copilotCalls, usage: logCtx.usage, nativePacingPreflightObserved: (globalThis as any).__nativePacingPreflightObserved === true }));

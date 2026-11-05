@@ -66,6 +66,7 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
   } });
 }
 const { runMessagesOverflowCase } = await import("./messages-overflow-case");
+const { acquireOwnedSpendHome } = await import("./owned-spend-home");
 const { upstreamMessagesRequestIdHeaders } = await import("../../src/server/messages-response-headers");
 if (base && upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture" }))["request-id"] !== "req_fixture") throw new Error("Baseline modules were not loaded");
 const rows = [];
@@ -80,35 +81,47 @@ function intern<T>(values: T[], value: T): number {
   if (index >= 0) return index;
   return values.push(value) - 1;
 }
-for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane === selectedLane)) for (const input of applicableMessagesOverflowFixtures(lane).slice(first, first + count)) {
-  const observations = new Map<string, boolean[]>();
-  (globalThis as any).__messagesOverflowRecord = (tag: string, value: boolean) => {
-    const values = observations.get(tag) ?? []; values.push(value); observations.set(tag, values);
-    return value;
-  };
-  if (input.fault) process.stderr.write(`fixture ${lane}/${input.id}\n`);
-  const result = await runMessagesOverflowCase(lane, input);
-  const passthrough = lane === "passthrough" || lane === "count_tokens";
-  if (!passthrough && input.rawBody === undefined && !input.fault && !input.localBranch && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
-  const internalDecisions: Record<string, boolean> = {};
-  for (const [tag, values] of observations) {
-    if (values.some(value => value !== values[0])) throw new Error(`Inconsistent ${tag} decisions for ${lane}/${input.id}`);
-    internalDecisions[tag] = values[0]!;
-  }
-  if (base) {
-    const id = messagesOverflowCaseId(lane, input);
-    if (Object.hasOwn(outcomes, id)) throw new Error(`Duplicate case id: ${lane}/${input.id}`);
-    // Outcome-only tuples keep the base fixture small; dictionaries retain exact compared values.
-    const outcome: unknown[] = [messagesOverflowLanes.indexOf(lane), result.status, result.clientRecognizes,
-      intern(decisions, internalDecisions), input.classification[lane], intern(types, result.type ?? null),
-      intern(codes, result.code ?? null), intern(mediaTypes, result.mediaType), result.clientError];
-    if (input.classification[lane] === "success" || input.fixedLocal) {
-      outcome.push(result.bodySha256, result.bodyLength);
+// A real server owns its spend home for its lifetime. Keep that same ownership
+// across this sequential slice, avoiding a full journal replay for every row.
+// Pure encoder lanes never acquire a lease; single-case helpers keep their default.
+let releaseSpendHome: (() => void) | undefined;
+const acquireSliceSpendHome = () => {
+  releaseSpendHome ??= acquireOwnedSpendHome();
+  return () => {}; // Borrowed by the row; the slice's finally owns release.
+};
+try {
+  for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane === selectedLane)) for (const input of applicableMessagesOverflowFixtures(lane).slice(first, first + count)) {
+    const observations = new Map<string, boolean[]>();
+    (globalThis as any).__messagesOverflowRecord = (tag: string, value: boolean) => {
+      const values = observations.get(tag) ?? []; values.push(value); observations.set(tag, values);
+      return value;
+    };
+    if (input.fault) process.stderr.write(`fixture ${lane}/${input.id}\n`);
+    const result = await runMessagesOverflowCase(lane, input, acquireSliceSpendHome);
+    const passthrough = lane === "passthrough" || lane === "count_tokens";
+    if (!passthrough && input.rawBody === undefined && !input.fault && !input.localBranch && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
+    const internalDecisions: Record<string, boolean> = {};
+    for (const [tag, values] of observations) {
+      if (values.some(value => value !== values[0])) throw new Error(`Inconsistent ${tag} decisions for ${lane}/${input.id}`);
+      internalDecisions[tag] = values[0]!;
     }
-    outcomes[id] = outcome;
-  } else rows.push({ lane, input, head: { ...result, internalDecisions } });
+    if (base) {
+      const id = messagesOverflowCaseId(lane, input);
+      if (Object.hasOwn(outcomes, id)) throw new Error(`Duplicate case id: ${lane}/${input.id}`);
+      // Outcome-only tuples keep the base fixture small; dictionaries retain exact compared values.
+      const outcome: unknown[] = [messagesOverflowLanes.indexOf(lane), result.status, result.clientRecognizes,
+        intern(decisions, internalDecisions), input.classification[lane], intern(types, result.type ?? null),
+        intern(codes, result.code ?? null), intern(mediaTypes, result.mediaType), result.clientError];
+      if (input.classification[lane] === "success" || input.fixedLocal) {
+        outcome.push(result.bodySha256, result.bodyLength);
+      }
+      outcomes[id] = outcome;
+    } else rows.push({ lane, input, head: { ...result, internalDecisions } });
+  }
+} finally {
+  delete (globalThis as any).__messagesOverflowRecord;
+  releaseSpendHome?.();
 }
-delete (globalThis as any).__messagesOverflowRecord;
 if (base) {
   const header = { schemaVersion: 8, baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec", caseTableSha256: messagesOverflowCaseTableHash(),
     columns: ["lane", "status", "clientRecognizes", "decisions", "class", "type", "code", "mediaType", "clientError", "bodySha256?", "bodyLength?"],

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 const detail = process.argv[2];
 // Refuse at the existing native spend gate, using its own exception and catch path.
 Bun.plugin({ name: "native spend denial fixture", setup(build) {
-  build.onLoad({ filter: /src\/server\/messages-native\.ts$/ }, ({ path }) => {
+  build.onLoad({ filter: /src[\\/]server[\\/]messages-native\.ts$/ }, ({ path }) => {
     const source = readFileSync(path, "utf8");
     const anchor = "if (!physicalBudget.spendEnforced && !spendTracker.charge()) throw new NativeMessagesSpendRefusal();";
     if (source.split(anchor).length !== 2) throw new Error("Native spend gate changed");

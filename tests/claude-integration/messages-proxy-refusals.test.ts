@@ -25,6 +25,7 @@ for (const kind of ["kiro-continuation", "config", "workflow-unbound", "pool-ref
     console.info(`REFUSAL_STATUS ${kind} ${result.status} ${result.code}`);
     expect(result.text.length).toBeGreaterThan(0);
     expect([result.status, result.code]).toEqual(expected[kind]!);
+    if (kind === "native-pacing-preflight") expect(result.nativePacingPreflightObserved).toBe(true);
     if (kind === "kiro-continuation") {
       expect(result.fetched).toBe(1); expect(result.text).not.toContain(result.absent);
       const error = result.text.split("\n").filter((line: string) => line.startsWith("data: ")).map((line: string) => JSON.parse(line.slice(6))).find((row: any) => row.type === "error");
