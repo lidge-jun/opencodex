@@ -527,6 +527,15 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Use your WorkBuddy AI international subscription. Sign in in your browser; models follow your account catalog.",
   },
   {
+    id: "codebuddy-ai", label: "CodeBuddy AI", adapter: "codebuddy-ai",
+    baseUrl: "https://www.codebuddy.ai/v2", authKind: "oauth", oauthId: "codebuddy-ai",
+    featured: false, dashboardPreset: true, liveModels: true,
+    defaultModel: "default-model", models: ["default-model"],
+    modelDiscovery: { path: "/v3/config", format: "codebuddy-ai" },
+    dashboardUrl: "https://www.codebuddy.ai",
+    note: "Use your CodeBuddy international subscription. Sign in in your browser; models follow your account catalog.",
+  },
+  {
     id: "dsh-account",
     label: "DeepSeek Account (DSH)",
     adapter: "dsh-account",

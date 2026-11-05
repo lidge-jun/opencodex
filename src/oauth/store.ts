@@ -25,6 +25,7 @@ import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
+import { normalizeCodeBuddyAiMetadata } from "../providers/codebuddy-ai";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { assertNoCrossAnthropicRegistration, assertAnthropicCredentialSource, assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
@@ -357,7 +358,7 @@ export function clearOAuthRefreshIntent(provider: string, accountId: string, gen
   });
 }
 export function credentialGeneration(cred: OAuthCredentials): string {
-  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires, ...(cred.workbuddy ? [cred.workbuddy] : [])])).digest("hex");
+  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires, ...(cred.workbuddy ? [cred.workbuddy] : []), ...(cred.codeBuddyAi ? [cred.codeBuddyAi] : [])])).digest("hex");
 }
 
 /** Load and normalize the OAuth auth store with hardened permissions, and hand the result to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
@@ -565,6 +566,8 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   const workbuddy = normalizeWorkBuddyMetadata(candidate.workbuddy);
   if (workbuddy) normalized.workbuddy = workbuddy;
+  const codeBuddyAi = normalizeCodeBuddyAiMetadata(candidate.codeBuddyAi);
+  if (codeBuddyAi) normalized.codeBuddyAi = codeBuddyAi;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
   if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;

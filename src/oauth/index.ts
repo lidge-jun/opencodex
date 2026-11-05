@@ -53,6 +53,8 @@ import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
 import { WORKBUDDY_CONFIG_URL, workBuddyHeaders } from "../providers/workbuddy";
+import { loginCodeBuddyAi, refreshCodeBuddyAiToken } from "./codebuddy-ai";
+import { CODEBUDDY_AI_CONFIG_URL, codeBuddyAiHeaders } from "../providers/codebuddy-ai";
 import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
@@ -103,6 +105,7 @@ import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthro
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
+  codeBuddyAi?: import("./types").CodeBuddyAiOAuthMetadata;
   provider: string;
   accountId: string;
   generation: string;
@@ -256,6 +259,11 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
   "workbuddy-ai": {
     login: loginWorkBuddy, refresh: refreshWorkBuddyToken,
     providerConfig: oauthConfig("workbuddy-ai"), defaultModel: oauthDefaultModel("workbuddy-ai"),
+    defaultRefreshPolicy: "lazy-only",
+  },
+  "codebuddy-ai": {
+    login: loginCodeBuddyAi, refresh: refreshCodeBuddyAiToken,
+    providerConfig: oauthConfig("codebuddy-ai"), defaultModel: oauthDefaultModel("codebuddy-ai"),
     defaultRefreshPolicy: "lazy-only",
   },
   "dsh-account": {
@@ -520,6 +528,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     generation: credentialGeneration(cred),
     accessToken: cred.access,
     ...(oauthProvider === "workbuddy-ai" && cred.workbuddy ? { workbuddy: { ...cred.workbuddy } } : {}),
+    ...(oauthProvider === "codebuddy-ai" && cred.codeBuddyAi ? { codeBuddyAi: { ...cred.codeBuddyAi } } : {}),
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
     ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     ...(oauthProvider === "zed" && cred.accountId ? { providerUserId: cred.accountId } : {}),
@@ -691,6 +700,7 @@ export async function getValidAccessTokenSnapshot(
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
 const FORCE_REFRESH_PROVIDERS = new Set([
   "workbuddy-ai",
+  "codebuddy-ai",
   "xai",
   "github-copilot",
   "kiro",
@@ -1161,6 +1171,7 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
  */
 export interface ModelsRequestObservedAuth {
   readonly workbuddy?: import("./types").WorkBuddyOAuthMetadata;
+  readonly codeBuddyAi?: import("./types").CodeBuddyAiOAuthMetadata;
   readonly oauthApiBaseUrl?: string;
 }
 
@@ -1173,6 +1184,10 @@ export function buildModelsRequest(
   if (providerName === "workbuddy-ai" || prov.adapter === "workbuddy-ai") {
     const allowed = mayResolveModelsOAuth(providerName, prov);
     return { url: WORKBUDDY_CONFIG_URL, headers: workBuddyHeaders(allowed && observedAuth?.workbuddy ? apiKey : undefined, observedAuth?.workbuddy) };
+  }
+  if (providerName === "codebuddy-ai" || prov.adapter === "codebuddy-ai") {
+    const allowed = mayResolveModelsOAuth(providerName, prov);
+    return { url: CODEBUDDY_AI_CONFIG_URL, headers: codeBuddyAiHeaders(allowed && observedAuth?.codeBuddyAi ? apiKey : undefined, observedAuth?.codeBuddyAi) };
   }
   const authorizedTarget = captureModelsOAuthTarget(providerName, prov);
   if (prov.authMode === "oauth" && !mayResolveModelsOAuth(providerName, prov)) apiKey = undefined;
