@@ -670,8 +670,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       clearQuotaCachesAfterAccountMutation(provider, false);
     }
 
-    // An unchanged retry must finish a reset left pending by the first request.
-    affinityReset ??= anthropicRouting?.flushAnthropicManualSelectionReset();
+    // Inactive pauses also publish invalidation before success; an unchanged retry drains it.
+    affinityReset ??= anthropicRouting?.flushAnthropicAccountPause();
     if (affinityReset && !await affinityReset) {
       return jsonResponse({ error: "Account pause was saved, but its session-affinity reset was not persisted. Retry with the same pause state and retryAffinityReset: true.",
         code: "affinity_reset_not_persisted", provider, accountId: body.accountId, paused: body.paused,

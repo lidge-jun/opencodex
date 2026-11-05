@@ -84,6 +84,44 @@ test("runtime manual selection overrides binding", async () => {
   expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
 });
 
+test("inactive pause durably invalidates only its bindings before a resume and restart", async () => {
+  const { a, b } = await seed();
+  const otherSession = "unrelated-binding";
+  bindAnthropicSessionAffinity(session, b);
+  bindAnthropicSessionAffinity(otherSession, a);
+  await flush();
+  const response = await accountMutation("pause", { provider: "anthropic", accountId: b, paused: true });
+  expect(response?.status).toBe(200);
+  expect(await response!.json()).toMatchObject({ activeAccountChanged: false });
+  const { anthropicAffinityPath, anthropicAffinityDigest } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const snapshot = JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8"));
+  expect(snapshot.entries.map((entry: { accountId: string }) => entry.accountId)).toEqual([a]);
+  expect(snapshot.entries[0].sessionDigest).toBe(anthropicAffinityDigest("anthropic", otherSession));
+  clearAnthropicAccountPoolState(); // Drop the pending timer before an auth-only resume.
+  const { setAccountPaused } = await import("../../../src/oauth/store");
+  await setAccountPaused("anthropic", b, false);
+  expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(a);
+}, 20_000);
+
+test("inactive pause reports a committed publication failure", async () => {
+  const { b } = await seed();
+  bindAnthropicSessionAffinity(session, b);
+  await flush();
+  const { AnthropicSessionAffinityStore } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed").mockResolvedValue(false);
+  try {
+    const response = await accountMutation("pause", { provider: "anthropic", accountId: b, paused: true });
+    expect(response?.status).toBe(503);
+    expect(await response!.json()).toMatchObject({ pauseCommitted: true, retryable: true, activeAccountChanged: false });
+    expect(getAccountSet("anthropic")!.accounts.find(row => row.id === b)?.paused).toBe(true);
+  } finally { confirmation.mockRestore(); }
+  clearAnthropicAccountPoolState();
+  const retry = await accountMutation("pause", { provider: "anthropic", accountId: b, paused: true });
+  expect(retry?.status).toBe(200);
+  const { anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+}, 20_000);
+
 test("manual selection success survives restart without a shutdown flush", async () => {
   const { b } = await seed();
   await flush();

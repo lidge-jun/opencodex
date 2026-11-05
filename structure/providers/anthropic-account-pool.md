@@ -534,7 +534,8 @@ junctions and non-regular files with identifier-free warnings. Aliases above the
 Memory and pending writes belong to the resolved config home; reset or an observed home change retires that scope.
 Ordinary routing mutations coalesce behind a one-second publication timer so caller-selected session keys cannot trigger
 synchronous snapshot writes. Manual management selection and pause-induced selection changes explicitly await confirmed
-reset publication before reporting success. A failed publication leaves the account mutation committed and returns
+reset publication before reporting success. Inactive management pauses hydrate and confirm targeted invalidation as well,
+preserving unrelated eligible bindings even when no routing owner observed the pause event. A failed publication leaves the account mutation committed and returns
 503 `affinity_reset_not_persisted` with `selectionCommitted` or `pauseCommitted` and `retryable: true`; repeating the
 selection request finishes the pending reset; pause retries preserve the account and desired state and add `retryAffinityReset: true` to rebuild reset intent even after restart. The synchronous routing-reset API is preserved. Account deletion with that explicit retry flag and the provider-only affinity-reset endpoint re-arm and confirm a global reset independently of the removed account, including an empty roster; failure after deletion reports `deletionCommitted` while retaining a retryable warning. This explicit retry also clears bindings formed since the first failure but never selects or resumes an account. Plain deletion preserves surviving bindings and only flushes an already pending reset. UI absence is not proof of durable publication, and a reset-only response must carry `affinityResetConfirmed: true` before its warning clears.
 Explicit best-effort and shutdown flushes remain distinct from confirmed operator publication. Failures emit identifier-free

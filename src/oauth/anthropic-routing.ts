@@ -351,6 +351,7 @@ type RoutingFacadeSymbol =
   | "resetAnthropicRoutingForManualSelection"
   | "flushAnthropicManualSelectionReset"
   | "resetAnthropicSessionAffinityConfirmed"
+  | "flushAnthropicAccountPause"
   | "getAnthropicPoolAccessToken"
   | "getAnthropicPoolAccessSnapshot"
   | "canRefreshAnthropicPoolAccount";
@@ -1351,6 +1352,13 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     return flushAnthropicManualSelectionReset();
   }
 
+  /** Publish pause invalidation without clearing bindings of unrelated eligible accounts. */
+  async function flushAnthropicAccountPause(): Promise<boolean> {
+    sessionAffinity.invalidate(); // Also hydrates when the pause event preceded this routing owner.
+    if (manualResetPending) return flushAnthropicManualSelectionReset();
+    return sessionAffinity.flushConfirmed();
+  }
+
   /**
    * Resolve a bearer for pool traffic without adopting a newer global Claude CLI
    * credential into a background multiauth `local-cli` slot (same fail-closed rule
@@ -1462,7 +1470,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     resolveAnthropicAccountForSession, resolveAnthropicDispatchAccountId, bindAnthropicSessionAffinity,
     clearAnthropicSessionAffinityForAccount, rotateAnthropicAccountOn429, rotateAnthropicAccountOnRefusal,
     recordAnthropicAccount429, recordAnthropicAccountRefusal, promoteAnthropicActiveAccount,
-    commitAnthropicSelectionRouting, resetAnthropicRoutingForManualSelection, flushAnthropicManualSelectionReset, resetAnthropicSessionAffinityConfirmed, getAnthropicPoolAccessToken,
+    commitAnthropicSelectionRouting, resetAnthropicRoutingForManualSelection, flushAnthropicManualSelectionReset, resetAnthropicSessionAffinityConfirmed, flushAnthropicAccountPause, getAnthropicPoolAccessToken,
     getAnthropicPoolAccessSnapshot, canRefreshAnthropicPoolAccount,
   });
 }
@@ -1698,6 +1706,10 @@ export function flushAnthropicManualSelectionReset(): Promise<boolean> {
 
 export function resetAnthropicSessionAffinityConfirmed(): Promise<boolean> {
   return anthropicRoutingFor("anthropic").resetAnthropicSessionAffinityConfirmed();
+}
+
+export function flushAnthropicAccountPause(): Promise<boolean> {
+  return anthropicRoutingFor("anthropic").flushAnthropicAccountPause();
 }
 
 export function getAnthropicPoolAccessToken(accountId: string): Promise<string> {
