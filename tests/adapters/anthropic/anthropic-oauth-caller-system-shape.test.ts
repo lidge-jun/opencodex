@@ -11,10 +11,11 @@ import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../s
 
 const CALLER_SYSTEM = "You are an AI agent running in OpenCode, a coding agent harness.";
 
-interface WireBlock { type: string; text?: string }
+interface WireBlock { type: string; text?: string; cache_control?: unknown }
 interface WireMessage { role: string; content: string | WireBlock[] }
 interface WireBody { system: WireBlock[]; messages: WireMessage[] }
 
+/** Fixture provider; `oauth` unless a case overrides it. */
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   return {
     adapter: "anthropic",
@@ -25,6 +26,7 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
   } as OcxProviderConfig;
 }
 
+/** Parsed request with an optional caller system prompt. */
 function parsed(messages: OcxMessage[], systemPrompt?: string[]): OcxParsedRequest {
   return {
     modelId: "claude-opus-5-5",
@@ -34,16 +36,23 @@ function parsed(messages: OcxMessage[], systemPrompt?: string[]): OcxParsedReque
   };
 }
 
+/** Build the outbound Messages body for a fixture request. */
 async function bodyOf(request: OcxParsedRequest, configured = provider()): Promise<WireBody> {
   const { body } = await createAnthropicAdapter(configured).buildRequest(request);
   return JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as WireBody;
 }
 
-/** The adapter stamps cache_control on the trailing block; these assertions are about shape. */
+/** Text sequence of a message or system array; cache markers are out of scope here. */
 function texts(blocks: WireBlock[] | string | undefined): (string | undefined)[] {
   if (blocks === undefined) return [];
   if (typeof blocks === "string") return [blocks];
   return blocks.map(block => block.text);
+}
+
+/** First block of a wire message, for the relocated prefix and its cache marker. */
+function leadBlock(message: WireMessage | undefined): WireBlock | undefined {
+  if (!message || typeof message.content === "string") return undefined;
+  return message.content[0];
 }
 
 describe("anthropic oauth caller system shape", () => {
@@ -52,6 +61,10 @@ describe("anthropic oauth caller system shape", () => {
 
     expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION]);
     expect(texts(body.messages[0]?.content)).toEqual([CALLER_SYSTEM, "hello"]);
+    expect(body.system[0]?.cache_control).toBeUndefined();
+    // The relocated prefix keeps the explicit breakpoint, so requests that share the caller
+    // prompt reuse it even when their first user content differs.
+    expect(leadBlock(body.messages[0])?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
   test("the identity block stays first and is the only top-level system block", async () => {
@@ -63,6 +76,13 @@ describe("anthropic oauth caller system shape", () => {
 
     expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION]);
     expect(JSON.stringify(body.system)).not.toContain("OpenCode");
+    // Roles and content survive the move; only the first user turn gained a leading block.
+    expect(body.messages.map(message => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(body.messages.map(message => texts(message.content))).toEqual([
+      [CALLER_SYSTEM, "hello"],
+      ["hi"],
+      ["again"],
+    ]);
   });
 
   test("a block-array first turn keeps its blocks after the moved instructions", async () => {
