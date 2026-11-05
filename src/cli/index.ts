@@ -606,7 +606,10 @@ async function handleStart(options: { block?: boolean } = {}) {
       writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
-        hostname: bound.config.hostname,
+        /** Persist the scope the listener actually bound (127.0.0.1 for a default install),
+         *  not the raw config value: an omitted field is unknown to the guarded stop, which
+         *  only compares a hostname the record actually carries. */
+        hostname: bound.server.hostname,
         attestationSecret: bound.localAttestationSecret,
         command: currentServingCommand(),
         ...siblingRuntimeField(),

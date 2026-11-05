@@ -349,6 +349,18 @@ describe("tracked runtime record inspection", () => {
     expect(describeTrackedRuntimeTarget(liveOcx)).toEqual({ pid: 4242, port: 58195, hostname: "0.0.0.0" });
   });
 
+  test("a record without a hostname reports it as unknown, not as an empty host", () => {
+    // The field is optional: a default-bind install has no configured hostname to persist, so
+    // the writer drops it. Reporting "" made the guarded stop compare an empty string against
+    // the loopback that liveness discovery reports for the same runtime.
+    trackedPid();
+    writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 4242, port: 58195 }), "utf-8");
+    expect(inspectTrackedRuntimeRecord(liveOcx)).toEqual(
+      { status: "verified", pid: 4242, port: 58195, hostname: undefined });
+    expect(describeTrackedRuntimeTarget(liveOcx)).toEqual(
+      { pid: 4242, port: 58195, hostname: undefined });
+  });
+
   test("an absent or invalid pid record is named before any process probe", () => {
     const probes: string[] = [];
     const deps: TrackedRecordProbeDeps = {

@@ -27,7 +27,7 @@ export interface GuardedStopSnapshot {
  * inspection probe -- it carries no path, command line, stderr, or token.
  */
 export type TrackedRuntimeCheck =
-  | { pid: number; port: number; hostname: string }
+  | { pid: number; port: number; hostname: string | undefined }
   | { untracked: string }
   | null;
 
@@ -125,6 +125,27 @@ export function managerStillActive(
   } };
 }
 
+/**
+ * Re-verify every approved fact before letting the caller stop anything.
+ *
+ * The approval is a snapshot of what the desktop saw, so each fact is re-read
+ * here and a difference returns `approval-changed` without stopping: the live
+ * endpoint and its role, the effective port, the config home, the resolving CLI,
+ * the ownership claim, takeover compatibility and the compatibility token, then
+ * the manager identity and the tracked-record pair. PID and port must match the
+ * record exactly. The hostname compares bind scope, and only when the record
+ * actually carries one: the field is optional, a default-bind install has no
+ * configured value to persist, and the endpoint check above already proved the
+ * live host. Treating that absence as drift refused every takeover on such an
+ * install, and no retry could differ because the running runtime never rewrites
+ * the record.
+ *
+ * @param expected The approved snapshot the caller is acting on.
+ * @param read Re-resolve the runtime as the desktop would; null when unreadable.
+ * @param tracked Re-read the tracked record pair the stop will signal.
+ * @param managerTarget Re-bind an installed manager's process tree, if any.
+ * @param stop The approved stop, called only after every check above holds.
+ */
 export async function runApprovedStop(
   expected: StopApproval,
   read: () => Promise<ResolveJson | null>,
@@ -144,9 +165,16 @@ export async function runApprovedStop(
     if ("untracked" in target) {
       return approvalChanged(`the tracked runtime record could not be verified (${target.untracked})`);
     }
-    if (target.pid !== expected.pid || target.port !== expected.port
-      || target.hostname !== expected.hostname) {
+    if (target.pid !== expected.pid || target.port !== expected.port) {
       return approvalChanged("the tracked runtime record changed");
+    }
+    // A record that omits the hostname says nothing about bind scope, and the live endpoint
+    // above already matched the approved host, so unknown must not read as drift. When the
+    // record does carry one, compare bind scope rather than spelling so a wildcard record and
+    // the loopback it defaults to are the same scope.
+    if (target.hostname !== undefined
+      && probeHostname(target.hostname) !== probeHostname(expected.hostname)) {
+      return approvalChanged("the tracked runtime record names a different bind hostname");
     }
     if (manager.kind === "unknown") {
       return approvalChanged(`the service manager could not be re-verified (${manager.reason})`);

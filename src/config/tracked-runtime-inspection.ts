@@ -31,6 +31,13 @@
  * - No path, command line, stderr text, or token leaves this module: the refusal
  *   causes below are fixed strings and the detail built from them is a fixed
  *   sentence.
+ *
+ * The verified target's "hostname" is optional and stays undefined when the
+ * record omits it. A default-bind install has no configured value for the writer
+ * to persist, so absence is the normal shape there, and it means "unknown" rather
+ * than an empty host: callers compare it by bind scope only when it is present,
+ * so a record that never stored one cannot read as drift against the loopback
+ * liveness discovery reports for the same runtime.
  */
 import { readFileSync } from "node:fs";
 import {
@@ -59,7 +66,7 @@ export type TrackedRecordRefusal =
   | "unverified";
 
 export type TrackedRecordInspection =
-  | { status: "verified"; pid: number; port: number; hostname: string }
+  | { status: "verified"; pid: number; port: number; hostname: string | undefined }
   | { status: "refused"; reason: TrackedRecordRefusal };
 
 /**
@@ -147,7 +154,10 @@ export function inspectTrackedRuntimeRecord(
     if (parsed.pid !== pid) {
       return { status: "refused", reason: "runtime-record-pid-mismatch" };
     }
-    return { status: "verified", pid, port: parsed.port, hostname: parsed.hostname ?? "" };
+    // "hostname" is optional in the record: older writers omit it, and a default bind has no
+    // configured value to persist. Absence means "unknown", not an empty host, so the caller
+    // must be able to tell the two apart instead of comparing "" against a discovered endpoint.
+    return { status: "verified", pid, port: parsed.port, hostname: parsed.hostname };
   } catch {
     return { status: "refused", reason: "unverified" };
   }
@@ -177,10 +187,13 @@ const TRACKED_REFUSAL_CAUSES: Record<TrackedRecordRefusal, string> = {
 /**
  * The guarded stop's tracked() callback shape: the verified target, or the
  * fixed cause of the single check that failed. Read-only; decides nothing.
+ *
+ * "hostname" is undefined when the record omitted it; the guard reads that as
+ * unknown scope, not as an empty one.
  */
 export function describeTrackedRuntimeTarget(
   deps: TrackedRecordProbeDeps = {},
-): { pid: number; port: number; hostname: string } | { untracked: string } {
+): { pid: number; port: number; hostname: string | undefined } | { untracked: string } {
   const inspection = inspectTrackedRuntimeRecord(deps);
   return inspection.status === "verified"
     ? { pid: inspection.pid, port: inspection.port, hostname: inspection.hostname }

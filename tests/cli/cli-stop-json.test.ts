@@ -516,6 +516,39 @@ describe("approval-bound stop", () => {
     expect(signals).toBe(0);
   });
 
+  test("an absent record hostname is unknown, a present one compares by bind scope", async () => {
+    let stops = 0;
+    const stop = async () => {
+      stops += 1;
+      return { ok: true, summary: summarize(record(), { exitCode: 0 }) };
+    };
+    // A default-bind approval: discovery reports the loopback it probed, while the preserved
+    // record carries no hostname at all. Unknown must not read as drift.
+    const loopback = { ...STOP_RESOLVE,
+      liveness: { ...STOP_RESOLVE.liveness, hostname: "127.0.0.1" } } as ResolveJson;
+    const approval: StopApproval = { ...STOP_APPROVAL, hostname: "127.0.0.1" };
+    const target = (hostname: string | undefined) => () => ({ pid: 42, port: 10100, hostname });
+
+    const absent = await runApprovedStop(approval, async () => loopback,
+      target(undefined), BOUND_STOP_MANAGER, stop);
+    expect(absent.summary.outcome).toBe("stopped");
+    expect(stops).toBe(1);
+
+    // Present but the same bind scope: a wildcard listener also serves loopback.
+    const wildcard = await runApprovedStop(approval, async () => loopback,
+      target("0.0.0.0"), BOUND_STOP_MANAGER, stop);
+    expect(wildcard.summary.outcome).toBe("stopped");
+    expect(stops).toBe(2);
+
+    // Present and genuinely a different scope: still refused, and the detail names the host,
+    // so a drifting record stays distinguishable from a PID or port change.
+    const foreign = await runApprovedStop(approval, async () => loopback,
+      target("192.168.1.5"), BOUND_STOP_MANAGER, stop);
+    expect(foreign.summary).toMatchObject({ outcome: "approval-changed",
+      detail: "the tracked runtime record names a different bind hostname" });
+    expect(stops).toBe(2);
+  });
+
   test("an asynchronous manager stop settles before status decides success", async () => {
     const order: string[] = [];
     let state: "active" | "inactive" = "active";
