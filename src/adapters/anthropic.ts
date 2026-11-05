@@ -133,21 +133,25 @@ function applyCacheControlToLeadText(blocks: Array<Record<string, unknown>>, cc:
 }
 
 /**
- * Move text to the head of the first user turn. Returns false when the first message is not a
- * user turn, so the caller can keep the text in the top-level system array.
+ * Prepend caller instructions without inserting text into a tool-result turn. Assistant-leading
+ * histories get a separate initial user turn, leaving existing call/result pairs adjacent.
  */
-function prependTextToFirstUserMessage(messages: unknown[], text: string): boolean {
+function prependTextToFirstUserMessage(messages: unknown[], texts: string[]): void {
+  const blocks = texts.map(text => ({ type: "text", text }));
   const first = messages[0] as Record<string, unknown> | undefined;
-  if (!first || first.role !== "user") return false;
+  if (!first || first.role !== "user") {
+    messages.unshift({ role: "user", content: blocks });
+    return;
+  }
   if (typeof first.content === "string") {
-    first.content = [{ type: "text", text }, { type: "text", text: first.content }];
-    return true;
+    first.content = [...blocks, { type: "text", text: first.content }];
+    return;
   }
   if (Array.isArray(first.content)) {
-    first.content = [{ type: "text", text }, ...(first.content as unknown[])];
-    return true;
+    first.content = [...blocks, ...(first.content as unknown[])];
+    return;
   }
-  return false;
+  messages.unshift({ role: "user", content: blocks });
 }
 
 type PromptCachingOptions = {
@@ -813,7 +817,8 @@ function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
-): { system: string[]; messages: unknown[] } {
+  relocateCallerSystem = false,
+): { system: string[]; callerSystem: string[]; messages: unknown[] } {
   // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
   // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
   const pendingReplay = new Map(serverReplay);
@@ -840,7 +845,8 @@ function messagesToAnthropicFormat(
     undefined,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
-  const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
+  const callerParts = parsed.context.systemPrompt ?? [];
+  const systemParts = [...callerParts, ...(relocateCallerSystem ? [] : toolCatalogNudge ? [toolCatalogNudge] : [])];
   // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
   const prefix = parsed._anthropicSystemCachePrefix
     ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
@@ -848,7 +854,9 @@ function messagesToAnthropicFormat(
   const texts = prefix && head?.startsWith(`${prefix}\n\n`)
     ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
     : [systemParts.join("\n\n")];
-  const system = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
+  const normalized = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
+  const callerSystem = relocateCallerSystem ? normalized : [];
+  const system = relocateCallerSystem ? (toolCatalogNudge ? [identifyRoutedModel(toolCatalogNudge, parsed.modelId)].filter(Boolean) : []) : normalized;
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -987,7 +995,7 @@ function messagesToAnthropicFormat(
     messages.push({ role: "user", content: "(continue)" });
   }
 
-  return { system, messages };
+  return { system, callerSystem, messages };
 }
 
 function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
@@ -1046,8 +1054,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // Advisor also reaches a gateway that opted in with forwardAdvisorTool (advisor-tool.ts).
       const serverToolPlan = planAnthropicServerTools(provider, parsed._anthropicServerTools, parsed._anthropicServerReplay,
         new Set(parsed.context.tools?.map(tool => tool.name)), usesNativeAnthropicEndpoint(provider));
-      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
-        serverToolPlan.replay);
+      const { system, callerSystem, messages } = messagesToAnthropicFormat(parsed, toolNames,
+        serverToolPlan.replay, isOAuth);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -1082,15 +1090,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let relocatedCallerSystem = false;
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
-        // Keep caller system text at the head of the first user turn for OAuth.
-        const callerSystem = (parsed.context.systemPrompt ?? []).join("\n\n");
-        body.system = [{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }];
-        if (system.length > 0) {
-          if (callerSystem && prependTextToFirstUserMessage(messages, system.join("\n\n"))) {
-            relocatedCallerSystem = true;
-          } else {
-            (body.system as Array<Record<string, unknown>>).push(...system.map(text => ({ type: "text", text })));
-          }
+        // A captured OpenCode request was rejected with caller instructions in top-level
+        // system, but accepted with those instructions in user content. Keep the proxy-owned
+        // tool contract in system, matching the existing Codex Responses request shape.
+        body.system = [
+          { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
+          ...system.map(text => ({ type: "text", text })),
+        ];
+        if (callerSystem.length > 0) {
+          prependTextToFirstUserMessage(messages, callerSystem);
+          relocatedCallerSystem = true;
         }
       } else if (system.length > 0) {
         body.system = system.map(text => ({ type: "text", text }));
