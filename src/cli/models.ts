@@ -400,7 +400,7 @@ function handleConfiguredModels(args: string[]): void {
   if (wantsJson) {
     console.log(JSON.stringify({
       models,
-      note: "Static config models only. Providers with liveModels=true may have additional models at runtime.",
+      note: "Saved config models and router-known models (registry seeds, hint-map keys, and discovered cache ids). Providers with liveModels=true may have additional models at runtime.",
     }, null, 2));
     return;
   }
