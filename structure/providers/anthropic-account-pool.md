@@ -541,6 +541,7 @@ selection request finishes the pending reset; pause retries preserve the account
 Explicit best-effort and shutdown flushes remain distinct from confirmed operator publication. Failures emit identifier-free
 warnings and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
 `tests/adapters/anthropic/anthropic-affinity-store.test.ts` exercise routing and persistence boundaries.
+Responses captures the routing-reset generation before credential resolution and checks it before and after the asynchronous OAuth commit. A changed generation rejects obsolete admission or recovery rather than restoring an old session binding; a fresh request can admit under the new generation. This does not roll back a completed OAuth selection commit or cancel sends already admitted to transport. `tests/adapters/anthropic/anthropic-quota-dispatch.test.ts` covers reset interleavings during credentials, commit and refusal recovery.
 
 ## JEV advisory publication
 

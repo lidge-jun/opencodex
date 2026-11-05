@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act, useLayoutEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useProviderAccountPools, type OAuthAccount } from "../src/hooks/useProviderAccountPools";
-import { affinityResetRetries, clearAffinityResetRetry, rememberAffinityResetRetry } from "../src/provider-affinity-reset-retries";
+import { affinityResetRetries, beginAffinityResetOperation, clearAffinityResetRetry, rememberAffinityResetRetry } from "../src/provider-affinity-reset-retries";
 import * as dialogs from "../src/action-dialogs";
 
 // A pause is persisted by the PUT alone. Everything after it is a follow-up read, and its
@@ -18,6 +18,10 @@ let respond: (url: string, init?: RequestInit) => Promise<Response>;
 let fetchOauth: () => Promise<void>;
 
 const row = (id: string, active: boolean, paused = false): OAuthAccount => ({ id, email: `${id}@example.test`, active, paused });
+function clearFixtureRetry(server: string) {
+  clearAffinityResetRetry(server, "fixture");
+  beginAffinityResetOperation(server, "fixture")(() => undefined, true, { kind: "confirmed" });
+}
 
 function Harness({ apiBase = "/pause-hook" }: { apiBase?: string }) {
   const aliveRef = useRef(true);
@@ -30,8 +34,8 @@ function Harness({ apiBase = "/pause-hook" }: { apiBase?: string }) {
 }
 
 beforeEach(async () => {
-  clearAffinityResetRetry("/pause-hook", "fixture");
-  clearAffinityResetRetry("/other-server", "fixture");
+  clearFixtureRetry("/pause-hook");
+  clearFixtureRetry("/other-server");
   previous = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof previous;
   const win = new Window({ url: "http://localhost" });
   Object.defineProperties(globalThis, {
@@ -51,8 +55,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => { root?.unmount(); });
   root = null;
-  clearAffinityResetRetry("/pause-hook", "fixture");
-  clearAffinityResetRetry("/other-server", "fixture");
+  clearFixtureRetry("/pause-hook");
+  clearFixtureRetry("/other-server");
   for (const key of globals) {
     const descriptor = previous[key];
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -154,9 +158,61 @@ test.each(["selection", "resume", "other-server"] as const)("late pause receipt 
     await old;
   });
   expect(notices).toEqual(noticesBefore);
-  expect(affinityResetRetries("/pause-hook").fixture).toEqual(newer === "selection" ? undefined
+  expect(affinityResetRetries("/pause-hook").fixture).toEqual(newer === "selection" ? { kind: "reset", accountId: "b" }
     : { kind: "pause", accountId: "b", paused: newer !== "resume" });
   if (newer === "other-server") expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+});
+
+test.each(["active", "delete", "reset"] as const)("late %s debt remains reset-only after a newer successful selection", async action => {
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  let settle!: (response: Response) => void;
+  let started!: () => void;
+  const dispatched = new Promise<void>(resolve => { started = resolve; });
+  let old!: Promise<void>;
+  respond = async () => { started(); return new Promise(resolve => { settle = resolve; }); };
+  const resets: unknown[] = [];
+  try {
+    await act(async () => { if (action === "reset") rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "reset", accountId: "b" }); });
+    await act(async () => {
+      old = action === "active" ? pools.switchAccount("fixture", row("b", false))
+        : action === "delete" ? pools.removeAccount("fixture", row("b", false)) : pools.retryAffinityReset("fixture");
+      await dispatched;
+    });
+    await act(async () => { root!.render(null); });
+    await act(async () => { root!.render(<Harness />); });
+    respond = async (url, init) => {
+      if (url.endsWith("/affinity-reset")) { resets.push(JSON.parse(String(init?.body))); return Response.json({ affinityResetConfirmed: true }); }
+      return init?.method === "PUT" ? Response.json({ ok: true, activeAccountId: "a" })
+        : Response.json({ activeAccountId: "a", accounts: [row("a", true)] });
+    };
+    await act(async () => { await pools.switchAccount("fixture", row("a", false)); });
+    await act(async () => {
+      settle(Response.json({ code: "affinity_reset_not_persisted", retryable: true,
+        ...(action === "active" ? { selectionCommitted: true } : action === "delete" ? { deletionCommitted: true } : {}) }, { status: 503 }));
+      await old;
+    });
+    expect(pools.pendingAffinityResets.fixture).toEqual({ kind: "reset", accountId: "b" });
+    await act(async () => { await pools.retryAffinityReset("fixture"); });
+    expect(resets).toEqual([{ provider: "fixture" }]);
+    expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+  } finally { consent.mockRestore(); }
+});
+
+test("reset success does not announce completion for debt discovered after it started", async () => {
+  await act(async () => { rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "reset", accountId: "b" }); });
+  const late = beginAffinityResetOperation("/pause-hook", "fixture");
+  let settle!: (response: Response) => void;
+  let pending!: Promise<void>;
+  respond = async () => new Promise(resolve => { settle = resolve; });
+  await act(async () => { pending = pools.retryAffinityReset("fixture"); });
+  await act(async () => { late(undefined, false, { kind: "unpersisted", accountId: "gone" }); });
+  await act(async () => { settle(Response.json({ affinityResetConfirmed: true })); await pending; });
+  expect(pools.pendingAffinityResets.fixture).toEqual({ kind: "reset", accountId: "gone" });
+  expect(notices.at(-1)).toEqual({ key: "prov.affinityResetPending", ok: false });
+  respond = async () => Response.json({ affinityResetConfirmed: true });
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+  expect(notices.at(-1)).toEqual({ key: "prov.affinityResetComplete", ok: true });
 });
 
 test("reset confirmation after unmount clears its receipt without notifying the old screen", async () => {
@@ -366,6 +422,123 @@ test.each(["partial", "legacy", "empty", "confirmed"] as const)("delete %s ackno
       expect(pools.pendingAffinityResets.fixture).toBeUndefined();
       expect(notices.at(-1)).toEqual({ key: "prov.affinityResetComplete", ok: true });
     }
+  } finally { consent.mockRestore(); }
+});
+
+test.each(["selection", "pause", "reset", "threshold"] as const)("deletion waits for an in-flight %s mutation", async action => {
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  let settle!: (response: Response) => void;
+  let pending!: Promise<unknown>;
+  let deletes = 0;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") return new Promise(resolve => { settle = resolve; });
+    if (init?.method === "DELETE") { deletes++; return Response.json({ ok: true }); }
+    return Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false)] });
+  };
+  try {
+    await act(async () => {
+      if (action === "reset") rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "reset", accountId: "b" });
+    });
+    await act(async () => {
+      pending = action === "selection" ? pools.switchAccount("fixture", row("b", false))
+        : action === "pause" ? pools.pauseAccount("fixture", row("b", false), true)
+        : action === "reset" ? pools.retryAffinityReset("fixture")
+        : pools.setAccountThreshold("fixture", row("b", false), 50);
+    });
+    await act(async () => { await pools.removeAccount("fixture", row("b", false)); });
+    expect(deletes).toBe(0);
+  } finally {
+    await act(async () => {
+      settle(Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false, affinityResetConfirmed: true,
+        autoSwitchThresholdOverride: 50, autoSwitchThreshold: 70, effectiveAutoSwitchThreshold: 50 }));
+      await pending;
+    });
+    consent.mockRestore();
+  }
+});
+
+test("in-flight deletion owns its provider until the committed receipt is retained", async () => {
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  let settle!: (response: Response) => void;
+  let started!: () => void;
+  const dispatched = new Promise<void>(resolve => { started = resolve; });
+  let pending!: Promise<void>;
+  const writes: string[] = [];
+  await act(async () => { rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "reset", accountId: "b" }); });
+  respond = async (_url, init) => {
+    if (init?.method === "DELETE") {
+      writes.push("DELETE");
+      if (writes.filter(value => value === "DELETE").length === 1) { started(); return new Promise(resolve => { settle = resolve; }); }
+      return new Response(null, { status: 500 });
+    }
+    if (init?.method === "PUT") {
+      const provider = JSON.parse(String(init.body)).provider;
+      writes.push(`PUT:${provider}`);
+      return Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false, affinityResetConfirmed: true });
+    }
+    return Response.json({ activeAccountId: "a", accounts: [row("a", true)] });
+  };
+  try {
+    await act(async () => { pending = pools.removeAccount("fixture", row("b", false)); await dispatched; });
+    await act(async () => {
+      await pools.switchAccount("fixture", row("b", false));
+      await pools.pauseAccount("fixture", row("b", false), true);
+      await pools.retryAffinityReset("fixture");
+      expect(await pools.setAccountThreshold("fixture", row("b", false), 50)).toBe(false);
+      await pools.removeAccount("fixture", row("b", false));
+      await pools.pauseAccount("other-provider", row("b", false), true);
+    });
+    expect(writes).toEqual(["DELETE", "PUT:other-provider"]);
+  } finally {
+    await act(async () => {
+      settle(Response.json({ code: "affinity_reset_not_persisted", deletionCommitted: true, retryable: true }, { status: 503 }));
+      await pending;
+    });
+    consent.mockRestore();
+  }
+  expect(pools.pendingAffinityResets.fixture).toEqual({ kind: "reset", accountId: "b" });
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+});
+
+test("deletion rechecks ownership after the confirmation dialog settles", async () => {
+  let confirm!: (value: boolean) => void;
+  const consent = spyOn(dialogs, "confirmAction").mockImplementation(() => new Promise(resolve => { confirm = resolve; }));
+  let settle!: (response: Response) => void;
+  let deletion!: Promise<void>;
+  let pause!: Promise<void>;
+  let deletes = 0;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") return new Promise(resolve => { settle = resolve; });
+    if (init?.method === "DELETE") { deletes++; return Response.json({ ok: true }); }
+    return Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false)] });
+  };
+  try {
+    await act(async () => { deletion = pools.removeAccount("fixture", row("b", false)); });
+    await act(async () => { pause = pools.pauseAccount("fixture", row("b", false), true); });
+    await act(async () => { confirm(true); await deletion; });
+    expect(deletes).toBe(0);
+  } finally {
+    await act(async () => { settle(Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false })); await pause; });
+    consent.mockRestore();
+  }
+});
+
+test.each(["http", "transport"] as const)("failed deletion releases its mutation owner after %s failure", async failure => {
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  let pauses = 0;
+  respond = async (_url, init) => {
+    if (init?.method === "DELETE") {
+      if (failure === "transport") throw new Error("synthetic disconnect");
+      return new Response(null, { status: 500 });
+    }
+    if (init?.method === "PUT") { pauses++; return Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false }); }
+    return Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false)] });
+  };
+  try {
+    await act(async () => { await pools.removeAccount("fixture", row("b", false)); });
+    await act(async () => { await pools.pauseAccount("fixture", row("b", false), true); });
+    expect(pauses).toBe(1);
   } finally { consent.mockRestore(); }
 });
 

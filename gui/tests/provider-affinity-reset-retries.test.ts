@@ -26,7 +26,7 @@ test.each([false, true])("newest committed receipt wins with reverse arrival %p"
   clearAffinityResetRetry(server, "p");
 });
 
-test("empty clear fences an older unknown receipt and duplicate completion", () => {
+test("empty intent clear fences older replay intent and duplicate completion", () => {
   const old = beginAffinityResetOperation("/aba", "p");
   clearAffinityResetRetry("/aba", "p");
   old(() => set("a"), true);
@@ -69,7 +69,7 @@ test("unchanged publication preserves the React snapshot while still fencing old
   clearAffinityResetRetry("/stable", "p");
 });
 
-test("a retired callback cannot affect a fresh journal for the same server and provider", () => {
+test("a retired intent callback cannot affect newer operations for the same provider", () => {
   const retired = beginAffinityResetOperation("/fresh", "p");
   clearAffinityResetRetry("/fresh", "p");
   const fresh = beginAffinityResetOperation("/fresh", "p");
@@ -102,4 +102,69 @@ test("compaction agrees with an uncompacted intent fold across settlement orders
       clearAffinityResetRetry("/reference", "p");
     }
   }
+});
+
+const confirmed = { kind: "confirmed" as const };
+const unpersisted = (accountId: string) => ({ kind: "unpersisted" as const, accountId });
+const confirmReset = (server: string) => beginAffinityResetOperation(server, "p")(() => undefined, true, confirmed);
+
+test.each([false, true])("a reset started before observing older debt cannot acknowledge it (late: %p)", late => {
+  const server = `/causal-${late}`;
+  const old = beginAffinityResetOperation(server, "p");
+  const reset = beginAffinityResetOperation(server, "p");
+  if (!late) old(() => set("a"), true, unpersisted("a"));
+  reset(() => undefined, true, confirmed);
+  if (late) old(() => set("a"), true, unpersisted("a"));
+  expect(affinityResetRetries(server).p).toEqual({ kind: "reset", accountId: "a" });
+  confirmReset(server);
+  expect(affinityResetRetries(server).p).toBeUndefined();
+  old(() => set("a"), true, unpersisted("a"));
+  expect(affinityResetRetries(server).p).toBeUndefined();
+});
+
+test("an intent clear cannot acknowledge observed reset debt", () => {
+  const server = "/intent-not-ack";
+  beginAffinityResetOperation(server, "p")(() => set("a"), true, unpersisted("a"));
+  clearAffinityResetRetry(server, "p");
+  expect(affinityResetRetries(server).p).toEqual({ kind: "reset", accountId: "a" });
+  confirmReset(server);
+  expect(affinityResetRetries(server).p).toBeUndefined();
+});
+
+test("late retired debt does not retire a newer pending operation", () => {
+  const server = "/debt-with-new-intent";
+  const old = beginAffinityResetOperation(server, "p");
+  rememberAffinityResetRetry(server, "p", { kind: "active", accountId: "b" });
+  const newer = beginAffinityResetOperation(server, "p");
+  old(() => set("a"), true, unpersisted("a"));
+  expect(affinityResetRetries(server).p).toEqual({ kind: "active", accountId: "b" });
+  newer(() => ({ kind: "pause", accountId: "b", paused: false }), true, unpersisted("b"));
+  expect(affinityResetRetries(server).p).toEqual({ kind: "pause", accountId: "b", paused: false });
+  confirmReset(server);
+  expect(affinityResetRetries(server).p).toBeUndefined();
+});
+
+test("out-of-order confirmations neither regress acknowledgement nor clear newer debt", () => {
+  const server = "/debt-ack-order";
+  beginAffinityResetOperation(server, "p")(() => set("a"), true, unpersisted("a"));
+  const oldReset = beginAffinityResetOperation(server, "p");
+  beginAffinityResetOperation(server, "p")(() => set("b"), true, unpersisted("b"));
+  confirmReset(server);
+  expect(affinityResetRetries(server).p).toBeUndefined();
+  beginAffinityResetOperation(server, "p")(() => set("c"), true, unpersisted("c"));
+  oldReset(() => undefined, true, confirmed);
+  clearAffinityResetRetry(server, "p");
+  expect(affinityResetRetries(server).p).toEqual({ kind: "reset", accountId: "c" });
+  confirmReset(server);
+  expect(affinityResetRetries(server).p).toBeUndefined();
+});
+
+test.each(["__proto__", "constructor", "toString"])("provider key %s has ordinary own-entry semantics", provider => {
+  const server = "/provider-key-record";
+  expect(affinityResetRetries(server)[provider]).toBeUndefined();
+  rememberAffinityResetRetry(server, provider, set("a"));
+  expect(Object.hasOwn(affinityResetRetries(server), provider)).toBe(true);
+  expect(affinityResetRetries(server)[provider]).toEqual(set("a"));
+  clearAffinityResetRetry(server, provider);
+  expect(affinityResetRetries(server)[provider]).toBeUndefined();
 });
