@@ -520,7 +520,7 @@ session digest, opaque account ID, last-use timestamp and hashed persistent logi
 without `loginId` retain runtime-only affinity. Token refresh preserves the fence; replacement login,
 removal/re-add, pause and reauthentication invalidate it. Invalid, oversized, future and expired rows are ignored;
 the newest 2,000 entries survive, with a 24-hour idle lifetime. A restored binding precedes the startup active
-preference; an acknowledged management selection clears bindings and persists the reset.
+preference; a confirmed management selection clears bindings and persists the reset.
 
 Temporary throttle and model-route/family detours retain a valid original binding and refresh its idle timestamp.
 Commit preserves a binding excluded by the route, an active admission pause or family rejection, or a transient
