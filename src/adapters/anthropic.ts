@@ -119,6 +119,16 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
   applyCacheControlToLast(blocks, cc);
 }
 
+/** Mark the first text block, the head of a relocated caller system prefix. */
+function applyCacheControlToLeadText(blocks: Array<Record<string, unknown>>, cc: CacheControl): void {
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].type === "text") {
+      blocks[i] = { ...blocks[i], cache_control: cc };
+      return;
+    }
+  }
+}
+
 /**
  * Move text to the head of the first user turn. Returns false when the first message is not a
  * user turn, so the caller can keep the text in the top-level system array.
@@ -140,6 +150,12 @@ function prependTextToFirstUserMessage(messages: unknown[], text: string): boole
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
+  /**
+   * The caller's system prompt travels as the head of the first user turn (OAuth). Cache that
+   * prefix instead of the single identity block in the top-level system array, so independent
+   * requests that share the caller prompt can reuse it.
+   */
+  relocatedSystemPrefix?: boolean;
 };
 
 /** Place explicit cache_control breakpoints on the built Anthropic body. */
@@ -173,9 +189,17 @@ function applyPromptCaching(
   }
   if (used >= explicitLimit) return;
 
-  // 2. system
+  // 2. system, or the caller prefix relocated to the first user turn
   const system = body.system as Array<Record<string, unknown>> | undefined;
-  if (system && system.length > 0) {
+  const relocated = options.relocatedSystemPrefix === true ? messages?.[0] : undefined;
+  if (relocated !== undefined && relocated.role === "user") {
+    if (typeof relocated.content === "string") {
+      relocated.content = [{ type: "text", text: relocated.content, cache_control: cc }];
+    } else if (Array.isArray(relocated.content) && relocated.content.length > 0) {
+      applyCacheControlToLeadText(relocated.content as Array<Record<string, unknown>>, cc);
+    }
+    used++;
+  } else if (system && system.length > 0) {
     applyCacheControlToLast(system, cc);
     used++;
   }
@@ -1092,6 +1116,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         stream: parsed.stream,
         max_tokens: parsed.options.maxOutputTokens ?? omittedMaxTokens,
       };
+      let relocatedCallerSystem = false;
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         // Anthropic's OAuth overage classifier treats caller instructions carried in the
@@ -1100,7 +1125,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         const callerSystem = (parsed.context.systemPrompt ?? []).join("\n\n");
         body.system = [{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }];
         if (system) {
-          if (!(callerSystem && prependTextToFirstUserMessage(messages, system))) {
+          if (callerSystem && prependTextToFirstUserMessage(messages, system)) {
+            relocatedCallerSystem = true;
+          } else {
             (body.system as Array<Record<string, unknown>>).push({ type: "text", text: system });
           }
         }
@@ -1301,6 +1328,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       applyPromptCaching(body, cc, {
         maxExplicitBreakpoints: explicitLimit,
         skipLastUser: !!automaticPromptCaching,
+        relocatedSystemPrefix: relocatedCallerSystem,
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
