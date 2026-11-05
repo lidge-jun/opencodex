@@ -1525,6 +1525,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 368
-- of those, state-changing: 226
+- declared capabilities: 369
+- of those, state-changing: 227
 - head-resolved invocations: 2
