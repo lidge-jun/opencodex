@@ -71,6 +71,7 @@ for (const enforced of [false, true]) {
     const root = "websocket-only-workflow";
     saveConfig({
       port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true,
+      clientIntegrations: { codex: false },
       defaultProvider: "fixture", workflowBudget: { maxPhysicalSends: 1 },
       ...(enforced ? { spend: { pool: { maxTokens: 100_000 } } } : {}),
       providers: { fixture: { adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,
@@ -106,6 +107,7 @@ for (const enforced of [false, true]) {
     } });
     const root = "websocket-retry-root";
     saveConfig({ port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true,
+      clientIntegrations: { codex: false },
       defaultProvider: "fixture", workflowBudget: { maxPhysicalSends: 1 },
       ...(enforced ? { spend: { pool: { maxTokens: 100_000 } } } : {}),
       providers: { fixture: { adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,

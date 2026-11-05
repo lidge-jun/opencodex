@@ -75,7 +75,7 @@ for (const enforced of [false, true]) for (const status of [503, 429]) {
     });
     let server: ReturnType<typeof startServer> | undefined;
     try {
-      const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      const config: OcxConfig = { port: 0, clientIntegrations: { codex: false }, defaultProvider: "fixture", providers: { fixture: {
         adapter: "anthropic", authMode: "key", apiKey: "fixture-key",
         baseUrl: new URL("/v1", upstream.url).href, allowPrivateNetwork: true,
         liveModels: false, models: ["fixture-model"],

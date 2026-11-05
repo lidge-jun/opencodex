@@ -102,6 +102,8 @@ function mockChatUpstreamCapturing() {
 function mockConfig(baseUrl: string, providerOverrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
     port: 0,
+    // Provider wire tests do not sync a native Codex installation.
+    clientIntegrations: { codex: false },
     defaultProvider: "mock",
     providers: {
       mock: {
