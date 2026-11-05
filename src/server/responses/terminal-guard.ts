@@ -82,14 +82,23 @@ function recentTurnHasToolActivity(parsed: OcxParsedRequest): boolean {
   return false;
 }
 
-// Tool calls or results after the latest user message mean this turn already executed tools, so a
-// text-only completion summary closes it; only a renewed plan announcement is still suspicious.
+/**
+ * Reports whether the current turn already executed tools: a tool call or tool result after the
+ * latest user message. A text-only plan announcement after the last tool activity means the turn
+ * stalled there, so it does not count, matching `recentTurnHasToolActivity`.
+ */
 function toolActivitySinceLatestUser(parsed: OcxParsedRequest): boolean {
   for (let i = parsed.context.messages.length - 1; i >= 0; i -= 1) {
     const message = parsed.context.messages[i];
     if (message.role === "user") return false;
     if (message.role === "toolResult") return true;
-    if (message.role === "assistant" && message.content.some(part => part.type === "toolCall")) return true;
+    if (message.role !== "assistant") continue;
+    if (message.content.some(part => part.type === "toolCall")) return true;
+    const text = message.content
+      .filter(part => part.type === "text")
+      .map(part => part.text)
+      .join("");
+    if (PLAN_INTENT_RE.test(text)) return false;
   }
   return false;
 }
@@ -101,6 +110,12 @@ function assistantText(events: readonly AdapterEvent[]): string {
     .join("");
 }
 
+/**
+ * Classifies a finished upstream turn that made no tool call. `continue` means the model only
+ * announced work for an actionable request, so the relay re-asks it with `TERMINAL_GUARD_NUDGE`.
+ * A completion summary after tool activity in the same turn passes; a renewed first-person plan
+ * announcement (`PLAN_INTENT_RE`) after that activity is still continued.
+ */
 export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly AdapterEvent[]): TerminalTurnAnalysis {
   const userText = latestUserText(parsed);
   const text = assistantText(events);
