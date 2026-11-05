@@ -23,12 +23,14 @@ function scopedFamily(row: Record<string, unknown>): "fable" | "opus" | "sonnet"
  * and malformed shared measurements make family enumeration incomplete. Shared finite
  * measurements apply regardless of the binding flag, though an unknown flag also makes
  * enumeration incomplete. A null legacy five_hour requires an explicitly active session.
- * Scoped rows retain active-only behavior; unknown kinds/families cannot clear refusals.
+ * Scoped rows retain active-only behavior for routing; an inactive scoped row is returned
+ * separately as display-only evidence. Unknown kinds/families cannot clear refusals.
  */
 export function anthropicUsageBuckets(body: Record<string, unknown>): {
-  buckets: AnthropicUsageBucket[]; familyEnumeration: boolean;
+  buckets: AnthropicUsageBucket[]; displayBuckets: AnthropicUsageBucket[]; familyEnumeration: boolean;
 } {
   const selected = new Map<UsageWindow, AnthropicUsageBucket>();
+  const displayOnly = new Map<UsageWindow, AnthropicUsageBucket>();
   const represented = new Set<UsageWindow>();
   const limits = Array.isArray(body.limits) ? body.limits : [];
   let familyEnumeration = Array.isArray(body.limits);
@@ -47,7 +49,10 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
       selected.set(window, { window, row, percentField: "percent" });
       continue;
     }
-    if (row.is_active === false) continue;
+    if (row.is_active === false) {
+      displayOnly.set(window, { window, row, percentField: "percent" });
+      continue;
+    }
     if (row.is_active !== undefined && row.is_active !== true) { familyEnumeration = false; continue; }
     if (toFiniteNumber(row.percent) === undefined) familyEnumeration = false;
     selected.set(window, { window, row, percentField: "percent" });
@@ -58,8 +63,10 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
     if (row) selected.set(window, { window, row, percentField: "utilization" });
   }
   // Stable canonical order, independent of how upstream orders limits.
-  return { buckets: (Object.keys(legacyFields) as UsageWindow[]).flatMap(window => {
-    const bucket = selected.get(window);
-    return bucket ? [bucket] : [];
-  }), familyEnumeration };
+  const ordered = (source: Map<UsageWindow, AnthropicUsageBucket>) => (Object.keys(legacyFields) as UsageWindow[])
+    .flatMap(window => {
+      const bucket = source.get(window);
+      return bucket ? [bucket] : [];
+    });
+  return { buckets: ordered(selected), displayBuckets: ordered(displayOnly), familyEnumeration };
 }

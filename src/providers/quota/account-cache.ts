@@ -44,11 +44,43 @@ export type AccountQuotaCacheEntry = {
   anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
 };
+const validReset = (resetAt: unknown): resetAt is number => typeof resetAt === "number"
+  && Number.isFinite(resetAt) && resetAt > 0 && Number.isFinite(new Date(resetAt).getTime());
+
+/** Persisted rows validate only the outer quota object, so window data may be malformed. Null when unchanged. */
+function retainedQuotaWindows(value: unknown, now: number): ProviderQuotaWindow[] | null {
+  const windows: ProviderQuotaWindow[] = Array.isArray(value) ? value : [];
+  const retained: ProviderQuotaWindow[] = [];
+  let changed = !Array.isArray(value);
+  for (const window of windows) {
+    if (!window || typeof window !== "object" || typeof window.label !== "string" || !window.label.trim()
+      || typeof window.percent !== "number" || !Number.isFinite(window.percent)
+      || window.percent < 0 || window.percent > 100) {
+      changed = true;
+      continue;
+    }
+    if ((window.passiveObservedAt !== undefined && (typeof window.passiveObservedAt !== "number"
+        || !Number.isFinite(window.passiveObservedAt) || window.passiveObservedAt <= 0 || window.passiveObservedAt > now
+        || now - window.passiveObservedAt >= ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS))
+      || validReset(window.resetAt) && window.resetAt <= now) {
+      changed = true;
+      continue;
+    }
+    if (window.resetAt !== undefined && !validReset(window.resetAt)) {
+      const normalized = { ...window };
+      delete normalized.resetAt;
+      retained.push(normalized);
+      changed = true;
+    } else {
+      retained.push(window);
+    }
+  }
+  return changed ? retained : null;
+}
+
 /** Expired measurements become unknown; missing reset evidence never implies a fresh allowance. */
 export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined, now: number): ProviderQuota | null {
   if (!quota) return null;
-  const validReset = (resetAt: unknown): resetAt is number => typeof resetAt === "number"
-    && Number.isFinite(resetAt) && resetAt > 0 && Number.isFinite(new Date(resetAt).getTime());
   let result = quota;
   for (const [percent, reset] of [
     ["fiveHourPercent", "fiveHourResetAt"],
@@ -63,38 +95,21 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
     if (valid) delete result[percent];
     delete result[reset];
   }
-  // Persisted rows validate only the outer quota object, so custom data may be malformed.
-  if (quota.customWindows !== undefined) {
-    const windows = Array.isArray(quota.customWindows) ? quota.customWindows : [];
-    const retained: ProviderQuotaWindow[] = [];
-    let changed = !Array.isArray(quota.customWindows);
-    for (const window of windows) {
-      if (!window || typeof window !== "object" || typeof window.label !== "string" || !window.label.trim()
-        || typeof window.percent !== "number" || !Number.isFinite(window.percent)
-        || window.percent < 0 || window.percent > 100) {
-        changed = true;
-        continue;
-      }
-      if ((window.passiveObservedAt !== undefined && (typeof window.passiveObservedAt !== "number"
-          || !Number.isFinite(window.passiveObservedAt) || window.passiveObservedAt <= 0 || window.passiveObservedAt > now
-          || now - window.passiveObservedAt >= ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS))
-        || validReset(window.resetAt) && window.resetAt <= now) {
-        changed = true;
-        continue;
-      }
-      if (window.resetAt !== undefined && !validReset(window.resetAt)) {
-        const normalized = { ...window };
-        delete normalized.resetAt;
-        retained.push(normalized);
-        changed = true;
-      } else {
-        retained.push(window);
-      }
+  for (const field of ["customWindows", "displayWindows"] as const) {
+    if (quota[field] === undefined) {
+      continue;
     }
-    if (changed) {
-      if (result === quota) result = { ...quota };
-      if (retained.length) result.customWindows = retained;
-      else delete result.customWindows;
+    const retained = retainedQuotaWindows(quota[field], now);
+    if (!retained) {
+      continue;
+    }
+    if (result === quota) {
+      result = { ...quota };
+    }
+    if (retained.length) {
+      result[field] = retained;
+    } else {
+      delete result[field];
     }
   }
   return hasQuotaRows(result) ? result : null;

@@ -194,8 +194,10 @@ and malformed shared measurements cannot revive legacy data and make family enum
 incomplete. Shared finite measurements are used regardless of the binding `is_active` flag;
 a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is explicitly
 null, only a finite session marked active creates a five-hour meter. Inactive shared usage
-is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics;
-unknown kinds or model families preserve usable shared windows without claiming a complete
+is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics
+for routing; an inactive scoped row is published only as `displayWindows`, which quota
+display renders and routing, exhaustion and cooldown recovery never read.
+Unknown kinds or model families preserve usable shared windows without claiming a complete
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.

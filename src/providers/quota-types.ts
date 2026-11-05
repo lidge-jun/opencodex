@@ -65,6 +65,12 @@ export interface ProviderQuota {
   kiroCreditsUsed?: number;
   kiroCreditsLimit?: number;
   customWindows?: ProviderQuotaWindow[];
+  /**
+   * Display-only measurements the producer withheld from routing: Anthropic model-scoped rows
+   * that upstream reports with `is_active: false`. Routing, exhaustion, cooldown recovery and
+   * reset ordering read only `customWindows`; nothing but quota display reads this field.
+   */
+  displayWindows?: ProviderQuotaWindow[];
   creditsUsd?: ProviderQuotaCreditsUsd;
   updatedAt: number;
 }
