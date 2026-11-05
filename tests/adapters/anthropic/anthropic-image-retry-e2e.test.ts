@@ -9,7 +9,7 @@ import { resetNormalizeStateForTests } from "../../../src/adapters/anthropic-ima
 import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxConfig } from "../../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -25,14 +25,14 @@ beforeEach(() => {
   resetNormalizeStateForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   upstream?.stop(true);
   upstream = null;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) removeTreeWithRetry(testDir);
+  if (testDir) await removeTreeAfterBackgroundWork(testDir);
   clearKeyCooldowns();
 });
 
@@ -81,6 +81,7 @@ function anthropicConfig(baseUrl: string, pool = false): OcxConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    clientIntegrations: { codex: false },
     defaultProvider: "anthropic-test",
     providers: {
       "anthropic-test": {
