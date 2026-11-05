@@ -63,7 +63,8 @@ class FakeWebSocket {
     const id = `resp_${FakeWebSocket.instances.indexOf(this)}`;
     this.frame({ type: "response.created", response: { id, status: "in_progress", output: [] } });
     if (step === "heartbeat-then-refuse" || step === "heartbeat-output-then-refuse"
-      || step === "unsafe-heartbeat-then-refuse" || step === "heartbeat-bare-then-refuse") {
+      || step === "unsafe-heartbeat-then-refuse" || step === "heartbeat-bare-then-refuse"
+      || step === "heartbeat-then-abort") {
       // A heartbeat only keeps the connection alive. The bare-code case also carries the sequence
       // marker the Responses wire puts on every event.
       this.frame(step === "heartbeat-bare-then-refuse"

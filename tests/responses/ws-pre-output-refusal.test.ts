@@ -255,6 +255,9 @@ describe("everything else keeps today's settle", () => {
       expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, replayUnsafe: malformed })).toBe(false);
     }
     expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, sequence_number: "2" })).toBe(false);
+    for (const marker of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, sequence_number: marker })).toBe(false);
+    }
     expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, stream_id: "other" })).toBe(false);
     // An unknown field may describe output or an effect this version does not know; fail closed.
     expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, delta: "visible" })).toBe(false);
