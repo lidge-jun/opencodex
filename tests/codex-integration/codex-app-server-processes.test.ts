@@ -882,13 +882,14 @@ describe("Codex session process matching (#2811)", () => {
 
 describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   const dispatchSource = readFileSync(repoPath("src", "cli", "dispatch.ts"), "utf8");
+  const syncSource = readFileSync(repoPath("src", "cli", "sync-command.ts"), "utf8");
   const configRoutesSource = readFileSync(
     repoPath("src", "server", "management", "config-routes.ts"),
     "utf8",
   );
 
   test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
-    const syncCase = dispatchSource.slice(dispatchSource.indexOf("sync: async"), dispatchSource.indexOf("v2: async"));
+    const syncCase = syncSource.slice(syncSource.indexOf("export async function runSyncCommand"), syncSource.indexOf("async function handleConnectedSyncCatalogWrite"));
     expect(syncCase).toContain("readRestartScope(syncArgs");
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
     expect(syncCase).toContain("handleRestartScopeAfterWrite");
@@ -908,8 +909,8 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     // separate Windows-only opt-in. That decision was superseded by an explicit
     // maintainer instruction, and the narrow scope did not disappear: it moved to
     // --restart-app-server-only, which is what this now pins.
-    for (const [name, endMarker] of [["sync: async", "v2: async"], ['"sync-cache": async', "gui: async"]] as const) {
-      const handler = dispatchSource.slice(dispatchSource.indexOf(name), dispatchSource.indexOf(endMarker));
+    for (const [source, name, endMarker] of [[syncSource, "export async function runSyncCommand", "async function handleConnectedSyncCatalogWrite"], [dispatchSource, '"sync-cache": async', "gui: async"]] as const) {
+      const handler = source.slice(source.indexOf(name), source.indexOf(endMarker));
       // One reader for every command, so the same flag cannot mean different things in
       // sync, sync-cache and catalog pull.
       expect(handler).toContain("readRestartScope(");

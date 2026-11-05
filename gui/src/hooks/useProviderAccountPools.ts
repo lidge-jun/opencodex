@@ -564,6 +564,12 @@ export function useProviderAccountPools(deps: {
         return;
       }
       if (retryAffinityReset || result.activeAccountChanged) clearPendingAffinityReset(provider);
+      else {
+        const pending = affinityResetRetries(apiBase)[provider];
+        if (pending?.kind === "pause" && pending.accountId === account.id && pending.paused !== paused) {
+          rememberAffinityResetRetry(apiBase, provider, { ...pending, paused });
+        }
+      }
       selectionMutationsRef.current.delete(key);
     } catch {
       if (currentMutation()) notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);

@@ -91,10 +91,10 @@ lint("wrapper root slots reject extra occurrences", () => {
 
 lint("deferred imports admit only reviewed bindings, contexts and counts", () => {
   const binding = 'const { guardedStartWindowsTray } = await import("./guarded-tray-ops");';
-  expect(inspect('async function runUpdate(){' + binding.repeat(3) + '}', "src/update/index.ts").scanner).toEqual([]);
+  expect(inspect('async function runUpdateWithSession(){' + binding.repeat(3) + '}', "src/update/index.ts").scanner).toEqual([]);
   for (const body of [binding.repeat(4), 'const runtime = await import("./guarded-tray-ops");',
     'const { startWindowsTray } = await import("./guarded-tray-ops");'])
-    expect(inspect('async function runUpdate(){' + body + '}', "src/update/index.ts").scanner.length).toBeGreaterThan(0);
+    expect(inspect('async function runUpdateWithSession(){' + body + '}', "src/update/index.ts").scanner.length).toBeGreaterThan(0);
   expect(inspect('async function other(){' + binding + '}', "src/update/index.ts").scanner.length).toBeGreaterThan(0);
 });
 

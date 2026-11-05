@@ -16,9 +16,9 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
+import { resolveCodexHomeDir } from "../codex/home";
 import { recordOwnedConfigPath } from "./config-ownership";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "./bun-runtime";
 import type { BunRuntimeSource } from "./bun-runtime";
@@ -59,9 +59,9 @@ function xmlEscape(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function currentCodexHomeAbsolute(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
+function currentCodexHomeAbsolute(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.CODEX_HOME?.trim();
+  return raw ? windowsServicePathAbsolute(raw) : resolveCodexHomeDir({ env });
 }
 
 function windowsServicePathAbsolute(raw: string): string {
@@ -109,7 +109,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
     `  <env name="${BUN_RUNTIME_PATH_ENV}" value="${xmlEscape(entry.bun)}"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
     `  <env name="PATH" value="${xmlEscape(filterTransientServicePath(env.PATH ?? "", ";", "win32"))}"/>`,
-    env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
+    `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute(env))}"/>`,
     env.CODEX_SQLITE_HOME?.trim() ? `  <env name="CODEX_SQLITE_HOME" value="${xmlEscape(windowsServicePathAbsolute(env.CODEX_SQLITE_HOME.trim()))}"/>` : null,
     `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
     aclTimeout ? `  <env name="OPENCODEX_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,

@@ -19,6 +19,7 @@ import {
   resolveLiveSidebandUpgrade,
 } from "../live";
 import { RESPONSE_TTL_MS } from "../../responses/state";
+import { isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 /**
@@ -124,7 +125,20 @@ function releaseLiveSidebandAdmission(ws: ServerWebSocket<WsData>): void {
  * `Uint8Array.from` copies into a fresh `ArrayBuffer`-backed view, so a frame
  * arriving from `node:buffer` still round-trips byte-for-byte.
  */
-export function sendUpstreamFrame(upstream: WebSocket, frame: string | Buffer): void {
+export function sendUpstreamFrame(upstream: WebSocket, frame: string | Buffer, context?: WsData["authContext"]): void {
+  if (context?.kind === "pool") {
+    let parsed: unknown;
+    try { parsed = JSON.parse(typeof frame === "string" ? frame : new TextDecoder("utf-8", { fatal: true }).decode(frame)); }
+    catch { /* Non-JSON frames retain their original bytes. */ }
+    const account = context.chatgptAccountId;
+    let isolated = isolateCodexPoolClientMetadata(parsed, account);
+    if (isolated && typeof isolated === "object" && !Array.isArray(isolated)) {
+      const record = isolated as Record<string, unknown>;
+      const session = isolateCodexPoolClientMetadata(record.session, account);
+      if (session !== record.session) isolated = { ...record, session };
+    }
+    if (isolated !== parsed) frame = typeof frame === "string" ? JSON.stringify(isolated) : Buffer.from(JSON.stringify(isolated));
+  }
   if (typeof frame === "string") {
     upstream.send(frame);
     return;
@@ -574,7 +588,7 @@ export function attachLiveSidebandUpstream(
     ws.data.livePendingBytes = undefined;
     for (const frame of pending) {
       try {
-        sendUpstreamFrame(upstream, frame);
+        sendUpstreamFrame(upstream, frame, ws.data.authContext);
       } catch {
         closeLiveSideband(ws, 1011, "upstream send failed");
         return;

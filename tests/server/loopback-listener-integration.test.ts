@@ -239,6 +239,10 @@ describe("hub management ingress", () => {
         { path: "/readyz" },
         { path: "/v1/responses", headers: { Connection: "Upgrade", Upgrade: "websocket" } },
         { path: "/missing-static.js" },
+        // Ollama-compatible paths live under /api/ but are data plane, never management ingress.
+        { path: "/api/version" },
+        { path: "/api/tags" },
+        { path: "/api/chat" },
       ];
       for (const entry of denied) {
         const response = await fetch(`${base}${entry.path}`, { headers: entry.headers });
@@ -376,6 +380,10 @@ describe("unauthenticated loopback listener", () => {
         { method: "GET", path: "/v1/alpha/search" },
         { method: "GET", path: "/v1/images/generations" },
         { method: "GET", path: "/v1/images/edits" },
+        // Ollama-compatible inference stays on the authenticated listener.
+        { method: "POST", path: "/api/chat", body: "{}" },
+        { method: "POST", path: "/api/generate", body: "{}" },
+        { method: "GET", path: "/api/tags" },
       ];
       for (const { method, path, body } of denied) {
         const res = await fetch(`${base}${path}`, {

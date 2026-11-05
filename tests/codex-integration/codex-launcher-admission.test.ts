@@ -36,7 +36,7 @@ function launch(home: string, args: string[] = [], extra: Record<string, string>
   console.error = (...values: unknown[]) => { notes.push(values.join(" ")); };
   try {
     const env = buildCodexLaunchEnv({ CODEX_HOME: home, ...extra }, {
-      routingKind: "opencodex-local", args, serviceToken: () => { reads++; return token; },
+      routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, args, serviceToken: () => { reads++; return token; },
     });
     return { env, reads, notes };
   } finally { console.error = original; }

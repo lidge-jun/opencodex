@@ -121,6 +121,70 @@ test("unrelated successful pause preserves reset retry after server state may ha
   expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "active", accountId: "b" });
 });
 
+test.each([true, false])("successful same-account changes update an owed pause retry from %s", async initialPaused => {
+  const writes: unknown[] = [];
+  let paused = !initialPaused;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      writes.push(body);
+      paused = body.paused;
+      return writes.length === 1
+        ? Response.json({ code: "affinity_reset_not_persisted", retryable: true,
+          pauseCommitted: true, activeAccountId: "a" }, { status: 503 })
+        : Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false });
+    }
+    return Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false, paused)] });
+  };
+  await act(async () => { await pools.pauseAccount("fixture", row("b", false, !initialPaused), initialPaused); });
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "pause", accountId: "b", paused: initialPaused });
+  await act(async () => { await pools.pauseAccount("fixture", row("b", false, initialPaused), !initialPaused); });
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "pause", accountId: "b", paused: !initialPaused });
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(writes).toEqual([
+    { provider: "fixture", accountId: "b", paused: initialPaused },
+    { provider: "fixture", accountId: "b", paused: !initialPaused },
+    { provider: "fixture", accountId: "b", paused: !initialPaused, retryAffinityReset: true },
+  ]);
+  expect(pools.accountSets.fixture.accounts.find(account => account.id === "b")?.paused).toBe(!initialPaused);
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+});
+
+test("successful pause of another account preserves the pending pause target", async () => {
+  respond = async (_url, init) => init?.method === "PUT"
+    ? Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false })
+    : Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false), row("c", false)] });
+  await act(async () => {
+    await pools.fetchAccountSets(["fixture"]);
+    rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "pause", accountId: "b", paused: true });
+  });
+  await act(async () => { await pools.pauseAccount("fixture", row("c", false), true); });
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "pause", accountId: "b", paused: true });
+});
+
+test("successful pause does not overwrite a newer reset-only retry", async () => {
+  let settle!: (response: Response) => void;
+  let mutation!: Promise<void>;
+  respond = async (_url, init) => init?.method === "PUT"
+    ? new Promise(resolve => { settle = resolve; })
+    : Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false)] });
+  await act(async () => {
+    rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "pause", accountId: "b", paused: true });
+  });
+  await act(async () => { mutation = pools.pauseAccount("fixture", row("b", false, true), false); });
+  try {
+    await act(async () => {
+      rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "reset", accountId: "b" });
+    });
+  } finally {
+    await act(async () => {
+      settle(Response.json({ ok: true, activeAccountId: "a", activeAccountChanged: false }));
+      await mutation;
+    });
+  }
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "reset", accountId: "b" });
+});
+
 test.each(["active", "pause"] as const)("%s retry survives unavailable rosters and requires global reset confirmation after absence", async action => {
   let writes = 0;
   respond = async (_url, init) => {
