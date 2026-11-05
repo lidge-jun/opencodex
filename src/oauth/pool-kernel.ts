@@ -27,7 +27,7 @@ const DEFAULT_STICKY_LIMIT = 1;
 const MIN_STICKY_LIMIT = 1;
 const MAX_STICKY_LIMIT = 100;
 const DEFAULT_STRATEGY: OcxAccountPoolRotationStrategy = "quota";
-const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
+const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first", "reset-near-weighted"]);
 
 /** Selection order for an account with no stored preference: one flat tier. */
 export const DEFAULT_ACCOUNT_PRIORITY = 0;
@@ -149,13 +149,13 @@ function cloneSelectionState(state: SelectionState): SelectionState {
   };
 }
 
-function smoothWeightedIndex(ids: readonly string[], state: SelectionState): number {
+function smoothWeightedIndex(ids: readonly string[], state: SelectionState, weightOf?: (id: string) => number): number {
   let best = -1;
   let bestScore = Number.NEGATIVE_INFINITY;
   let total = 0;
-  const weight = 1;
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i]!;
+    const weight = Math.max(1, Math.min(Math.max(3, ids.length - 1), Math.floor(weightOf?.(id) ?? 1)));
     const score = (state.currentWeights.get(id) ?? 0) + weight;
     state.currentWeights.set(id, score);
     total += weight;
@@ -180,6 +180,7 @@ function pickRoundRobinFromState(
   stickyLimit: number,
   state: SelectionState,
   commitSticky: boolean,
+  weightOf?: (id: string) => number,
 ): string | null {
   if (eligibleIds.length === 0) return null;
 
@@ -194,7 +195,7 @@ function pickRoundRobinFromState(
     state.successes = 0;
   }
 
-  const index = smoothWeightedIndex(eligibleIds, state);
+  const index = smoothWeightedIndex(eligibleIds, state, weightOf);
   if (index < 0) return null;
 
   const picked = eligibleIds[index]!;
@@ -209,8 +210,9 @@ export function pickRoundRobinAccount(
   poolKey: string,
   eligibleIds: readonly string[],
   stickyLimit: number,
+  weightOf?: (id: string) => number,
 ): string | null {
-  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true);
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true, weightOf);
 }
 
 /**
@@ -221,12 +223,13 @@ export function peekRoundRobinAccount(
   poolKey: string,
   eligibleIds: readonly string[],
   stickyLimit: number,
+  weightOf?: (id: string) => number,
 ): string | null {
   const live = selectionState.get(poolKey);
   const scratch = live
     ? cloneSelectionState(live)
     : { successes: 0, currentWeights: new Map<string, number>() };
-  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false);
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false, weightOf);
 }
 
 export function notePoolRotationSuccess(
