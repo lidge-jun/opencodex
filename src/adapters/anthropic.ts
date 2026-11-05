@@ -122,6 +122,24 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
   applyCacheControlToLast(blocks, cc);
 }
 
+/**
+ * Move text to the head of the first user turn. Returns false when the first message is not a
+ * user turn, so the caller can keep the text in the top-level system array.
+ */
+function prependTextToFirstUserMessage(messages: unknown[], text: string): boolean {
+  const first = messages[0] as Record<string, unknown> | undefined;
+  if (!first || first.role !== "user") return false;
+  if (typeof first.content === "string") {
+    first.content = [{ type: "text", text }, { type: "text", text: first.content }];
+    return true;
+  }
+  if (Array.isArray(first.content)) {
+    first.content = [{ type: "text", text }, ...(first.content as unknown[])];
+    return true;
+  }
+  return false;
+}
+
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
@@ -1039,10 +1057,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       };
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
-        body.system = [
-          { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...system.map(text => ({ type: "text", text })),
-        ];
+        // Keep caller system text at the head of the first user turn for OAuth.
+        const callerSystem = (parsed.context.systemPrompt ?? []).join("\n\n");
+        body.system = [{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }];
+        if (system.length > 0) {
+          if (!(callerSystem && prependTextToFirstUserMessage(messages, system.join("\n\n")))) {
+            (body.system as Array<Record<string, unknown>>).push(...system.map(text => ({ type: "text", text })));
+          }
+        }
       } else if (system.length > 0) {
         body.system = system.map(text => ({ type: "text", text }));
       }
