@@ -9,6 +9,7 @@ import { assertCodeBuddyAiDestination, CODEBUDDY_AI_BASE_URL, codeBuddyAiHeaders
 const sessionSalt = randomBytes(32);
 const opaqueId = (value: unknown) => createHmac("sha256", sessionSalt).update(JSON.stringify(value)).digest("hex").slice(0, 32);
 
+/** OpenAI Chat contract over CodeBuddy SSE, with its account headers and tool-schema rules. */
 export function createCodeBuddyAiAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const base = createOpenAIChatAdapter({ ...provider, adapter: "openai-chat", baseUrl: CODEBUDDY_AI_BASE_URL, headers: undefined });
   return {

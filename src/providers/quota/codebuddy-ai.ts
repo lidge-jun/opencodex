@@ -19,12 +19,14 @@ function packageEnd(row: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
+/** Earliest future non-daily package expiry, summed across packages that end together. */
 export function codeBuddyAiExpiringCredits(packages: unknown[], codes: ReadonlySet<string>, now: number): WorkBuddyCreditBalance["expiring"] {
   let at = Infinity, amount = 0;
   for (const raw of packages) {
     const row = workBuddyRecord(raw);
     if (typeof row.PackageCode !== "string" || !codes.has(row.PackageCode) || String(row.CapacityType) === "4") continue;
-    const remaining = workBuddyCapacity(row.CycleCapacityRemainPrecise || row.CycleCapacityRemain);
+    const precise = workBuddyCapacity(row.CycleCapacityRemainPrecise);
+    const remaining = precise ?? workBuddyCapacity(row.CycleCapacityRemain);
     const end = packageEnd(row);
     if (!remaining || !end || end <= now) continue;
     if (end < at) { at = end; amount = remaining; }
@@ -57,6 +59,7 @@ async function expiringCredits(summary: Record<string, unknown>, headers: Record
   return codeBuddyAiExpiringCredits(lists.flat(), new Set(codes), now);
 }
 
+/** Probe the account meter; failures omit the balance instead of reporting zero. */
 export async function fetchCodeBuddyAiQuota(provider: string, credential: OAuthCredentials): Promise<ProviderQuotaProbeResult> {
   if (!credential.codeBuddyAi) return null;
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS), now = Date.now();

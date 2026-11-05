@@ -66,6 +66,9 @@ test("catalog rejects business errors, invalid IDs and oversized rosters", () =>
   expect(extractProviderModelItems({ code: 1, data: catalog().data }, discovery).ok).toBe(false);
   expect(extractProviderModelItems(catalog("bad\nmodel"), discovery).ok).toBe(false);
   expect(extractProviderModelItems(catalog(), { ...discovery, maxModels: 1 })).toMatchObject({ ok: false, reason: "too_many_models" });
+  // The CLI roster is bounded independently of data.models.
+  expect(extractProviderModelItems({ code: 0, data: { agents: [{ name: "cli", models: ["glm-a", "glm-b"] }], models: [{ id: "glm-a" }] } },
+    { ...discovery, maxModels: 1 })).toMatchObject({ ok: false, reason: "too_many_models" });
 });
 
 for (const stream of [false, true]) test(`Responses pipeline sends CodeBuddy AI credentials and handles SSE (stream=${stream})`, async () => {

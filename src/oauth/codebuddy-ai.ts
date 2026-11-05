@@ -15,6 +15,14 @@ export class CodeBuddyAiApiError extends Error {
   }
 }
 
+/** The local refresh grant is past its expiry: only a new browser login can succeed. */
+export class CodeBuddyAiLoginRequiredError extends Error {
+  readonly terminal = true;
+  constructor() {
+    super("CodeBuddy AI refresh token expired; sign in again");
+  }
+}
+
 /** Fixed-origin, bounded reads; upstream error/profile text never enters diagnostics. */
 export async function codeBuddyAiApi(
   path: string, headers: Record<string, string>, signal?: AbortSignal, post = false, payload: Json = {},
@@ -91,6 +99,7 @@ async function poll(path: string, headers: Record<string, string>, retryCode: nu
   }
 }
 
+/** Browser login: request state, show the login page, poll, then resolve the team identity. */
 export async function loginCodeBuddyAi(ctrl: OAuthController): Promise<OAuthCredentials> {
   const deadline = AbortSignal.timeout(5 * 60_000);
   const signal = ctrl.signal ? AbortSignal.any([ctrl.signal, deadline]) : deadline;
@@ -127,10 +136,11 @@ export async function loginCodeBuddyAi(ctrl: OAuthController): Promise<OAuthCred
   return credentials(token, { uid: who.uid, domain, ...(enterpriseId ? { enterpriseId: enterpriseId as string } : {}) });
 }
 
+/** Rotate the access token; a locally expired grant throws a terminal login-required error. */
 export async function refreshCodeBuddyAiToken(refresh: string, signal?: AbortSignal, previous?: OAuthCredentials): Promise<OAuthCredentials> {
   const metadata = previous?.codeBuddyAi;
   if (!metadata || !codeBuddyAiHeaderValue(refresh, 32768)) throw new Error("CodeBuddy AI requires a new browser login");
-  if (metadata.refreshExpiresAt && metadata.refreshExpiresAt <= Date.now()) throw new Error("CodeBuddy AI refresh token expired; sign in again");
+  if (metadata.refreshExpiresAt && metadata.refreshExpiresAt <= Date.now()) throw new CodeBuddyAiLoginRequiredError();
   const headers = codeBuddyAiHeaders(undefined, metadata);
   headers["X-Refresh-Token"] = refresh;
   headers["X-Auth-Refresh-Source"] = "plugin";

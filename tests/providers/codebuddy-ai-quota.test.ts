@@ -4,7 +4,7 @@ import { parseWorkBuddyCredits, normalizeWorkBuddyCredits } from "../../src/prov
 import { fetchCodeBuddyAiQuota, codeBuddyAiExpiringCredits } from "../../src/providers/quota/codebuddy-ai";
 import { TERMINAL_QUOTA_FAILURE } from "../../src/providers/quota/report-cache";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, providerOAuthAccountQuotaMode, fetchProviderQuotaReports } from "../../src/providers/quota";
-import { saveCredential, getAccountSet, setAccountPaused, mergeAccountCredential, getAccountCredential } from "../../src/oauth/store";
+import { saveCredential, getAccountSet, setAccountPaused, mergeAccountCredential, getAccountCredential, setActiveAccount } from "../../src/oauth/store";
 import { accountHeadroomPercent } from "../../src/oauth/account-quota-rank";
 import { cachedProviderQuotaIsExhausted } from "../../src/combos/resolve";
 import { providerDecisionWindows } from "../../src/providers/quota-decision-publication";
@@ -53,6 +53,9 @@ test("finds the earliest counted gift expiry, excluding daily slices and unrelat
     { PackageCode: "other", CapacityType: 1, CycleCapacityRemain: 50, DeductionEndTime: now + 1 },
   ];
   expect(codeBuddyAiExpiringCredits(rows, new Set(["gift", "base"]), now)).toEqual({ amount: 260, at });
+  // A precise zero means the package is depleted; the legacy field must not resurrect it.
+  expect(codeBuddyAiExpiringCredits([{ PackageCode: "gift", CapacityType: 1, CycleCapacityRemainPrecise: "0",
+    CycleCapacityRemain: 250, DeductionEndTime: at }], new Set(["gift"]), now)).toBeUndefined();
 });
 
 test("uses account-owned headers and bounded pagination for package expiry", async () => {
@@ -103,7 +106,9 @@ test("the registered quota path is account-isolated, cached, refreshable, and di
   }) as typeof fetch;
   expect(providerOAuthAccountQuotaMode("codebuddy-ai")).toBe("probe");
   const rows = await fetchProviderAccountQuotas("codebuddy-ai");
-  expect(rows.map(row => row.quota?.workbuddyCredits?.total).sort()).toEqual([350, 500]);
+  // Each row must carry the balance probed with ITS credential: a swap between accounts fails here.
+  expect(rows.map(row => [getAccountCredential("codebuddy-ai", row.accountId)?.access, row.quota?.workbuddyCredits?.total]).sort())
+    .toEqual([["fixture-access-a", 350], ["fixture-access-b", 500]]);
   await fetchProviderAccountQuotas("codebuddy-ai"); expect(reads).toBe(2);
   await fetchProviderAccountQuotas("codebuddy-ai", true); expect(reads).toBe(4);
   for (const row of rows) {
@@ -121,6 +126,8 @@ test("the registered quota path is account-isolated, cached, refreshable, and di
 
 test("Overview reports use the selected account and failed refresh preserves stale data until a 401", async () => {
   await saveCredential("codebuddy-ai", credentials());
+  await saveCredential("codebuddy-ai", credentials("b"));
+  await setActiveAccount("codebuddy-ai", "fixture-user-a");
   stubSummary(summary());
   const config = { port: 10100, defaultProvider: "codebuddy-ai", providers: { "codebuddy-ai": {
     adapter: "codebuddy-ai", baseUrl: "https://www.codebuddy.ai/v2", authMode: "oauth" as const,

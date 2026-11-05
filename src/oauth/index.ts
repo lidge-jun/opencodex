@@ -53,7 +53,7 @@ import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
 import { WORKBUDDY_CONFIG_URL, workBuddyHeaders } from "../providers/workbuddy";
-import { loginCodeBuddyAi, refreshCodeBuddyAiToken } from "./codebuddy-ai";
+import { CodeBuddyAiLoginRequiredError, loginCodeBuddyAi, refreshCodeBuddyAiToken } from "./codebuddy-ai";
 import { CODEBUDDY_AI_CONFIG_URL, codeBuddyAiHeaders } from "../providers/codebuddy-ai";
 import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
@@ -768,6 +768,9 @@ function terminal(error:unknown):boolean{
   // ChatGPT carries the pool classifier's verdict on the error itself: revoked and
   // expired grants are terminal; unknown/transient failures stay retryable.
   if(error instanceof ChatGptTokenError)return error.terminal;
+  // A locally expired CodeBuddy refresh grant cannot be renewed without a browser login, so
+  // retrying it only repeats the same failure.
+  if(error instanceof CodeBuddyAiLoginRequiredError)return error.terminal;
   // Local durable-write/read/cleanup failures are operational, not credential
   // death: the provider credential was never rejected or consumed. Never mark
   // the account needsReauth for broken local persistence infrastructure.

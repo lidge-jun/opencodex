@@ -1,10 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { loginCodeBuddyAi, refreshCodeBuddyAiToken, codeBuddyAiApi } from "../../src/oauth/codebuddy-ai";
-import { normalizeAuthStoreBuffer, credentialGeneration } from "../../src/oauth/store";
+import { normalizeAuthStoreBuffer, credentialGeneration, getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getValidAccessSnapshotForAccount, OAuthLoginRequiredError } from "../../src/oauth";
+import { createTempHome } from "../helpers/temp-home";
 import type { OAuthCredentials } from "../../src/oauth/types";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+let home: ReturnType<typeof createTempHome> | undefined;
+afterEach(() => { globalThis.fetch = originalFetch; home?.remove(); home = undefined; });
 const token = { accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresIn: 3600, refreshExpiresIn: 7200, domain: "international" };
 function replies(who: unknown, calls: Array<{ url: string; headers: Headers }> = []) {
   globalThis.fetch = (async (input, init) => {
@@ -35,6 +38,11 @@ test("missing identity and ambiguous team refuse credential creation", async () 
   await expect(loginCodeBuddyAi({})).rejects.toThrow("identity unavailable");
   replies({ uid: "fixture-user", type: "enterprise", accounts: [] });
   await expect(loginCodeBuddyAi({})).rejects.toThrow("team identity unavailable");
+  replies({ uid: "fixture-user", type: "enterprise", accounts: [
+    { uid: "fixture-user", type: "enterprise", enterpriseId: "fixture-team-a" },
+    { uid: "fixture-user", type: "enterprise", enterpriseId: "fixture-team-b" },
+  ] });
+  await expect(loginCodeBuddyAi({})).rejects.toThrow("team identity unavailable");
 });
 
 test("cancellation stops polling without saving a credential", async () => {
@@ -49,7 +57,9 @@ test("login rejects foreign URLs and never projects upstream error text", async 
   globalThis.fetch = (async () => Response.json({ code: 0, data: { state: "s", authUrl: "private-fixture-invalid-url" } })) as typeof fetch;
   await expect(loginCodeBuddyAi({})).rejects.toThrow("CodeBuddy AI returned an invalid login URL");
   globalThis.fetch = (async () => Response.json({ code: 11140, msg: "secret-fixture-access" }, { status: 403 })) as typeof fetch;
-  await expect(loginCodeBuddyAi({})).rejects.toThrow("HTTP 403, code 11140");
+  const rejected = await loginCodeBuddyAi({}).catch(error => error as Error);
+  expect(rejected.message).toBe("CodeBuddy AI request failed (HTTP 403, code 11140)");
+  expect(rejected.message).not.toContain("secret-fixture-access");
 });
 
 test("refresh preserves account/team, rotates tokens and rejects expired refresh grants", async () => {
@@ -70,6 +80,17 @@ test("refresh preserves account/team, rotates tokens and rejects expired refresh
   })).rejects.toThrow("expired");
 });
 
+test("a locally expired refresh grant marks the account needs-reauth instead of retrying", async () => {
+  home = createTempHome("ocx-codebuddy-ai-reauth-");
+  await saveCredential("codebuddy-ai", {
+    access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() - 1, accountId: "fixture-user",
+    codeBuddyAi: { uid: "fixture-user", domain: "international", refreshExpiresAt: 1 },
+  });
+  const accountId = getAccountSet("codebuddy-ai")!.activeAccountId;
+  await expect(getValidAccessSnapshotForAccount("codebuddy-ai", accountId)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+  expect(getAccountSet("codebuddy-ai")!.accounts.find(row => row.id === accountId)?.needsReauth).toBe(true);
+});
+
 test("bounded API response refuses oversized and malformed data", async () => {
   globalThis.fetch = (async () => new Response("x".repeat(256 * 1024 + 1))) as typeof fetch;
   await expect(codeBuddyAiApi("/v2/plugin/auth/state", {})).rejects.toThrow("invalid response");
@@ -87,5 +108,9 @@ test("protected store retains validated metadata and fences identity changes", (
   if (result.kind === "ready") expect(result.store["codebuddy-ai"]?.accounts[0]?.credential.codeBuddyAi).toEqual(cred.codeBuddyAi);
   expect(credentialGeneration({ ...cred, codeBuddyAi: { ...cred.codeBuddyAi!, enterpriseId: "other" } })).not.toBe(credentialGeneration(cred));
   const invalid = normalizeAuthStoreBuffer(Buffer.from(JSON.stringify({ "codebuddy-ai": { ...cred, codeBuddyAi: { uid: "bad\nheader", domain: "international" } } })));
-  if (invalid.kind === "ready") expect(invalid.store["codebuddy-ai"]?.accounts[0]?.credential.codeBuddyAi).toBeUndefined();
+  expect(invalid.kind).toBe("ready");
+  if (invalid.kind !== "ready") return;
+  const retained = invalid.store["codebuddy-ai"]?.accounts[0]?.credential;
+  expect(retained).toMatchObject({ access: cred.access, refresh: cred.refresh });
+  expect(retained?.codeBuddyAi).toBeUndefined();
 });

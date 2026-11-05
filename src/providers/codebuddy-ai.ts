@@ -6,14 +6,17 @@ export const CODEBUDDY_AI_BASE_URL = `${CODEBUDDY_AI_ORIGIN}/v2`;
 export const CODEBUDDY_AI_CONFIG_URL = `${CODEBUDDY_AI_ORIGIN}/v3/config`;
 export const CODEBUDDY_AI_USER_AGENT = "CLI/2.180.0 CodeBuddy/2.180.0";
 
+/** Per-credential catalog authority: the token and its account metadata both participate. */
 export function codeBuddyAiCatalogIdentity(access: string, metadata: CodeBuddyAiOAuthMetadata | undefined): string {
   return createHash("sha256").update(JSON.stringify([access, metadata])).digest("hex");
 }
 
+/** A header-safe value: non-empty printable ASCII, bounded. */
 export function codeBuddyAiHeaderValue(value: unknown, max = 1024): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max && /^[\x21-\x7e]+$/.test(value);
 }
 
+/** Narrow stored metadata before it reaches headers or a cache identity. */
 export function normalizeCodeBuddyAiMetadata(value: unknown): CodeBuddyAiOAuthMetadata | undefined {
   if (!value || typeof value !== "object") return undefined;
   const v = value as Partial<CodeBuddyAiOAuthMetadata>;
@@ -27,6 +30,7 @@ export function normalizeCodeBuddyAiMetadata(value: unknown): CodeBuddyAiOAuthMe
   };
 }
 
+/** Refuse any base URL that is not the fixed CodeBuddy origin and `/v2` path. */
 export function assertCodeBuddyAiDestination(baseUrl: string): void {
   const u = new URL(baseUrl);
   if (u.origin !== CODEBUDDY_AI_ORIGIN || u.username || u.password || u.search || u.hash
@@ -35,6 +39,7 @@ export function assertCodeBuddyAiDestination(baseUrl: string): void {
   }
 }
 
+/** Fixed client identity plus the selected account, team and tenant. */
 export function codeBuddyAiHeaders(access: string | undefined, metadata?: CodeBuddyAiOAuthMetadata): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent": CODEBUDDY_AI_USER_AGENT,
