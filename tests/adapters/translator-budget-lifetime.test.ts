@@ -8,6 +8,9 @@ import {
 } from "../../src/server/responses/core-lifetime";
 import { isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import {
+  isPolicyCandidateRefusal, PolicyCandidateUnavailableError, policyCandidateRefusalResponse,
+} from "../../src/server/responses/policy-request-scope";
+import {
   markNativePassthroughSseResponse, isNativePassthroughSseResponse,
   markEagerRelaySseResponse, isEagerRelaySseResponse,
   markPreinspectedJsonResponse, isPreinspectedJsonResponse,
@@ -175,6 +178,20 @@ for (const outerLease of [false, true]) {
     });
   }
 }
+
+test.each([true, false])("policy refusal authority survives lifetime wrappers only for a local response (%s)", async local => {
+  const refusal = policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+  // An upstream can reproduce every wire byte, but cannot mint the local response identity.
+  const source = local ? refusal : new Response(await refusal.text(), { status: refusal.status, headers: refusal.headers });
+  let released = 0;
+  const budget = createTranslatorBudget();
+  const wrapped = finalizeAccountLease(finalizeOwnedTranslatorBudget(source, budget), () => { released++; });
+  expect(isPolicyCandidateRefusal(wrapped)).toBe(local);
+  expect(wrapped.status).toBe(409);
+  expect((await wrapped.json()).error.code).toBe("policy_candidate_unavailable");
+  expect(released).toBe(1);
+  expect(budget.snapshot().currentBytes).toBe(0);
+});
 
 for (const surface of ["responses", "chat-completions", "claude-messages"] as const) {
   test(`${surface}: HTTP owner links request abort to its unread response budget`, async () => {

@@ -16,6 +16,11 @@ When a main-account hard-lock fallback selects a profile, `src/server/responses/
 checks its first ranked destination against the original model under the
 [fallback policy](../fallback-policy.md#sites), before authentication or upstream dispatch.
 
+After final normalization, preparation refuses a Chat destination that cannot preserve a mandatory
+tool choice using `PolicyCandidateUnavailableError`. The local response identity allows traversal
+to a compatible originally eligible candidate without sending to the incompatible destination.
+Ordinary direct routes keep the client-facing 400; upstream errors do not acquire this identity.
+
 Normal virtual-model wire mapping remains attached to its admitted selector and does not add a new
 eligible model. Policy traversal records settled physical destinations and skips a destination already
 attempted through another candidate or redirect; same-target credential and transient retries retain
@@ -27,6 +32,8 @@ The initial decision remains the selection evidence while physical attempts reco
 Cancellation, non-replayable responses and committed output keep the
 [shared replay boundaries](responses-failover.md). A local policy refusal is identified by its
 in-process response identity; matching upstream prose or error codes cannot authorize another attempt.
+The translator-budget and account-lease wrappers in `src/server/responses/core-lifetime.ts` carry
+that identity from their source response without deriving it from serialized error contents.
 Formatted quota errors retain [their upstream-code provenance](responses-combo-boundaries.md#upstream-account-quota-exhaustion-failover)
 through lifecycle wrappers; a reflected quota message on a 400/422 response does not authorize a
 candidate hop merely because formatting serialized it as `insufficient_quota` or its text mentions a free-tier single-request cap.
@@ -35,3 +42,7 @@ Coverage: `tests/routing/routing-policy-dispatch-scope.test.ts` exercises real r
 normalization and configured subagent selection with synthetic dispatch. It also covers recovery,
 alias collisions, redirects, bounded traces and virtual models. `tests/routing/routing-policy-fallback.test.ts`
 pins request snapshots, terminal responses, cancellation, credential handoff and attempt accounting.
+`tests/responses/responses-direct-chat-tool-choice.test.ts` exercises the real endpoint's pre-send
+Chat refusal, unchanged hosted/MCP selectors and tool declarations, and native MCP output on Responses fallback.
+`tests/adapters/translator-budget-lifetime.test.ts` distinguishes a local refusal from identical
+upstream wire bytes through both lifetime wrappers.

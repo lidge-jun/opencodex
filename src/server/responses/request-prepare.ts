@@ -8,7 +8,7 @@ import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, PolicyCandidateUnavailableError } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -74,6 +74,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { formatErrorResponse } from "../../bridge";
+import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
@@ -1459,6 +1460,12 @@ export async function prepareResponsesRequest(
   });
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
+    if (route.provider.adapter === "openai-chat"
+      && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId)) {
+      if (policyScope.eligibility) throw new PolicyCandidateUnavailableError();
+      return formatErrorResponse(400, "invalid_request_error",
+        "This mandatory tool_choice cannot be preserved for a translated Chat destination.");
+    }
   } catch (error) {
     const policyRefusal = policyCandidateRefusalResponse(error);
     if (policyRefusal) return policyRefusal;

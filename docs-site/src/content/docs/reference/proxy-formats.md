@@ -50,6 +50,11 @@ snapshot omits it. Auto/none, incomplete results and unknown contracts retain th
 
 ## Required tools on translated Chat routes
 
+Before sending, the proxy rejects a mandatory tool choice that the selected Chat destination cannot
+represent, such as `computer_use` or a required allowed-tool list containing MCP selections. A direct
+route returns HTTP 400 without an upstream request. A routing profile can continue to another
+originally eligible destination under its configured fallback policy, preserving the original choice.
+
 A translated OpenAI Chat response must contain a complete selected client tool call when
 `tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream
 finishes normally without one, the turn fails with `required_tool_not_called` and preserves usage.

@@ -41,6 +41,12 @@ export function isPolicyCandidateRefusal(response: Response): boolean {
   return localRefusals.has(response);
 }
 
+/** Preserve local refusal authority when response lifetime owners wrap the body. */
+export function carryPolicyCandidateRefusal(source: Response, target: Response): Response {
+  if (localRefusals.has(source)) localRefusals.add(target);
+  return target;
+}
+
 export function capturePolicyRequestRoute(scope: PolicyRequestScope, route: RouteResult): RouteResult {
   if (!scope.eligibility && route.policyEligibility && route.routeDecision?.routeKind === "policy") {
     scope.eligibility = new Set(route.policyEligibility);

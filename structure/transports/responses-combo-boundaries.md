@@ -39,6 +39,13 @@ tool-search lowering, still applies after parsing. Chat translation maps a direc
 choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none, including the resolved model's auto-only tool-choice policy; exhaustion reports the tool-choice constraint. Eligibility resolves synthetic Fast/effort selectors before model policy, matching child request preparation while preserving exact configured IDs.
 Registered OpenAI API virtual models resolve to their wire model before adapter and auto-only policy checks, using the same registry resolver as child normalization. Other providers and unregistered IDs remain literal. Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
 
+Required allowed-tools lists containing MCP entries also exclude Chat: a function name cannot retain
+the MCP server's ownership, even when a client function has the same name. The shared predicate in
+`src/server/responses/combo-required-tool-contract.ts` also guards direct Chat destinations after final
+normalization in `src/server/responses/request-prepare.ts`. An incompatible direct route returns 400
+before dispatch; an authorized policy candidate uses the [local policy refusal](policy-fallback.md)
+so another originally eligible destination can serve the unchanged choice.
+
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native
 `openai-responses` JSON children with explicit required or named function/custom choices.
