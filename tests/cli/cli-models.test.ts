@@ -148,6 +148,62 @@ describe("ocx models", () => {
     }
   });
 
+  // The registry-sync merge must go through the router's guarded derivation, not a raw
+  // registry read: a provider whose transport diverges from its namesake registry entry
+  // gets nothing, a matching one gets the seed, and stale saved configs gain new seed ids
+  // while saved models stay first. cline is a registry entry with preserveCustomDestination
+  // (fixed key destination), so the transport guard actually discriminates for it.
+  test("registry seed syncs into a stale saved config when the transport matches", () => {
+    const { dir } = freshConfig({ providers: { cline: {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cline.bot/api/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      defaultModel: "anthropic/claude-sonnet-4-6",
+      // Deliberately predates the current seed: saved subset, plus one custom-only id.
+      models: ["anthropic/claude-sonnet-4-6", "custom-only-model"],
+    } } });
+    try {
+      const result = runCli(["models", "--provider", "cline", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models.map((m: { model: string; isDefault: boolean }) => m);
+      expect(rows[0]).toMatchObject({ model: "anthropic/claude-sonnet-4-6", isDefault: true });
+      expect(rows[1]).toMatchObject({ model: "custom-only-model", isDefault: false });
+      // Seed ids absent from the stale saved config still appear.
+      const ids = rows.map((m: { model: string }) => m.model);
+      expect(ids).toContain("openai/gpt-4o");
+      expect(ids).toContain("google/gemini-2.5-pro");
+      // No duplicate rows: saved ids also come back from the router union, and the
+      // per-provider seen-dedupe must collapse them.
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(rows.filter((m: { isDefault: boolean }) => m.isDefault)).toHaveLength(1);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("registry seed does NOT leak into a provider whose transport diverges from its namesake", () => {
+    const { dir } = freshConfig({ providers: { cline: {
+      adapter: "openai-chat",
+      baseUrl: "https://elsewhere.example.com/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      defaultModel: "my-model",
+      models: ["my-model"],
+    } } });
+    try {
+      // The cline registry entry carries a non-empty seed (the matching-transport test
+      // above receives it), so listing only the saved id here means the transport guard
+      // is what excluded the seed, not an empty registry.
+      const result = runCli(["models", "--provider", "cline", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.map((m: { model: string }) => m.model)).toEqual(["my-model"]);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("models --provider X --json combines flags", () => {
     const { dir } = freshConfig();
     try {

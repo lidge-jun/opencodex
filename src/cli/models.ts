@@ -94,9 +94,17 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
     // defaultModel first
     if (prov.defaultModel) addModel(prov.defaultModel, true);
 
-    // models array
-    if (prov.models) {
-      for (const m of prov.models) addModel(m, m === prov.defaultModel);
+    // Keep the CLI list current when this config predates a provider's registry seed.
+    // knownModelIdsForProvider is the router's own derivation: config models first, then
+    // registry seeds, hint-map keys, and live-discovered cache ids (registry-derived
+    // sources only enter when the transport guard matches -- a custom endpoint named like
+    // a registry provider gets none of them), then customModels. Because hint-map keys
+    // are included, wire-only ids a provider's collapsed picker hides still appear here;
+    // that is router parity. A model the user pruned from `models` reappears if the
+    // registry still seeds it -- the list is a union, not the user's curation. The
+    // user's saved models remain first and are never discarded.
+    for (const m of [...(prov.models ?? []), ...knownModelIdsForProvider(provName, prov, config)]) {
+      addModel(m, m === prov.defaultModel);
     }
   }
 
