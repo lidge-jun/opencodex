@@ -278,7 +278,10 @@ describe("everything else keeps today's settle", () => {
     ["doubled wrapper aliases", { ...OVERLOADED, status_code: 503 }],
     ["an unrecognized code without a wrapper status", { type: "error", error: { code: "mystery", message: "x" } }],
   ])("after the preamble, %s is relayed in the body", async (_name, frame) => {
-    await committed(await exchange(opened(CREATED, frame)));
+    const body = await committed(await exchange(opened(CREATED, frame)));
+    // The name claims this frame reaches the client: prove that frame, not only a 200.
+    expect(body).toContain(`event: ${frame.type}`);
+    expect(body).toContain(frame.error.message);
   });
 
   test.each([
