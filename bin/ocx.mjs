@@ -1444,7 +1444,7 @@ if (desktopPlan.kind === "handoff") {
     // Signal delivery is asynchronous; never resume package repair or Bun lookup.
     await new Promise(() => {});
   }
-  // Only confirmed target ENOENT reaches the ordinary package path below.
+  // A selected Desktop never falls back to the package after a launch failure.
 }
 
 if (!orchestratedUpdate && process.argv[2] === "update" && installMethod === "mise") {
