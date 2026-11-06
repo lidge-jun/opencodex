@@ -79,6 +79,8 @@ the estimate excludes it too; history that never reaches the provider therefore 
 context-limit refusal. Models that preserve reasoning, and other adapters,
 send that thinking and still count it.
 
+Character-based token estimates apply the existing denser CJK weight to supplementary Han characters such as 𠀀 as well as BMP Chinese and Korean text. A supplementary Han surrogate pair contributes two UTF-16 units to that bucket. These remain heuristics: model ratios, context-window caps and provider-reported usage are unchanged.
+
 ## The parser
 
 `responses/parser.ts` validates the incoming request with `responses/schema.ts` (Zod), then builds an
