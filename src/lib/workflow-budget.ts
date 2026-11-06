@@ -94,8 +94,8 @@ export interface WorkflowBudgetPolicy {
    */
   readonly interactiveReserve: number;
   /**
-   * Roots tracked at once, as a hard bound rather than a hint. At the ceiling one idle,
-   * under-limit root is evicted to make room; when no root may be forgotten safely the new
+   * Roots tracked at once, as a hard bound rather than a hint. At the ceiling one idle root
+   * with no unexpired count history or exhausted spend is evicted; when none is safe the new
    * root is REFUSED with `workflow-tracking-exhausted`. Admitting it anyway is what made a
    * caller minting new ids able to grow this map past the number written here.
    */
@@ -192,8 +192,8 @@ export type WorkflowDenial =
   | "workflow-children-exhausted"
   | "workflow-spend-exhausted"
   /**
-   * The root table is full and every entry is active or exhausted, so admitting this root
-   * would mean evicting one whose ceiling has already fired. Refusing is the honest answer:
+   * The root table is full and every entry retains activity, unexpired counts or exhausted
+   * spend, so admitting this root would discard accounting. Refusing is the honest answer:
    * `maxTrackedRoots` is a bound, and inserting anyway made it a suggestion.
    */
   | "workflow-tracking-exhausted"
@@ -266,7 +266,7 @@ export function workflowDenialSummary(
       return {
         code: "workflow_tracking_exhausted",
         message: "This proxy refused the request locally: it is already tracking as many tasks as"
-          + " it may, and every one of them is busy or over its own ceiling, so no provider was"
+          + " it may, and every one retains activity, unexpired counts or exhausted spend, so no provider was"
           + " contacted.",
       };
     case "workflow-send-replayed":
@@ -457,19 +457,16 @@ const roots = new Map<string, WorkflowState>();
  * was active or exhausted -- which is precisely the fan-out this file exists to bound.
  */
 function evictOneRoot(
-  policy: WorkflowBudgetPolicy,
   spendLedger?: SpendReservationLedger,
   now: number = Date.now(),
 ): boolean {
   let oldestKey: string | undefined;
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, state] of roots) {
-    // An active root is never evicted: dropping it would hand its fan-out a fresh allowance,
-    // which is the exact laundering this ledger exists to prevent. The same holds for an
-    // EXHAUSTED-but-idle root -- count-exhausted or spend-exhausted -- because recreating it
-    // fresh under the same id resets the very ceiling that already fired.
+    // Dropping active or unexpired count state would hand the same root fresh allowances,
+    // even when it used only part of a ceiling. Durable spend remains independently protected.
     if (state.active > 0) continue;
-    if (windowedSends(state, now) >= policy.maxPhysicalSends) continue;
+    if (windowedSends(state, now) > 0 || windowedChildren(state, now) > 0) continue;
     if (spendLedger?.exhausted("root", key) === true) continue;
     if (state.lastSeenMs < oldestAt) { oldestAt = state.lastSeenMs; oldestKey = key; }
   }
@@ -540,10 +537,10 @@ export function admitWorkflowTurn(
     };
   };
   if (!state) {
-    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(policy, ledger, now)) {
+    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(ledger, now)) {
       // Nothing may be forgotten, so the new root is refused instead of admitted over the
-      // bound. The alternative -- evicting an exhausted root -- resets the ceiling that
-      // already fired, and a caller minting fresh ids would get unlimited budget from it.
+      // bound. Evicting unexpired history would reset an existing allowance, and a caller
+      // minting fresh ids could repeatedly recover budget from the forgotten counts.
       return refuse("workflow-tracking-exhausted");
     }
     state = newWorkflowState(now, policy);

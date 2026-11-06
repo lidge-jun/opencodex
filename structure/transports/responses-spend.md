@@ -10,6 +10,11 @@ spent budget tells the client. Dispatch and retry behavior is in
 `request-spend.ts` connects this count to both enforced and observe-only request budgets;
 reporter retries, concurrent requests and adapter-owned permits share the root's existing window.
 Unused dispatch permits consume no root sends, and cleanup cannot refund a claimed physical start.
+Root-table eviction preserves active leases, any unexpired send or child counts, and exhausted
+durable spend. Only an idle root with no remaining windowed history and no exhausted spend is
+reusable; when none is safe, a new root is refused before insertion. Count history remains
+process-local, and live limit changes do not reset it. `tests/lib/workflow-budget.test.ts`
+pins partial-history retention, empty-root reuse, saturation, window expiry and limit changes.
 Observe-only reports reconcile those starts once; already-sent legacy reports remain recorded.
 The confirmed same-account gated-model ladder owns one non-renewable allowance of seven retries
 over the shared ledger. Each rung obtains fresh normal-capacity durable spend admission and a

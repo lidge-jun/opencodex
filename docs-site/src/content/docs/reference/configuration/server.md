@@ -111,6 +111,8 @@ The defaults suit most installs. Raise them when a workflow that legitimately ru
 
 The **Subagents** page of the dashboard shows the effective ceilings and edits them. `GET /api/workflow-budget/settings` returns the effective values with their defaults and allowed ranges; `PUT` with a partial object updates them, and JSON `null` restores the defaults. Dashboard/API changes apply to the next request without a restart and never reset what a task has already used; `POST /api/workflow-budget/clear` remains the way to forgive one task. A malformed file block is ignored with a warning and the built-in ceilings stay in force. Local `ocx config set/unset` edits require a restart to converge the running proxy. The 10-minute window, the reserved interactive slot and the 512 tracked tasks are not configurable.
 
+An idle task keeps its tracking slot while it has unexpired sends or child history, even if it has only partly used a limit. The proxy reuses only slots with no active turn, no remaining count history and no exhausted token budget. If all 512 slots must be retained, a new task receives local HTTP 429 with `workflow_tracking_exhausted` instead of resetting another task's allowance. Slots become reusable as their count windows expire; durable token ceilings remain independent. Count history is process-local and is not made persistent by this retention rule.
+
 ## Upstream transport recovery
 
 While the canonical ChatGPT upstream WebSocket waits for the first Responses event after
