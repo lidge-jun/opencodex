@@ -63,12 +63,12 @@ afterEach(async () => {
   }
 });
 
-async function mount() {
+async function mount(apiBase = "") {
   await act(async () => {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <Subagents apiBase="" />
+        <Subagents apiBase={apiBase} />
       </LanguageProvider>,
     );
   });
@@ -121,7 +121,7 @@ test("caps featured selections at five", async () => {
   // The cap lives in TWO places: the disabled attribute above (presentation) and the
   // state guard in toggle(). Force a click past the disabled attribute so a weakened
   // state guard cannot hide behind the UI check.
-  await act(async () => { addToggle(available[5]!).dispatchEvent(new (globalThis as any).window.MouseEvent("click", { bubbles: true })); });
+  await act(async () => { addToggle(available[5]!).dispatchEvent(new (globalThis as unknown as { window: { MouseEvent: typeof MouseEvent } }).window.MouseEvent("click", { bubbles: true })); });
   expect(removeButtons().length).toBe(5);
 
   // Every edit saved itself, and no autosave ever shipped more than five.
@@ -129,6 +129,23 @@ test("caps featured selections at five", async () => {
   expect(puts.length).toBe(5);
   expect(puts.every((r) => JSON.parse(String(r.init!.body)).models.length <= 5)).toBe(true);
   expect(JSON.parse(String(puts.at(-1)!.init!.body)).models).toEqual(available.slice(0, 5));
+});
+
+test("leads with what is in effect: first featured pick, slots used, pin state; free slots show as empty rows", async () => {
+  chosen = ["a-2", "a-1"];
+  // A base of its own, so the shared resource cache from earlier tests cannot answer first.
+  await mount("http://summary.test");
+  const summary = container.querySelector('section[aria-label="In effect now"]');
+  expect(summary).toBeTruthy();
+  // The summary comes before the roster and names only the first choice, never the list again.
+  expect(summary!.compareDocumentPosition(container.querySelector(".subagents-workspace-shell")!) & 4).toBe(4);
+  expect(summary!.textContent).toContain("a-2");
+  expect(summary!.textContent).not.toContain("a-1");
+  expect(summary!.textContent).toContain("2 of 5 picked");
+  expect(summary!.textContent).toContain("Off");
+  // Two featured rows plus three empty slots that are not rows of the roster.
+  expect(container.querySelectorAll(".swi-featured-row")).toHaveLength(2);
+  expect(container.textContent?.match(/Empty slot/g)).toHaveLength(3);
 });
 
 test("adding a model saves the featured order without a Save button", async () => {

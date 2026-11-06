@@ -57,6 +57,8 @@ zaman yukarı akışta yenilemeye zorlamaz.
 
 - Her etiket, bildirilen pencereler arasında tercih edileni gösterir: önce haftalık, sonra
   aylık, sonra 5 saatlik, sonra sağlayıcı adlı bir pencere veya ön ödemeli krediler.
+- Ön ödemeli kredilerin en az %90'ı kullanılmışsa ve tercih edilen normal pencere kritik
+  değilse etikette krediler gösterilir. Normal pencere de kritikse önceliğini korur.
 - Etiket %70 kullanımda amber rengine, %90 kullanımda kırmızıya döner.
 - Bildirilen tüm pencereleri sıfırlama saati ve okuma zamanıyla görmek için etiketin
   üzerine gelin veya klavyeyle odaklayın. Dokunmatik ekranda ilk dokunuş bu ayrıntıları gösterir.

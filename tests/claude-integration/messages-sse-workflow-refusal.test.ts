@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { helperPath, repoRoot } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 for (const detail of ["unbound", "bound", "absent", "invalid"]) test(`native workflow detail: ${detail}`, async () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-workflow-sse-"));
   try {
@@ -11,6 +12,8 @@ for (const detail of ["unbound", "bound", "absent", "invalid"]) test(`native wor
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (exit !== 0) throw new Error(`${stdout}\n${stderr}`);
     const result = JSON.parse(stdout.trim().split("\n").find(line => line.startsWith("WORKFLOW "))!.slice(9));
+    expect(result.hookHits).toBeGreaterThan(0);
+    expect(result.filterChecks).toEqual({ forward: true, backward: true });
     expect(result.status).toBe(429); expect(result.sends).toBe(0);
     expect(result.text.length).toBeGreaterThan(0);
     expect(result.text).not.toContain("987654321");
@@ -19,4 +22,4 @@ for (const detail of ["unbound", "bound", "absent", "invalid"]) test(`native wor
     expect(result.code).toBe("workflow_spend_exhausted");
     expect(result.header).toBe("workflow_spend_exhausted");
   } finally { rmSync(home, { recursive: true, force: true }); }
-});
+}, SPAWN_BUDGET_MS);

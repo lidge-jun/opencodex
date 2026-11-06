@@ -324,6 +324,13 @@ describe("tracked runtime record inspection", () => {
     Object.assign(new Error("fake " + code), { code });
   const liveOcx: TrackedRecordProbeDeps = { signal: () => {}, identity: () => "match" };
   const trackedPid = () => writeFileSync(getPidPath(), "4242", "utf-8");
+  test("an omitted tracked hostname remains distinct from an explicitly empty hostname", () => {
+    trackedPid();
+    writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 4242, port: 58195 }), "utf-8");
+    expect(describeTrackedRuntimeTarget(liveOcx)).toEqual({ pid: 4242, port: 58195, hostname: undefined });
+    writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 4242, port: 58195, hostname: "" }), "utf-8");
+    expect(describeTrackedRuntimeTarget(liveOcx)).toEqual({ pid: 4242, port: 58195, hostname: "" });
+  });
   const trustedProbePaths = () => {
     const trustedSystem32 = join(testDir, "trusted", "System32");
     const trustedPowerShell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");

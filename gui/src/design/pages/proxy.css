@@ -1,0 +1,81 @@
+/* v2 styles for the Proxy details, Advisor and the All settings hub pages. Imported by design/theme.css into the `bridge`
+   layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
+   Tailwind classes in the components; keep this file for what utilities cannot say. */
+
+/* ---- settings sections: v1 panels that sit in a section body become plain rows ----------
+   CompactionRoutingPanel, the reasoning and memory panels and FallbackPanel own their data
+   and still render a `.panel`. Inside a section's inset body the frame already exists, so
+   each panel drops its own card and reads as one more ruled row. MemoryObservabilityCard
+   sets an inline bottom margin, hence the one `!important`. */
+.pv2-section-body > :is(.panel, section, details) {
+  margin: 0 !important;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  min-width: 0;
+}
+.pv2-section-body > :is(.panel, section, details) > .font-semibold:first-child,
+.pv2-section-body > :is(.panel, section, details) > .spread:first-child .font-semibold,
+.pv2-section-body > :is(.panel, section, details) > summary,
+.pv2-section-body .pv2-row-label,
+.pv2-section-body .mem-head-title,
+.pv2-section-body .fallback-panel > h3 {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--ocx-fg);
+  letter-spacing: 0;
+}
+.pv2-section-body :is(.setting-hint, .card-sub) {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ocx-fg-muted);
+}
+/* The first and last rows sit inside the body's rounded corners. */
+.pv2-section-body > :first-child { border-top-left-radius: 12px; border-top-right-radius: 12px; }
+.pv2-section-body > :last-child { border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
+
+/* Sidecar rows keep their pinned control band (styles-dashboard-workspace.css) but lose the
+   card padding they had as panels: they are rows now. */
+.pv2-section-body > .dash-sidecar-row-card { padding: 14px 16px; }
+.pv2-section-body .dash-sidecar-copy .setting-hint { margin-top: 2px; }
+
+/* Fallback switch rows and the memory head are flex rows of their own; give them the row rhythm. */
+.pv2-section-body .fallback-panel { gap: 10px; }
+.pv2-section-body .fallback-panel > h3 { margin: 0; }
+.pv2-section-body .fallback-switch-row { padding: 6px 0; }
+.pv2-section-body .fallback-switch-row strong { font-weight: 500; }
+
+/* Long policy text a panel keeps in a disclosure: quiet summary, wrapped body. */
+.pv2-more { margin-top: 6px; }
+.pv2-more > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ocx-fg-muted);
+}
+.pv2-more > summary:hover { color: var(--ocx-fg); }
+.pv2-more[open] > summary { margin-bottom: 4px; }
+.pv2-more > :not(summary) { max-width: 68ch; }
+
+/* The sync row keeps its old hook class (tests and the sync toast read it), but its v1 grid
+   would split the row into two columns: it is a settings row like the others. */
+.pv2-section-body > .pv2-row.dash-sync-summary { display: flex; align-items: stretch; gap: 12px; }
+
+/* Row selects fill the width their row gives them. */
+.pv2-row-control .custom-select { min-width: 0; }
+
+/* The overview stack spaces the head, the notices and the section grid evenly. */
+.dash-overview-stack { gap: 20px; }
+
+/* Advisor: the model picker (a shared component) sizes itself inline; in the settings row it
+   fills the same field width as the other pickers. Its inline display needs the override. */
+.advisor-model-row .custom-select { display: block !important; width: 100%; }
+.advisor-model-row .select-trigger { width: 100%; justify-content: space-between; }
+.advisor-model-row .select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Advisor activity table: sticky header inside the inset, numbers right-aligned. */
+.pv2-table th { position: sticky; top: 0; z-index: 1; background: var(--ocx-raised); }
