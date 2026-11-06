@@ -204,6 +204,7 @@ test("a Child's /readyz reports an unusable link as 503 pending with a reason, a
 test("a ready Child's /readyz names its current tunnel connection, and a pending or unknown one omits it", async () => {
   let verdict: LinkReadiness = { ready: false, reason: "home_unreachable" };
   let generation: string | undefined = "fixture-child:1";
+  writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: linkConnection() }));
   const server = startMachineListener(0, {
     state: linkConnection(), managementAuthState: authState(), linkKeySource: () => LINK_KEY,
     linkTunnel: { connected: () => ({ kind: "match" }), pending: () => false, waitForConnected: async () => false },
