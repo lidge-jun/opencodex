@@ -67,3 +67,11 @@
 @media (prefers-reduced-motion: reduce) {
   .remote-link-page *, .remote-link-page *::before, .remote-link-page *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+.remote-link-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.remote-link-badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); }
+.remote-link-plant-card { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); }
+.remote-link-plant-card h4 { margin: 0; font-size: var(--text-body); font-weight: 600; color: var(--text); }
+.remote-link-plant-card p { margin: 0; font-size: var(--text-label); line-height: 1.5; color: var(--muted); }
+.remote-link-plant-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-family: var(--font-code); font-size: var(--text-caption); color: var(--text); }
+.remote-link-purge-option { display: flex; align-items: flex-start; gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--raised); font-size: var(--text-control); color: var(--text); cursor: pointer; }
+.remote-link-purge-option input { margin-top: 2px; flex: 0 0 auto; }

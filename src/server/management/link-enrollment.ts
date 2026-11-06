@@ -258,10 +258,18 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         phase = "remote_plant";
         const source = resolveBinary(confirmed.targetTriple ?? null);
         if (!source.ok) return fail("remote_plant_unavailable", "No verified ocx-child binary is available for this host architecture.", 409, source.reason);
-        const planted = await runner.run(
-          buildExecArgv({ alias, argv: remotePlantChildArgv(remotePlatform, source.artifact.sizeBytes, source.artifact.sha256), knownHostsFile: knownHosts }),
-          { stdin: source.artifact.bytes, timeoutMs: Math.max(budget, 60_000) },
-        );
+        let planted: SshRunResult;
+        try {
+          planted = await runner.run(
+            buildExecArgv({ alias, argv: remotePlantChildArgv(remotePlatform, source.artifact.sizeBytes, source.artifact.sha256), knownHostsFile: knownHosts }),
+            { stdin: source.artifact.bytes, timeoutMs: Math.max(budget, 60_000) },
+          );
+        } catch (plantErr) {
+          if (plantErr instanceof SshRunnerError && plantErr.code === "timeout") {
+            return fail("remote_plant_timeout", "Planting ocx-child on the remote host timed out.", 502, sshRunnerErrorHint(plantErr));
+          }
+          return fail("remote_plant_failed", "Could not plant ocx-child on the remote host.", 502, sshRunnerErrorHint(plantErr));
+        }
         if (planted.code !== 0) return fail("remote_plant_failed", "Could not plant ocx-child on the remote host.", 502, sshFailureHint(planted.stderr));
         plantedFreshBinary = true;
         ephemeralChild = true;

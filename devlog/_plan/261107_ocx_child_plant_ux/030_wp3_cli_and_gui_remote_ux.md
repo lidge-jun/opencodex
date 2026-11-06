@@ -107,3 +107,18 @@
 - Connected list -> row with `childKind: "ephemeral"` and matching `appliedCodexSettingsDigest === homeCodexSettingsDigest` renders `Lightweight` + `Home settings synced`; mismatched digest renders `Sync needed`.
 - Ephemeral Disconnect dialog -> checking purge checkbox sends `DELETE /api/link/<id>` with `{ purge: true }`; unchecking sends bodyless `DELETE /api/link/<id>`; `remote_disconnect_failed` transitions to Force Remove rendering `~/.cache/opencodex/bin/ocx-child detach`.
 
+## 4. `wp3` P-Phase Continuity & Architect Reflection Amendments (`01a1b32b-f0db-7e73-93d5-8578c4fbf55d`)
+
+- **Continuity from `wp2` D**: Resumed from `wp2` D conclusion ("Next cycle wp3 implements CLI (--plant, --purge) and #remote GUI + 11 locales").
+- **Architect `01a1b32b-f0db-7e73-93d5-8578c4fbf55d` verdict**: `ALIGNED` on `W3-ARCH-01..W3-ARCH-03`.
+- **Folded refinements**:
+  1. Gate CLI `confirm-host` `{ allowMissing: true }` on `shouldPlant || probe.runtimeKind === "missing"` so existing full-runtime CLI expectations stay unchanged, and accept both legacy 3-key and extended `allowMissing` confirmation payloads.
+  2. Map `child_port_busy`, `child_external_provider_conflict`, `remote_plant_failed`, `remote_plant_timeout`, and `remote_plant_unavailable` in CLI `PHASES` / actionable error messages, and emit `~/.cache/opencodex/bin/ocx-child detach` residual recovery when `shouldPlant` or `runtimeKind === "ephemeral"` is active.
+  3. Explicitly parse and null-default `childKind`, `appliedCodexSettingsDigest`, and `homeCodexSettingsDigest` in `parseRemoteLinkStatus` (`gui/src/remote-link-api.ts`), and reset `purge` checkbox state to `false` whenever the Disconnect dialog opens or closes.
+
+## 5. `wp3` A-Phase Audit Fold-Backs (`01a1b32d-f03c-79f0-ba27-9cf46b2708ec`, `GO-WITH-FIXES`)
+
+1. **`remote_plant_timeout` & zero hardcoded strings in `src/pages/*`**: Add `remote_plant_timeout` to `LINK_ERROR_CODES`, `ERROR_TKEY`, and all 11 locale catalogs (`remoteLink.error.remote_plant_timeout`); add `link.plant.unknownArch` across all 11 locales for `targetTriple === null`; and place `formatBinaryMegabytes` inside `gui/src/remote-link-api.ts` so `src/pages/*` passes `bun run lint:i18n` with zero allowlist additions.
+2. **Strict `probe.runtimeKind === "missing"` CLI gate**: Gate CLI `confirm-host` `{ allowMissing: true }` strictly on `shouldPlant || probe.runtimeKind === "missing"`.
+3. **Null guards & force/purge isolation**: Render parity badge only when `row.appliedCodexSettingsDigest !== null && status.homeCodexSettingsDigest !== null`; omit Apply CTA when `runtimeKind === "missing" && !plantable`; send `{ purge: true }` only when `!pending.force && purge && pending.row.childKind === "ephemeral"`, and send `{ force: true }` exclusively when `pending.force` is true.
+
