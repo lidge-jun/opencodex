@@ -37,6 +37,7 @@ slot. Explicit starts have separate physical allowance; ordinary retry and bound
 are not replenished, including when recovery is created after earlier successors. A refused successor sends no upstream frame and ends the chain with
 the original locally constructed 429 response, including its workflow-refusal provenance and header.
 It never falls back to HTTP or replays the initial request.
+The tracker carries each new denial's reason and spend detail into that response without recording the refusal event twice.
 `tests/responses/ws-native-continuation-send-budget.test.ts` covers both native modes and spend
 policies, repeated sends, cancellation before dispatch, control frames and unconfigured long chains.
 

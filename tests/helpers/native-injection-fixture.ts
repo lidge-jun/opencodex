@@ -58,7 +58,7 @@ export const waitForInjection = async (condition: () => boolean) => {
   for (let i = 0; i < 1000; i++) { if (condition()) return; await Bun.sleep(1); }
   throw new Error("injection fixture condition timed out");
 };
-/** Acquire the fixture's real writer before a test binds a spend policy. */
+/** Pair with installInjectionFixture: its afterEach releases this writer after client cleanup. */
 export function prepareInjectionSpendHome(): void {
   releaseSpendHome ??= acquireOwnedSpendHome();
 }

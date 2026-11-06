@@ -3,7 +3,7 @@ import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
-import { chargeWorkflowSends, recordWorkflowRefusalEvent, reserveWorkflowSend, workflowDenialSummary, type WorkflowDenial } from "../../lib/workflow-budget";
+import { chargeWorkflowSends, recordWorkflowRefusalEvent, reserveWorkflowSend, workflowDenialSummary, type WorkflowDenial, type WorkflowSpendDenialDetail } from "../../lib/workflow-budget";
 import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 
 /** The terminal usage a request reported, in the only two fields the ledger books. */
@@ -28,6 +28,8 @@ export interface RequestSpendReporter {
 export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSettlement {
   /** Dispatches this request lost to a ledger ceiling. Zero on every ordinary request. */
   readonly refusals: number;
+  /** Latest local admission decision, paired with the monotonic refusal count. */
+  readonly lastRefusal?: { readonly reason: WorkflowDenial; readonly spend?: WorkflowSpendDenialDetail };
   readonly enforced: boolean;
   ensureSeed(target: SpendTargetIdentity, prepaidProof?: SpendReservationProof): SpendSeed | undefined;
   beginReporter(): RequestSpendReporter;
@@ -74,6 +76,7 @@ export function createRequestSpendTracker(
   const live: string[] = [];
   const pendingDispatch = new Set<string>();
   let refusals = 0;
+  let lastRefusal: RequestSpendTracker["lastRefusal"];
   let resolved = false;
   let terminalProcessed = false;
   let seededAccounting = false;
@@ -185,6 +188,7 @@ export function createRequestSpendTracker(
         refusals += 1;
         // Preserve the PR's explicit unresolved-history refusal and its distinct operator code.
         if (denial.reason === "pool-history-unresolved") {
+          lastRefusal = { reason: "workflow-pool-history-unresolved" };
           const summary = workflowDenialSummary("workflow-pool-history-unresolved");
           markLocalRequestLogRefusal(logCtx, summary.code);
           logCtx.errorCode = summary.code;
@@ -206,6 +210,7 @@ export function createRequestSpendTracker(
             ...(denial.includesUnboundPoolHistory ? { includesUnboundPoolHistory: true } : {}),
           }
           : undefined;
+        lastRefusal = { reason, ...(detail ? { spend: detail } : {}) };
         const summary = workflowDenialSummary(reason, detail);
         markLocalRequestLogRefusal(logCtx, summary.code);
         logCtx.errorCode = summary.code;
@@ -217,6 +222,7 @@ export function createRequestSpendTracker(
   const claimWorkflowSend = (): boolean => {
     if (reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) return true;
     refusals++;
+    lastRefusal = { reason: "workflow-sends-exhausted" };
     const summary = workflowDenialSummary("workflow-sends-exhausted");
     markLocalRequestLogRefusal(logCtx, summary.code);
     logCtx.errorCode = summary.code;
@@ -473,6 +479,7 @@ export function createRequestSpendTracker(
       }
     },
     get refusals(): number { return refusals; },
+    get lastRefusal() { return lastRefusal; },
   };
   return tracker;
 }

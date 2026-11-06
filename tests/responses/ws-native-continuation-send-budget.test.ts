@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
-import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, WORKFLOW_LOCAL_REFUSAL_HEADER } from "../../src/lib/workflow-budget";
+import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, listWorkflowBudgetEvents, WORKFLOW_LOCAL_REFUSAL_HEADER } from "../../src/lib/workflow-budget";
 import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { claimNativeContinuationSend } from "../../src/server/responses/native-continuation-send";
+import { NativeContinuationRefusalError } from "../../src/server/responses/native-continuation-refusal";
 import {
   installInjectionFixture, prepareInjectionSpendHome, beginInjection, injectionConfig,
   advertiseInjection, completeInjection, savedResult, continuationFrame,
@@ -63,6 +65,7 @@ for (const mode of ["injection", "steering"] as const) for (const enforced of [f
     expect(refusal.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_sends_exhausted");
     expect(refusal.error.message).toContain("no additional provider request was sent");
     expect(workflowBudgetSnapshot(root)).toMatchObject({ sends: limit, active: 0 });
+    expect(listWorkflowBudgetEvents().filter(event => event.rootId === root && event.kind === "refused")).toHaveLength(1);
     expect(InjectionSocket.all).toHaveLength(1);
     expect(fallbackCalls).toBe(0);
   });
@@ -123,4 +126,57 @@ test("native injection control frames do not consume the next continuation slot"
   await waitForInjection(() => !x.ws.data.nativeControl);
   expect(workflowBudgetSnapshot(root)).toMatchObject({ sends: 2, active: 0 });
   expect(fallbackCalls).toBe(0);
+});
+
+test("native token-ceiling refusal preserves its workflow identity after earlier sends", async () => {
+  const root = "native-token-refusal";
+  prepareInjectionSpendHome(); bindWorkflowBudgetConfig(null);
+  configureSharedSpendLedger(spendPolicyFromConfig({ root: { maxTokens: 4096 } }));
+  const x = await beginInjection({ max_output_tokens: 1024 }, injectionConfig(), "test",
+    { "x-codex-parent-thread-id": root, "thread-id": root });
+  let id = x.id, refused = false;
+  for (let i = 1; i <= 8; i++) {
+    const call = `token-call-${i}`, item = advertiseInjection(x.socket, call);
+    completeInjection(x.socket, { output: [item] }, id);
+    await waitForInjection(() => x.sent.some(frame => frame.type === "response.completed" && frame.response.id === id));
+    const count = x.socket.frames.length;
+    x.send(continuationFrame({ type: "response.create", previous_response_id: id,
+      max_output_tokens: 1024, input: [savedResult(call)] }));
+    await waitForInjection(() => x.socket.frames.length > count || x.sent.some(frame => frame.type === "error"));
+    const error = x.sent.find(frame => frame.type === "error");
+    if (error) {
+      refused = true;
+      expect(error.status).toBe(429);
+      expect(error.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_spend_exhausted");
+      expect(error.error.message.replaceAll(",", "")).toContain("4096");
+      expect(x.socket.frames).toHaveLength(count);
+      expect(workflowBudgetSnapshot(root)?.sends).toBe(count);
+      break;
+    }
+    const previous = id; id = `token-successor-${i}`;
+    x.socket.emit({ type: "response.created", response: { id, previous_response_id: previous, output: [] } });
+  }
+  expect(refused).toBe(true);
+  const denials = listWorkflowBudgetEvents().filter(event => event.rootId === root && event.kind === "refused");
+  expect(denials).toHaveLength(1);
+  expect(denials[0]).toMatchObject({ reason: "workflow-spend-exhausted", spendScope: "root", spendLimit: 4096 });
+  await waitForInjection(() => !x.ws.data.nativeControl);
+  expect(workflowBudgetSnapshot(root)?.active).toBe(0);
+  expect(fallbackCalls).toBe(0);
+});
+
+test("an independent continuation refusal does not replay stale spend details", async () => {
+  let reports = 0, closes = 0;
+  const tracker = { refusals: 1, settle() {}, lastRefusal: {
+    reason: "workflow-spend-exhausted", spend: { scope: "pool", limit: 7, projected: 8, includesUnboundPoolHistory: true },
+  } };
+  const reporter = Object.assign((_count: number) => { reports++; }, { beforeSend: () => false, close: () => { closes++; } });
+  let refusal: Response | undefined;
+  try { claimNativeContinuationSend(reporter, { model: "m", provider: "fixture", spendTracker: tracker,
+    spendRefusalDetail: { scope: "pool", limit: 7, projected: 8, includesUnboundPoolHistory: true } }); }
+  catch (error) { if (!(error instanceof NativeContinuationRefusalError)) throw error; refusal = error.response; }
+  expect(refusal?.status).toBe(429);
+  expect(refusal?.headers.has(WORKFLOW_LOCAL_REFUSAL_HEADER)).toBe(false);
+  expect((await refusal!.json()).error.message).toContain("request send budget exhausted before dispatch");
+  expect(reports).toBe(0); expect(closes).toBe(1);
 });
