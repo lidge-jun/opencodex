@@ -645,4 +645,81 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(body).toContain('"type":"compaction"');
     expect(hits).toEqual(["m1", "m2"]);
   });
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} reasoning followed by max_output_tokens terminal fails over to backup target`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat" });
+          emit({ type: "thinking_delta", thinking: "deep reflection on problem..." });
+          emit({
+            type: "incomplete",
+            reason: "max_output_tokens",
+            usage: { inputTokens: 50, outputTokens: 200, totalTokens: 250 },
+          });
+          return;
+        }
+        emit({ type: "text_delta", text: "backup target answer" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const parent: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, parent);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain("backup target answer");
+      expect(hits).toEqual(["m1", "m2"]);
+    });
+  }
+
+  test("remote compaction with reasoning deltas before max_output_tokens terminal fails over to backup target", async () => {
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      if (parsed.modelId === "m1") {
+        emit({ type: "heartbeat" });
+        emit({ type: "thinking_delta", thinking: "thinking during compaction..." });
+        emit({
+          type: "incomplete",
+          reason: "max_output_tokens",
+          usage: { inputTokens: 100, outputTokens: 500, totalTokens: 600 },
+        });
+        return;
+      }
+      emit({ type: "text_delta", text: "compacted summary output from backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/free",
+        input: [
+          { type: "message", role: "user", content: "previous context" },
+          { type: "compaction_trigger" },
+        ],
+        stream: true,
+      }),
+    }), config, parent);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(body).toContain('"type":"compaction"');
+    expect(hits).toEqual(["m1", "m2"]);
+  });
 });

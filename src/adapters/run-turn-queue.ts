@@ -172,6 +172,29 @@ export function classifyZeroOutputTokenLimit(event: AdapterEvent): Extract<Adapt
   };
 }
 
+export function isReasoningEvent(event: AdapterEvent): boolean {
+  return event.type === "thinking_delta"
+    || event.type === "thinking_signature"
+    || event.type === "redacted_thinking"
+    || event.type === "kiro_redacted_reasoning"
+    || event.type === "reasoning_raw_delta";
+}
+
+export function isContentEvent(event: AdapterEvent): boolean {
+  switch (event.type) {
+    case "text_delta":
+      return event.text.length > 0;
+    case "tool_call_start":
+    case "tool_call_delta":
+    case "tool_call_end":
+    case "web_search_call_begin":
+    case "web_search_call_end":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
@@ -180,6 +203,7 @@ export async function preflightAdapterEvents(
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
   let replayUnsafe = false;
+  let bufferedReasoningCodeUnits = 0;
   const maxWaitMs = options?.maxWaitMs;
   if (maxWaitMs !== undefined && maxWaitMs <= 0) {
     return { stream: replay(buffered, iterator), empty: false, replayUnsafe, timedOut: true };
@@ -204,7 +228,7 @@ export async function preflightAdapterEvents(
         };
       }
       const next = raced;
-      if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
+      if (next.done) return { stream: replay(buffered, iterator), empty: buffered.length === 0, replayUnsafe };
       if (next.value.type === "heartbeat") {
         replayUnsafe ||= next.value.replayUnsafe === true;
         // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
@@ -212,7 +236,15 @@ export async function preflightAdapterEvents(
         if (next.value.preflightReady === true && options?.honorReady !== false) {
           return { stream: replay(buffered, iterator), empty: false, replayUnsafe, ready: true };
         }
-        if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
+        if (buffered[0]?.type === "heartbeat" && buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
+        continue;
+      }
+      if (isReasoningEvent(next.value)) {
+        buffered.push(next.value);
+        bufferedReasoningCodeUnits += retainedEventCodeUnits(next.value);
+        if (buffered.length > 1_024 || bufferedReasoningCodeUnits > DEFAULT_MAX_EVENT_CODE_UNITS) {
+          return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        }
         continue;
       }
       const classifiedError = replayUnsafe ? undefined : classifyFirstEvent?.(next.value);

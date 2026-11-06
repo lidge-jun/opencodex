@@ -476,6 +476,53 @@ describe("run-turn adapter event preflight", () => {
     expect(await collect(preflight.stream)).toEqual([{ type: "error", message: "stop" }]);
     expect(cancelled).toBe(1);
   });
+
+  test("buffers reasoning events until first content event", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const content: AdapterEvent = text("answer");
+    const values = [heartbeat, thinking, content, done];
+    const preflight = await preflightAdapterEvents(events(values));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual(values);
+  });
+
+  test("reasoning followed by max_output_tokens terminal fails over via zero-output classifier", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const limitTerminal: AdapterEvent = {
+      type: "incomplete",
+      reason: "max_output_tokens",
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    };
+    const preflight = await preflightAdapterEvents(
+      events([heartbeat, thinking, limitTerminal]),
+      classifyZeroOutputTokenLimit,
+    );
+    expect(preflight.error).toEqual({
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      code: "zero_output_token_limit",
+      message: "Provider reached its output token limit before producing output",
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    });
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([heartbeat, thinking, preflight.error]);
+  });
+
+  test("reasoning followed by done length stopReason fails over via zero-output classifier", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const doneLimit: AdapterEvent = {
+      type: "done",
+      stopReason: "length",
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    };
+    const preflight = await preflightAdapterEvents(
+      events([heartbeat, thinking, doneLimit]),
+      classifyZeroOutputTokenLimit,
+    );
+    expect(preflight.error?.code).toBe("zero_output_token_limit");
+  });
 });
 
 describe("run-turn adapter event queue retained-payload budgets", () => {

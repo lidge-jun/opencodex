@@ -8,7 +8,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { ResponsesCompletionPolicy } from "./completion-policy";
 import { linkAbortSignal, runTurnAdapterSseResponses } from "./core-lifetime";
-import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, isContentEvent, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
@@ -1045,8 +1045,12 @@ export async function executeResponsesRunTurn(
         const replayUnsafe = events
           .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
           .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
-        const classifiedError = firstMeaningful && !replayUnsafe
-          ? classifyUndeclaredFirstTool(firstMeaningful)
+        const sawContent = events.some(isContentEvent);
+        const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
+        const zeroOutputLimit = !sawContent && terminalEvent ? classifyZeroOutputTokenLimit(terminalEvent) : undefined;
+        const firstTool = events.find(event => event.type === "tool_call_start");
+        const classifiedError = !replayUnsafe
+          ? (zeroOutputLimit ?? (firstTool ? classifyUndeclaredFirstTool(firstTool) : undefined) ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
           if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);
