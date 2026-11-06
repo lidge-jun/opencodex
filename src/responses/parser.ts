@@ -217,6 +217,12 @@ function nameDestinationContent(
   return changed ? parts : content;
 }
 
+/**
+ * Validate a Responses body and normalize its tools, options and conversation.
+ * Restores signed or opaque reasoning from replayed items; late signatures require
+ * adjacent output ownership and retain thinking/signature ordering.
+ * @throws Error when the body fails Responses schema validation.
+ */
 export function parseRequest(
   body: unknown,
   parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef },
