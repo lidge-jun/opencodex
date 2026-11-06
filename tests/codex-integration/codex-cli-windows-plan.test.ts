@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { createConnection } from "node:net";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { trustWindowsTempFixtureAncestry, windowsTempAncestryPreload } from "../helpers/windows-temp-ancestry";
@@ -23,7 +25,43 @@ import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
 const liveWorkerRoots = new Set<string>();
+type OwnedPlanChild = { exited: Promise<number>; exitCode: number | null; kill(): unknown };
+const ownedPlanChildren = new Map<string, OwnedPlanChild>();
 let planCleanupEpoch = 0;
+function independentPlanTemp(): string {
+  const local = process.env.LOCALAPPDATA?.trim();
+  if (!local || !isAbsolute(local)) throw new Error("native temp parent unavailable");
+  const tempParent = realpathSync.native(join(local, "Temp"));
+  for (let ancestor = tempParent;;) {
+    if (existsSync(join(ancestor, TEST_TEMP_OWNER_FILE))) throw new Error("native temp is inside a test sandbox");
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  return tempParent;
+}
+async function stopOwnedPlanChild(root: string, timeoutMs = INTERNAL_DEADLINE_MS,
+  requestStop: (child: OwnedPlanChild) => unknown = child => child.kill()): Promise<boolean> {
+  const child = ownedPlanChildren.get(root);
+  if (!child) return true;
+  let killFailed = false;
+  try { if (child.exitCode === null) requestStop(child); } catch { killFailed = true; }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); });
+  const exited = child.exited.then(() => true, () => false);
+  const confirmed = await Promise.race([exited, expired]);
+  clearTimeout(timer);
+  if (!confirmed || killFailed) return false;
+  ownedPlanChildren.delete(root);
+  return true;
+}
+async function stopAllOwnedPlanChildren(): Promise<string[]> {
+  const failures: string[] = [];
+  for (const root of ownedPlanChildren.keys()) {
+    if (!await stopOwnedPlanChild(root)) failures.push("Windows plan child exit unconfirmed; fixture retained");
+  }
+  return failures;
+}
 async function cleanupPlanFixture(root: string): Promise<boolean> {
   if (liveWorkerRoots.has(root)) return false;
   await removeTreeAfterBackgroundWork(root);
@@ -31,15 +69,18 @@ async function cleanupPlanFixture(root: string): Promise<boolean> {
 }
 afterEach(async () => {
   planCleanupEpoch++;
+  const failures: unknown[] = (await stopAllOwnedPlanChildren()).map(message => new Error(message));
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) {
     // A test timeout does not cancel its async body. Retain fixtures until a real
     // Worker close, or external reconciliation of an unsettled CLI process tree.
-    if (!await cleanupPlanFixture(root)) roots.push(root);
+    try { if (!await cleanupPlanFixture(root)) roots.push(root); }
+    catch (error) { roots.push(root); failures.push(error); }
   }
-});
+  if (failures.length) throw new AggregateError(failures, "Windows plan fixture cleanup failed");
+}, SPAWN_BUDGET_MS);
 // npm's independent cmd-shim fixture; no candidate is ever executed.
 const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL',
   'CALL :find_dp0', '', 'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (',
@@ -238,51 +279,149 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
 
-native("Windows plan fixture job terminates a live descendant when its owner exits", async () => {
-  const { dlopen } = await import("bun:ffi");
-  const kernel = dlopen("kernel32.dll", {
-    OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
-    WaitForSingleObject: { args: ["u64", "u32"], returns: "u32" },
-    TerminateProcess: { args: ["u64", "u32"], returns: "i32" },
-    CloseHandle: { args: ["u64"], returns: "i32" },
-  });
-  const source = `import {spawn} from 'node:child_process';
-    const p=spawn(process.execPath,['-e',${JSON.stringify('globalThis.fixtureServer=Bun.serve({port:0,fetch(){return new Response("ok")}}); console.log("READY");')}],{detached:true,stdio:['ignore','pipe','ignore'],windowsHide:true});
-    let s=''; for await(const v of p.stdout) { s+=v.toString(); if(s.includes('\\n'))break; }
-    if(!s.includes('READY'))throw Error('descendant exited'); console.log('READY:'+p.pid);
-    for await(const chunk of Bun.stdin.stream()){void chunk;}`;
-  const child = Bun.spawn([process.execPath, "--preload", helperPath("windows-plan-child-processes.ts"), "-e", source],
+native("Windows plan cleanup stops its owned child before releasing its fixture", async () => {
+  const epoch = planCleanupEpoch;
+  try {
+  const root = realpathSync.native(mkdtempSync(join(independentPlanTemp(), "ocx-plan-owned-child-")));
+  roots.push(root); liveWorkerRoots.add(root);
+  expect(isTestHomeGuardArmed()).toBe(true);
+  assertNotRealHomeUnderTest(root);
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("READY"); for await(const chunk of Bun.stdin.stream()){void chunk;}'],
     { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  ownedPlanChildren.set(root, child);
+  const reader = child.stdout.getReader();
+  let bodyFailed = false, bodyError: unknown;
+  try {
+    const ready = await reader.read();
+    if (planCleanupEpoch !== epoch) return;
+    expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
+    expect(child.exitCode).toBeNull();
+    const beforeStop = await cleanupPlanFixture(root);
+    if (planCleanupEpoch !== epoch) return;
+    expect(beforeStop).toBe(false);
+    expect(existsSync(root)).toBe(true);
+    // If termination does not settle, the bounded cleanup must retain ownership.
+    const unconfirmed = await stopOwnedPlanChild(root, 1, () => {});
+    if (planCleanupEpoch !== epoch) return;
+    expect(unconfirmed).toBe(false);
+    expect(ownedPlanChildren.get(root)).toBe(child);
+    expect(child.exitCode).toBeNull();
+    const afterUnconfirmed = await cleanupPlanFixture(root);
+    if (planCleanupEpoch !== epoch) return;
+    expect(afterUnconfirmed).toBe(false);
+    expect(existsSync(root)).toBe(true);
+    const failures = await stopAllOwnedPlanChildren();
+    if (planCleanupEpoch !== epoch) return;
+    expect(failures).toEqual([]);
+    const exit = await child.exited;
+    if (planCleanupEpoch !== epoch) return;
+    expect(exit).not.toBeNull();
+    expect(existsSync(root)).toBe(true);
+  } catch (error) {
+    bodyFailed = true; bodyError = error;
+  } finally {
+    try {
+      reader.releaseLock();
+      child.stdin.end();
+      await child.exited;
+      if (planCleanupEpoch === epoch) {
+        ownedPlanChildren.delete(root);
+        liveWorkerRoots.delete(root);
+      }
+    } catch (cleanupError) {
+      if (bodyFailed) throw new AggregateError([bodyError, cleanupError], "owned-child probe and cleanup failed");
+      throw cleanupError;
+    }
+  }
+  if (bodyFailed) throw bodyError;
+  } catch (error) {
+    if (planCleanupEpoch === epoch) throw error;
+    console.error(`[test] owned-child probe settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}, SPAWN_BUDGET_MS);
+
+native("Windows plan fixture job closes a live descendant connection when its owner exits", async () => {
+  const epoch = planCleanupEpoch;
+  try {
+  const capability = randomUUID();
+  const descendant = `const token=${JSON.stringify(capability)}; let server;
+    server=Bun.listen({hostname:'127.0.0.1',port:0,socket:{open(s){s.write('READY:'+token+'\\n')},
+      data(s,d){if(new TextDecoder().decode(d).trim()===token){s.end();server.stop(true)}}}});
+    console.log('PORT:'+server.port);`;
+  const owner = `import {spawn} from 'node:child_process';
+    const p=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{detached:true,stdio:['ignore','pipe','ignore'],windowsHide:true});
+    let s=''; for await(const v of p.stdout){s+=v.toString();if(s.includes('\\n'))break;}
+    if(!/^PORT:\\d+\\n$/.test(s))throw Error('descendant readiness failed'); process.stdout.write(s);
+    for await(const chunk of Bun.stdin.stream()){void chunk;}`;
+  const child = Bun.spawn([process.execPath, "--preload", helperPath("windows-plan-child-processes.ts"), "-e", owner],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const ownerKey = "Windows plan job containment probe";
+  ownedPlanChildren.set(ownerKey, child);
   const errors = new Response(child.stderr).text();
   const reader = child.stdout.getReader();
-  let descendant = 0n;
+  let socket: ReturnType<typeof createConnection> | undefined;
+  let closed: Promise<boolean> | undefined;
+  let authenticated = false;
+  let bodyFailed = false, bodyError: unknown;
   try {
     let ready = ""; const decoder = new TextDecoder();
     while (!ready.includes("\n")) {
       const part = await reader.read();
+      if (planCleanupEpoch !== epoch) return;
       if (part.done) throw new Error(`fixture job owner exited early: ${await errors}`);
       ready += decoder.decode(part.value, { stream: true });
     }
-    const match = /^READY:(\d+)\n$/.exec(ready);
+    const match = /^PORT:(\d+)\n$/.exec(ready);
     expect(match).not.toBeNull();
-    descendant = kernel.symbols.OpenProcess(0x100001, 0, Number(match![1])); // SYNCHRONIZE | PROCESS_TERMINATE
-    expect(descendant).not.toBe(0n);
-    expect(kernel.symbols.WaitForSingleObject(descendant, 0)).toBe(258); // WAIT_TIMEOUT: still alive.
+    socket = createConnection({ host: "127.0.0.1", port: Number(match![1]) });
+    const handshake = new Promise<string>((resolve, reject) => {
+      socket!.once("data", data => resolve(data.toString()));
+      socket!.once("error", reject);
+    });
+    // Windows may reset an established socket when a process is terminated.
+    closed = new Promise<boolean>(resolve => socket!.once("close", () => resolve(true)));
+    const greeting = await handshake;
+    if (planCleanupEpoch !== epoch) return;
+    expect(greeting).toBe(`READY:${capability}\n`);
+    authenticated = true;
+    expect(socket.destroyed).toBe(false);
     child.kill();
     await child.exited;
-    expect(kernel.symbols.WaitForSingleObject(descendant, INTERNAL_DEADLINE_MS)).toBe(0); // WAIT_OBJECT_0
+    if (planCleanupEpoch !== epoch) return;
+    ownedPlanChildren.delete(ownerKey);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), INTERNAL_DEADLINE_MS); });
+    const jobClosedConnection = await Promise.race([closed, expired]);
+    clearTimeout(timer);
+    if (planCleanupEpoch !== epoch) return;
+    expect(jobClosedConnection).toBe(true);
+  } catch (error) {
+    bodyFailed = true; bodyError = error;
   } finally {
+    try {
     reader.releaseLock();
-    if (child.exitCode === null) { child.kill(); await child.exited; }
-    if (descendant) {
-      // The retained process handle can address only this owned descendant, even if a PID is reused.
-      if (kernel.symbols.WaitForSingleObject(descendant, 0) === 258) {
-        if (!kernel.symbols.TerminateProcess(descendant, 1)) throw new Error("owned descendant termination failed");
-        if (kernel.symbols.WaitForSingleObject(descendant, INTERNAL_DEADLINE_MS) !== 0) throw new Error("owned descendant exit unconfirmed");
-      }
-      expect(kernel.symbols.CloseHandle(descendant)).not.toBe(0);
+    if (child.exitCode === null && !await stopOwnedPlanChild(ownerKey)) throw new Error("fixture job owner exit unconfirmed");
+    if (child.exitCode !== null) { await child.exited; ownedPlanChildren.delete(ownerKey); }
+    if (socket && !socket.destroyed && authenticated) {
+      // A previously authenticated connection addresses only this fixture, never a reused PID or port.
+      socket.write(capability + "\n");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), INTERNAL_DEADLINE_MS); });
+      const released = await Promise.race([closed!, expired]);
+      clearTimeout(timer);
+      if (!released) throw new Error("owned descendant connection release unconfirmed");
     }
-    kernel.close();
+    if (socket && !socket.destroyed && !authenticated) socket.destroy();
+    child.stdin.end();
+    } catch (cleanupError) {
+      if (bodyFailed) throw new AggregateError([bodyError, cleanupError], "job containment probe and cleanup failed");
+      throw cleanupError;
+    }
+  }
+  if (bodyFailed) throw bodyError;
+  } catch (error) {
+    if (planCleanupEpoch === epoch) throw error;
+    console.error(`[test] job containment probe settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
   }
 }, SPAWN_BUDGET_MS);
 
@@ -294,15 +433,7 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
   try {
   // The child may outlive this test and the preload sandbox after a timeout.
   // Its fixture therefore lives outside every ownership-marked test sandbox.
-  const local = process.env.LOCALAPPDATA?.trim();
-  if (!local || !isAbsolute(local)) throw new Error("native temp parent unavailable");
-  const tempParent = realpathSync.native(join(local, "Temp"));
-  for (let ancestor = tempParent;;) {
-    if (existsSync(join(ancestor, TEST_TEMP_OWNER_FILE))) throw new Error("native temp is inside a test sandbox");
-    const parent = dirname(ancestor);
-    if (parent === ancestor) break;
-    ancestor = parent;
-  }
+  const tempParent = independentPlanTemp();
   const root = realpathSync.native(mkdtempSync(join(tempParent, "ocx-windows-plan-")));
   roots.push(root);
   // No fixture subprocess may start before ownership is registered.
@@ -329,9 +460,11 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     helperPath("windows-cli-plan-unsafe-case.ts")], {
     cwd: f.root, env, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
+  ownedPlanChildren.set(f.root, child);
   const errorsPromise = new Response(child.stderr).text();
   const reader = child.stdout.getReader();
   let readyChecked = false;
+  let readinessFailed = false, readinessError: unknown;
   try {
     const decoder = new TextDecoder();
     let ready = "";
@@ -350,10 +483,18 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     expect(process.env.OPENCODEX_HOME).toBe(parentHome);
     expect(process.env.OPENCODEX_ADMIN_AUTH_TOKEN).toBe(parentAdmin);
     readyChecked = true;
+  } catch (error) {
+    readinessFailed = true; readinessError = error;
   } finally {
-    child.stdin.end();
-    if (!readyChecked) reader.releaseLock();
+    try {
+      child.stdin.end();
+      if (!readyChecked) reader.releaseLock();
+    } catch (cleanupError) {
+      if (readinessFailed) throw new AggregateError([readinessError, cleanupError], "Windows plan readiness and cleanup failed");
+      throw cleanupError;
+    }
   }
+  if (readinessFailed) throw readinessError;
   const outputPromise = (async () => {
     const decoder = new TextDecoder(); let output = "";
     try {
@@ -371,6 +512,7 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
   }
   if (exit !== 0) throw new Error(`Windows plan child failed: ${errors}`);
   expect(output.trim()).toBe("WINDOWS_CLI_PLAN_UNSAFE_CASE_PASS");
+  ownedPlanChildren.delete(f.root);
   liveWorkerRoots.delete(f.root);
   } catch (error) {
     if (planCleanupEpoch === epoch) throw error;
