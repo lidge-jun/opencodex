@@ -922,7 +922,7 @@ export async function executeComboResponses(
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
-  const exhaustedFailure = (): Response => {
+  const exhaustedFailure = (targetsExhausted = false): Response => {
     if (contextFailure) {
       adoptFailedChildLog(contextFailure.childLog);
       return contextFailure.response;
@@ -930,7 +930,7 @@ export async function executeComboResponses(
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
     if (failedChildLog) adoptFailedChildLog(failedChildLog);
-    if (toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice");
+    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice");
     if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
@@ -1589,7 +1589,7 @@ export async function executeComboResponses(
       if (!initialSend?.producerOwned) initialSend?.permit.release();
     }
   }
-  const failure = exhaustedFailure();
+    const failure = exhaustedFailure(true);
   if (
     failure === lastFailure && lastFailure?.status === 413
     && lastFailureClassifiesOverflow

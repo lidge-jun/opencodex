@@ -1,4 +1,5 @@
 import { createInferenceSendBudget } from "../inference/context";
+import { responsesSpendTarget } from "./request-spend-target";
 import type { ResponsesRequestContext } from "./core-options";
 import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, reportDispatchSends } from "../../lib/request-execution-budget";
 import {
@@ -84,8 +85,7 @@ export function createResponsesSendBudget(
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
   // Capture at helper creation, before another leg can replace the pending handoff.
   const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) =>
-    createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
-      identityId: logCtx.accountLogLabel }), permit, charged => {
+    createPhysicalSendReporter(sendBudget, () => responsesSpendTarget(logCtx), permit, charged => {
       noteTargetSends(Math.max(0, charged));
       options.onCompactionRecoverySendsReported?.(charged);
       chargeWorkflowSends(workflowRootId, charged);

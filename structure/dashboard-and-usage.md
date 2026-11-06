@@ -180,7 +180,7 @@ identity; rotating the secret behind the same reference preserves the logical ac
 `src/usage/jev-stats.ts` owns the parallel content-free JEV projection; its accumulator contract lives in [providers/jev-decision.md](./providers/jev-decision.md).
 
 `src/providers/label.ts` stamps only key authentication, including implicit custom-provider
-keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
+keys. `src/server/request-log.ts` (with recovery markers in `src/server/request-log-attempt-recovery.ts`) commits identity at dispatch after queued selection changes,
 retains separate flat records when retries change keys, and isolates each record's raw usage
 from parent combo totals and adapter-loop aggregation. Reported failure usage is retained;
 missing usage and historical identities remain unknown. Native wire snapshots replace only the

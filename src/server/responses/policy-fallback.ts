@@ -298,9 +298,7 @@ export async function handleResponsesWithPolicyFallback(
           Object.assign(logCtx, failureLog);
         } else {
           // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
-          if (isPolicyCandidateRefusal(response)) {
-            try { await response.body?.cancel(); } catch { /* the dispatched candidate replaces the local body */ }
-          }
+          try { await response.body?.cancel(); } catch { /* the dispatched candidate replaces the retained failure */ }
           hop.commit();
           response = nextResponse;
           current = nextTarget;

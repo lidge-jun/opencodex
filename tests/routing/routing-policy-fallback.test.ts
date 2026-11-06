@@ -64,6 +64,32 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([false, true])("upstream failure body settles when the next policy hop is refused=%s", async denied => {
+    const config = fixtureConfig();
+    if (denied) config.fallback = { routes: { "policy/daily": { provider: false } } };
+    let calls = 0, released = 0;
+    const original = finalizeAccountLease(formatErrorResponse(503, "upstream_error", "synthetic failure"), () => { released++; });
+    const success = Response.json({ status: "completed" });
+    const response = await handleResponsesWithPolicyFallback(request(), config, {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls++;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return calls === 1 ? original : success;
+      },
+    });
+    try {
+      expect(calls).toBe(denied ? 1 : 2);
+      expect(response.status).toBe(denied ? 503 : 200);
+      expect(original.bodyUsed).toBe(true);
+      expect(released).toBe(1);
+      expect(response.bodyUsed).toBe(false);
+      const body = await response.json();
+      if (denied) expect(body.error.code).toBe("fallback_refused");
+      else expect(body.status).toBe("completed");
+      expect(released).toBe(1);
+    } finally { await original.body?.cancel().catch(() => {}); await response.body?.cancel().catch(() => {}); await success.body?.cancel().catch(() => {}); }
+  });
   test.each([
     [["tool", "tool", "tool"], 400],
     [["tool", "generic", "tool"], 409],

@@ -23,6 +23,7 @@ Ordinary direct routes keep the client-facing 400; upstream errors do not acquir
 Non-forward Copilot routes defer this check until Auto negotiation settles the adapter and model.
 `src/server/responses/request-transport.ts` repeats the check after every negotiation, including
 credential and session renewal; a static Responses route cannot silently become incompatible Chat.
+Copilot stages its provider/model until negotiation, scope and mandatory-tool checks pass. `src/server/responses/request-spend-target.ts` supplies the accepted candidate's identity to spend admission without overwriting physical attribution, and clears that binding for each new transport preparation. Only a physical send publishes the candidate's account/model/adapter to its log; account, model or wire changes seal the previous attempt before applying the new identity. Admitted roster identity still funds only ingress-owned budgets before the first send. Persisted refreshes, manual selection and paused-account fences remain authoritative.
 Policy and combo children carry the local refusal identity; direct requests retain the same 400.
 Direct and exhausted-policy tool refusals carry proxy-error provenance without a Copilot account-error presentation, so Chat and Messages retain the local diagnostic.
 Auto-pause credential refresh maps the same typed refusal before returning from recovery, while its
@@ -30,6 +31,7 @@ unused hop reservation is released. Adapter and native Responses error delivery 
 through response rebuilding so policy traversal also works after a mid-dispatch renegotiation.
 Every refresh exception cancels its original response and releases the exchange's abort linkage;
 caller cancellation uses the selected effective signal and is captured before cleanup aborts the upstream, so cleanup or an unused request signal cannot manufacture it.
+Queued Copilot refusals consume no physical-send budget or attempt count. Initial, recovery and continuation reporters settle at the HTTP executor; the Copilot attempt note follows spend admission through the physical-send observer. Other OAuth runTurn notes and forward/Codex receipt paths keep their existing owners. Single-use recovery reservations reject a second dispatch before another count is recorded.
 
 Normal virtual-model wire mapping remains attached to its admitted selector and does not add a new
 eligible model. Policy traversal records settled physical destinations and skips a destination already
@@ -38,7 +40,7 @@ their existing budgets. Local skips preserve the last upstream failure and its l
 route identity, usage, active attempt and spend tracker; preparation-only fields are discarded.
 Completed physical attempt rows remain intact, and final logging settles the last actual send's usage.
 The initial decision remains the selection evidence while physical attempts record execution.
-When every observed refusal is specifically a mandatory-tool incompatibility, exhausted policy traversal returns the direct 400 diagnostic. Generic local skips and upstream failures permanently exclude that projection; cancellation and replay boundaries retain precedence. Discarded local response bodies are cancelled to settle their lifetime owners.
+When every observed refusal is specifically a mandatory-tool incompatibility, exhausted policy traversal returns the direct 400 diagnostic. Generic local skips and upstream failures permanently exclude that projection; cancellation and replay boundaries retain precedence. Discarded local bodies and replaced upstream failure bodies are cancelled to settle their lifetime owners; a refused fallback guard also cancels the retained failure.
 
 Cancellation, non-replayable responses and committed output keep the
 [shared replay boundaries](responses-failover.md). A local policy refusal is identified by its
