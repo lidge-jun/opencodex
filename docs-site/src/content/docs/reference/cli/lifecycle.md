@@ -109,9 +109,9 @@ known local endpoints before returning the normal not-running result.
 While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
 it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
 a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app
-started) or **Quit** to keep it stopped. For the same reason the dashboard's **Stop** button refuses
+started) or **Quit** to keep it stopped. For the same reason the dashboard's stop (the sidebar proxy lever pulled all the way down) refuses
 with `desktop_supervised`, and changes nothing, for a proxy the app started.
-The web dashboard's **Stop** button runs the same action (`POST /api/stop`) on every backend
+The web dashboard's stop lever runs the same action (`POST /api/stop`) on every backend
 except Windows Task Scheduler. There the wrapper can respawn the proxy after the task ends,
 and only a stop running outside the proxy can verify that restart window before restoring
 your client config — so the dashboard refuses with `respawnable_service`, changes nothing,

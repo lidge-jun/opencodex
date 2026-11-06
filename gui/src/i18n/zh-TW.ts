@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
@@ -119,6 +128,15 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saveFailed": "無法儲存工作流程限制。",
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
+  ...shellV2Copy("zh-TW"),
+  ...modelsV2Copy("zh-TW"),
+  ...accountsV2Copy("zh-TW"),
+  ...subagentsV2Copy("zh-TW"),
+  ...usageV2Copy("zh-TW"),
+  ...logsV2Copy("zh-TW"),
+  ...connectV2Copy("zh-TW"),
+  ...startupV2Copy("zh-TW"),
+  ...proxyV2Copy("zh-TW"),
   "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
   "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",
   "claude.tierDefaults.title": "CLI 層級預設模型",
@@ -1797,7 +1815,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.useOauthLogin": "← 使用 OAuth 登入",
 "nav.codexAuth": "Codex 認證",
   "nav.codexSet": "Codex",
-  "nav.connect": "連線",
+  "nav.connect": "路由",
   "nav.usageLogs": "用量與日誌",
   "nav.sectionNavigation": "分區頁面",
   "codexSet.tab.multiauth": "多帳號認證",

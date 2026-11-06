@@ -1,0 +1,219 @@
+/* v2 styles for the Logs & Debug, Storage page. Imported by design/theme.css into the `bridge`
+   layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
+   Tailwind classes in the components; keep this file for what utilities cannot say. */
+
+/* ---- Logs: request rows ------------------------------------------------------
+   Badges inside a row (intercepted helper, surface, speed tier, protocol path) become quiet
+   6px tags in the UI face, so the provider · model line stays the loudest thing in the cell. */
+.logs-page .logs-table .badge {
+  height: 20px;
+  padding: 0 7px;
+  gap: 4px;
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  background: var(--ocx-surface-2);
+  color: var(--ocx-fg-muted);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.logs-page .logs-table .badge-amber {
+  background: var(--ocx-warning-soft);
+  color: var(--ocx-warning);
+  box-shadow: none;
+}
+.logs-page .logs-table .mono { font-weight: 400; }
+.logs-page .log-reasoning-cell { color: var(--ocx-fg-muted); font-size: 12.5px; }
+.logs-page .logs-decode-rate { font-size: 11.5px; line-height: 1.25; }
+
+/* The empty state already sits in the panel's inset body: no second frame. */
+.logs-page .empty,
+.debug-v2 .empty {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 44px 24px;
+}
+
+/* Notices inside a panel header line up with the toolbar. */
+.logs-page .notice,
+.debug-v2 .notice { margin: 0; border-radius: 10px; }
+
+/* ---- Logs: request detail dialog ---------------------------------------------
+   The v1 frosted sheet becomes a React Bits card: a hairline 12px card, sections as quiet
+   blocks separated by a hairline, labels in the muted face beside mono values. */
+.log-detail-card {
+  border-radius: 14px;
+  border: 0;
+  background: var(--ocx-raised);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 0 0 1px var(--ocx-line), var(--ocx-shadow-lg);
+  padding: 20px 22px;
+  font-family: var(--font-ui);
+}
+.log-detail-card .modal-head { margin-bottom: 12px; gap: 12px; }
+.log-detail-card .modal-head h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.log-detail-card .logs-detail-info { color: var(--ocx-fg-muted); font-weight: 500; font-size: 14px; }
+.log-detail-card .modal-desc { color: var(--ocx-fg-muted); font-size: 13px; }
+.log-detail-card .log-detail-section { padding: 14px 0; border-top: 1px solid var(--ocx-line); }
+.log-detail-card .log-detail-section:first-of-type { border-top: 0; padding-top: 4px; }
+.log-detail-card .log-detail-section-title {
+  margin: 0 0 10px;
+  color: var(--ocx-fg);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-transform: none;
+}
+.log-detail-card .log-detail-grid { gap: 7px 16px; font-size: 13px; }
+.log-detail-card .log-detail-grid > .muted { color: var(--ocx-fg-muted); }
+.log-detail-card .log-detail-grid > .mono { font-size: 12.5px; color: var(--ocx-fg); }
+.log-detail-card .log-detail-notes,
+.log-detail-card .log-detail-notes-line { color: var(--ocx-fg-muted); font-size: 12px; }
+.log-detail-card .log-detail-attempts-wrap {
+  border: 0;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  background: var(--ocx-bg);
+}
+.log-detail-card .log-detail-attempts thead th { color: var(--ocx-fg-subtle); font-size: 12px; border-bottom-color: var(--ocx-line); }
+.log-detail-card .log-detail-attempts tbody td { border-bottom-color: var(--ocx-line); font-size: 12.5px; }
+.log-detail-card .log-detail-raw > summary { color: var(--ocx-fg-muted); font-size: 13px; }
+.log-detail-card .log-detail-json {
+  border: 0;
+  border-radius: 8px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+
+/* ---- Debug: the live tail lines ----------------------------------------------- */
+.debug-v2 .debug-tail-lines {
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--ocx-fg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.debug-v2 .debug-inbound-table th {
+  height: 34px;
+  padding: 0 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ocx-fg-subtle);
+  border-bottom: 1px solid var(--ocx-line);
+  white-space: nowrap;
+}
+.debug-v2 .debug-inbound-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ocx-line);
+  font-size: 12.5px;
+}
+.debug-v2 .debug-inbound-table tbody tr:last-child td { border-bottom: 0; }
+.debug-v2 .debug-inbound-table td:first-child { white-space: nowrap; }
+
+/* ---- Storage -------------------------------------------------------------------
+   The workspace (bucket rail + overview) and the cleanup card become two hairline 12px
+   cards. Inside, the summary tiles and each section are inset 10px blocks on the page
+   colour, the bucket rail selects with a raised plate, and section titles lose the v1
+   small caps. Structure and behaviour stay in the v1 sheet; this only repaints it. */
+.storage-v2 .storage-page-meta { color: var(--ocx-fg-subtle); font-size: 12.5px; }
+.storage-v2 .storage-page-meta__home { color: var(--ocx-fg-muted); }
+
+.storage-v2 .storage-workspace-root,
+.storage-v2 .storage-cleanup-card {
+  margin: 0;
+  padding: 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+@media (min-width: 1024px) {
+  .storage-v2 .storage-workspace-root {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+    align-items: start;
+    gap: 16px;
+  }
+  .storage-v2 .storage-workspace-rail { border-bottom: 0; padding-bottom: 0; }
+  .storage-v2 .storage-workspace-rail-list { max-height: none; }
+}
+.storage-v2 .storage-workspace-rail { border-bottom-color: var(--ocx-line); }
+.storage-v2 .storage-workspace-rail-header { padding: 2px 6px 4px; }
+.storage-v2 .storage-workspace-rail-title { font-size: 13px; font-weight: 600; color: var(--ocx-fg); }
+.storage-v2 .storage-workspace-rail-count { color: var(--ocx-fg-subtle); }
+.storage-v2 .storage-workspace-rail-row { border-radius: 8px; transition: background-color 0.15s; }
+.storage-v2 .storage-workspace-rail-row:hover { background: var(--ocx-accent-soft); }
+.storage-v2 .storage-workspace-rail-row--selected,
+.storage-v2 .storage-workspace-rail-row--selected:hover {
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.06), inset 0 0 0 1px var(--ocx-line);
+}
+.storage-v2 .storage-workspace-rail-row:focus-visible { outline-color: var(--ocx-highlight); }
+.storage-v2 .storage-workspace-rail-name { font-size: 13px; color: var(--ocx-fg); }
+.storage-v2 .storage-workspace-rail-meta { color: var(--ocx-fg-subtle); }
+.storage-v2 .storage-workspace-rail-size { color: var(--ocx-fg-muted); }
+
+.storage-v2 .stw-summary-card {
+  border: 0;
+  border-radius: 10px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.storage-v2 .stw-summary-label { color: var(--ocx-fg-subtle); font-size: 12px; }
+.storage-v2 .stw-summary-value { font-size: 18px; letter-spacing: -0.02em; }
+.storage-v2 .stw-summary-value.mono { font-size: 12.5px; letter-spacing: 0; }
+
+.storage-v2 .stw-section {
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.storage-v2 .stw-section:last-child { margin-bottom: 0; }
+/* A section nested in a section (protection, compaction) is a divided block, not a box. */
+.storage-v2 .stw-section .stw-section {
+  margin: 12px 0 0;
+  padding: 12px 0 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: inset 0 1px 0 var(--ocx-line);
+}
+.storage-v2 .stw-section-title {
+  margin: 0 0 10px;
+  color: var(--ocx-fg);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-transform: none;
+}
+.storage-v2 .stw-kv-row dt { color: var(--ocx-fg-muted); }
+.storage-v2 .stw-file-row { border-bottom-color: var(--ocx-line); padding: 7px 0; }
+.storage-v2 .stw-file-bucket { color: var(--ocx-fg-subtle); }
+.storage-v2 .stw-hint { color: var(--ocx-fg-muted); }
+.storage-v2 .stw-detail-toolbar { border-bottom-color: var(--ocx-line); }
+
+/* cleanup card: the Policy / Quarantine tabs read as the segmented track */
+.storage-v2 .storage-cleanup-card__tabs {
+  display: inline-flex;
+  width: fit-content;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.storage-v2 .storage-cleanup-card__tabs .page-tab { padding: 4px 12px; border-radius: 8px; font-size: 13px; }
+.storage-v2 .storage-cleanup-card__tabs .page-tab--active {
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+.storage-v2 .storage-cleanup-card .panel-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.storage-v2 .storage-cleanup-card :is(.storage-policy-meta, .storage-cleanup-manual) { border-color: var(--ocx-line); }
+.storage-v2 .storage-cleanup-manual__title { font-size: 13px; font-weight: 600; color: var(--ocx-fg); }

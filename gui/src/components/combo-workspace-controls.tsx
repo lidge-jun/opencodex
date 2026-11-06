@@ -10,10 +10,12 @@ import {
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { navigateHash } from "../hash-routing";
 import { useT } from "../i18n/shared";
-import { Switch } from "../ui";
+import { Select, Switch } from "../ui";
 import { formatProviderDisplayName } from "../provider-icons";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { clampedNumberInput, enabledProviders, modelsForProvider } from "./combo-workspace-utils";
+
+const TARGET_PICKER = "max-[939px]:[grid-column:3/-1]";
 
 export function StrategySeg({
   value,
@@ -63,22 +65,19 @@ export function EffortSelect({
   const unsupported = value !== null && !options.includes(value);
   return (
     <>
-      <select
+      <Select
         id={id}
-        className="input"
+        fullWidth
         value={value ?? ""}
         disabled={disabled}
-        aria-label={t("cws.field.defaultEffort")}
-        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value as ComboEffort)}
-      >
-        <option value="">{t("cws.field.defaultEffortNone")}</option>
-        {unsupported && value ? (
-          <option value={value}>{value} ({t("cws.field.defaultEffortUnsupportedOption")})</option>
-        ) : null}
-        {options.map((effort) => (
-          <option key={effort} value={effort}>{effort}</option>
-        ))}
-      </select>
+        label={t("cws.field.defaultEffort")}
+        onChange={(next) => onChange(next === "" ? null : next as ComboEffort)}
+        options={[
+          { value: "", label: t("cws.field.defaultEffortNone") },
+          ...(unsupported && value ? [{ value, label: `${value} (${t("cws.field.defaultEffortUnsupportedOption")})` }] : []),
+          ...options.map((effort) => ({ value: effort, label: effort })),
+        ]}
+      />
       {unsupported ? (
         <p className="muted" style={{ fontSize: 12, margin: "4px 0 0", color: "var(--danger, #b42318)" }}>
           {t("cws.field.defaultEffortUnsupported")}
@@ -317,41 +316,44 @@ export function TargetEditor({
                 <IconArrowDown width={14} height={14} aria-hidden="true" />
               </button>
             </div>
-            <select
-              className="input"
+            {/* On a narrow row both pickers take the full width under the reorder controls
+                (the stylesheet did this for the old `.input` selects by child position). */}
+            <Select
+              fullWidth
+              className={TARGET_PICKER}
               value={row.provider}
-              aria-label={t("cws.target.provider")}
-              onChange={(e) => {
-                const provider = e.target.value;
+              label={t("cws.target.provider")}
+              onChange={(provider) => {
                 const first = modelsForProvider(models, provider, providers)[0] ?? "";
                 replaceModel(index, { provider, model: first });
               }}
-            >
-              <option value="">{t("cws.target.pickProvider")}</option>
-              {providerOptions.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.disabled ? t("cws.target.disabled", { name: formatProviderDisplayName(p.name, t) }) : formatProviderDisplayName(p.name, t)}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input"
+              options={[
+                { value: "", label: t("cws.target.pickProvider") },
+                ...providerOptions.map((p) => ({
+                  value: p.name,
+                  label: p.disabled ? t("cws.target.disabled", { name: formatProviderDisplayName(p.name, t) }) : formatProviderDisplayName(p.name, t),
+                })),
+              ]}
+            />
+            <Select
+              fullWidth
+              className={TARGET_PICKER}
               value={row.model}
               disabled={modelSelectDisabled}
-              aria-label={t("cws.target.model")}
-              onChange={(e) => replaceModel(index, { provider: row.provider, model: e.target.value })}
-            >
-              <option value="">
-                {modelSelectDisabled
-                  ? t("cws.target.pickProviderFirst")
-                  : options.length === 0
-                    ? t("cws.target.noModels")
-                    : t("cws.target.pickModel")}
-              </option>
-              {options.map((id) => (
-                <option key={id} value={id}>{id}</option>
-              ))}
-            </select>
+              label={t("cws.target.model")}
+              onChange={(model) => replaceModel(index, { provider: row.provider, model })}
+              options={[
+                {
+                  value: "",
+                  label: modelSelectDisabled
+                    ? t("cws.target.pickProviderFirst")
+                    : options.length === 0
+                      ? t("cws.target.noModels")
+                      : t("cws.target.pickModel"),
+                },
+                ...options.map((id) => ({ value: id, label: id })),
+              ]}
+            />
             {(strategy === "round-robin" || strategy === "random") && (
               <input
                 className="input mono"

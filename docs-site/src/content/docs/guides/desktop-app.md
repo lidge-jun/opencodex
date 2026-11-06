@@ -223,9 +223,9 @@ shows the Child's dashboard. If the port is held by something the app cannot use
 bound to an address other than `127.0.0.1`, the app stops retrying and waits for that to change. A
 recovery that finishes while the update page is open leaves that page on screen.
 
-The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own **Stop** button
-does not stop a proxy the app runs, because the app would start it again: it says so and changes
-nothing. What the app decided and why is
+The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own stop (pulling the
+proxy lever at the foot of the sidebar all the way down) does not stop a proxy the app runs,
+because the app would start it again: it says so and changes nothing. What the app decided and why is
 recorded in `runtime-supervisor.log` in the app's log directory (`~/Library/Logs/com.opencodex.desktop`
 on macOS).
 
