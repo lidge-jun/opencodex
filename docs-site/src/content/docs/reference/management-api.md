@@ -448,6 +448,8 @@ of the Codex option for the chosen device, regardless of the selected app. This 
 Configured IDs that cannot be selected exactly, such as IDs with surrounding whitespace, remain in
 the configured snapshot but are omitted from individual device choices and counted in
 `unavailableConfiguredKeys`; they are never silently trimmed or classified as unconfigured.
+If a dashboard session expires during an authorized facets or `unconfigured` scan, the server
+returns 401 instead of the 403 used for a credential that lacks the required dashboard scope.
 For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
 256 characters, or more than 65,536 total ID characters rather than silently truncating them.
 Client labels are best-effort classifications of inbound headers, not authentication, and raw

@@ -117,6 +117,11 @@ function configuredUsageKeyIds(config: OcxConfig): string[] {
   return snapshotConfiguredKeyIds(keys.map(key => key.id));
 }
 
+/** Only used after a previously authorized session expires during an async read. */
+function expiredUsageSession(): Response {
+  return Response.json({ error: "session_expired" }, { status: 401, headers: { "cache-control": "no-store" } });
+}
+
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -210,7 +215,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const { getUsageSourceFacets } = await import("./usage-source-facets");
       const facets = await getUsageSourceFacets(parsed.filter, ids);
       const revoked = auth(ctx, "dashboard");
-      if (revoked) return revoked;
+      if (revoked) return expiredUsageSession();
       const currentIds = configuredUsageKeyIds(config);
       const currentLinks = JSON.stringify(readStoreFor(ctx).links.map(({ apiKeyId, alias }) => [apiKeyId, alias]).sort());
       if (JSON.stringify(ids) !== JSON.stringify(currentIds) || links !== currentLinks) throw new Error("inventory changed");
@@ -342,7 +347,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         const filteredAggregate = await getFilteredUsageAggregate(filter, window);
         if (sessionGuard) {
           const denied = sessionGuard(ctx, "dashboard");
-          if (denied) return denied;
+          if (denied) return expiredUsageSession();
           const currentIds = configuredUsageKeyIds(config);
           if (JSON.stringify(currentIds) !== JSON.stringify(configuredIds)) {
             return Response.json({ error: "usage_inventory_changed" }, { status: 503, headers: { "cache-control": "no-store" } });

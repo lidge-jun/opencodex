@@ -26,6 +26,8 @@ Unselectable padded IDs remain in the configured membership set but are omitted 
 rows and counted separately, so they neither hide valid choices nor become unconfigured traffic.
 `src/server/management/usage-source-facets.ts` bounds concurrent scans. The session-only facets
 route rechecks session and inventory after scanning, fails closed on changes and sets no-store.
+Expiration after an authorized scan starts returns 401 so the dashboard clears session-scoped
+results; an initial credential lacking the required dashboard scope still receives 403.
 Snapshots exceeding 1,024 configured keys, 256 characters per ID or 65,536 total ID characters
 are refused rather than truncated; retained accumulator estimates include the snapshot and cache
 identity. Invalid ledger rows mark unconfigured reports incomplete without claiming they were

@@ -20,6 +20,7 @@ import type { SshRunner, SshChild, SshRunResult } from "../../src/link/ssh-runne
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { trustedLoopbackForIngress, type ServerIngress } from "../../src/server/index/serve-options";
 import * as usageLedgerScanner from "../../src/usage/ledger-scanner";
+import { resetUsageAggregateCacheForTests } from "../../src/server/management/usage-aggregate-cache";
 
 let temp = "";
 
@@ -171,6 +172,38 @@ afterEach(() => {
 });
 
 describe("link management routes", () => {
+  test("a revoked session cannot receive an in-flight unconfigured-key report", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-usage-revocation-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    resetUsageAggregateCacheForTests();
+    const h = harness();
+    let paired = true;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const scanning = new Promise<void>(resolve => { started = resolve; });
+    const original = usageLedgerScanner.scanUsageLedgerCooperatively;
+    const spy = spyOn(usageLedgerScanner, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      started(); await gate; return original(options);
+    });
+    try {
+      const url = new URL("http://127.0.0.1/api/usage?client=all&device=unconfigured");
+      const pending = handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, h.config, h.deps, "gui-session",
+        { isPaired: () => paired, isCurrent: () => paired, revokeCurrent: () => true },
+        { trustedLoopback: true, guiSessionIssuance: "pairing" });
+      expect(await Promise.race([scanning.then(() => "scanning"), pending.then(response => `early:${response?.status}`)])).toBe("scanning");
+      paired = false; release();
+      const response = await pending;
+      expect(response?.status).toBe(401);
+      expect(response?.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      release(); spy.mockRestore(); resetUsageAggregateCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
+  });
+
   test.each(["revoked", "inventory"] as const)("a facet scan fails closed when %s changes mid-read", async change => {
     temp = mkdtempSync(join(tmpdir(), "ocx-facet-revocation-"));
     const previousHome = process.env.OPENCODEX_HOME;
@@ -197,7 +230,7 @@ describe("link management routes", () => {
       if (change === "revoked") paired = false;
       else h.config.apiKeys = [{ id: "new-key", name: "new", key: "fixture", createdAt: "2026-01-01T00:00:00Z" }];
       release();
-      expect((await pending)?.status).toBe(change === "revoked" ? 403 : 503);
+      expect((await pending)?.status).toBe(change === "revoked" ? 401 : 503);
     } finally {
       release();
       spy.mockRestore();

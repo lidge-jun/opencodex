@@ -450,6 +450,29 @@ test.each([401])("a %s facet denial clears active report, counts, and inventory 
   expect(radio("Codex").textContent).not.toContain("30");
 });
 
+test("a session expiring during facet refresh clears previously shown device aliases", async () => {
+  installSharedSession("ocx_session_facet_expiry");
+  let release: ((value: Response) => void) | undefined;
+  let scans = 0;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) {
+      if (++scans === 1) return Promise.resolve(response(facets(url)));
+      return new Promise<Response>(resolve => { release = resolve; });
+    }
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [{ apiKeyId: "key-a", alias: "Private laptop" }] }));
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Private laptop");
+  await act(async () => win.dispatchEvent(new win.Event("focus")));
+  expect(release).toBeDefined();
+  await act(async () => release!(Response.json({ error: "session_expired" }, { status: 401 })));
+  expect(document.body.textContent).not.toContain("Private laptop");
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(usageSessionSnapshot().blocked).toBe(true);
+});
+
 test("a new shared session rejects a previous session's late success", async () => {
   installSharedSession("ocx_session_old");
   let release: ((response: Response) => void) | undefined;
