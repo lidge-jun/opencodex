@@ -1391,7 +1391,8 @@ describe("launchd service plist", () => {
     const codexHome = join(root, "codex-home");
     const openCodexHome = join(root, "opencodex-home");
     const xml = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
+      .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;")
+      .replaceAll("\t", "&#9;").replaceAll("\n", "&#10;").replaceAll("\r", "&#13;");
     try {
       process.env.CODEX_HOME = codexHome;
       process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
