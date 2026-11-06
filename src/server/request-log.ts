@@ -633,7 +633,7 @@ export function addRequestLog(entry: RequestLogEntry) {
   const attemptNormalizationDropped = entry.attemptNormalizationDropped === true, client = normalizeRecordedClient(entry.client) ?? "unknown";
   const clientDescriptor = Object.getOwnPropertyDescriptor(entry, "client");
   if (!Object.isFrozen(entry) || !clientDescriptor?.enumerable || !("value" in clientDescriptor) || clientDescriptor.value !== client || Object.values(Object.getOwnPropertyDescriptors(entry)).some(descriptor => !("value" in descriptor))) {
-    entry = { ...entry, client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
+    entry = { ...entry, ...errorDetailFor(entry), client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
   }
   entry = projectErrorDetail(entry);
   if (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true) entry = { ...entry, attemptNormalizationDropped: true };
