@@ -41,6 +41,7 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
     JSON.stringify({ code: "invalid-argument", error: "Failed to start sampling: [input_too_large] The prompt is too long for this model's context window (555817 tokens > 500000 tokens)" }),
     "The conversation has exceeded this model's context limit.",
+    "The input is not malformed; the input exceeds the model's context limit.",
     "This input is beyond the context window for the selected model.",
     "The request has reached the model context length limit.",
     // Devin's opaque context-window refusal: emitted as a structured event with code context_length_exceeded.
@@ -101,7 +102,10 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { message: 'Invalid value for "user": "maximum context length" is not allowed.' } }),
     "The model's context window is not full; the request is invalid",
     "Your input does not exceed the context window",
+    "Your input does not actually exceed the context window",
     "Unsupported parameter: user; supplied value 'The conversation has exceeded this model's context limit.'",
+    JSON.stringify({ error: { code: "invalid_value", param: "tools[0].function.name" },
+      last_error: "The conversation has exceeded this model's context limit." }),
     JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
       response: { error: "The conversation has exceeded this model's context limit." } }),
     JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
@@ -165,6 +169,7 @@ export function registerComboContextOverflowCases<Server>({
       message: "This model's maximum context length is 8192 tokens." } }))).toBe(true);
     for (const message of [
       "The conversation has exceeded this model's context limit.",
+      "The input is not malformed; the input exceeds the model's context limit.",
       "Request was not accepted because the input exceeds the context window.",
       "No tokens remain and the model's context window is full.",
       "It is not a timeout! The model's context window is full.",
@@ -191,6 +196,9 @@ export function registerComboContextOverflowCases<Server>({
       "Unsupported parameter: user; supplied value 'The conversation has exceeded this model's context limit.'",
       "The model's context window is not full; the request is invalid",
       "Your input does not exceed the context window",
+      "Your input does not actually exceed the context window",
+      JSON.stringify({ error: { code: "invalid_value", param: "tools[0].function.name" },
+        last_error: "The conversation has exceeded this model's context limit." }),
       JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
         response: { error: "The conversation has exceeded this model's context limit." } }),
       JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",

@@ -78,14 +78,31 @@ const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/
 
 /** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
-  if (NEGATED_CONTEXT_VERDICT.test(text.slice(start, end))) return true;
+  const matchSlice = text.slice(start, end);
+  const lastBoundary = Math.max(
+    matchSlice.lastIndexOf(";"),
+    matchSlice.lastIndexOf("."),
+    matchSlice.lastIndexOf("!"),
+    matchSlice.lastIndexOf("?"),
+    matchSlice.lastIndexOf("\n"),
+  );
+  const verdictClause = lastBoundary !== -1 ? matchSlice.slice(lastBoundary + 1) : matchSlice;
+  if (NEGATED_CONTEXT_VERDICT.test(verdictClause)) return true;
   // Phrase matches can begin at the verb and omit its negating auxiliary (`does not exceed`).
   // Check only a directly attached negator so unrelated wording such as `No tokens remain and
   // the model's context window is full` still counts as an affirmed overflow verdict.
   const before = text.slice(Math.max(0, start - 48), start);
-  return /\b(?:not|no|never|neither|nor)\s*$/i.test(before)
-    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|may|might|must)\s+(?:not|never)\s*$/i.test(before)
-    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn|mustn)['’]t\s*$/i.test(before);
+  const lastClauseBoundary = Math.max(
+    before.lastIndexOf(";"),
+    before.lastIndexOf("."),
+    before.lastIndexOf("!"),
+    before.lastIndexOf("?"),
+    before.lastIndexOf("\n"),
+  );
+  const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary + 1) : before;
+  return /\b(?:not|no|never|neither|nor)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|may|might|must)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn|mustn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore);
 }
 
 function hasAffirmedVerdict(text: string, verdict: RegExp): boolean {
@@ -170,7 +187,12 @@ export function isDefiniteContextOverflow(status: number, message: string, match
     if (!errorTextSource || typeof errorTextSource.value !== "string") return false;
     // A string-valued leaf can sit inside `response.error` while the outer envelope carries
     // the validation code. Check both records before trusting the leaf's context wording.
-    if (isParameterValidationRecord(record) || isParameterValidationRecord(errorTextSource.owner)) return false;
+    const errorObject = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+      ? record.error as Record<string, unknown>
+      : undefined;
+    if (isParameterValidationRecord(record)
+      || (errorObject !== undefined && isParameterValidationRecord(errorObject))
+      || isParameterValidationRecord(errorTextSource.owner)) return false;
     text = errorTextSource.value.trim();
   }
   return false;
