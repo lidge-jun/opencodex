@@ -50,12 +50,17 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const startup = useKeyedClientResource(`home-startup:${apiBase}`, [apiBase],
     signal => getJson<StartupBody>(`${apiBase}/api/startup-health`, signal));
   // The 24-hour window is cut when the rows arrive, so render never reads the clock.
-  const failures = useKeyedClientResource(`home-failures:${apiBase}`, [apiBase],
+  const failureRead = useKeyedClientResource(`home-failures:${apiBase}`, [apiBase],
     async signal => {
-      const rows = (await getJson<{ logs?: LogRow[] }>(`${apiBase}/api/logs?limit=500`, signal))?.logs ?? [];
-      return recentFailures(rows, Date.now() - DAY_MS);
+      const response = await fetch(`${apiBase}/api/logs?limit=500`, { signal });
+      if (!response.ok) throw new Error("logs unavailable");
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || !("logs" in body) || !Array.isArray(body.logs)) throw new Error("logs unavailable");
+      return recentFailures(body.logs as LogRow[], Date.now() - DAY_MS);
     },
-    { pollMs: 30_000 }).data ?? [];
+    { pollMs: 30_000 });
+  const failuresKnown = failureRead.error == null && failureRead.data !== undefined;
+  const failures = failuresKnown ? failureRead.data ?? [] : [];
 
   const online = health.data != null;
   const providerCount = Object.keys(config.data?.providers ?? {}).length;
@@ -76,6 +81,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const allDone = doneCount === steps.length;
 
   const headline = !online ? t("shellV2.homeDown")
+    : !failuresKnown ? t("shellV2.homeErrorsUnavailable")
     : failures.length > 0 ? t("shellV2.homeErrorsToday", { count: number.format(failures.length) })
     : t("shellV2.homeOk");
 
@@ -84,7 +90,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
           <span className="relative inline-flex size-3 shrink-0" aria-hidden>
-            <span className={cn("relative size-3 rounded-full", !online ? "bg-danger" : failures.length ? "bg-warning" : "bg-success")} />
+            <span className={cn("relative size-3 rounded-full", !online ? "bg-danger" : !failuresKnown || failures.length ? "bg-warning" : "bg-success")} />
           </span>
           <h1 className="m-0 text-title font-semibold tracking-[-0.025em] text-balance">{headline}</h1>
         </div>
@@ -150,7 +156,9 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
             <button type="button" onClick={() => navigate("logs")}
               className="cursor-pointer text-[13px] font-medium text-highlight hover:underline">{t("shellV2.viewAll")}</button>
           </div>
-          {failures.length === 0 ? (
+          {!failuresKnown ? (
+            <p className="m-0 text-[14px] text-fg-muted">{t("shellV2.homeErrorsUnavailable")}</p>
+          ) : failures.length === 0 ? (
             <p className="m-0 text-[14px] text-fg-muted">{t("shellV2.noErrors")}</p>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0">

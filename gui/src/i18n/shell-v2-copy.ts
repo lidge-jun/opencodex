@@ -27,6 +27,7 @@ const rows = {
 
   // ---- home -------------------------------------------------------------------
   homeOk: ["Everything is running", "모든 게 정상이에요", "Alles läuft", "Tout fonctionne", "一切正常", "一切正常", "Всё работает", "すべて正常です", "Her şey çalışıyor", "Mọi thứ đang chạy", "Tudo funcionando"],
+  homeErrorsUnavailable: ["Recent errors unavailable", "최근 오류를 확인할 수 없어요", "Letzte Fehler nicht verfügbar", "Erreurs récentes indisponibles", "无法获取最近的错误", "無法取得最近的錯誤", "Последние ошибки недоступны", "最近のエラーを取得できません", "Son hatalar kullanılamıyor", "Không thể tải lỗi gần đây", "Erros recentes indisponíveis"],
   homeDown: ["The proxy is not answering", "프록시가 응답하지 않아요", "Der Proxy antwortet nicht", "Le proxy ne répond pas", "代理没有响应", "代理沒有回應", "Прокси не отвечает", "プロキシが応答していません", "Proxy yanıt vermiyor", "Proxy không phản hồi", "O proxy não está respondendo"],
   homeErrorsToday: ["{count} requests failed in the last 24 hours", "최근 24시간 동안 요청 {count}개가 실패했어요", "{count} Anfragen in den letzten 24 Stunden fehlgeschlagen", "{count} requêtes ont échoué ces dernières 24 h", "过去 24 小时有 {count} 个请求失败", "過去 24 小時有 {count} 個請求失敗", "За 24 часа не выполнено запросов: {count}", "過去24時間に {count} 件のリクエストが失敗しました", "Son 24 saatte {count} istek başarısız oldu", "{count} yêu cầu lỗi trong 24 giờ qua", "{count} solicitações falharam nas últimas 24 horas"],
   tileVersion: ["Version", "버전", "Version", "Version installée", "版本", "版本", "Версия", "バージョン", "Sürüm", "Phiên bản", "Versão"],
