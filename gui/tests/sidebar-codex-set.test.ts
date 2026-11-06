@@ -22,7 +22,9 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    * one line. Pinning the exact destructuring made this fail the moment an
    * entry gained a field — a change it was never written to catch.
    */
-  expect(src).toContain("NAV_GROUPS.filter(group => group.tier === tier)");
+  const nav = await Bun.file(new URL("../src/components/sidebar-nav.tsx", import.meta.url)).text();
+  expect(src).toContain("<SidebarNav");
+  expect(nav).toContain("NAV_GROUPS.filter(group => group.tier === tier)");
 
   /*
    * It stays in the nav table and remains routable for deep links. The icon

@@ -22,7 +22,8 @@ import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
 import { IconMenu, IconGlobe, IconPower, IconX, IconRefresh, IconHistory } from "./icons";
 import { switchDashboardEdition } from "./lib/dashboard-edition";
-import { NAV_GROUPS, NAV_TIERS, groupForPage, visibleGroupPages } from "./nav-groups";
+import { groupForPage, visibleGroupPages } from "./nav-groups";
+import { SidebarNav } from "./components/sidebar-nav";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
@@ -253,6 +254,19 @@ export default function App() {
     if (desktopMac && appRef.current) return watchMacTitlebarMetrics(appRef.current);
   }, [desktopMac]);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
+  // Menu search and row shortcuts live in SidebarNav; App only says how to show the rail
+  // (expand the collapsed rail, open the phone drawer) and how to navigate.
+  const revealSidebar = useCallback(() => {
+    if (navCollapsed) toggleNavCollapse();
+    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 760px)").matches) setNavOpen(true);
+  }, [navCollapsed, toggleNavCollapse]);
+  // Deliberate sidebar navigation — push a history entry and close the phone drawer.
+  const sidebarNavigate = (target: Page) => {
+    navigateToPage(target);
+    setNavOpen(false);
+  };
+  const sidebarPageLabel = (target: Page) => t(PAGE_TKEY[target]);
+  const sidebarPageAvailable = (target: Page) => target !== "remote-workspace" || remoteWorkspaceAvailable;
   const sidebarRef = useRef<HTMLElement>(null);
   const navWasOpen = useRef(false);
 
@@ -336,7 +350,10 @@ export default function App() {
     if (navOpen) {
       navWasOpen.current = true;
       // after the 180ms slide-in: while visibility is transitioning, focus() no-ops
-      const timer = setTimeout(() => sidebarRef.current?.focus(), 200);
+      // Menu search (Cmd/Ctrl+K) opens the drawer and focuses its own field; keep that focus.
+      const timer = setTimeout(() => {
+        if (!sidebarRef.current?.contains(document.activeElement)) sidebarRef.current?.focus();
+      }, 200);
       return () => clearTimeout(timer);
     }
     if (navWasOpen.current) { navWasOpen.current = false; menuBtnRef.current?.focus(); }
@@ -512,30 +529,15 @@ export default function App() {
             page it owns, so #logs/debug highlights Usage & Logs, and a click opens the
             group's first page.
           */}
-          {NAV_TIERS.map(({ tier, tkey: tierKey }) => (
-            <div key={tier} className="nav-tier" data-tier={tier}>
-              <div className="nav-tier-label" aria-hidden="true">{t(tierKey)}</div>
-              {NAV_GROUPS.filter(group => group.tier === tier).map(group => {
-                const { id, tkey, Icon } = group;
-                const active = activeGroup?.id === id;
-                return (
-                  <div key={id} className="nav-entry">
-                    <button type="button" className={`nav-item${active ? " active" : ""}`}
-                      data-page={group.pages[0]}
-                      data-group={id}
-                      onClick={() => {
-                        // Deliberate sidebar navigation — push a history entry.
-                        navigateToPage(group.pages[0]);
-                        setNavOpen(false);
-                      }}
-                      aria-current={active ? "page" : undefined}>
-                      <Icon /> {t(tkey)}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          <SidebarNav
+            activeGroupId={activeGroup?.id ?? null}
+            pageLabel={sidebarPageLabel}
+            pageAvailable={sidebarPageAvailable}
+            onNavigate={sidebarNavigate}
+            onReveal={revealSidebar}
+            desktopShell={desktopShell}
+            t={t}
+          />
         </nav>
         <div className="sidebar-foot">
           <ProxyControls

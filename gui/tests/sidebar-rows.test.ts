@@ -60,9 +60,11 @@ test("the sidebar is eleven group rows in two tiers, owning every sidebar page o
   expect(groupForPage("claude")?.id).toBe("connect");
   expect(groupForPage("remote-workspace")?.id).toBe("remote");
 
-  // App renders the table, one tier at a time, rather than a copy of it.
-  expect(src).toContain("NAV_TIERS.map(");
-  expect(src).toContain("NAV_GROUPS.filter(group => group.tier === tier)");
+  // The sidebar renders the table, one tier at a time, rather than a copy of it.
+  const nav = await Bun.file(new URL("../src/components/sidebar-nav.tsx", import.meta.url)).text();
+  expect(src).toContain("<SidebarNav");
+  expect(nav).toContain("NAV_TIERS.map(");
+  expect(nav).toContain("NAV_GROUPS.filter(group => group.tier === tier)");
   expect(src).not.toContain("const NAV: NavEntry[]");
 });
 

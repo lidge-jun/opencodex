@@ -220,6 +220,71 @@
 }
 .app--nav-collapsed .nav-tier-label { visibility: hidden; }
 
+/* ---- menu search beside the Everyday heading ----------------------------- */
+.nav-tier-head { display: flex; align-items: center; justify-content: space-between; min-height: 24px; padding-bottom: 2px; }
+.nav-tier-head .nav-tier-label { padding-bottom: 0; }
+.nav-search-open {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 22px; padding: 0 4px 0 5px; margin-right: 2px;
+  border: 0; border-radius: 6px; background: none;
+  color: var(--ocx-fg-subtle); cursor: pointer;
+}
+.nav-search-open svg { width: 13px; height: 13px; }
+.nav-search-open:hover { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
+.nav-search-open:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.nav-search {
+  display: flex; align-items: center; gap: 6px;
+  height: 30px; margin: 0 0 4px; padding: 0 4px 0 9px;
+  border-radius: 8px; background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line-strong, var(--ocx-line));
+}
+.nav-search:focus-within { box-shadow: inset 0 0 0 1px var(--ocx-fg-subtle), 0 0 0 3px var(--accent-ring); }
+.nav-search > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--ocx-fg-subtle); }
+.nav-search .nav-search-input {
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  margin: 0; padding: 0;
+  border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent;
+  -webkit-appearance: none; appearance: none;
+  color: var(--ocx-fg); font: inherit; font-size: 13px;
+}
+.nav-search .nav-search-input:focus, .nav-search .nav-search-input:focus-visible { outline: 0; box-shadow: none; border: 0; }
+.nav-search-input::-webkit-search-cancel-button { display: none; }
+.nav-search-close {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto;
+  border: 0; border-radius: 6px; background: none; color: var(--ocx-fg-subtle); cursor: pointer;
+}
+.nav-search-close svg { width: 13px; height: 13px; }
+.nav-search-close:hover { color: var(--ocx-fg); background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); }
+.nav-search-results { display: flex; flex-direction: column; gap: 1px; }
+.nav-search-result.is-highlighted { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
+.nav-search-context { margin-left: auto; padding-left: 8px; font-size: 11.5px; color: var(--ocx-fg-subtle); white-space: nowrap; }
+.nav-search-empty { padding: 8px; font-size: 12.5px; color: var(--ocx-fg-subtle); }
+
+/* Row shortcuts stay out of sight until the row is hovered or focused: a quiet sidebar. */
+.nav-item-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-kbd {
+  margin-left: auto; padding: 0 4px;
+  font: 500 10.5px/16px var(--font-sans, inherit); font-variant-numeric: tabular-nums;
+  color: var(--ocx-fg-subtle); border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  opacity: 0; transition: opacity var(--motion-fast, 120ms);
+}
+.nav-item:hover .nav-kbd, .nav-item:focus-visible .nav-kbd { opacity: 1; }
+.nav-kbd--search { margin-left: 0; opacity: 1; box-shadow: none; padding: 0; }
+
+/* ---- Fine-tuning folds by default ---------------------------------------- */
+.nav-tier-toggle {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  border-radius: 6px;
+}
+.nav-tier-toggle .nav-tier-label { padding-bottom: 4px; }
+.nav-tier-toggle:hover .nav-tier-label { color: var(--ocx-fg-muted); }
+.nav-tier-toggle:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.nav-tier-chevron { width: 12px; height: 12px; margin-bottom: 4px; color: var(--ocx-fg-subtle); transition: transform var(--motion-fast, 120ms); }
+.nav-tier--folding.is-open .nav-tier-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .nav-kbd, .nav-tier-chevron { transition: none; } }
+
 /* ---- sidebar strip: wordmark with the collapse toggle beside it ----------- */
 .sidebar-top { justify-content: space-between; gap: 8px; }
 .sidebar-top .brand--strip {
