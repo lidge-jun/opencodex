@@ -103,9 +103,19 @@ describe("combo failure cooldown scope", () => {
       "Invalid schema for response_format 'reply': 'type' is a required property.",
       "response_format.type must be one of 'text', 'json_object', 'json_schema'.",
       "response_format must be a valid JSON schema.",
+      "response_format.json_schema.schema must be a valid JSON schema.",
     ]) {
       expect(comboFailureDecision(400, malformed, genericUpstream)).toBe("stop");
     }
+
+    const envelopeWithDetail = JSON.stringify({
+      error: {
+        message: "Upstream request failed",
+        detail: "response_format.json_schema.schema must be a valid JSON schema.",
+        type: "upstream_error",
+      },
+    });
+    expect(comboFailureDecision(400, envelopeWithDetail, genericUpstream)).toBe("stop");
 
     // Without the explicit provider type, and with a real structured validation code, a 400
     // remains terminal instead of treating any opaque client error as target-specific.

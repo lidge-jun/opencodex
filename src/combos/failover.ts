@@ -407,10 +407,14 @@ function http400ErrorRecord(message: string): Record<string, unknown> | undefine
 /** Identify known malformed structured-output diagnostics that must remain terminal. */
 function isMalformedResponseFormatRequest(status: number, message: string): boolean {
   if (status !== 400) return false;
-  const errorMessage = http400ErrorRecord(message)?.message;
-  const detail = typeof errorMessage === "string" ? errorMessage : message;
-  return /\binvalid schema(?: for)? response_format\b/i.test(detail)
-    || /\bresponse_format(?:\.[a-z_]+)?\s+must be (?:one of|valid|a valid)\b/i.test(detail);
+  const record = http400ErrorRecord(message);
+  const fields = record
+    ? [record.message, record.detail].filter((value): value is string => typeof value === "string")
+    : [];
+  if (fields.length === 0) fields.push(message);
+  return fields.some(detail =>
+    /\binvalid schema(?: for)? response_format\b/i.test(detail)
+    || /\bresponse_format(?:\.[a-z_]+)*\s+must be (?:one of|valid|a valid)\b/i.test(detail));
 }
 
 /** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */
