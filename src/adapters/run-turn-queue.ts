@@ -158,6 +158,20 @@ async function* replay(
   }
 }
 
+/** A limit terminal is replayable only as the first meaningful event. */
+export function classifyZeroOutputTokenLimit(event: AdapterEvent): Extract<AdapterEvent, { type: "error" }> | undefined {
+  const zeroOutputLimit = event.type === "incomplete"
+    ? event.reason === "max_output_tokens" && event.retryable !== false && event.endTurn !== false && !event.providerState
+    : event.type === "done" && ["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "")
+      && event.endTurn !== false && !event.providerState && !event.compactionEncryptedContent;
+  if (!zeroOutputLimit) return undefined;
+  return {
+    type: "error", status: 502, errorType: "upstream_error", code: "zero_output_token_limit",
+    message: "Provider reached its output token limit before producing output",
+    ...((event.type === "done" || event.type === "incomplete") && event.usage ? { usage: event.usage } : {}),
+  };
+}
+
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,

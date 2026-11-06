@@ -502,4 +502,107 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(body).toContain("response.failed");
     expect(hits).toEqual(["a"]);
   });
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} zero-output max_output_tokens terminal fails over to backup target`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat" });
+          emit({
+            type: "incomplete",
+            reason: "max_output_tokens",
+            usage: { inputTokens: 10, outputTokens: 0, totalTokens: 10 },
+          });
+          return;
+        }
+        emit({ type: "text_delta", text: "zero-output failover backup" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const parent: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, parent);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain("zero-output failover backup");
+      expect(hits).toEqual(["m1", "m2"]);
+    });
+  }
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} zero-output done length terminal fails over to backup target`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat" });
+          emit({
+            type: "done",
+            stopReason: "max_tokens",
+            usage: { inputTokens: 15, outputTokens: 0, totalTokens: 15 },
+          });
+          return;
+        }
+        emit({ type: "text_delta", text: "done-limit backup" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const parent: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, parent);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain("done-limit backup");
+      expect(hits).toEqual(["m1", "m2"]);
+    });
+  }
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} max_output_tokens after visible output does not fail over`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "text_delta", text: "partial output before limit" });
+          emit({
+            type: "incomplete",
+            reason: "max_output_tokens",
+          });
+          return;
+        }
+        emit({ type: "text_delta", text: "must not run" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(hits).toEqual(["m1"]);
+      expect(body).toContain("partial output before limit");
+      expect(body).not.toContain("must not run");
+    });
+  }
 });

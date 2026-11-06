@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  classifyZeroOutputTokenLimit,
   COALESCE_MAX_CHUNK_LENGTH,
   createAdapterEventQueue,
   DEFAULT_MAX_BACKLOG_CODE_UNITS,
@@ -644,5 +645,90 @@ describe("run-turn adapter event queue retained-payload budgets", () => {
         .toThrow("maxEventCodeUnits must be a positive safe integer");
     }
     expect(DEFAULT_MAX_EVENT_CODE_UNITS).toBeLessThan(DEFAULT_MAX_BACKLOG_CODE_UNITS);
+  });
+});
+
+describe("classifyZeroOutputTokenLimit", () => {
+  test("classifies incomplete with max_output_tokens as retryable zero-output error", () => {
+    const event: AdapterEvent = {
+      type: "incomplete",
+      reason: "max_output_tokens",
+      usage: { inputTokens: 42, outputTokens: 0, totalTokens: 42 },
+    };
+    expect(classifyZeroOutputTokenLimit(event)).toEqual({
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      code: "zero_output_token_limit",
+      message: "Provider reached its output token limit before producing output",
+      usage: { inputTokens: 42, outputTokens: 0, totalTokens: 42 },
+    });
+  });
+
+  test("classifies done with max_tokens, length, or max_output_tokens as zero-output error", () => {
+    for (const stopReason of ["max_tokens", "length", "max_output_tokens"]) {
+      const event: AdapterEvent = {
+        type: "done",
+        stopReason,
+        usage: { inputTokens: 50, outputTokens: 0, totalTokens: 50 },
+      };
+      expect(classifyZeroOutputTokenLimit(event)).toEqual({
+        type: "error",
+        status: 502,
+        errorType: "upstream_error",
+        code: "zero_output_token_limit",
+        message: "Provider reached its output token limit before producing output",
+        usage: { inputTokens: 50, outputTokens: 0, totalTokens: 50 },
+      });
+    }
+  });
+
+  test("ignores incomplete with non-token-limit reasons", () => {
+    expect(classifyZeroOutputTokenLimit({ type: "incomplete", reason: "content_filter" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "incomplete", reason: "cancelled" })).toBeUndefined();
+  });
+
+  test("ignores done with normal stop reasons", () => {
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "stop" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "end_turn" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done" })).toBeUndefined();
+  });
+
+  test("ignores non-replayable terminals: retryable=false, endTurn=false, providerState, or compactionEncryptedContent", () => {
+    expect(classifyZeroOutputTokenLimit({
+      type: "incomplete",
+      reason: "max_output_tokens",
+      retryable: false,
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "incomplete",
+      reason: "max_output_tokens",
+      endTurn: false,
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "incomplete",
+      reason: "max_output_tokens",
+      providerState: { cursor: "opaque" },
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "done",
+      stopReason: "max_tokens",
+      endTurn: false,
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "done",
+      stopReason: "max_tokens",
+      providerState: { cursor: "opaque" },
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "done",
+      stopReason: "max_tokens",
+      compactionEncryptedContent: "encrypted_blob",
+    })).toBeUndefined();
   });
 });

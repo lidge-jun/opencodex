@@ -8,7 +8,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { ResponsesCompletionPolicy } from "./completion-policy";
 import { linkAbortSignal, runTurnAdapterSseResponses } from "./core-lifetime";
-import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
@@ -761,6 +761,9 @@ export async function executeResponsesRunTurn(
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
+      // Called only at the first meaningful event; preflight protects side effects.
+      const zeroOutputLimit = !routedCompaction && classifyZeroOutputTokenLimit(event);
+      if (zeroOutputLimit) return zeroOutputLimit;
       // This tool is declared to the adapter by the private search loop.
       if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
       const emptyCatalogRefusal = emptyToolCatalogRefusal(event, clientToolCatalog);
@@ -833,6 +836,7 @@ export async function executeResponsesRunTurn(
           eventSource, classifyUndeclaredFirstTool, { honorReady: false },
         );
         if (preflight.error || preflight.empty) {
+          if (preflight.error?.usage) transportState.bindKeyUsageFromBridge(preflight.error.usage);
           runTurnAbort.abort();
           queue.close();
           const classified = adapterFailureFromEvent(preflight.error ?? {
@@ -1045,6 +1049,7 @@ export async function executeResponsesRunTurn(
           ? classifyUndeclaredFirstTool(firstMeaningful)
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
+          if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);
           const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
             ? firstMeaningful
             : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
