@@ -59,7 +59,7 @@ function fixture(nativeOutput: Record<string, unknown>[] = [{ id: "computer_fixt
   return { config, sent };
 }
 
-function request(toolChoice: unknown, tools: unknown[], model = "chat/model", input: unknown = "Use the selected tool."): Request {
+function request(toolChoice: unknown, tools: unknown[] | undefined, model = "chat/model", input: unknown = "Use the selected tool."): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -114,6 +114,28 @@ for (const type of ["additional_tools", "tool_search_output"]) for (const model 
     expect((sent[0]!.body.tools as Array<{ function: { name: string } }>).map(tool => tool.function.name)).toEqual(["shell"]);
   });
 }
+
+for (const type of ["additional_tools", "tool_search_output"]) for (const model of ["chat/model", "policy/tools"])
+  for (const topLevel of [undefined, []]) {
+    test(`required input-only ${type} rejects empty Chat tools on ${model}, top=${String(topLevel)}`, async () => {
+      const { config, sent } = fixture([{ id: "file-fixture", type: "file_search_call", status: "completed" }]);
+      const input = [{ type, role: "developer", call_id: "search-fixture", status: "completed", tools: [{ type: "file_search" }] },
+        { role: "user", content: "Use the loaded tool." }];
+      const response = await handleResponses(request("required", topLevel, model, input), config, {});
+      expect(response.status, await response.text()).toBe(model === "chat/model" ? 400 : 200);
+      expect(sent.map(row => row.provider)).toEqual(model === "chat/model" ? [] : ["responses"]);
+      if (sent.length) {
+        expect(sent[0]!.body.tool_choice).toBe("required");
+        const forwarded = sent[0]!.body.input as Array<Record<string, unknown>>;
+        if (type === "tool_search_output") {
+          // The native adapter lowers this carrier to its supported result envelope.
+          expect(forwarded[0]!.type).toBe("function_call_output");
+          expect(forwarded[0]!.call_id).toBe("search-fixture");
+          expect(JSON.parse(String(forwarded[0]!.output))).toEqual({ tools: [{ type: "file_search" }], status: "completed" });
+        } else expect(forwarded).toEqual(input);
+      }
+    });
+  }
 
 test("native Chat cannot replace a required named MCP tool with a same-named client function", async () => {
   const { config, sent } = fixture();
