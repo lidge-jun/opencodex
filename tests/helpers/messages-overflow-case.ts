@@ -50,6 +50,7 @@ export async function observeMessagesOverflowBody(response: Response, lane: Mess
 }
 
 export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixture: MessagesOverflowFixture) {
+  const phase = (name: string, started: number) => { if (process.env.OCX_OVERFLOW_DIAG === "1") process.stderr.write(`OVERFLOW_DIAG ${JSON.stringify({ phase: name, row: fixture.id, elapsed_ms: +(performance.now() - started).toFixed(1) })}\n`); };
   const tail = (fixture.messageStop || fixture.id.startsWith("frame-complete-")) ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "";
   const prefix = fixture.prefix ? `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: fixture.prefix } })}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n` : "";
   const error = { ...(fixture.type ? { type: fixture.type } : {}), ...(fixture.status !== undefined ? { status: fixture.status } : {}), message: `${fixture.message} ${overflowSentinel}`, ...(fixture.code !== undefined ? { code: fixture.code } : {}) };
@@ -131,7 +132,9 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
         if (fixture.fault?.startsWith("read")) return new Response(bodyStream(""), { headers: { "content-type": "application/json" } });
         return Response.json({ type: "error", error: { ...error, ...(fixture.other ? { detail: fixture.other } : {}) } }, { status: fixture.status ?? 400 });
       };
+      const serverStarted = performance.now();
       upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: reply });
+      phase("server_start", serverStarted);
       if (builtin) await saveCredential("anthropic", { access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 3600000, source: "oauth", accountId: "synthetic-account" });
       let mockSends = 0;
       if (passthrough && fixture.fault === "connect") { changedFetch = true; globalThis.fetch = (async () => { mockSends++; throw makeFault(); }) as typeof fetch; }
@@ -141,13 +144,19 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       let replayCalls = 0;
       if (fixture.fault?.startsWith("read") && lane.startsWith("translated")) (globalThis as any).__messagesReplayResponse = () => { replayCalls++; return lane === "translated-http" ? new Response(bodyStream(""), { status: 400, headers: { "content-type": "application/json" } }) : reply(); };
       if (fixture.thrown && lane === "translated-fold") (globalThis as any).__messagesCollectorStream = bodyStream("");
+      const configStarted = performance.now();
       saveConfig(config);
+      phase("save_config", configStarted);
       const request = new Request(`http://localhost/v1/messages${lane === "count_tokens" ? "/count_tokens" : ""}`, { method: "POST", headers: { "content-type": "application/json", ...(passthrough ? { authorization: "Bearer sk-ant-oat01-fixture" } : {}) }, body: JSON.stringify({ model: passthrough ? "claude-sonnet-4-6" : `${providerName}/wire-model`, max_tokens: 16, stream: false, messages: [{ role: "user", content: "fixture" }], ...(fixture.toolGuard ? { tools: [] } : {}) }) });
+      const requestStarted = performance.now();
       response = lane === "count_tokens" ? await handleClaudeCountTokens(request, config) : await handleClaudeMessages(request, config, { model: "fixture", provider: "fixture" });
+      phase("request_handler", requestStarted);
       if (fixture.fault?.startsWith("read") && lane.startsWith("translated")) { if (!replayCalls) throw new Error("Replay fixture did not exercise its response boundary"); }
       else if ((builtin || fixture.fault) && mockSends === 0) throw new Error("Builtin fixture did not use its local fetch callback");
     }
+    const bodyStarted = performance.now();
     const { text, bodySha256, bodyLength } = await observeMessagesOverflowBody(response, lane, fixture);
+    phase("body_observation", bodyStarted);
     const stream = lane === "converter" || lane === "direct-stream";
     let payload: any;
     try { payload = JSON.parse(stream ? text.split("data: ").at(-1)! : text); } catch { /* non-JSON bodies are observed as text */ }
@@ -160,5 +169,5 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       clientRecognizes: clientError && clientRecognizesOverflow(message),
       compactionSentence: payload?.error?.message === compactionSentence, bodySha256, bodyLength };
 
-  } finally { if (changedFetch) globalThis.fetch = previousFetch; delete (globalThis as any).__messagesReplayResponse; delete (globalThis as any).__messagesCollectorStream; delete (globalThis as any).__messagesReadFailure; translatorBudget?.dispose(); release?.(); await upstream?.stop(true); }
+  } finally { const teardownStarted = performance.now(); if (changedFetch) globalThis.fetch = previousFetch; Reflect.deleteProperty(globalThis, "__messagesReplayResponse"); Reflect.deleteProperty(globalThis, "__messagesCollectorStream"); Reflect.deleteProperty(globalThis, "__messagesReadFailure"); translatorBudget?.dispose(); release?.(); await upstream?.stop(true); phase("teardown", teardownStarted); }
 }

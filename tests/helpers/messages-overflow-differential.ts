@@ -2,6 +2,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash } from "./messages-overflow-cases";
+const diagEnabled = process.env.OCX_OVERFLOW_DIAG === "1";
+const diagStart = performance.now();
+const diag = (phase: string, fields: Record<string, string | number> = {}) => { if (diagEnabled) process.stderr.write(`OVERFLOW_DIAG ${JSON.stringify({ phase, at_ms: +(performance.now() - diagStart).toFixed(1), ...fields })}\n`); };
+diag("entry_after_static_imports");
 const [mode, scratch, output, selectedLane, offset = "0", limit] = process.argv.slice(2) as [string, string, string, string?, string?, string?];
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 const base = mode === "--generate-base";
@@ -18,6 +22,7 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
   if (source.split(needle).length !== 2) throw new Error(`Baseline observation anchor not unique: ${needle}`);
   return source.replace(needle, replacement);
 }
+const overlayStarted = performance.now();
 {
   const existing = base ? new Set(git("ls-tree", "-r", "--name-only", "72e80d280", "--", "src").trim().split("\n")) : new Set<string>();
   const changed = base ? git("diff", "--name-only", "72e80d280", "--", "src").trim().split("\n").filter(path => existing.has(path))
@@ -65,11 +70,14 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
     build.onLoad({ filter }, ({ path }) => ({ contents: readFileSync(overlays.get(path)!, "utf8"), loader: "ts" }));
   } });
 }
+diag("overlay_plugin_ready", { elapsed_ms: +(performance.now() - overlayStarted).toFixed(1) });
 // Install before the request graph loads, so even an ACL verifier that returns
 // after requesting termination cannot hide its still-live PowerShell child.
 const spawnTracker = base ? undefined : (await import("./messages-overflow-spawn-tracker")).trackOverflowAsyncSpawns();
+const importStarted = performance.now();
 const { runMessagesOverflowCase } = await import("./messages-overflow-case");
 const { upstreamMessagesRequestIdHeaders } = await import("../../src/server/messages-response-headers");
+diag("dynamic_imports_ready", { elapsed_ms: +(performance.now() - importStarted).toFixed(1) });
 if (base && upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture" }))["request-id"] !== "req_fixture") throw new Error("Baseline modules were not loaded");
 const rows = [];
 const decisions: Record<string, boolean>[] = [];
@@ -84,6 +92,9 @@ function intern<T>(values: T[], value: T): number {
   return values.push(value) - 1;
 }
 for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane === selectedLane)) for (const input of applicableMessagesOverflowFixtures(lane).slice(first, first + count)) {
+  const rowStarted = performance.now();
+  Reflect.set(globalThis, "__overflowDiagRow", input.id);
+  diag("row_start", { row: input.id });
   const observations = new Map<string, boolean[]>();
   (globalThis as any).__messagesOverflowRecord = (tag: string, value: boolean) => {
     const values = observations.get(tag) ?? []; values.push(value); observations.set(tag, values);
@@ -91,6 +102,7 @@ for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane ==
   };
   if (input.fault) process.stderr.write(`fixture ${lane}/${input.id}\n`);
   const result = await runMessagesOverflowCase(lane, input);
+  diag("row_done", { row: input.id, elapsed_ms: +(performance.now() - rowStarted).toFixed(1) });
   const passthrough = lane === "passthrough" || lane === "count_tokens";
   if (!passthrough && input.rawBody === undefined && !input.fault && !input.localBranch && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
   const internalDecisions: Record<string, boolean> = {};
@@ -122,6 +134,7 @@ if (base) {
   for (let index = 0; index < lines.length; index += 3) groups.push(lines.slice(index, index + 3).join(","));
   await Bun.write(output, `${JSON.stringify(header).slice(0, -1)},"outcomes":{\n${groups.join(",\n")}\n}}\n`);
 } else {
+  const finalizeStarted = performance.now();
   // Successful exit is not enough on Windows: an async ACL child can outlive its caller.
   const { settleBackgroundWork } = await import("../../src/lib/background-work");
   const settled = await settleBackgroundWork({ timeoutMs: 2_000 });
@@ -134,4 +147,5 @@ if (base) {
   await spawnTracker!.drain();
   spawnTracker!.restore();
   await Bun.write(output, JSON.stringify({ schemaVersion: 8, rows, fixtureAsyncSpawnsDrained: true }) + "\n");
+  diag("finalize_done", { elapsed_ms: +(performance.now() - finalizeStarted).toFixed(1), rows: rows.length });
 }

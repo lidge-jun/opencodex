@@ -56,11 +56,24 @@ type Outcome = { exit: number; stdout: string; stderr: string };
  * stop and join the direct child. An unsuccessful call never authorizes the
  * caller to remove its scratch: a terminated child may have descendants.
  */
-export async function collectOverflowChild(child: OverflowChild, deadline: number | null, reapMs = 2_000): Promise<Outcome> {
+export async function collectOverflowChild(child: OverflowChild, deadline: number | null, reapMs = 2_000, diagnostic?: (line: string) => void, firstOutput?: () => void): Promise<Outcome> {
   let exitObserved = false;
   const exit = Promise.resolve().then(() => child.exited).then(code => { exitObserved = true; return code; });
-  const stdout = Promise.resolve().then(() => new Response(child.stdout).text());
-  const stderr = Promise.resolve().then(() => new Response(child.stderr).text());
+  let outputObserved = false;
+  const read = async (stream: ReadableStream<Uint8Array>, forward: boolean) => {
+    if (!diagnostic) return new Response(stream).text();
+    const reader = stream.getReader(); const decoder = new TextDecoder(); let all = ""; let pending = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (value?.length && !outputObserved) { outputObserved = true; firstOutput?.(); }
+      const part = decoder.decode(value, { stream: !done }); all += part; pending += part;
+      const lines = pending.split("\n"); pending = lines.pop()!;
+      for (const line of lines) if (forward && line.startsWith("OVERFLOW_DIAG ")) diagnostic(line);
+      if (done) { if (forward && pending.startsWith("OVERFLOW_DIAG ")) diagnostic(pending); return all; }
+    }
+  };
+  const stdout = Promise.resolve().then(() => read(child.stdout, false));
+  const stderr = Promise.resolve().then(() => read(child.stderr, true));
   // Attach handlers immediately, including to the losing completion branch.
   const joined = Promise.allSettled([exit, stdout, stderr]);
   const completion = Promise.all([exit, stdout, stderr]).then(
