@@ -1,11 +1,11 @@
 import type { PersistedUsageEntry } from "./log";
-import { isLegacyCodexUsage, matchesUsageSource, USAGE_SOURCE_CLIENTS,
+import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, USAGE_SOURCE_CLIENTS,
   type UsageDeviceFilter, type UsageSourceClient, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 
 /** Fold request rows once. Only currently configured IDs get individual counters. */
 export function createSourceFacetAccumulator(filter: UsageSourceFilter, ids: readonly string[], window: UsageTimeWindow) {
-  const configured = new Set(ids);
+  const configured = new Set(snapshotConfiguredKeyIds(ids));
   const apps = Object.fromEntries(USAGE_SOURCE_CLIENTS.map(client => [client, 0])) as Record<UsageSourceClient, number>;
   const keys = new Map([...configured].sort().map(id => [id, 0]));
   let all = 0;

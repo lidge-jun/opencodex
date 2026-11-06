@@ -1,7 +1,7 @@
 import { scanUsageLedgerCooperatively } from "../../usage/ledger-scanner";
 import { currentUsageLogRevision, usageLogIdentityKey, usageLogRevisionKey } from "../../usage/log";
 import { createSourceFacetAccumulator } from "../../usage/source-facets";
-import type { UsageSourceFilter } from "../../usage/source-filter";
+import { snapshotConfiguredKeyIds, type UsageSourceFilter } from "../../usage/source-filter";
 import { rangeWindow } from "../../usage/summary";
 
 const MAX_FLIGHTS = 4;
@@ -16,7 +16,7 @@ type SourceFacets = ReturnType<ReturnType<typeof createSourceFacetAccumulator>["
 
 /** Single-flight identical requests; never retain arbitrary historical key IDs. */
 export async function getUsageSourceFacets(filter: UsageSourceFilter, configuredIds: readonly string[]): Promise<SourceFacets> {
-  const ids = [...new Set(configuredIds)].sort();
+  const ids = snapshotConfiguredKeyIds(configuredIds);
   const captured: UsageSourceFilter = { client: filter.client, device: { ...filter.device } };
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const revision = currentUsageLogRevision();

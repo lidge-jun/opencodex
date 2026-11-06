@@ -81,6 +81,19 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("unconfigured reports retain invalid-row diagnostics across incremental scans", async () => {
+    const path = join(testDir, "usage.jsonl");
+    writeFileSync(path, line("valid"));
+    const filter = { sourceFilter: { client: "all" as const, device: { kind: "unconfigured" as const } }, configuredApiKeyIds: [] };
+    expect((await getFilteredUsageAggregate(filter)).usageInvalidRows).toBe(false);
+    appendFileSync(path, "{invalid}\n");
+    const next = await getFilteredUsageAggregate(filter);
+    expect(next.update).toBe("append");
+    expect(next.usageInvalidRows).toBe(true);
+    appendFileSync(path, line("another"));
+    expect((await getFilteredUsageAggregate(filter)).usageInvalidRows).toBe(true);
+  });
+
   test("facet scans share identical work and reject excess distinct concurrent scans", async () => {
     const original = usageLedgerScannerModule.scanUsageLedgerCooperatively;
     let release!: () => void;

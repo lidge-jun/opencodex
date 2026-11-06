@@ -1,7 +1,7 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
-import { isLegacyCodexUsage, matchesUsageSource, type UsageSourceFilter } from "./source-filter";
+import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
 import {
@@ -1312,7 +1312,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     const inputSource = options?.filter?.sourceFilter;
     const sourceFilter = inputSource ? { client: inputSource.client, device: { ...inputSource.device } } : undefined;
     const configuredApiKeyIds = options?.filter?.configuredApiKeyIds
-      ? [...options.filter.configuredApiKeyIds] : undefined;
+      ? snapshotConfiguredKeyIds(options.filter.configuredApiKeyIds) : undefined;
     if (sourceFilter?.device.kind === "unconfigured" && !configuredApiKeyIds) {
       throw new Error("configured key snapshot required");
     }
@@ -1323,6 +1323,10 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     this.mode = options?.mode ?? "exact";
     this.window = options?.window ? Object.freeze({ ...options.window }) : undefined;
     this.requestIds = this.mode === "exact" ? new Map() : null;
+    if (configuredApiKeyIds) {
+      // Account conservatively for the array, set, and serialized retained cache identity.
+      this.estimatedRetainedBytes += configuredApiKeyIds.reduce((bytes, id) => bytes + 128 + id.length * 8, 0);
+    }
   }
 
   get snapshotWindow(): { start: number | null; end: number | null } {

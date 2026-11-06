@@ -443,6 +443,8 @@ The dashboard-session-only `/api/usage/source-facets` accepts the same `client` 
 parameters and provides counts for a captured 30-day window, the filter echo and incomplete-read
 status. App counts respect the chosen device; device counts respect the chosen app. Individual key
 counts are limited to configured keys. This endpoint and `unconfigured` reports use `no-store`.
+For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
+256 characters, or more than 65,536 total ID characters rather than silently truncating them.
 Client labels are best-effort classifications of inbound headers, not authentication, and raw
 headers are not stored as client attribution. The `/v1/usage` data-key endpoint accepts `client`
 and echoes its authenticated-key scope without exposing the key ID. A Remote Link management relay

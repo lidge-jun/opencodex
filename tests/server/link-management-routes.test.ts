@@ -1,7 +1,7 @@
 import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -231,8 +231,16 @@ describe("link management routes", () => {
       expect(group?.status).toBe(200);
       expect(group?.headers.get("cache-control")).toBe("no-store");
       expect((await group!.json() as { summary: { requests: number } }).summary.requests).toBe(1);
+      appendFileSync(join(temp, "usage.jsonl"), "{invalid}\n");
+      const partial = await call("/api/usage?client=codex&device=unconfigured", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config);
+      const partialBody = await partial!.json() as { usageIncomplete?: boolean; usageIncompleteReason?: string };
+      expect(partialBody.usageIncomplete).toBe(true);
+      expect(partialBody.usageIncompleteReason).toBeUndefined();
       expect((await call(`${path}&client=all`, "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(400);
       expect((await call("/api/usage/source-facets?client=codex&device=key&apiKeyId=foreign", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(400);
+      h.config.apiKeys = [{ id: "x".repeat(257), name: "long", key: "fixture-key", createdAt: "2026-01-01T00:00:00Z" }];
+      expect((await call("/api/usage/source-facets?client=all&device=all", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(503);
+      expect((await call("/api/usage?client=all&device=unconfigured", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(503);
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;

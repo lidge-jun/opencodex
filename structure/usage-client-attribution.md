@@ -23,6 +23,10 @@ snapshot is included in filtered-cache identity. `src/usage/source-facets.ts` fo
 30-day app/device counts in one pass, retaining individual counters only for configured IDs;
 `src/server/management/usage-source-facets.ts` bounds concurrent scans. The session-only facets
 route rechecks session and inventory after scanning, fails closed on changes and sets no-store.
+Snapshots exceeding 1,024 configured keys, 256 characters per ID or 65,536 total ID characters
+are refused rather than truncated; retained accumulator estimates include the snapshot and cache
+identity. Invalid ledger rows mark unconfigured reports incomplete without claiming they were
+oversized. `tests/usage/usage-aggregate-cache.test.ts` covers append and snapshot identity.
 
 `src/server/index/link-management.ts` binds new source-filtered relay reads to the admitted link
 key. Source-filtered snapshot bounds cover only matching rows. `src/client/link-management-relay.ts`

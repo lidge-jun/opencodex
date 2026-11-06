@@ -23,7 +23,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { getFailureProjection } from "../../usage/failure-projection-cache";
-import { parseUsageSource } from "../../usage/source-filter";
+import { MAX_USAGE_CONFIGURED_KEYS, parseUsageSource, snapshotConfiguredKeyIds } from "../../usage/source-filter";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -111,6 +111,12 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
   return { ...summary, since, generatedAt: now };
 }
 
+function configuredUsageKeyIds(config: OcxConfig): string[] {
+  const keys = config.apiKeys ?? [];
+  if (keys.length > MAX_USAGE_CONFIGURED_KEYS) throw new Error("configured key snapshot exceeds limit");
+  return snapshotConfiguredKeyIds(keys.map(key => key.id));
+}
+
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -196,7 +202,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       return Response.json({ error: "invalid usage source filter" }, { status: 400, headers: { "cache-control": "no-store" } });
     }
     try {
-      const ids = [...new Set((config.apiKeys ?? []).map(key => key.id))].sort();
+      const ids = configuredUsageKeyIds(config);
       if (parsed.filter.device.kind === "key" && !ids.includes(parsed.filter.device.id)) {
         return Response.json({ error: "unknown key" }, { status: 400, headers: { "cache-control": "no-store" } });
       }
@@ -205,7 +211,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const facets = await getUsageSourceFacets(parsed.filter, ids);
       const revoked = auth(ctx, "dashboard");
       if (revoked) return revoked;
-      const currentIds = [...new Set((config.apiKeys ?? []).map(key => key.id))].sort();
+      const currentIds = configuredUsageKeyIds(config);
       const currentLinks = JSON.stringify(readStoreFor(ctx).links.map(({ apiKeyId, alias }) => [apiKeyId, alias]).sort());
       if (JSON.stringify(ids) !== JSON.stringify(currentIds) || links !== currentLinks) throw new Error("inventory changed");
       return Response.json(facets, { headers: { "cache-control": "no-store" } });
@@ -241,7 +247,11 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const denied = sessionGuard(ctx, "dashboard");
       if (denied) return denied;
     }
-    const configuredIds = unconfigured ? [...new Set((config.apiKeys ?? []).map(key => key.id))].sort() : undefined;
+    let configuredIds: string[] | undefined;
+    if (unconfigured) {
+      try { configuredIds = configuredUsageKeyIds(config); }
+      catch { return Response.json({ error: "usage_inventory_unavailable" }, { status: 503, headers: { "cache-control": "no-store" } }); }
+    }
     if (url.searchParams.get("jev") === "1") {
       const range = parseRange(url.searchParams.get("range"));
       const rawComboId = url.searchParams.get("comboId");
@@ -333,7 +343,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         if (sessionGuard) {
           const denied = sessionGuard(ctx, "dashboard");
           if (denied) return denied;
-          const currentIds = [...new Set((config.apiKeys ?? []).map(key => key.id))].sort();
+          const currentIds = configuredUsageKeyIds(config);
           if (JSON.stringify(currentIds) !== JSON.stringify(configuredIds)) {
             return Response.json({ error: "usage_inventory_changed" }, { status: 503, headers: { "cache-control": "no-store" } });
           }
@@ -341,7 +351,8 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         const accumulator = filteredAggregate.accumulator;
         const body = {
           ...accumulator.summarize(range, now, surface),
-          ...(filteredAggregate.usageIncomplete ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const } : {}),
+          ...(filteredAggregate.usageIncomplete ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const }
+            : unconfigured && filteredAggregate.usageInvalidRows ? { usageIncomplete: true as const } : {}),
           historyTruncated: false,
           truncatedPrefixBytes: 0,
           entriesTruncated: false,

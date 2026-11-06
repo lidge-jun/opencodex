@@ -194,6 +194,12 @@ describe("usage client attribution", () => {
     });
   });
 
+  test("unconfigured key snapshots reject excessive identities without truncating them", () => {
+    const sourceFilter = { client: "all" as const, device: { kind: "unconfigured" as const } };
+    expect(() => createUsageSummaryAccumulator({ filter: { sourceFilter, configuredApiKeyIds: ["x".repeat(257)] } })).toThrow();
+    expect(() => createUsageSummaryAccumulator({ filter: { sourceFilter, configuredApiKeyIds: Array.from({ length: 1025 }, (_, i) => `id-${i}`) } })).toThrow();
+  });
+
   test("source facets count matching rows in both dimensions without retaining arbitrary key IDs", () => {
     const now = Date.now();
     const filter = { client: "codex" as const, device: { kind: "all" as const } };

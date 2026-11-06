@@ -7,6 +7,19 @@ export type UsageSourceClient = (typeof USAGE_SOURCE_CLIENTS)[number];
 export type UsageDeviceFilter = { kind: "all" | "no-key" | "unconfigured" } | { kind: "key"; id: string };
 export interface UsageSourceFilter { client: UsageSourceClient; device: UsageDeviceFilter }
 
+/** Reject excessive snapshots instead of truncating identity or retaining unbounded keys. */
+export const MAX_USAGE_CONFIGURED_KEYS = 1024;
+export function snapshotConfiguredKeyIds(ids: readonly string[]): string[] {
+  if (ids.length > MAX_USAGE_CONFIGURED_KEYS) throw new Error("configured key snapshot exceeds limit");
+  let size = 0;
+  for (const id of ids) {
+    if (typeof id !== "string" || !id || id.length > 256 || (size += id.length) > 65536) {
+      throw new Error("configured key snapshot exceeds limit");
+    }
+  }
+  return [...new Set(ids)].sort();
+}
+
 /** Old rows in the historic Codex surface are disclosed as unclassified, never as a subtype. */
 export function isLegacyCodexUsage(entry: PersistedUsageEntry): boolean {
   return entry.client === undefined && entry.surface === undefined;
