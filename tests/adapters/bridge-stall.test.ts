@@ -99,6 +99,51 @@ describe("bridge stall watchdog budget", () => {
     }
   }
 
+  for (const mode of ["normal", "multiple", "afterOutput"] as const) {
+    test(`hidden thinking does not issue a stalled open tool, mode=${mode}`, async () => {
+      const { timers, tick } = beatSeam();
+      const stalled = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const blocks = mode === "multiple" ? 2 : 1;
+      /** Interleave signed hidden blocks into an argument stream that subsequently stalls. */
+      async function* upstream(): AsyncGenerator<AdapterEvent> {
+        yield { type: "tool_call_start", id: "call_hidden_stall", name: "read" };
+        yield { type: "tool_call_delta", arguments: '{"value":' };
+        for (let i = 0; i < blocks; i++) {
+          yield { type: "thinking_delta", thinking: `hidden-${i}` };
+          yield { type: "thinking_signature", signature: `sig-${i}`, ...(mode === "afterOutput" ? { afterOutput: true } : {}) };
+          if (i === 0) yield { type: "tool_call_delta", arguments: '"ok"' };
+        }
+        stalled.resolve();
+        await release.promise;
+      }
+      const framesPromise = collectSse(bridgeToResponsesSSE(
+        upstream(), "model", undefined, undefined, undefined, () => release.resolve(), 500,
+        { stallTimeoutSec: 1, hideThinkingSummary: true, timers },
+      ));
+      try {
+        await stalled.promise;
+        tick(); tick(); tick();
+        const frames = await framesPromise;
+        const added = frames.filter(frame => frame.event === "response.output_item.added").map(frame => frame.data);
+        const done = frames.filter(frame => frame.event === "response.output_item.done").map(frame => frame.data);
+        const items = done.map(event => event.item as Record<string, unknown>);
+        const tool = items.find(item => item.type === "function_call")!;
+        expect(tool.status).toBe("incomplete");
+        expect(tool.arguments).toBe('{"value":"ok"');
+        expect(frames.filter(frame => frame.event === "response.function_call_arguments.done")).toHaveLength(0);
+        expect(added.map(event => event.output_index)).toEqual(added.map((_, index) => index));
+        expect(done.map(event => event.output_index)).toEqual(added.map(event => event.output_index));
+        expect(items.filter(item => item.encrypted_content).map(item => decodeReasoningEnvelope(item.encrypted_content as string)))
+          .toEqual(Array.from({ length: blocks }, (_, i) => ({ sig: `sig-${i}`, txt: `hidden-${i}`, ...(mode === "afterOutput" ? { aft: tool.id } : {}) })));
+        const terminal = frames.filter(frame => frame.event === "response.incomplete");
+        expect(terminal).toHaveLength(1);
+        expect(stallReason(terminal[0]!)).toBe("upstream_stall_timeout");
+        expect((terminal[0]!.data.response as Record<string, unknown>).output).toEqual(items);
+      } finally { release.resolve(); }
+    });
+  }
+
   test("a disabled budget (stallTimeoutSec: 0) does not kill a silent upstream on the first beat", async () => {
     // Regression: resolveStallTimeoutSec(0) used to floor to 1s, and maxStallTicks then rounded to
     // 0, so `++stallTicks >= 0` tripped the watchdog on the very first silent beat — killing a

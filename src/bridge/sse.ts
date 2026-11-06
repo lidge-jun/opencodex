@@ -416,19 +416,76 @@ export function bridgeToResponsesSSE(
         budget?.releaseRetained(previousBytes, { kind: "reasoning" });
         return encoded;
       };
-      // hideThinkingSummary path: no visible reasoning item exists, but a signed thinking block
-      // must still round-trip — emit an envelope-only reasoning item (empty summary, no text leak).
+      let deferredHiddenReasoning: string[] = [];
+      let deferredHiddenReasoningIndex = 0;
+      const deferredReasoningEntryBytes = 32; // Queue bookkeeping, in addition to each retained payload.
+      /** Release unconsumed queue payloads and entry overhead on cancellation or translation overflow. */
+      const discardDeferredHiddenReasoning = () => {
+        for (let i = deferredHiddenReasoningIndex; i < deferredHiddenReasoning.length; i++) {
+          budget?.releaseRetained(bytesOf(deferredHiddenReasoning[i]!) + deferredReasoningEntryBytes, { kind: "reasoning" });
+        }
+        deferredHiddenReasoning = [];
+        deferredHiddenReasoningIndex = 0;
+      };
+      /** Transfer a retained envelope into a closed item; release failed direct sends, while queues own theirs. */
+      const emitHiddenReasoningEnvelope = (encrypted: string, queued = false): boolean => {
+        let transferred = false;
+        try {
+          if (closed) return false;
+          const itemId = outputItemId("reasoning", "rs");
+          const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
+          emit("response.output_item.added", { output_index: outputIndex, item });
+          if (closed) return false;
+          emit("response.output_item.done", { output_index: outputIndex, item });
+          if (closed) return false;
+          retainFinishedItem(item as OutputItem, bytesOf(encrypted), "reasoning");
+          transferred = true;
+          outputIndex++;
+          return true;
+        } finally {
+          if (!transferred && !queued) budget?.releaseRetained(bytesOf(encrypted), { kind: "reasoning" });
+        }
+      };
+      /** Drain independent hidden blocks only after the open tool has safely released its index. */
+      const flushDeferredHiddenReasoning = () => {
+        if (currentToolCall) return;
+        while (deferredHiddenReasoningIndex < deferredHiddenReasoning.length) {
+          if (!emitHiddenReasoningEnvelope(deferredHiddenReasoning[deferredHiddenReasoningIndex]!, true)) {
+            discardDeferredHiddenReasoning();
+            return;
+          }
+          budget?.releaseRetained(deferredReasoningEntryBytes, { kind: "reasoning" });
+          deferredHiddenReasoning[deferredHiddenReasoningIndex++] = "";
+        }
+        deferredHiddenReasoning = [];
+        deferredHiddenReasoningIndex = 0;
+      };
+      /** Queue retained raw/ordinary envelopes behind an open tool, prioritizing a safely closed owner's trailer. */
+      const deliverHiddenReasoningEnvelope = (encrypted: string, afterOutput = false) => {
+        if (currentToolCall) {
+          try {
+            budget?.chargeRetained(deferredReasoningEntryBytes, { kind: "reasoning" });
+            deferredHiddenReasoning.push(encrypted);
+          } catch (error) {
+            budget?.releaseRetained(bytesOf(encrypted), { kind: "reasoning" });
+            throw error;
+          }
+          return;
+        }
+        // A turn-level trailer must stay adjacent to its owner, ahead of ordinary hidden blocks.
+        if (afterOutput) emitHiddenReasoningEnvelope(encrypted);
+        flushDeferredHiddenReasoning();
+        if (!afterOutput) emitHiddenReasoningEnvelope(encrypted);
+      };
+      /** Seal hidden thinking without issuing an unfinished call; explicit late trailers wait for owner closure. */
       const flushHiddenReasoningEnvelope = (after?: string) => {
+        if (currentToolCall && pendingSignatureAfterOutput) return;
         const hiddenText = joinChunks(hiddenThinking);
+        const afterOutput = pendingSignatureAfterOutput;
         const encrypted = takeReasoningEnvelope(hiddenText || undefined, after);
         hiddenThinking = emptyChunks();
-        if (!encrypted) return;
-        const itemId = outputItemId("reasoning", "rs");
-        const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
-        emit("response.output_item.added", { output_index: outputIndex, item });
-        emit("response.output_item.done", { output_index: outputIndex, item });
-        retainFinishedItem(item as OutputItem, bytesOf(encrypted), "reasoning");
-        outputIndex++;
+        if (encrypted) deliverHiddenReasoningEnvelope(encrypted, afterOutput);
+        else flushDeferredHiddenReasoning();
       };
       // hideThinkingSummary for RAW reasoning (openai-chat reasoning_content, kiro tags): no
       // visible reasoning item is emitted — the app renders nothing, so tool cells keep grouping
@@ -452,12 +509,7 @@ export function bridgeToResponsesSSE(
         hiddenRawReasoning = emptyChunks();
         reservation?.commitRetained();
         budget?.releaseRetained(previousBytes, { kind: "reasoning" });
-        const itemId = outputItemId("reasoning", "rs");
-        const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
-        emit("response.output_item.added", { output_index: outputIndex, item });
-        emit("response.output_item.done", { output_index: outputIndex, item });
-        retainFinishedItem(item as OutputItem, bytesOf(encrypted), "reasoning");
-        outputIndex++;
+        deliverHiddenReasoningEnvelope(encrypted);
       };
       // Kiro reasoning round-trip. Kiro sends its encrypted blob at the END of a turn, while the
       // assistant message is still open, so this CANNOT emit on arrival: the open message still
@@ -650,6 +702,7 @@ export function bridgeToResponsesSSE(
         outputIndex++;
         currentToolCall = null;
         if (pendingSignatureAfterOutput) flushHiddenReasoningEnvelope(item.id);
+        flushDeferredHiddenReasoning();
       };
 
       // Terminal-error / incomplete path for an open tool call (#765 remainder).
@@ -691,6 +744,7 @@ export function bridgeToResponsesSSE(
         outputIndex++;
         currentToolCall = null;
         if (pendingSignatureAfterOutput) flushHiddenReasoningEnvelope(item.id);
+        flushDeferredHiddenReasoning();
       };
 
       const abortCurrentToolCallForTranslatorOverflow = () => {
@@ -796,6 +850,7 @@ export function bridgeToResponsesSSE(
         const usage = (error as AdapterEvent | null | undefined)?.type === "error"
           ? (error as Extract<AdapterEvent, { type: "error" }>).usage : undefined;
         if (usage) options?.onUsage?.(usage);
+        discardDeferredHiddenReasoning();
         abortCurrentToolCallForTranslatorOverflow();
         currentWebSearch = null;
         releasePendingWebSources();
@@ -897,10 +952,10 @@ export function bridgeToResponsesSSE(
             // Terminal/tool-end handlers decide whether an open call completed safely.
             if (currentReasoning) closeCurrentReasoning();
             else if (!pendingSignatureAfterOutput) {
-              // A normal hidden thinking block owns its exact text, not the next block.
-              // Close any output first so its index cannot collide with the carrier.
+              // Hidden thinking cannot issue an unfinished tool. Seal each block independently
+              // and let the tool's safe close drain its deferred carriers at fresh indexes.
               closeCurrentMessage("commentary");
-              closeCurrentToolCall();
+              if (!options?.hideThinkingSummary) closeCurrentToolCall();
               flushHiddenReasoningEnvelope();
             } else if (!currentMsg && !currentToolCall) flushHiddenReasoningEnvelope();
             // Explicit late turn signatures wait for the open output's close helper.
@@ -992,7 +1047,6 @@ export function bridgeToResponsesSSE(
             }
             case "thinking_delta": {
               if (currentMsg) closeCurrentMessage("commentary");
-              if (currentToolCall) closeCurrentToolCall();
               if (options?.hideThinkingSummary) {
                 // The hidden branch returns early, so flush any raw reasoning
                 // that preceded the thinking block and clear the replay-cache
@@ -1010,6 +1064,7 @@ export function bridgeToResponsesSSE(
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               if (event.thinking.length > 0) rawReasoningForNextToolCall = "";
+              if (currentToolCall) closeCurrentToolCall();
               if (!currentReasoning) {
                 const itemId = outputItemId("reasoning", "rs");
                 const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
@@ -1051,7 +1106,7 @@ export function bridgeToResponsesSSE(
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
-              if (currentToolCall) closeCurrentToolCall();
+              if (currentToolCall && !options?.hideThinkingSummary) closeCurrentToolCall();
               budget?.chargeRetained(bytesOf(event.data), { kind: "reasoning" });
               pendingRedacted.push(event.data);
               // A redacted block is complete at content_block_start. Emit it here,
@@ -1616,6 +1671,7 @@ export function bridgeToResponsesSSE(
         if (beat !== undefined) clearBeatInterval(beat);
         cancelUpstreamOnce();
         releasePendingWebSources();
+        discardDeferredHiddenReasoning();
         disposeOwnedBudget();
       },
     }));

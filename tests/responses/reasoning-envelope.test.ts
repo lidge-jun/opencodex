@@ -267,6 +267,308 @@ describe("pending signature terminal safety", () => {
   }
 });
 
+describe("hidden thinking while a tool remains open", () => {
+  const endings = ["error", "incomplete", "truncated", "eof", "throw", "malformed", "tool-incomplete", "tool-end", "done"] as const;
+  for (const blocks of [1, 2]) {
+    for (const ending of endings) {
+      test(`${blocks} ordinary hidden blocks preserve open call through ${ending}`, async () => {
+        await checkHiddenTool(blocks, ending, false);
+      });
+    }
+  }
+  for (const ending of endings) {
+    test(`afterOutput hidden block preserves open call through ${ending}`, async () => {
+      await checkHiddenTool(1, ending, true);
+    });
+  }
+  test("redacted hidden blocks do not issue an unfinished call or merge signed blocks", async () => {
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_redacted", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{" };
+      yield { type: "thinking_delta", thinking: "exact thought" };
+      yield { type: "thinking_signature", signature: "normal-sig" };
+      yield { type: "redacted_thinking", data: "opaque" };
+      yield { type: "error", code: "upstream_error", message: "synthetic failure" };
+    }
+    const wire = await new Response(bridgeToResponsesSSE(
+      upstream(), "m", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true },
+    )).text();
+    const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    const items = events.filter(event => event.type === "response.output_item.done").map(event => event.item);
+    expect(items[0].status).toBe("incomplete");
+    expect(items.filter(item => item.encrypted_content).map(item => decodeReasoningEnvelope(item.encrypted_content)))
+      .toEqual([{ sig: "normal-sig", txt: "exact thought" }, { red: ["opaque"] }]);
+    expect(events.filter(event => event.type === "response.function_call_arguments.done")).toHaveLength(0);
+  });
+
+  test("unsigned hidden thinking cannot issue an unfinished call", async () => {
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_unsigned", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{" };
+      yield { type: "thinking_delta", thinking: "unsealed" };
+      yield { type: "error", code: "upstream_error", message: "synthetic failure" };
+    }
+    const wire = await new Response(bridgeToResponsesSSE(
+      upstream(), "m", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true },
+    )).text();
+    const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    expect(events.find(event => event.type === "response.output_item.done").item.status).toBe("incomplete");
+    expect(events.filter(event => event.type === "response.function_call_arguments.done")).toHaveLength(0);
+  });
+
+  test("deferred hidden blocks stay bounded by the translator budget", async () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 4096 });
+    let produced = 0;
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_bounded", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      for (; produced < 1000; produced++) {
+        yield { type: "thinking_delta", thinking: "x".repeat(256) };
+        yield { type: "thinking_signature", signature: `sig-${produced}` };
+        yield { type: "tool_call_delta", arguments: "" };
+      }
+      yield { type: "done" };
+    }
+    try {
+      const wire = await new Response(bridgeToResponsesSSE(
+        upstream(), "m", undefined, undefined, undefined, undefined, 2000,
+        { hideThinkingSummary: true, translatorBudget: budget },
+      )).text();
+      expect(produced).toBeLessThan(1000);
+      expect(budget.snapshot().highWaterBytes).toBeLessThanOrEqual(4096);
+      expect(wire).toContain('"code":"translation_buffer_limit"');
+      expect(wire).not.toContain("event: response.function_call_arguments.done");
+      expect(wire).not.toContain('"status":"completed"');
+    } finally { budget.dispose(); }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each(["entry", "direct"] as const)("borrowed budget releases payload after %s admission failure", async stage => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 65536 });
+    const charge = budget.chargeRetained.bind(budget);
+    const reserve = budget.reserveTransient.bind(budget);
+    let failDirectFrame = false;
+    const chargeSpy = spyOn(budget, "chargeRetained").mockImplementation((bytes, scope) => {
+      if (stage === "entry" && scope.kind === "reasoning" && bytes === 32) throw new TranslatorBudgetExceededError("reasoning", 65536);
+      charge(bytes, scope);
+    });
+    const reserveSpy = spyOn(budget, "reserveTransient").mockImplementation((bytes, scope) => {
+      if (failDirectFrame && scope.kind === "live_transient") {
+        failDirectFrame = false;
+        throw new TranslatorBudgetExceededError("live_transient", 65536);
+      }
+      return reserve(bytes, scope);
+    });
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      if (stage === "entry") {
+        yield { type: "tool_call_start", id: "call_admission", name: "read" };
+        yield { type: "tool_call_delta", arguments: "{}" };
+      }
+      yield { type: "thinking_delta", thinking: "hidden" };
+      yield { type: "thinking_signature", signature: "sig" };
+      if (stage === "entry") yield { type: "tool_call_delta", arguments: "" };
+      yield { type: "done" };
+    }
+    try {
+      const wire = await new Response(bridgeToResponsesSSE(
+        upstream(), "m", undefined, undefined, undefined, undefined, 2000,
+        { hideThinkingSummary: true, translatorBudget: budget, outputItemIds: {
+          next(kind) { if (stage === "direct" && kind === "reasoning") failDirectFrame = true; return `${kind}_admission`; },
+        } },
+      )).text();
+      expect(wire.match(/event: response.failed/g)).toHaveLength(1);
+      expect(wire).toContain('"code":"translation_buffer_limit"');
+      expect(wire).not.toContain("event: response.function_call_arguments.done");
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally { chargeSpy.mockRestore(); reserveSpy.mockRestore(); budget.dispose(); }
+  });
+
+  test.each([2048, 4096, 8192])("deferred drain respects budget=%s without a second terminal", async maxTurnBytes => {
+    const budget = createTranslatorBudget({ maxTurnBytes });
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_drain", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      for (let i = 0; i < 3; i++) {
+        yield { type: "thinking_delta", thinking: "x".repeat(256) };
+        yield { type: "thinking_signature", signature: `sig-${i}` };
+        yield { type: "tool_call_delta", arguments: "" };
+      }
+      yield { type: "error", code: "upstream_error", message: "synthetic failure" };
+    }
+    try {
+      const wire = await new Response(bridgeToResponsesSSE(
+        upstream(), "m", undefined, undefined, undefined, undefined, 2000,
+        { hideThinkingSummary: true, translatorBudget: budget },
+      )).text();
+      expect(wire.match(/event: response.failed/g)).toHaveLength(1);
+      expect(wire.match(/data: \[DONE\]/g)).toHaveLength(1);
+      expect(wire).not.toContain("event: response.function_call_arguments.done");
+      expect(wire).not.toContain('"status":"completed"');
+      expect(budget.snapshot().highWaterBytes).toBeLessThanOrEqual(maxTurnBytes);
+    } finally { budget.dispose(); }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each([false, true])("late trailer stays adjacent ahead of deferred normal blocks, failed=%s", async failed => {
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_mixed", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      yield { type: "thinking_delta", thinking: "normal" };
+      yield { type: "thinking_signature", signature: "normal-sig" };
+      yield { type: "tool_call_delta", arguments: "" };
+      yield { type: "thinking_delta", thinking: "late" };
+      yield { type: "thinking_signature", signature: "late-sig", afterOutput: true };
+      if (failed) yield { type: "error", code: "upstream_error", message: "synthetic failure" };
+      else yield { type: "done" };
+    }
+    const wire = await new Response(bridgeToResponsesSSE(
+      upstream(), "m", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true },
+    )).text();
+    const items = wire.split("\n").filter(line => line.startsWith("data: {"))
+      .map(line => JSON.parse(line.slice(6))).filter(event => event.type === "response.output_item.done").map(event => event.item);
+    expect(items[0].status).toBe(failed ? "incomplete" : "completed");
+    expect(items.slice(1).map(item => decodeReasoningEnvelope(item.encrypted_content))).toEqual([
+      { sig: "late-sig", txt: "late", aft: items[0].id }, { sig: "normal-sig", txt: "normal" },
+    ]);
+  });
+
+  for (const next of ["summary", "redacted"] as const) {
+    for (const failed of [false, true]) {
+      test(`hidden raw followed by ${next} keeps the open tool index, failed=${failed}`, async () => {
+        async function* upstream(): AsyncGenerator<AdapterEvent> {
+          yield { type: "tool_call_start", id: "call_raw", name: "read" };
+          yield { type: "tool_call_delta", arguments: '{"value":' };
+          yield { type: "reasoning_raw_delta", text: "raw text" };
+          if (next === "summary") {
+            yield { type: "thinking_delta", thinking: "summary text" };
+            yield { type: "thinking_signature", signature: "summary-sig" };
+          } else yield { type: "redacted_thinking", data: "opaque" };
+          yield { type: "tool_call_delta", arguments: '"ok"}' };
+          if (failed) yield { type: "error", code: "upstream_error", message: "synthetic failure" };
+          else { yield { type: "tool_call_end" }; yield { type: "done" }; }
+        }
+        const wire = await new Response(bridgeToResponsesSSE(
+          upstream(), "m", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true },
+        )).text();
+        const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+        const added = events.filter(event => event.type === "response.output_item.added");
+        const done = events.filter(event => event.type === "response.output_item.done");
+        expect(added.map(event => event.output_index)).toEqual([0, 1, 2]);
+        expect(done.map(event => event.output_index)).toEqual([0, 1, 2]);
+        expect(done[0].item).toMatchObject({ type: "function_call", arguments: '{"value":"ok"}', status: failed ? "incomplete" : "completed" });
+        expect(events.filter(event => event.type === "response.function_call_arguments.delta").map(event => [event.output_index, event.item_id, event.delta]))
+          .toEqual([[0, done[0].item.id, '{"value":'], [0, done[0].item.id, '"ok"}']]);
+        expect(done.slice(1).map(event => decodeReasoningEnvelope(event.item.encrypted_content))).toEqual([
+          { txt: "raw text" }, next === "summary" ? { sig: "summary-sig", txt: "summary text" } : { red: ["opaque"] },
+        ]);
+        expect(events.find(event => event.type === (failed ? "response.failed" : "response.completed")).response.output).toEqual(done.map(event => event.item));
+      });
+    }
+  }
+
+  test.each([false, true])("redacted block cannot consume a late trailer before owner close, failed=%s", async failed => {
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_late_red", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      yield { type: "thinking_delta", thinking: "normal" };
+      yield { type: "thinking_signature", signature: "normal-sig" };
+      yield { type: "tool_call_delta", arguments: "" };
+      yield { type: "thinking_delta", thinking: "late" };
+      yield { type: "thinking_signature", signature: "late-sig", afterOutput: true };
+      yield { type: "redacted_thinking", data: "opaque" };
+      yield { type: "tool_call_delta", arguments: "" };
+      if (failed) yield { type: "error", code: "upstream_error", message: "synthetic failure" };
+      else { yield { type: "tool_call_end" }; yield { type: "done" }; }
+    }
+    const wire = await new Response(bridgeToResponsesSSE(
+      upstream(), "m", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true },
+    )).text();
+    const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    const done = events.filter(event => event.type === "response.output_item.done");
+    expect(done.map(event => event.output_index)).toEqual([0, 1, 2]);
+    expect(done[0].item.status).toBe(failed ? "incomplete" : "completed");
+    expect(done.slice(1).map(event => decodeReasoningEnvelope(event.item.encrypted_content))).toEqual([
+      { sig: "late-sig", txt: "late", aft: done[0].item.id, red: ["opaque"] }, { sig: "normal-sig", txt: "normal" },
+    ]);
+    expect(events.find(event => event.type === (failed ? "response.failed" : "response.completed")).response.output).toEqual(done.map(event => event.item));
+  });
+
+  test.each(["signed", "raw"] as const)("client cancellation releases deferred %s payload and queue charges", async mode => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 65536 });
+    const queued = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_cancel", name: "read" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      for (let i = 0; i < 2; i++) {
+        if (mode === "signed") {
+          yield { type: "thinking_delta", thinking: `hidden-${i}` };
+          yield { type: "thinking_signature", signature: `sig-${i}` };
+        } else {
+          yield { type: "reasoning_raw_delta", text: `hidden-${i}` };
+          yield { type: "thinking_delta", thinking: "" };
+        }
+        yield { type: "tool_call_delta", arguments: "" };
+      }
+      queued.resolve();
+      await release.promise;
+    }
+    const stream = bridgeToResponsesSSE(upstream(), "m", undefined, undefined, undefined,
+      () => release.resolve(), 2000, { hideThinkingSummary: true, translatorBudget: budget });
+    const reader = stream.getReader();
+    const draining = (async () => { while (!(await reader.read()).done) {} })();
+    try {
+      await queued.promise;
+      const before = budget.snapshot().currentBytes;
+      const encodedBytes = [0, 1].reduce((sum, i) => sum + Buffer.byteLength(encodeReasoningEnvelope({ txt: `hidden-${i}`, ...(mode === "signed" ? { sig: `sig-${i}` } : {}) })), 0);
+      await reader.cancel();
+      await draining;
+      expect(before - budget.snapshot().currentBytes).toBe(encodedBytes + 2 * 32);
+    } finally { release.resolve(); budget.dispose(); }
+  });
+
+  /** Exercise hidden blocks between argument fragments without allowing thinking to issue a call. */
+  async function checkHiddenTool(blocks: number, ending: typeof endings[number], afterOutput: boolean) {
+    const usage = { inputTokens: 1, outputTokens: 1 };
+    async function* upstream(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_interleaved", name: "read" };
+      yield { type: "tool_call_delta", arguments: '{"value":' };
+      for (let i = 0; i < blocks; i++) {
+        yield { type: "thinking_delta", thinking: `hidden-${i}` };
+        yield { type: "thinking_signature", signature: `sig-${i}`, ...(afterOutput ? { afterOutput: true } : {}) };
+        if (i === 0) yield { type: "tool_call_delta", arguments: '"ok"' };
+      }
+      if (ending !== "malformed") yield { type: "tool_call_delta", arguments: "}" };
+      if (ending === "throw") throw new Error("synthetic interleaved failure");
+      if (ending === "error") yield { type: "error", code: "upstream_error", message: "synthetic interleaved failure" };
+      if (ending === "incomplete") yield { type: "incomplete", reason: "adapter_eof", usage };
+      if (ending === "truncated") yield { type: "done", usage, stopReason: "max_tokens" };
+      if (ending === "malformed" || ending === "tool-end") yield { type: "tool_call_end" };
+      if (ending === "tool-incomplete") yield { type: "tool_call_end", incomplete: true };
+      if (ending === "tool-end" || ending === "done") yield { type: "done", usage };
+    }
+    const wire = await new Response(bridgeToResponsesSSE(
+      upstream(), "m", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true },
+    )).text();
+    const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    const added = events.filter(event => event.type === "response.output_item.added");
+    const done = events.filter(event => event.type === "response.output_item.done");
+    const tool = done.find(event => event.item.type === "function_call");
+    const success = ending === "tool-end" || ending === "done";
+    expect(tool.item.status).toBe(success ? "completed" : "incomplete");
+    expect(tool.item.arguments).toBe(ending === "malformed" ? '{"value":"ok"' : '{"value":"ok"}');
+    expect(events.filter(event => event.type === "response.function_call_arguments.done")).toHaveLength(success ? 1 : 0);
+    expect(added.map(event => event.output_index)).toEqual(added.map((_, index) => index));
+    expect(done.map(event => event.output_index)).toEqual(added.map(event => event.output_index));
+    const envelopes = done.filter(event => event.item.encrypted_content).map(event => decodeReasoningEnvelope(event.item.encrypted_content));
+    expect(envelopes).toEqual(Array.from({ length: blocks }, (_, i) => ({ sig: `sig-${i}`, txt: `hidden-${i}`, ...(afterOutput ? { aft: tool.item.id } : {}) })));
+    expect(events.filter(event => event.type === "response.reasoning_summary_text.delta")).toHaveLength(0);
+    const terminal = events.filter(event => ["response.completed", "response.failed", "response.incomplete"].includes(event.type));
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0].response.output).toEqual(done.map(event => event.item));
+  }
+});
+
 describe("normal interleaved thinking signatures", () => {
   for (const hidden of [false, true]) {
     test(`each block retains its exact text and signature, hidden=${hidden}`, async () => {
