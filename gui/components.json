@@ -18,18 +18,5 @@
     "lib": "@/lib",
     "hooks": "@/hooks"
   },
-  "registries": {
-    "@reactbits-starter": {
-      "url": "https://pro.reactbits.dev/api/r/starter/{name}.json",
-      "headers": { "Authorization": "Bearer ${REACTBITS_LICENSE_KEY}" }
-    },
-    "@reactbits-pro": {
-      "url": "https://pro.reactbits.dev/api/r/pro/{name}.json",
-      "headers": { "Authorization": "Bearer ${REACTBITS_LICENSE_KEY}" }
-    },
-    "@aceternity": {
-      "url": "https://ui.aceternity.com/registry/{name}.json",
-      "headers": { "Authorization": "Bearer ${ACETERNITY_TOKEN}" }
-    }
-  }
+  "registries": {}
 }
