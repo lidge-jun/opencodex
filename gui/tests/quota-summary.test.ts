@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildQuotaSummary, formatQuotaPercent, quotaSeverity } from "../src/quota-summary";
-import { freshQuotaReportsFromResponse } from "../src/provider-workspace/report";
+import { accountQuotaFromReport, freshQuotaReportsFromResponse } from "../src/provider-workspace/report";
 
 const now = Date.UTC(2026, 8, 23, 3);
 const name = (provider: string) => provider;
@@ -111,9 +111,10 @@ describe("quota summary", () => {
     ];
     const reports = freshQuotaReportsFromResponse([
       { provider: "real-credits", updatedAt: now, quota: { weeklyPercent: 7, customWindows, creditsUsd: { used: 100, limit: 100, remaining: 0, percent: 100 } } },
-      { provider: "unlimited", updatedAt: now, quota: { monthlyPercent: 7, customWindows, creditsUsd: { unlimited: true, percent: 100 } } },
+      { provider: "unlimited", updatedAt: now, quota: { monthlyPercent: 7, customWindows, creditsUsd: { used: 100, limit: 100, remaining: 0, percent: 100, unlimited: true } } },
       { provider: "malformed", updatedAt: now, quota: { monthlyPercent: 7, customWindows, creditsUsd: { percent: NaN } } },
     ], now);
+    expect(accountQuotaFromReport(reports.unlimited)?.creditsUsd).toEqual({ used: 100, limit: 100, remaining: 0, percent: 100, unlimited: true });
     const rows = buildQuotaSummary(reports, name);
     expect(rows.map(row => [row.provider, row.headline.labelKey, row.headline.percent])).toEqual([
       ["real-credits", "quotaSummary.credits", 100],
