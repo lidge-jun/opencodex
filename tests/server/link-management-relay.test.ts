@@ -239,6 +239,37 @@ afterEach(async () => {
 });
 
 describe("Remote Link management relay on the Home", () => {
+  test("new source filters stay bound to the admitted link key for GET and HEAD", async () => {
+    const base = await linkBase();
+    const now = Date.now();
+    const usage = (requestId: string, apiKeyId: string, timestamp: number) => ({ requestId, apiKeyId, timestamp,
+      provider: "mock", model: "test-model", status: 200, durationMs: 1, usageStatus: "unreported", client: "codex_cli" });
+    writeFileSync(join(testHome, "usage.jsonl"), [usage("other-old", "other-key", now - 5000),
+      usage("own", LINKED_ID, now), usage("other-new", "other-key", now + 5000)]
+      .map(row => JSON.stringify(row)).join("\n") + "\n");
+    const own = "/v1/link-management/api/usage?client=codex&device=key&apiKeyId=linked-key";
+    const forbidden = [
+      "?client=codex&device=all", "?client=codex&device=no-key",
+      "?client=codex&device=key&apiKeyId=other-key", "?client=codex&device=key",
+      "?client=codex&device=key&apiKeyId=linked-key&apiKeyId=other-key",
+    ];
+    for (const method of ["GET", "HEAD"]) {
+      const allowed = await get(base, own, LINKED_KEY, { method });
+      expect(allowed.status).toBe(200);
+      if (method === "GET") {
+        const body = await allowed.json() as { snapshotWindowStart: number; snapshotWindowEnd: number };
+        expect([body.snapshotWindowStart, body.snapshotWindowEnd]).toEqual([now, now]);
+      }
+      for (const query of forbidden) {
+        expect((await get(base, `/v1/link-management/api/usage${query}`, LINKED_KEY, { method })).status).toBe(403);
+      }
+      expect((await get(base, "/v1/link-management/api/usage", LINKED_KEY, { method })).status).toBe(200);
+    }
+    const { handleLinkManagementRequest } = await import("../../src/server/index/link-management");
+    const url = new URL(`http://127.0.0.1${own}`);
+    expect((await handleLinkManagementRequest(new Request(url), url, config(), {}, undefined, undefined)).status).toBe(403);
+  });
+
   test("admits allowlisted reads only with the link key", async () => {
     const base = await linkBase();
     for (const credential of [undefined, ENV_KEY, OTHER_KEY]) {

@@ -399,9 +399,14 @@ describe("the Responses WebSocket handshake", () => {
     // dropping `admission` from the payload fails here rather than passing a
     // socket-opened assertion that never looked at it.
     const headers = new Headers({ "x-forwarded-for": "ignored" });
-    const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key", source: "dedicated" });
+    const principal = { clientPrincipalId: "admitted-replay-owner" };
+    const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key", source: "dedicated" },
+      undefined, "lane", "codex_cli", principal);
     expect(payload.admission).toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
     expect(payload.headers).toBe(headers);
+    expect(payload.client).toBe("codex_cli");
+    expect(payload.replayPrincipal).toBe(principal);
+    expect(payload.sessionLaneId).toBe("lane");
   });
 
   // The phase-2 guard that asserted no telemetry symbols existed yet has served

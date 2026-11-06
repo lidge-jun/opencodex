@@ -554,6 +554,16 @@ describe("update stops the running proxy before replacing files", () => {
     expect(abortAt).toBeLessThan(stopAt);
   });
 
+  test("config pre-flight runs BEFORE the stop so fallback configuration aborts before stopping services", () => {
+    const preflightAt = updateSource.indexOf("configPreflight = runConfigPreflight(configPath);");
+    const abortAt = updateSource.indexOf("aborting update before stopping services");
+    const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
+    expect(preflightAt).toBeGreaterThan(-1);
+    expect(abortAt).toBeGreaterThan(-1);
+    expect(preflightAt).toBeLessThan(stopAt);
+    expect(abortAt).toBeLessThan(stopAt);
+  });
+
   test("cache access gates in both CLI entry points precede every tray/proxy stop", () => {
     const runtimeGate = updateSource.indexOf("const cachePreflight = runNpmCachePreflight();");
     const runtimeStop = updateSource.indexOf('selfLaunchArgv(["stop"])');

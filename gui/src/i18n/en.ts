@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -123,6 +132,15 @@ export const en = {
   "workflowBudget.saveFailed": "Could not save workflow limits.",
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
+  ...shellV2Copy("en"),
+  ...modelsV2Copy("en"),
+  ...accountsV2Copy("en"),
+  ...subagentsV2Copy("en"),
+  ...usageV2Copy("en"),
+  ...logsV2Copy("en"),
+  ...connectV2Copy("en"),
+  ...startupV2Copy("en"),
+  ...proxyV2Copy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -2162,7 +2180,7 @@ export const en = {
   "modal.useOauthLogin": "← Use OAuth login",
 "nav.codexAuth": "Codex Auth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Connect",
+  "nav.connect": "Route",
   "nav.usageLogs": "Usage & Logs",
   "nav.sectionNavigation": "Section pages",
   "codexSet.tab.multiauth": "Multi-auth",

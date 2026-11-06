@@ -1,0 +1,1347 @@
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useI18n, type TFn, type Locale } from "../i18n/shared";
+import { readUsageResponseJson, UsageReadFailedError, type UsageReadMetadata } from "../usage-summary-resource";
+import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
+import { formatProviderDisplayName } from "../provider-icons";
+import { formatTokens } from "../format-tokens";
+import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { EmptyState, Notice } from "../ui";
+import { IconChevron } from "../icons";
+import { modelLabel } from "../model-display";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
+import { SectionTabs } from "../components/section-tabs";
+import { sectionAnchorId } from "../section-anchors";
+import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
+import UsageCompanionView from "./usage-companion-view";
+import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
+
+type Range = "all" | "30d" | "7d";
+type UsageSurface = "all" | "codex" | "claude" | "grok";
+
+interface UsageSummaryTotals {
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
+  requests: number;
+  measuredRequests: number;
+  reportedRequests: number;
+  unreportedRequests: number;
+  unsupportedRequests: number;
+  estimatedRequests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  coverageRatio: number;
+  estimatedCostUsd?: number;
+  pricedRequests?: number;
+  unpricedRequests?: number;
+  unmeteredRequests?: number;
+}
+
+interface UsageDay {
+  date: string;
+  requests: number;
+  measuredRequests: number;
+  reportedRequests: number;
+  totalTokens: number;
+  models: UsageDayModel[];
+}
+
+interface UsageDayModel {
+  model: string;
+  provider: string;
+  requests: number;
+  totalTokens: number;
+}
+
+interface UsageModel {
+  provider: string;
+  model: string;
+  resolvedModel?: string;
+  requests: number;
+  measuredRequests: number;
+  reportedRequests: number;
+  estimatedRequests: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheHitRate?: number | null;
+  /** Input tokens whose cache detail was observed; hit rate is not model-wide below inputTokens. */
+  cacheObservedInputTokens?: number;
+  /** API list-price estimate for the priced portion of this row. */
+  estimatedCostUsd?: number;
+  /** Requests included in the API list-price estimate. */
+  pricedRequests?: number;
+  /** Requests excluded from the estimate because price or usable usage is unavailable. */
+  unpricedRequests?: number;
+  shareRatio: number;
+}
+
+interface UsageProvider {
+  provider: string;
+  requests: number;
+  measuredRequests: number;
+  reportedRequests: number;
+  estimatedRequests: number;
+  totalTokens: number;
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
+  /** API list-price estimate for the priced portion of this row. */
+  estimatedCostUsd?: number;
+  /** Requests included in the API list-price estimate. */
+  pricedRequests?: number;
+  /** Requests excluded from the estimate because price or usable usage is unavailable. */
+  unpricedRequests?: number;
+  shareRatio: number;
+}
+
+class UsageWindowMismatchError extends Error {}
+
+interface UsageResponse extends UsageReadMetadata {
+  range: Range;
+  surface: UsageSurface;
+  since: number | null;
+  until?: number;
+  customWindow?: boolean;
+  generatedAt: number;
+  summary: UsageSummaryTotals;
+  days: UsageDay[];
+  models: UsageModel[];
+  providers: UsageProvider[];
+  historyTruncated: boolean;
+  truncatedPrefixBytes: number;
+  entriesTruncated: boolean;
+  entriesDropped: number;
+  // Bounds of the rows the bounded reader loaded, before any range or surface filtering.
+  // Describes the read, not the query, and is never a completeness claim (#1497).
+  // Optional because a dashboard can talk to a proxy that predates these fields.
+  snapshotWindowStart?: number | null;
+  snapshotWindowEnd?: number | null;
+  error?: string;
+}
+
+function formatPct(ratio: number): string {
+  return `${Math.round(ratio * 100)}%`;
+}
+
+type UsageCostRow = Pick<UsageModel, "estimatedCostUsd" | "pricedRequests" | "unpricedRequests">;
+
+/**
+ * Renders a row's API list-price estimate with explicit pricing coverage.
+ * Newer proxies return the coverage fields even when every request is
+ * unpriced; older proxies have none of them, so their cells stay unavailable
+ * rather than making an unknown amount look free.
+ *
+ * The coverage caption is `usage-cost-note`, which the stylesheet makes a block so it always
+ * begins the line under the amount instead of trailing it and folding mid-phrase. Its leading
+ * space stays in the markup: a block box drops leading white space when it lays out, so the cell
+ * reads the same either way, and the space keeps the rendered text exactly what it was for
+ * anything reading the cell as one string.
+ */
+function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale; t: TFn }) {
+  const hasPriceData = row.estimatedCostUsd !== undefined
+    || row.pricedRequests !== undefined
+    || row.unpricedRequests !== undefined;
+  if (!hasPriceData) return <span className="muted">—</span>;
+
+  const excludedRequests = row.unpricedRequests ?? 0;
+  const excludedCaption = t(
+    excludedRequests === 1 ? "usage.cost.excludedOne" : "usage.cost.excluded",
+    { count: excludedRequests },
+  );
+  if (row.estimatedCostUsd === undefined) {
+    return (
+      <>
+        <span className="muted">—</span>
+        {excludedRequests > 0 && (
+          <span className="muted text-caption usage-cost-note"> {excludedCaption}</span>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="mono">{formatUsdEstimate(row.estimatedCostUsd ?? 0, locale)}</span>
+      {excludedRequests > 0 && (
+        <span className="muted text-caption usage-cost-note"> {excludedCaption}</span>
+      )}
+    </>
+  );
+}
+
+function formatOptionalTokens(value: number | undefined, locale: Locale, unavailable: string): string {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? formatTokens(value, locale)
+    : unavailable;
+}
+
+function formatOptionalPct(value: number | null | undefined, unavailable: string): string {
+  return typeof value === "number" && Number.isFinite(value) ? formatPct(value) : unavailable;
+}
+
+/**
+ * Why a row's hit rate covers less than its input, or why it has none at all.
+ *
+ * The rate is an average over the input tokens whose cache detail was actually reported, so a
+ * provider that reports reads and never reports writes still has one. Only a row where nothing
+ * reported cache detail has nothing to average, and that is the row that shows an em dash.
+ */
+function cacheHitRateTitle(model: UsageModel, locale: Locale, t: TFn): string | undefined {
+  if (typeof model.cacheHitRate !== "number" || !Number.isFinite(model.cacheHitRate)) {
+    return t("usage.cacheHitRate.unmeasured");
+  }
+  const observed = model.cacheObservedInputTokens;
+  if (typeof observed !== "number" || !Number.isFinite(observed) || observed >= model.inputTokens) {
+    return undefined;
+  }
+  return t("usage.cacheHitRate.partial", {
+    measured: formatTokens(observed, locale),
+    total: formatTokens(model.inputTokens, locale),
+  });
+}
+
+function hasThroughput(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function throughputTitle(row: { throughputTokensPerSec?: number; throughputSamples?: number }, t: TFn): string {
+  return hasThroughput(row.throughputTokensPerSec)
+    ? t("usage.throughput.title", { samples: row.throughputSamples ?? 0 })
+    : t("usage.throughput.unmeasured");
+}
+
+// Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
+// across days and renders. Saturation/lightness are fixed for a cohesive palette on the dark chart.
+function modelColor(model: string, provider: string): string {
+  const key = `${provider}/${model}`;
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 55% 55%)`;
+}
+
+// Last 7 calendar days (oldest → newest), zero-filled, for the 7d bar chart. The API's `days` only
+// carries dates with activity, so missing days are backfilled to 0 to keep a stable 7-bar axis.
+function lastSevenDays(days: UsageDay[]): UsageDay[] {
+  const byDate = new Map(days.map(d => [d.date, d]));
+  const out: UsageDay[] = [];
+  const cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+  cursor.setDate(cursor.getDate() - 6);
+  for (let i = 0; i < 7; i++) {
+    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+    const d = byDate.get(iso);
+    out.push({
+      date: iso,
+      requests: d?.requests ?? 0,
+      measuredRequests: d?.measuredRequests ?? 0,
+      reportedRequests: d?.reportedRequests ?? 0,
+      totalTokens: d?.totalTokens ?? 0,
+      models: d?.models ?? [],
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
+function formatCalendarDate(date: string, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(`${date}T12:00:00`));
+}
+
+function chartTipPosition(rect: DOMRect): CSSProperties {
+  const gutter = 8;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxWidth = Math.min(240, Math.max(0, viewportWidth - gutter * 2));
+  const left = Math.max(gutter, Math.min(rect.left + rect.width / 2 - maxWidth / 2, viewportWidth - gutter - maxWidth));
+  const above = rect.top - gutter > viewportHeight - rect.bottom - gutter;
+  const vertical = above
+    ? (() => {
+        const bottom = Math.max(gutter, Math.min(viewportHeight - gutter, viewportHeight - rect.top + gutter));
+        return { bottom, maxHeight: Math.max(0, viewportHeight - bottom - gutter) };
+      })()
+    : (() => {
+        const top = Math.max(gutter, Math.min(viewportHeight - gutter, rect.bottom + gutter));
+        return { top, maxHeight: Math.max(0, viewportHeight - top - gutter) };
+      })();
+  return { left, maxWidth, ...vertical };
+}
+
+function UsageChartOverlay({
+  anchor,
+  className,
+  children,
+}: {
+  anchor: DOMRect;
+  className: string;
+  children: ReactNode;
+}) {
+  return createPortal(
+    <div className={`${className} chart-overlay`} role="tooltip" style={chartTipPosition(anchor)}>{children}</div>,
+    document.body,
+  );
+}
+
+function dayDetail(day: Pick<UsageDay, "date" | "requests" | "totalTokens">, locale: Locale, t: TFn): string {
+  return t("usage.chart.dayDetail", {
+    date: formatCalendarDate(day.date, locale),
+    requests: day.requests,
+    tokens: formatTokens(day.totalTokens, locale),
+  });
+}
+
+function quantileBuckets(values: number[]): number[] {
+  const positive = values.filter(v => v > 0).sort((a, b) => a - b);
+  if (positive.length === 0) return [0, 0, 0, 0];
+  const q = (p: number) => positive[Math.min(positive.length - 1, Math.floor(p * positive.length))];
+  return [q(0.25), q(0.5), q(0.75), q(0.95)];
+}
+
+function bucketLevel(value: number, buckets: number[]): 0 | 1 | 2 | 3 | 4 {
+  if (value <= 0) return 0;
+  if (value <= buckets[0]) return 1;
+  if (value <= buckets[1]) return 2;
+  if (value <= buckets[2]) return 3;
+  return 4;
+}
+
+interface HeatmapCell {
+  date: string;
+  requests: number;
+  totalTokens: number;
+  level: 0 | 1 | 2 | 3 | 4;
+  dayOfWeek: number;
+}
+
+function buildHeatmap(days: UsageDay[], customWindow = false): { weeks: HeatmapCell[][]; months: { label: string; col: number }[]; buckets: number[] } {
+  const buckets = quantileBuckets(days.map(d => d.totalTokens));
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (customWindow) {
+    const weeks: HeatmapCell[][] = [];
+    const months: { label: string; col: number }[] = [];
+    let week: HeatmapCell[] = [];
+    let weekStart: number | undefined;
+    let previousMonth = -1;
+    let lastMonthCol = -4;
+    const pad = (length: number) => {
+      while (week.length < length) week.push({ date: "", requests: 0, totalTokens: 0, level: 0, dayOfWeek: week.length });
+    };
+    // The server already supplied the bounded civil dates. Local midnight stepping
+    // can retain a shifted hour across DST and omit the final day of the report.
+    for (const day of days) {
+      const [year, month, date] = day.date.split("-").map(Number);
+      const calendar = new Date(Date.UTC(year, month - 1, date));
+      const weekday = calendar.getUTCDay();
+      const nextWeekStart = calendar.getTime() - weekday * 86_400_000;
+      if (weekStart !== nextWeekStart) {
+        if (week.length > 0) { pad(7); weeks.push(week); }
+        week = [];
+        weekStart = nextWeekStart;
+      }
+      const monthIndex = calendar.getUTCMonth();
+      if (monthIndex !== previousMonth && weeks.length - lastMonthCol >= 4) {
+        months.push({ label: monthNames[monthIndex], col: weeks.length });
+        previousMonth = monthIndex;
+        lastMonthCol = weeks.length;
+      }
+      pad(weekday);
+      week.push({ date: day.date, requests: day.requests, totalTokens: day.totalTokens,
+        level: bucketLevel(day.totalTokens, buckets), dayOfWeek: weekday });
+    }
+    if (week.length > 0) { pad(7); weeks.push(week); }
+    return { weeks, months, buckets };
+  }
+  const dayMap = new Map(days.map(d => [d.date, d]));
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - 364);
+  start.setDate(start.getDate() - start.getDay());
+
+  const weeks: HeatmapCell[][] = [];
+  const months: { label: string; col: number }[] = [];
+  let lastMonthCol = -4;
+  let prevMonthIdx = -1;
+  let week: HeatmapCell[] = [];
+  const cursor = new Date(start);
+
+  while (cursor <= today) {
+    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+    const m = cursor.getMonth();
+    if (cursor.getDay() === 0 && m !== prevMonthIdx && weeks.length - lastMonthCol >= 4) {
+      months.push({ label: monthNames[m], col: weeks.length });
+      lastMonthCol = weeks.length;
+      prevMonthIdx = m;
+    }
+    const d = dayMap.get(iso);
+    week.push({
+      date: iso,
+      requests: d?.requests ?? 0,
+      totalTokens: d?.totalTokens ?? 0,
+      level: d ? bucketLevel(d.totalTokens, buckets) : 0,
+      dayOfWeek: cursor.getDay(),
+    });
+    if (cursor.getDay() === 6) {
+      weeks.push(week);
+      week = [];
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  if (week.length > 0) {
+    while (week.length < 7) {
+      week.push({ date: "", requests: 0, totalTokens: 0, level: 0, dayOfWeek: week.length });
+    }
+    weeks.push(week);
+  }
+  return { weeks, months, buckets };
+}
+
+function UsageFilters({
+  surface,
+  range,
+  onSurface,
+  onRange,
+  t,
+}: {
+  surface: UsageSurface;
+  range: Range | null;
+  onSurface: (surface: UsageSurface) => void;
+  onRange: (range: Range) => void;
+  t: TFn;
+}) {
+  return (
+    <div className="usage-filters">
+      <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
+        {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
+          const label = t(`logs.filter.surface.${choice}`);
+          return (
+            <button
+              key={choice}
+              type="button"
+              className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+              aria-label={label}
+              aria-pressed={surface === choice}
+              onClick={() => onSurface(choice)}
+            >
+              {choice === "codex" && (
+                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
+              )}
+              {choice === "claude" && (
+                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
+              )}
+              {choice === "grok" && (
+                <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
+              )}
+              <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+                {label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
+        {(["all", "30d", "7d"] as Range[]).map(choice => {
+          const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);
+          return (
+            <button
+              key={choice}
+              type="button"
+              className={`usage-segmented-btn${range === choice ? " active" : ""}`}
+              aria-label={label}
+              aria-pressed={range === choice}
+              onClick={() => onRange(choice)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function UsageSummaryCards({
+  summary,
+  activeDays,
+  locale,
+  t,
+}: {
+  summary: UsageSummaryTotals;
+  activeDays: number;
+  locale: Locale;
+  t: TFn;
+}) {
+  return (
+    <>
+    <div className="usage-cards usage-cards-3x2" role="group" aria-label={t("usage.title")}>
+      <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
+      <div className="stat" title={t("usage.card.cachedTokensHint")}>
+        <div className="muted">{t("usage.card.cachedTokens")}</div>
+        <div className="stat-value">{formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)}</div>
+        {(summary.cacheCreationInputTokens ?? 0) > 0 && (
+          <div className="muted text-caption">
+            {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
+          </div>
+        )}
+      </div>
+      <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
+    </div>
+      <div className="usage-cost-row" role="note" title={throughputTitle(summary, t)}>
+        <span className="muted">{t("usage.col.tokPerSec")}</span>
+        <span className="stat-value mono usage-cost-value">{hasThroughput(summary.throughputTokensPerSec) ? summary.throughputTokensPerSec.toFixed(1) : t("usage.unavailable")}</span>
+        <span className="muted text-caption">{throughputTitle(summary, t)}</span>
+      </div>
+      {summary.estimatedCostUsd !== undefined && (
+        <div className="usage-cost-row" role="note">
+          <span className="muted">{t("usage.cost.total")}</span>
+          <span className="stat-value mono usage-cost-value">
+            {formatUsdEstimate(summary.estimatedCostUsd, locale)}
+          </span>
+          <span className="muted text-caption">{t("usage.cost.disclaimer")}</span>
+          {((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)) > 0 && (
+            <span className="muted text-caption">
+              {t("usage.cost.unpricedNote").replace("{count}", String((summary.unpricedRequests ?? 0) + (summary.unmeteredRequests ?? 0)))}
+            </span>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Locale; t: TFn }) {
+  const [active, setActive] = useState<{ date: string; anchor: DOMRect } | null>(null);
+  const max = Math.max(1, ...weekBars.map(day => day.totalTokens));
+  const activeDay = weekBars.find(day => day.date === active?.date);
+  const show = (day: UsageDay, element: HTMLElement) => {
+    setActive({ date: day.date, anchor: element.getBoundingClientRect() });
+  };
+
+  return (
+    <div className="daybars" role="group" aria-label={t("usage.section.heatmap")}>
+      {weekBars.map(day => {
+        const percentage = Math.round((day.totalTokens / max) * 100);
+        const label = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(new Date(`${day.date}T12:00:00`));
+        return (
+          <button
+            type="button"
+            key={day.date}
+            className="daybar"
+            aria-label={dayDetail(day, locale, t)}
+            onFocus={event => show(day, event.currentTarget)}
+            onBlur={() => setActive(current => current?.date === day.date ? null : current)}
+            onPointerEnter={event => show(day, event.currentTarget)}
+            onPointerDown={event => show(day, event.currentTarget)}
+            onPointerLeave={event => {
+              if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) {
+                setActive(current => current?.date === day.date ? null : current);
+              }
+            }}
+          >
+            <div className="daybar-track">
+              <div
+                className="daybar-stack"
+                style={{ ["--daybar-scale" as string]: String(Math.max(0, Math.min(1, percentage / 100))) }}
+              >
+                {day.models.map(model => (
+                  <div
+                    key={`${model.provider}/${model.model}`}
+                    className="daybar-seg"
+                    style={{ flexGrow: model.totalTokens, background: modelColor(model.model, model.provider) }}
+                  />
+                ))}
+                {day.models.length === 0 && day.totalTokens > 0 && (
+                  <div className="daybar-seg" style={{ flexGrow: 1, background: "var(--green)" }} />
+                )}
+              </div>
+            </div>
+            <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
+            <span className="daybar-label muted">{label}</span>
+          </button>
+        );
+      })}
+      {active && activeDay && (
+        <UsageChartOverlay className="daybar-tip" anchor={active.anchor}>
+          <div className="daybar-tip-date">{formatCalendarDate(activeDay.date, locale)}</div>
+          <div className="daybar-tip-row">
+            <span>{t("usage.heatmap.tooltipRequests", { requests: activeDay.requests })}</span>
+            <span className="daybar-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(activeDay.totalTokens, locale) })}</span>
+          </div>
+          {activeDay.models.slice(0, 8).map(model => (
+            <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
+              <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
+              <span className="daybar-tip-name">{modelLabel(model.model)}</span>
+              <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
+            </div>
+          ))}
+        </UsageChartOverlay>
+      )}
+    </div>
+  );
+}
+
+function UsageHeatmapPanel({
+  range,
+  heatmap,
+  weekBars,
+  locale,
+  t,
+}: {
+  range: Range | null;
+  heatmap: ReturnType<typeof buildHeatmap>;
+  weekBars: UsageDay[];
+  locale: Locale;
+  t: TFn;
+}) {
+  const heatmapRef = useRef<HTMLDivElement | null>(null);
+  const cells = useMemo(() => heatmap.weeks.flat().filter(cell => cell.date), [heatmap]);
+  const [selectedDate, setSelectedDate] = useState(() => cells.at(-1)?.date ?? "");
+  const [tip, setTip] = useState<{ date: string; anchor: DOMRect } | null>(null);
+  const hintId = useId();
+  const rovingDate = cells.some(cell => cell.date === selectedDate) ? selectedDate : (cells.at(-1)?.date ?? "");
+
+  const selectCell = (cell: HeatmapCell, element: HTMLElement) => {
+    setSelectedDate(cell.date);
+    setTip({ date: cell.date, anchor: element.getBoundingClientRect() });
+  };
+
+  const onCellKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, cell: HeatmapCell) => {
+    const index = cells.findIndex(candidate => candidate.date === cell.date);
+    const offset = event.key === "ArrowUp" ? -1
+      : event.key === "ArrowDown" ? 1
+        : event.key === "ArrowLeft" ? -7
+          : event.key === "ArrowRight" ? 7
+            : 0;
+    if (!offset || index < 0) return;
+    event.preventDefault();
+    const next = cells[Math.max(0, Math.min(cells.length - 1, index + offset))]!;
+    setSelectedDate(next.date);
+    const element = heatmapRef.current?.querySelector<HTMLElement>(`[data-date="${next.date}"]`);
+    if (element) {
+      element.focus();
+      setTip({ date: next.date, anchor: element.getBoundingClientRect() });
+    }
+  };
+
+  useEffect(() => {
+    const element = heatmapRef.current;
+    if (!element) return;
+    const pinRight = () => { element.scrollLeft = element.scrollWidth; };
+    pinRight();
+    const observer = new ResizeObserver(pinRight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [heatmap, range]);
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-heatmap-title">
+      <h3 id="usage-heatmap-title" className="panel-title">{t("usage.section.heatmap")}</h3>
+      {range === "7d" ? (
+        <WeekDayBars weekBars={weekBars} locale={locale} t={t} />
+      ) : (
+        <div className="heatmap" ref={heatmapRef}>
+          <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
+            <span className="heatmap-day-spacer" />
+            {heatmap.months.map(month => (
+              <span key={`${month.label}-${month.col}`} className="heatmap-month" style={{ gridColumn: month.col + 2 }}>{month.label}</span>
+            ))}
+          </div>
+          <div className="heatmap-body">
+            <div className="heatmap-days">
+              <span /><span>{t("usage.dayMon")}</span><span /><span>{t("usage.dayWed")}</span><span /><span>{t("usage.dayFri")}</span><span />
+            </div>
+            <div
+              className="heatmap-grid"
+              role="group"
+              aria-labelledby="usage-heatmap-title"
+              aria-describedby={hintId}
+              style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, var(--hm-cell))` }}
+            >
+              {heatmap.weeks.map((week, weekIndex) => (
+                <div key={week[0]?.date || `week-${weekIndex}`} className="heatmap-week">
+                  {week.map((cell, dayIndex) => cell.date ? (
+                    <button
+                      type="button"
+                      key={cell.date}
+                      className={`heatmap-cell heatmap-cell-${cell.level}`}
+                      data-date={cell.date}
+                      tabIndex={rovingDate === cell.date ? 0 : -1}
+                      aria-label={dayDetail(cell, locale, t)}
+                      onFocus={event => selectCell(cell, event.currentTarget)}
+                      onBlur={() => setTip(current => current?.date === cell.date ? null : current)}
+                      onKeyDown={event => onCellKeyDown(event, cell)}
+                      onPointerEnter={event => selectCell(cell, event.currentTarget)}
+                      onPointerDown={event => selectCell(cell, event.currentTarget)}
+                      onPointerLeave={event => {
+                        if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) {
+                          setTip(current => current?.date === cell.date ? null : current);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span key={`pad-${weekIndex}-${dayIndex}`} className="heatmap-cell heatmap-cell-0" aria-hidden="true" />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          <span id={hintId} className="sr-only">{t("usage.heatmap.keyboardLabel")}</span>
+          <span className="sr-only" aria-live="polite">
+            {cells.find(cell => cell.date === rovingDate) ? dayDetail(cells.find(cell => cell.date === rovingDate)!, locale, t) : ""}
+          </span>
+          {tip && (() => {
+            const cell = cells.find(candidate => candidate.date === tip.date);
+            if (!cell?.date) return null;
+            return (
+              <UsageChartOverlay className="heatmap-tip" anchor={tip.anchor}>
+                <div className="heatmap-tip-date">{formatCalendarDate(cell.date, locale)}</div>
+                <div className="heatmap-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(cell.totalTokens, locale) })}</div>
+                <div className="heatmap-tip-req muted">{t("usage.heatmap.tooltipRequests", { requests: cell.requests })}</div>
+              </UsageChartOverlay>
+            );
+          })()}
+          <div className="heatmap-legend muted">
+            <span>{t("usage.heatmap.less")}</span>
+            {[0, 1, 2, 3, 4].map(level => <span key={level} className={`heatmap-cell heatmap-cell-${level}`} />)}
+            <span>{t("usage.heatmap.more")}</span>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UsageWorkspaceSection({
+  title,
+  titleId,
+  children,
+}: {
+  title: string;
+  titleId: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="usw-section" aria-labelledby={titleId}>
+      <h3 id={titleId} className="h-section">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function UsageModelsTable({
+  models,
+  modelQuery,
+  onModelQuery,
+  locale,
+  t,
+  workspace = false,
+}: {
+  models: UsageModel[];
+  modelQuery: string;
+  onModelQuery: (query: string) => void;
+  locale: Locale;
+  t: TFn;
+  workspace?: boolean;
+}) {
+  const searchLabel = t("usage.search.models");
+  const sectionLabel = t("usage.section.models");
+  const titleId = "usage-models-title";
+  const listPriceDisclaimerId = "usage-models-list-price-disclaimer";
+  const unavailable = t("usage.unavailable");
+  const searchInput = (
+    <input
+      className="input"
+      aria-label={searchLabel}
+      placeholder={searchLabel}
+      value={modelQuery}
+      onChange={event => onModelQuery(event.target.value)}
+    />
+  );
+  const table = (
+    <div className="tbl-wrap">
+      {/*
+        Identity, then the three figures a reader compares models on, then the detail behind
+        them. The pair in front is also the pair the stylesheet pins while the rest scrolls
+        sideways, so their position here is load-bearing rather than cosmetic.
+      */}
+      <table className="tbl usage-models-tbl">
+        <thead>
+          <tr>
+            <th>{t("logs.col.model")}</th>
+            <th>{t("logs.col.provider")}</th>
+            <th>{t("usage.col.share")}</th>
+            <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
+            <th className="num">{t("usage.col.requests")}</th>
+            <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.inputTokens")}</th>
+            <th className="num">{t("usage.col.outputTokens")}</th>
+            <th className="num">{t("usage.col.tokPerSec")}</th>
+            <th className="num">{t("usage.col.cacheHits")}</th>
+            <th className="num">{t("usage.col.cacheWrites")}</th>
+            <th className="num">{t("usage.col.cacheHitRate")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {models.map(model => {
+            const providerName = formatProviderDisplayName(model.provider, t);
+            const cacheCoverage = cacheHitRateTitle(model, locale, t);
+            const throughputNote = throughputTitle(model, t);
+            return (
+              <tr key={`${model.provider}/${model.model}`}>
+                {/* Both pinned columns are width-capped, so carry the full value in a tooltip. */}
+                <td className="mono" title={model.model}>{modelLabel(model.model)}</td>
+                <td className="muted" title={providerName}>{providerName}</td>
+                <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
+                <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+                <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
+                <td className="num">{model.requests}</td>
+                <td className="num">{model.measuredRequests}</td>
+                <td className="num mono">{formatTokens(model.inputTokens, locale)}</td>
+                <td className="num mono">{formatTokens(model.outputTokens, locale)}</td>
+                <td className="num mono" title={throughputNote}>
+                  <span className="usage-hit-rate">
+                    {hasThroughput(model.throughputTokensPerSec) ? `${model.throughputTokensPerSec.toFixed(1)} tok/s` : unavailable}
+                  </span>
+                  {hasThroughput(model.throughputTokensPerSec) && <span className="sr-only">{throughputNote}</span>}
+                </td>
+                <td className="num mono">{formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale, unavailable)}</td>
+                <td className="num mono">{formatOptionalTokens(model.cacheCreationInputTokens, locale, unavailable)}</td>
+                {/*
+                  The summary already averages only the input tokens whose cache detail was
+                  reported, so whatever number it returns has a basis. Suppressing it unless that
+                  basis covered the row's whole input is what hid a measured hit rate behind an em
+                  dash for every provider that leaves some requests unreported; the coverage is a
+                  note on the cell now, not a gate.
+                */}
+                <td className="num mono" title={cacheCoverage}>
+                  <span className="usage-hit-rate">{formatOptionalPct(model.cacheHitRate, unavailable)}</span>
+                  {/* A `title` reaches a pointer and nothing else, so the sentence is also read. */}
+                  {cacheCoverage !== undefined && <span className="sr-only">{cacheCoverage}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p id={listPriceDisclaimerId} className="muted text-caption">{t("usage.cost.disclaimer")}</p>
+    </div>
+  );
+
+  if (workspace) {
+    return (
+      <UsageWorkspaceSection title={sectionLabel} titleId={titleId}>
+        <div className="usw-section-toolbar">{searchInput}</div>
+        {table}
+      </UsageWorkspaceSection>
+    );
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <div className="panel-head">
+        <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+        {searchInput}
+      </div>
+      {table}
+    </section>
+  );
+}
+
+function UsageProvidersTable({
+  providers,
+  locale,
+  t,
+  workspace = false,
+}: {
+  providers: UsageProvider[];
+  locale: Locale;
+  t: TFn;
+  workspace?: boolean;
+}) {
+  const unavailable = t("usage.unavailable");
+  const sectionLabel = t("usage.section.providers");
+  const titleId = "usage-providers-title";
+  const listPriceDisclaimerId = "usage-providers-list-price-disclaimer";
+  const table = (
+    <div className="tbl-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>{t("logs.col.provider")}</th>
+            <th className="num">{t("usage.col.requests")}</th>
+            <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num">{t("usage.col.tokPerSec")}</th>
+            <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
+            <th>{t("usage.col.share")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {providers.map(provider => (
+            <tr key={provider.provider}>
+              <td className="mono">{formatProviderDisplayName(provider.provider, t)}</td>
+              <td className="num">{provider.requests}</td>
+              <td className="num">{provider.measuredRequests}</td>
+              <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td className="num mono" title={throughputTitle(provider, t)}>
+                <span className="usage-hit-rate">
+                  {hasThroughput(provider.throughputTokensPerSec) ? `${provider.throughputTokensPerSec.toFixed(1)} tok/s` : unavailable}
+                </span>
+                {hasThroughput(provider.throughputTokensPerSec) && <span className="sr-only">{throughputTitle(provider, t)}</span>}
+              </td>
+              <td className="num"><UsageListPrice row={provider} locale={locale} t={t} /></td>
+              <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p id={listPriceDisclaimerId} className="muted text-caption">{t("usage.cost.disclaimer")}</p>
+    </div>
+  );
+
+  if (workspace) {
+    return (
+      <UsageWorkspaceSection title={sectionLabel} titleId={titleId}>
+        {table}
+      </UsageWorkspaceSection>
+    );
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+      {table}
+    </section>
+  );
+}
+
+function UsageCoveragePanel({
+  summary,
+  t,
+  workspace = false,
+}: {
+  summary: UsageSummaryTotals;
+  t: TFn;
+  workspace?: boolean;
+}) {
+  const sectionLabel = t("usage.section.coverage");
+  const titleId = "usage-coverage-title";
+  const body = (
+    <>
+      <div className="usage-cards usage-cards-3x2">
+        <div className="stat"><div className="muted">{t("usage.coverage.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
+        <div className="stat"><div className="muted">{t("usage.coverage.reported")}</div><div className="stat-value">{summary.reportedRequests}</div></div>
+        <div className="stat"><div className="muted">{t("usage.coverage.estimated")}</div><div className="stat-value">{summary.estimatedRequests}</div></div>
+        <div className="stat"><div className="muted">{t("logs.tokens.unreported")}</div><div className="stat-value">{summary.unreportedRequests}</div></div>
+        <div className="stat"><div className="muted">{t("logs.tokens.unsupported")}</div><div className="stat-value">{summary.unsupportedRequests}</div></div>
+      </div>
+      <p className="muted text-control" style={{ marginTop: 12 }}>{t("usage.coverage.note")}</p>
+    </>
+  );
+
+  if (workspace) {
+    return (
+      <UsageWorkspaceSection title={sectionLabel} titleId={titleId}>
+        {body}
+      </UsageWorkspaceSection>
+    );
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: 16 }} aria-labelledby={titleId}>
+      <h3 id={titleId} className="panel-title">{sectionLabel}</h3>
+      {body}
+    </section>
+  );
+}
+
+/**
+ * Workspace layout for Usage: report sections remain mounted in one scrollable column.
+ */
+function UsageWorkspaceBody({
+  data,
+  heatmap,
+  weekBars,
+  activeDays,
+  filteredModels,
+  modelQuery,
+  onModelQuery,
+  sortedProviders,
+  range,
+  locale,
+  t,
+}: {
+  data: UsageResponse | null;
+  heatmap: ReturnType<typeof buildHeatmap>;
+  weekBars: UsageDay[];
+  activeDays: number;
+  filteredModels: UsageModel[];
+  modelQuery: string;
+  onModelQuery: (query: string) => void;
+  sortedProviders: UsageProvider[];
+  range: Range | null;
+  locale: Locale;
+  t: TFn;
+}) {
+  const empty = !!data && data.summary.requests === 0;
+  const sections = [
+    {
+      id: "overview",
+      label: t("usage.section.overview"),
+      meta: data ? `${data.summary.requests}` : "—",
+      body: data ? (
+        <>
+          <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
+          <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
+        </>
+      ) : null,
+    },
+    {
+      id: "models",
+      label: t("usage.section.models"),
+      meta: data ? `${data.models.length}` : "—",
+      body: data
+        ? <UsageModelsTable models={filteredModels} modelQuery={modelQuery} onModelQuery={onModelQuery} locale={locale} t={t} workspace />
+        : null,
+    },
+    {
+      id: "providers",
+      label: t("usage.section.providers"),
+      meta: data ? `${data.providers.length}` : "—",
+      body: data
+        ? <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} workspace />
+        : null,
+    },
+    {
+      id: "coverage",
+      label: t("usage.section.coverage"),
+      meta: data ? formatPct(data.summary.coverageRatio) : "—",
+      body: data ? <UsageCoveragePanel summary={data.summary} t={t} workspace /> : null,
+    },
+  ];
+  return (
+    <div className="usage-workspace-shell">
+      <div className="usage-workspace-root">
+        {/*
+          Every section stays in the document and the page scrolls; the pinned strip scrolls
+          to one instead of swapping the panel. Switching by replacement meant only one
+          section existed at a time, so the report could not be read by scrolling at all.
+        */}
+        <SectionTabs
+          scope="usage"
+          ariaLabel={t("usage.workspace.sections")}
+          items={sections.map(s => ({ id: s.id, label: s.label, meta: s.meta }))}
+        />
+        <section className="usage-workspace-main" aria-label={t("usage.workspace.report")}>
+          {empty ? <EmptyState title={t("usage.empty")} /> : sections.map(s => (
+            <div key={s.id} id={sectionAnchorId("usage", s.id)} className="usw-body usw-section-block">
+              {s.body}
+            </div>
+          ))}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
+const usageMemoryCache = new Map<string, UsageResponse>();
+
+type UsageScope = "machine" | "hub";
+
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, connected: boolean, scope: UsageScope, apiKeyId?: string): string {
+  return `ocx.usage.v2:${apiBase}:${connected ? "connected" : "standalone"}:${scope}:${apiKeyId ?? ""}:${range}:${surface}`;
+}
+
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, connected: boolean, scope: UsageScope, apiKeyId?: string): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
+  return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
+}
+
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, connected: boolean, scope: UsageScope, apiKeyId: string | undefined, value: UsageResponse) {
+  const key = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
+  usageMemoryCache.set(key, value);
+  writeSessionListCache(key, value);
+}
+
+export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBase: string; connected?: boolean; apiKeyId?: string }) {
+  const { t, locale } = useI18n();
+  const [tab, setTab] = useState(readUsageTab);
+  useEffect(() => {
+    const onHash = () => setTab(readUsageTab());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const [range, setRange] = useState<Range>("30d");
+  const [surface, setSurface] = useState<UsageSurface>("all");
+  const [scope, setScope] = useState<UsageScope>("machine");
+  const [modelQuery, setModelQuery] = useState("");
+  const [draftWindow, setDraftWindow] = useState({ since: "", until: "" });
+  const [customWindow, setCustomWindow] = useState<UsageTimeWindow | null>(null);
+  const [rangeError, setRangeError] = useState<UsageRangeError | null>(null);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const since = customWindow?.since;
+  const until = customWindow?.until;
+
+  const clearCustomWindow = () => {
+    setCustomWindow(null);
+    setDraftWindow({ since: "", until: "" });
+    setRangeError(null);
+  };
+  const selectRange = (next: Range) => {
+    setRange(next);
+    clearCustomWindow();
+  };
+
+  const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
+    const query = new URLSearchParams({ range, surface });
+    if (connected && scope === "machine" && apiKeyId) query.set("apiKeyId", apiKeyId);
+    if (since !== undefined && until !== undefined) {
+      query.set("since", String(since));
+      query.set("until", String(until));
+    }
+    const response = await fetch(`${apiBase}/api/usage?${query}`, { signal });
+    const next = await readUsageResponseJson<UsageResponse>(response);
+    // HTTP 200 alone does not prove an older daemon honored the custom bounds.
+    if (since !== undefined && (next?.customWindow !== true || next.since !== since || next.until !== until)) {
+      throw new UsageWindowMismatchError();
+    }
+    if (since === undefined) writeHeldUsage(apiBase, range, surface, connected, scope, apiKeyId, next);
+    return next;
+  }, [apiBase, apiKeyId, connected, range, scope, surface, since, until]);
+
+  const presetKey = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
+  const resourceKey = customWindow ? JSON.stringify([presetKey, since, until]) : presetKey;
+  // Arbitrary custom windows belong only to the subscription-scoped resource store.
+  const cached = customWindow ? null : readHeldUsage(apiBase, range, surface, connected, scope, apiKeyId);
+  // Range and surface identify different reports, so the key changes with both. That prevents
+  // a force-loading dependency revalidation from ever showing a previous report as this one.
+  const resource = useDataSurface<UsageResponse>(
+    resourceKey,
+    [apiBase, apiKeyId, connected, range, scope, surface, since, until],
+    loadUsage,
+    { isEmpty: () => false, initialData: cached ?? undefined },
+  );
+  const { state } = resource;
+  const data = state.data ?? cached ?? null;
+
+  const heatmap = useMemo(() => buildHeatmap(data?.days ?? [], !!customWindow), [data?.days, customWindow]);
+  const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
+  const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
+  const filteredModels = useMemo(() => {
+    const q = modelQuery.trim().toLowerCase();
+    const models = data?.models ?? [];
+    const sorted = models.toSorted((a, b) => b.totalTokens - a.totalTokens);
+    if (!q) return sorted.slice(0, 100);
+    return sorted.filter(m =>
+      m.model.toLowerCase().includes(q) ||
+      m.provider.toLowerCase().includes(q) ||
+      (m.resolvedModel ?? "").toLowerCase().includes(q),
+    ).slice(0, 100);
+  }, [data?.models, modelQuery]);
+
+  const sortedProviders = useMemo(() =>
+    (data?.providers ?? []).toSorted((a, b) => b.totalTokens - a.totalTokens),
+    [data?.providers],
+  );
+
+  return (
+    <>
+      <div className="page-head usage-head">
+        <h2 id="usage-page-title">{t("usage.title")}</h2>
+        {tab === "report" && <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />}
+      </div>
+      <div className="page-tabs" role="tablist" aria-label={t("nav.usage")}>
+        {(["report", "companion"] as const).map(item => (
+          <button key={item} type="button" role="tab" id={`usage-tab-${item}`}
+            aria-selected={tab === item} aria-controls={`usage-panel-${item}`}
+            tabIndex={tab === item ? 0 : -1}
+            className={`page-tab${tab === item ? " page-tab--active" : ""}`}
+            onClick={() => selectUsageTab(item)} onKeyDown={usageTabKeyDown}>
+            {t(item === "report" ? "usage.workspace.report" : "usage.section.companion")}
+          </button>
+        ))}
+      </div>
+      {tab === "companion" ? (
+        <div role="tabpanel" id="usage-panel-companion" aria-labelledby="usage-tab-companion">
+          <UsageCompanionView apiBase={apiBase} providers={data?.providers ?? []} />
+        </div>
+      ) : <div role="tabpanel" id="usage-panel-report" aria-labelledby="usage-tab-report">
+      <p className="page-sub">{t("usage.subtitle")}</p>
+      {/*
+        An explicit interval is the rare path — the presets answer the question almost every
+        time — so the two date fields open on request instead of greeting every visit as the
+        second thing on the page. The applied interval stays outside the panel: collapsing the
+        controls must never hide which window the totals below actually cover.
+      */}
+      <section className="usage-range">
+        <div className="usage-range-bar">
+          <button
+            type="button"
+            className={`usage-range-toggle${customWindow ? " is-active" : ""}`}
+            aria-expanded={rangeOpen}
+            // The panel is unmounted while closed, so naming it then would leave a dangling IDREF.
+            aria-controls={rangeOpen ? "usage-range-panel" : undefined}
+            // A validation failure is only legible next to the fields that caused it. Closing the
+            // panel would otherwise park an invisible error on a trigger that looks untouched, and
+            // re-render the alert on reopen for a draft the user walked away from. The check reads
+            // the rendered value rather than an updater argument: a setState updater has to stay
+            // pure, and this one would fire the second setState twice under StrictMode.
+            onClick={() => {
+              if (rangeOpen) setRangeError(null);
+              setRangeOpen(!rangeOpen);
+            }}
+          >
+            <span>{t("usage.range.custom")}</span>
+            <IconChevron width={12} height={12} aria-hidden="true" className="usage-range-chevron" />
+          </button>
+          {customWindow && <p className="usage-range-applied muted text-control" role="status">{(() => {
+            const formatter = new Intl.DateTimeFormat(locale, {
+              year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+              second: "2-digit", fractionalSecondDigits: 3, timeZoneName: "short",
+            });
+            return t("usage.range.applied", { start: formatter.format(customWindow.since), end: formatter.format(customWindow.until) });
+          })()}</p>}
+        </div>
+        {rangeOpen && (
+          <form id="usage-range-panel" className="usage-range-panel" aria-label={t("usage.range.custom")} noValidate onSubmit={event => {
+            event.preventDefault();
+            const result = parseUsageTimeRange(draftWindow.since, draftWindow.until);
+            if (result.ok === false) {
+              setRangeError(result.error);
+              return;
+            }
+            setRangeError(null);
+            setCustomWindow(result.window);
+          }}>
+            <div className="usage-range-fields">
+              <label className="usage-range-field">
+                <span className="field-label">{t("usage.range.start")}</span>
+                <input className="input" type="datetime-local" step="60" required
+                  value={draftWindow.since}
+                  aria-invalid={rangeError !== null}
+                  aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
+                  onChange={event => {
+                    const value = event.currentTarget.value;
+                    setDraftWindow(current => ({ ...current, since: value }));
+                    setRangeError(null);
+                  }} />
+              </label>
+              <label className="usage-range-field">
+                <span className="field-label">{t("usage.range.end")}</span>
+                <input className="input" type="datetime-local" step="60" required
+                  value={draftWindow.until}
+                  aria-invalid={rangeError !== null}
+                  aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
+                  onChange={event => {
+                    const value = event.currentTarget.value;
+                    setDraftWindow(current => ({ ...current, until: value }));
+                    setRangeError(null);
+                  }} />
+              </label>
+              <button type="submit" className="btn btn-primary btn-sm usage-range-action">{t("usage.range.apply")}</button>
+              <button type="button" className="btn btn-ghost btn-sm usage-range-action" onClick={clearCustomWindow}>{t("usage.range.clear")}</button>
+            </div>
+            <p id="usage-range-help" className="muted text-caption">{t("usage.range.help")}</p>
+            {rangeError && <p id="usage-range-error" role="alert" className="notice notice-err">{t(`usage.range.${rangeError}`)}</p>}
+          </form>
+        )}
+      </section>
+      {/*
+        Only shown when connected. Naming the source is a two-plane concept: it answers
+        "which store served these numbers", and that question only exists once there are
+        two. A standalone install has exactly one, so the row says nothing the page does
+        not already imply — while still being a line about topology that a user who never
+        enabled remote hub has to read past.
+      */}
+      {connected && (
+        <div className="usage-source-row">
+          <span>{t("usage.source.connected")}</span>
+          <div className="usage-scope-control" role="group" aria-label={t("usage.scope.label")}>
+            <button type="button" className={`btn btn-sm${scope === "machine" ? " btn-primary" : " btn-ghost"}`} aria-pressed={scope === "machine"} onClick={() => setScope("machine")}>{t("usage.scope.machine")}</button>
+            <button type="button" className={`btn btn-sm${scope === "hub" ? " btn-primary" : " btn-ghost"}`} aria-pressed={scope === "hub"} onClick={() => setScope("hub")}>{t("usage.scope.hub")}</button>
+          </div>
+        </div>
+      )}
+
+      {state.showSkeleton && !data ? (
+        <DataSurfaceSkeleton label={t("usage.loading")} rows={5} />
+      ) : state.kind === "failed-cold" ? (
+        <Notice tone="err">
+          {state.error instanceof UsageWindowMismatchError
+            ? `${t("usage.loadError")} ${t("dash.codexRestartMalformed")}`
+            : state.error instanceof UsageReadFailedError ? t("usage.loadError")
+            : connected ? t("usage.hubOffline") : state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => resource.refresh()}>
+            {t("common.retry")}
+          </button>
+        </Notice>
+      ) : (
+        <>
+          {state.showError && (
+            <Notice tone="err">
+              {t(connected && !(state.error instanceof UsageReadFailedError) ? "usage.hubOffline" : "usage.loadError")}
+            </Notice>
+          )}
+          <UsageIncompleteNotice data={data} />
+          {data?.historyTruncated && (
+            // Naming the loaded window is the point: without it, `30d` and "Available history"
+            // look identical on a busy installation even though both may cover far less than
+            // they claim (#1497). `warn` rather than `ok` because a total that silently omits
+            // in-range rows is a caveat, not a status update.
+            <Notice tone="warn">
+              {(() => {
+                // Both bounds must be renderable before the detailed wording is used: an older
+                // proxy omits the fields entirely, and a hand-edited row can carry a timestamp
+                // outside Date's range. Either way the generic string is the honest fallback.
+                const start = renderableInstant(data.snapshotWindowStart);
+                const end = renderableInstant(data.snapshotWindowEnd);
+                return start !== null && end !== null
+                  ? t("usage.historyTruncatedWindow", { start, end })
+                  : t("usage.historyTruncated");
+              })()}
+            </Notice>
+          )}
+          <UsageWorkspaceBody
+            data={data}
+            heatmap={heatmap}
+            weekBars={weekBars}
+            activeDays={activeDays}
+            filteredModels={filteredModels}
+            modelQuery={modelQuery}
+            onModelQuery={setModelQuery}
+            sortedProviders={sortedProviders}
+            range={customWindow ? null : range}
+            locale={locale}
+            t={t}
+          />
+        </>
+      )}
+      </div>}
+    </>
+  );
+}
+function renderableInstant(value: number | null | undefined): string | null {
+  // The reader preserves whatever timestamp a row carries, including hand-edited values far
+  // outside Date's supported range. A presence check alone would then render the literal
+  // string "Invalid Date" in a notice whose whole job is to be trustworthy, so the bound is
+  // only used once it round-trips through Date.
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const at = new Date(value);
+  return Number.isFinite(at.getTime()) ? at.toLocaleString() : null;
+}

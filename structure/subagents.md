@@ -59,7 +59,7 @@ Pool credentials used by subagent routes can be
 [linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
 resolver enforces source identity and expiry before those credentials reach routing.
 
-## Multi-agent surface mode (3-state)
+## Multi-agent surface mode
 
 See [surface selection and capacity](subagent-capacity.md#multi-agent-surface-selection) for the mode, global flag and hybrid configuration contract.
 

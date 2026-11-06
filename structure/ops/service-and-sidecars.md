@@ -55,7 +55,7 @@ without running handlers is not covered by this forwarding mechanism.
 
 ## Guarded CLI update restart
 
-`src/cli/system-restart-client.ts` freezes the newer-CLI candidate's runtime identity and physical homes. `src/cli/update-restart-home.ts` captures the service-record digest from
+`src/cli/system-restart-client.ts` freezes the newer-CLI candidate's runtime identity, physical homes and diagnosed hostname, which later reads must match exactly. An omitted hostname corresponds to the default loopback bind; a present empty or whitespace-only runtime hostname refuses before stop with fixed, sanitized owner-specific recovery guidance. For a detached standalone proxy, the guidance conditions `ocx stop` on independent ownership and bind verification and acceptance of possible forced termination, requires independent exit, supervision and port checks before `ocx start`, and directs uncertain cases to the owner or administrator. The serialized child handoff is validated before stop; replacement checks compare bind scope while retaining exact record rereads and attestation. `src/cli/update-restart-home.ts` captures the service-record digest from
 `src/cli/update-restart-service-record.ts`: all ordered `serviceStatePaths()` candidates, including confirmed absences and the authoritative position, plus the launchd plist or
 systemd unit. State and ownership resolve from those captured bytes. Each present regular file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
 mode, uid and gid. The opened descriptor must be regular and match device/inode before any read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
@@ -500,8 +500,8 @@ so an override can never shorten the budgets that prevent a duplicate proxy, and
 `src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
 constants in child processes.
 
-The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe
-`src/update/proxy-liveness-probe.mjs`, decided by
+In Bun installs (`src/update/index.ts`), `runConfigPreflight` opens `config.json` and checks the same descriptor's bytes using passive diagnostics before stopping the proxy. Imported-text diagnostics suppress configuration-derived sanitizer warnings for this check; normal diagnostics and loading retain their warnings. The check writes no recovery backups. An unreadable entry (including a dangling symlink), descriptor close failure, or configuration requiring diagnostics fallback or salvage aborts with code 1 before tray handoff or `ocx stop`. Recovery guidance distinguishes unreadable paths from readable invalid files and explains that validation does not edit the file. Reparable configs and readable symlinks to regular files pass; a genuinely missing config is allowed. The check does not prevent later edits. npm/pnpm flows (`bin/ocx.mjs`) keep their existing stop sequence.
+The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe `src/update/proxy-liveness-probe.mjs`, decided by
 `src/update/stop-decision.mjs`. A refused dial is `dead`. A dial that is only dropped or times
 out, which is what a listener bound to a tailnet address produces once it is gone, falls back to
 one transient exclusive bind of the same host and port, only when the host is a literal IP address

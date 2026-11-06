@@ -324,8 +324,9 @@ export function dropLearnedUnsupportedReasoningEfforts(
 ): string[] {
   if (efforts.length === 0) return [...efforts];
   const key = metadataProviderKey(provider);
+  if (!key) return [...efforts];
   const credential = credentialIdentity(provider);
-  if (!key || !credential) return [...efforts];
+  if (!credential) return [...efforts];
   const support = loadSupport();
   if (support.size === 0) return [...efforts];
   const kept = efforts.filter(effort => !support.has(supportKey(key, credential, modelId, effort)));

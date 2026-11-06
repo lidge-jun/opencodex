@@ -326,6 +326,7 @@ export function createWebsocketHandler(
             provider: "unknown",
             ...(requestMetricsRecorder ? { requestMetricsRecorder } : {}),
             ...(wsAdmission ? admissionFields(wsAdmission) : {}),
+            client: ws.data.client ?? "unknown",
             inboundProtocol: "responses",
           };
           let logged = false;

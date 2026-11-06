@@ -120,12 +120,13 @@ test("child requires a schema-1 lowercase digest before acquiring or checking st
   }
 });
 test("child validates fingerprint and supervision before/under lease and every publication guard", () => {
-  for (const drift of ["record", "supervision", "replacement"] as const) for (let checkpoint = 1; checkpoint <= 7; checkpoint++) {
+  for (const drift of ["record", "supervision", "replacement", "configuration"] as const) for (let checkpoint = 1; checkpoint <= 7; checkpoint++) {
     const s = fixture(); let checks = 0; let acquires = 0; let releases = 0;
     const mutate = () => {
       if (drift === "record") s.drift();
       if (drift === "supervision") s.flip();
       if (drift === "replacement") { renameSync(s.record, s.record + ".old"); writeFileSync(s.record, JSON.stringify(s.state)); }
+      if (drift === "configuration") writeFileSync(join(s.home.config.path, "config.json"), JSON.stringify({ hostname: "::1" }));
     };
     const marker = { home: s.home, version: "2.77.0", port: 23456, hostname: "127.0.0.1", deadlineAt: 5000 };
     const invoke = () => {

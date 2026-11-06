@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -122,6 +131,15 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Workflow-Limits konnten nicht gespeichert werden.",
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
+  ...shellV2Copy("de"),
+  ...modelsV2Copy("de"),
+  ...accountsV2Copy("de"),
+  ...subagentsV2Copy("de"),
+  ...usageV2Copy("de"),
+  ...logsV2Copy("de"),
+  ...connectV2Copy("de"),
+  ...startupV2Copy("de"),
+  ...proxyV2Copy("de"),
   "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
   "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",
   "claude.tierDefaults.title": "CLI-Standardmodelle",
@@ -1577,7 +1595,7 @@ export const de: Record<TKey, string> = {
   "modal.loginTimeout": "Login-Zeitüberschreitung — versuche es erneut.",
 "nav.codexAuth": "Codex-Auth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Verbinden",
+  "nav.connect": "Route",
   "nav.usageLogs": "Nutzung & Protokolle",
   "nav.sectionNavigation": "Bereichsseiten",
   "codexSet.tab.multiauth": "Multi-Auth",
@@ -2358,7 +2376,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.oauthCancelled": "Login wurde abgebrochen.",
   "codexAuth.loginFailed": "Login fehlgeschlagen",
   "codexAuth.needsReauth": "Erneut anmelden",
-  "codexAuth.reauthenticate": "Re-authenticate",
+  "codexAuth.reauthenticate": "Erneut anmelden",
   "codexAuth.tokenExpired": "Token abgelaufen — dieses Konto erneut authentifizieren",
   "codexAuth.mainTokenExpired": "Token abgelaufen — unten mit Gerätecode oder über Codex-App-Login erneut anmelden",
   "codexAuth.mainReauthSucceeded": "Angemeldet",

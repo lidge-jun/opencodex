@@ -9,6 +9,7 @@ import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuth
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import { en } from "../src/i18n/en";
+import { chooseOption, selectTrigger } from "./helpers/custom-select";
 import { interpolate, type TFn } from "../src/i18n/shared";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import {
@@ -170,8 +171,7 @@ test("IAM profile selection sends the server-offered ARN and completes only once
   await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm(); await tick();
   expect(host.textContent).toContain("Choose a Kiro profile");
   expect(settled).toEqual([]);
-  const select = host.querySelector("select")!;
-  await act(async () => { select.value = profiles[1]!.arn; select.dispatchEvent(new win.Event("change", { bubbles: true })); });
+  await chooseOption(selectTrigger(host, "[role=combobox]"), profiles[1]!.arn);
   await submitIamForm();
   const posts = requests.filter(request => request.url.endsWith("/api/oauth/login"));
   expect(JSON.parse(String(posts[1]!.init?.body))).toEqual({ provider: "kiro", flowId, profileArn: profiles[1]!.arn });

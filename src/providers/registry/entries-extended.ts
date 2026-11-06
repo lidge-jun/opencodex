@@ -1046,6 +1046,15 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest", promptCacheKey: true,
     // Native text-only input enrolls this model in the existing vision sidecar.
     modelInputModalities: { "zai-glm-5-3": ["text"] },
+    // Images per request above the documented 8, measured on api.mistral.ai on 2026-11-04 as the
+    // largest count accepted before a refusal (Flash answers HTTP 503, code 3800, at 21; Large 4
+    // answers HTTP 400 at 101). GLM 5.3 Flash accepted every count tried, up to 256.
+    modelCapabilities: {
+      "deepseek-v4-1-flash-1017": { mistralMaxImages: 20 },
+      "mistral-large-4": { mistralMaxImages: 100 },
+      "mistral-large-4-0": { mistralMaxImages: 100 },
+      "zai-glm-5-3-flash": { mistralMaxImages: 256 },
+    },
   },
   {
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",

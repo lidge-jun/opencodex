@@ -6,8 +6,40 @@ import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { fetchDashboardMaMode } from "../src/pages/dashboard-core-poll";
 import { useDashboardData } from "../src/pages/use-dashboard-data";
 import { subagentSurfaceModes } from "../src/subagent-surface";
+import { DashboardMultiAgentControl } from "../src/pages/dashboard-overview-head";
 
 const signal = () => new AbortController().signal;
+
+test("the redesigned dashboard switch offers plaintext only with capability and preserves saving state", async () => {
+  const { win, restore } = setupDashboardDom(globalThis.fetch);
+  const { createRoot } = await import("react-dom/client");
+  const host = win.document.createElement("div");
+  win.document.body.append(host);
+  const root = createRoot(host);
+  const selections: string[] = [];
+  const render = async (supported: boolean, busy = false) => {
+    await act(async () => root.render(<LanguageProvider>
+      <DashboardMultiAgentControl maMode="default" maSupportsPlaintextV2={supported} maBusy={busy}
+        switchMaMode={async mode => { selections.push(mode); }} />
+    </LanguageProvider>));
+  };
+  try {
+    await render(false);
+    expect(host.querySelectorAll('[role="radio"]').length).toBe(3);
+    await render(true);
+    const radios = host.querySelectorAll('[role="radio"]');
+    expect(radios.length).toBe(4);
+    await act(async () => { (radios[3] as unknown as HTMLButtonElement).click(); });
+    expect(selections).toEqual(["v2-plaintext"]);
+    await render(true, true);
+    expect(host.querySelector("fieldset")?.disabled).toBe(true);
+    await render(false);
+    expect(host.querySelectorAll('[role="radio"]').length).toBe(3);
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
 
 test("the ma-mode poll retains 'v2-plaintext' and the capability field", async () => {
   const originalFetch = globalThis.fetch;

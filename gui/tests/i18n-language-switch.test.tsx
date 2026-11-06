@@ -163,7 +163,7 @@ describe("zh-TW language switch on the real GUI surface", () => {
     expect(navLabels()).toContain("Providers");
     expect(navLabels()).toContain("Subagents");
     expect(navLabels()).toContain("Usage & Logs");
-    expect(navLabels()).toContain("Connect");
+    expect(navLabels()).toContain("Route");
     expect(navLabels()).toContain("Remote Link");
 
     await choose(["繁體中文"]);
@@ -172,10 +172,10 @@ describe("zh-TW language switch on the real GUI surface", () => {
     expect(navLabels()).toContain("供應商");
     expect(navLabels()).toContain("子代理");
     expect(navLabels()).toContain("用量與日誌");
-    expect(navLabels()).toContain("連線");
+    expect(navLabels()).toContain("路由");
     expect(navLabels()).not.toContain("Providers");
     expect(navLabels()).not.toContain("Subagents");
-    expect(navLabels()).not.toContain("Connect");
+    expect(navLabels()).not.toContain("Route");
 
     expect(localStorage.getItem("ocx-lang")).toBe("zh-TW");
     expect(testWindow.document.documentElement.lang).toBe("zh-TW");
@@ -224,7 +224,7 @@ describe("French language switch on the real GUI surface", () => {
 
     expect(navLabels()).toEqual([
       "Tableau de bord",
-      "Connexion",
+      "Routage",
       "Codex",
       "Fournisseurs",
       "Modèles",

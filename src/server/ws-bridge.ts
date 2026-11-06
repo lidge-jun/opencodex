@@ -15,6 +15,7 @@ import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
 import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
+import type { UsageClient } from "../usage/client";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -23,6 +24,7 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
+  client?: UsageClient;
   responsesActivity?: CodexWebSocketActivity;
   nativeControl?: NativeResponseControl;
   /** Content-free per-turn explanation; never a model capability assertion. */
@@ -107,6 +109,7 @@ export function buildResponsesWsData(
   admission: DataPlaneAdmission,
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
   sessionLaneId?: string,
+  client?: UsageClient,
   replayPrincipal?: HandleResponsesOptions["replayPrincipal"],
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
@@ -115,6 +118,7 @@ export function buildResponsesWsData(
     headers,
     admission,
     ...(replayPrincipal ? { replayPrincipal } : {}),
+    ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),
   };

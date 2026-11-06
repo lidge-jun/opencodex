@@ -1,22 +1,72 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { repoPath } from "./repo-root";
+const hooks = {
+  upstreamLoads: 0, upstreamHits: 0, nativeLoads: 0, nativeHits: 0, verdictLoads: 0,
+  admittedRecords: 0, collectedMatches: 0, admissions: [] as boolean[],
+  redInputs: [] as { path: string; marker: boolean }[],
+  redFilterChecks: [] as { forward: boolean; backward: boolean }[],
+};
+(globalThis as typeof globalThis & { __fixtureHooks: typeof hooks }).__fixtureHooks = hooks;
+const portable = (path: string) => path.replaceAll("\\", "/");
+function replaceOnce(source: string, anchor: string, replacement: string): string {
+  if (source.split(anchor).length !== 2) throw new Error("Fixture anchor missing or duplicated: " + anchor);
+  return source.replace(anchor, replacement);
+}
 function readOriginal(path: string): string {
-  const exported = process.env.MESSAGES_RED_SOURCE && join(process.env.MESSAGES_RED_SOURCE, relative(repoPath(), path));
-  return readFileSync(exported && existsSync(exported) ? exported : path, "utf8");
+  const rel = relative(repoPath(), path);
+  const exported = process.env.MESSAGES_RED_SOURCE && join(process.env.MESSAGES_RED_SOURCE, rel);
+  const red = !!exported && existsSync(exported);
+  const contents = readFileSync(red ? exported! : path, "utf8");
+  if (red) hooks.redInputs.push({ path: portable(rel), marker: contents.includes("L7_RED_SOURCE_MARKER") });
+  return contents;
 }
 if (process.env.MESSAGES_RED_SOURCE) {
-  const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !path.endsWith("server/claude-messages.ts") && !path.endsWith("claude/failure-verdict.ts"));
-  const filter = new RegExp("^(?:" + paths.map(path => repoPath(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$");
+  const instrumented = new Set(["src/server/claude-messages.ts", "src/server/messages-native.ts", "src/claude/failure-verdict.ts"]);
+  const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !instrumented.has(portable(path)));
+  const escape = (part: string) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const filter = new RegExp("^(?:" + paths.map(path => portable(repoPath(path)).split("/").map(escape).join("[\\\\/]")).join("|") + ")$");
+  hooks.redFilterChecks = paths.map(path => {
+    const candidate = portable(repoPath(path));
+    return { forward: filter.test(candidate), backward: filter.test(candidate.replaceAll("/", "\\")) };
+  });
   Bun.plugin({ name: "935199a98 red source", setup(build) {
     build.onLoad({ filter }, ({ path }) => ({ contents: readOriginal(path), loader: "ts" }));
   } });
 }
 const kind = process.argv[2]!;
+const filters = {
+  upstream: /src[\\/]server[\\/]claude-messages\.ts$/,
+  native: /src[\\/]server[\\/]messages-native\.ts$/,
+  verdict: /src[\\/]claude[\\/]failure-verdict\.ts$/,
+};
+const filterChecks = Object.fromEntries(Object.entries(filters).map(([name, filter]) => {
+  const suffix = name === "upstream" ? "src/server/claude-messages.ts" : name === "native" ? "src/server/messages-native.ts" : "src/claude/failure-verdict.ts";
+  return [name, { forward: filter.test("/fixture/" + suffix), backward: filter.test("C:\\fixture\\" + suffix.replaceAll("/", "\\")) }];
+}));
 Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
-  build.onLoad({ filter: /src\/server\/claude-messages\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("const upstream = await handleResponses(internalReq, {", "const upstream = globalThis.__localRefusalReply ?? await handleResponses(internalReq, {"), loader: "ts" }));
-  build.onLoad({ filter: /src\/server\/messages-native\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);", "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);"), loader: "ts" }));
-  build.onLoad({ filter: /src\/claude\/failure-verdict\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("  if (sink) (sink.delivered", "  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n  if (sink) (sink.delivered"), loader: "ts" }));
+  build.onLoad({ filter: filters.upstream }, ({ path }) => {
+    hooks.upstreamLoads++;
+    return { loader: "ts", contents: replaceOnce(readOriginal(path),
+      "const upstream = await handleResponses(internalReq, {",
+      "const upstream = globalThis.__localRefusalReply ? (globalThis.__fixtureHooks.upstreamHits++, globalThis.__localRefusalReply) : await handleResponses(internalReq, {") };
+  });
+  build.onLoad({ filter: filters.native }, ({ path }) => {
+    hooks.nativeLoads++;
+    return { loader: "ts", contents: replaceOnce(readOriginal(path),
+      "const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);",
+      "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { globalThis.__fixtureHooks.nativeHits++; throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);") };
+  });
+  build.onLoad({ filter: filters.verdict }, ({ path }) => {
+    hooks.verdictLoads++;
+    const admission = "  if (sink) (sink.delivered ??= []).push({ client: JSON.stringify(client), legacy });";
+    const observed = replaceOnce(readOriginal(path), admission,
+      "  globalThis.__fixtureHooks.admissions.push(Boolean(sink));\n  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n" + admission
+      + "\n  if (sink) globalThis.__fixtureHooks.admittedRecords += sink.delivered?.length ?? 0;");
+    return { loader: "ts", contents: replaceOnce(observed,
+      "    sink.collectedProjection = true;",
+      "    sink.collectedProjection = true;\n    if (sink.collected === next.legacy) globalThis.__fixtureHooks.collectedMatches++;") };
+  });
 } });
 const { handleClaudeMessages, handleClaudeCountTokens } = await import("../../src/server/claude-messages");
 const { markProxyError } = await import("../../src/lib/client-error-body");
@@ -87,7 +137,7 @@ if (kind.startsWith("native-pacing")) {
     { upstream: new AbortController(), connectMs: 0, rateLimitPolicy: null, thinkingSignatureRecovery: { prepareHttp: async () => false } } as any);
   const response = new Response(encodeAnthropicMessageSse(continuations.fetchTerminalGuardContinuation(parsed), { model: "fixture", translatorBudget, proxyErrorContext: logCtx }));
   const text = await response.text(); translatorBudget.dispose();
-  console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent: KEY, code: null, fetched })); process.exit(0);
+  console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent: KEY, code: null, fetched, hooks })); process.exit(0);
 } else if (kind === "discovery" || kind === "muse") {
   const oauth = await import("../../src/oauth");
   const { AntigravityProjectDiscoveryError } = await import("../../src/oauth/antigravity-discovery-diagnostics");
@@ -98,7 +148,7 @@ if (kind.startsWith("native-pacing")) {
 } else if (kind === "native-usage") {
   const { runMessagesOverflowCase } = await import("./messages-overflow-case");
   const row = await runMessagesOverflowCase("native-http", { id: "local-usage", message: "fixture", fault: "usage-limit", classification: { "native-http": "error" }, recovery: { "native-http": false } });
-  console.log("REFUSAL_RESULT " + JSON.stringify({ status: row.status, text: row.text, absent: "1970", code: row.code ?? null })); process.exit(0);
+  console.log("REFUSAL_RESULT " + JSON.stringify({ status: row.status, text: row.text, absent: "1970", code: row.code ?? null, hooks })); process.exit(0);
 } else if (kind === "provider") {
   produced = Response.json({ error: { type: "permission_error", message: KEY }, proxyAuthored: true, presentation: "roster" }, { status: 403 });
 } else if (kind === "pacing") {
@@ -154,6 +204,7 @@ if (kind.startsWith("native-pacing")) {
   produced = (markProxyError as any)(formatErrorResponse(status, code, message), kind === "model" ? "model_availability" : kind);
 }
 if (produced) (globalThis as any).__localRefusalReply = produced;
+const collectedUpstream = kind === "sink" ? produced?.clone() : undefined;
 saveConfig(config);
 const logCtx: any = { model: "fixture", provider: "fixture" };
 const req = new Request(`http://localhost/v1/messages${["roster-count", "body-overflow-count"].includes(kind) ? "/count_tokens" : ""}`, { method: "POST", headers: { "content-type": "application/json", ...((kind === "deep" || kind === "usage" || kind.startsWith("body-")) ? { authorization: "Bearer sk-ant-oat01-fixture" } : {}) }, body: JSON.stringify({ model, max_tokens: 16, stream: kind === "sink", messages: [{ role: "user", content: kind === "input" ? "a".repeat(4000) : "fixture" }] }) });
@@ -165,4 +216,17 @@ const direct = kind === "sink-direct" ? await (async () => {
 const chat = kind === "chat-roster" ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "fixture" }], stream: false }) }), config, logCtx) : undefined;
 const response = chat ?? direct ?? (["roster-count", "body-overflow-count"].includes(kind) ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, logCtx, kind === "scope-direct" ? { requestId: crypto.randomUUID(), start: Date.now(), admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined));
 const text = await response.text();
-console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set((globalThis as any).__observedSinks ?? [])].reduce((n: number, sink: any) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: (globalThis as any).__copilotCalls, usage: logCtx.usage }));
+const observations = globalThis as typeof globalThis & { __localRefusalReply?: Response; __observedSinks?: { delivered?: unknown[] }[]; __copilotCalls?: string[] };
+const retainedCount = () => [...new Set(observations.__observedSinks ?? [])].reduce((n, sink) => n + (sink.delivered?.length ?? 0), 0);
+const streaming = kind.startsWith("sink") ? { admissions: [...hooks.admissions], retained: retainedCount() } : undefined;
+let collected: { status: number; textLength: number } | undefined;
+if (collectedUpstream) {
+  observations.__localRefusalReply = collectedUpstream;
+  const collectedRequest = new Request("http://localhost/v1/messages", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, max_tokens: 16, stream: false, messages: [{ role: "user", content: "fixture" }] }),
+  });
+  const collectedResponse = await handleClaudeMessages(collectedRequest, config, { model: "fixture", provider: "fixture" });
+  collected = { status: collectedResponse.status, textLength: (await collectedResponse.text()).length };
+}
+console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: retainedCount(), expectedBody, copilotCalls: observations.__copilotCalls, usage: logCtx.usage, hooks, filterChecks, streaming, collected }));

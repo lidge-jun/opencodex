@@ -12,6 +12,9 @@ import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningMod
 import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
 import { SUBAGENT_SURFACE_GUIDE_URL, confirmsPlaintextV2Mode, type SubagentSurfaceMode } from "../subagent-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
+import { InEffectSummary } from "../components/v2-subagents/InEffectSummary";
+import { formatNamespacedModelId } from "../provider-icons";
+import { sectionAnchorId } from "../section-anchors";
 
 type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
 
@@ -22,6 +25,11 @@ const UNLOADED_ULTRA_MODE: UltraModeState = {
 
 function seedSubagents(cacheKey: string): CachedSubagents | null {
   return readSessionListCache<CachedSubagents>(cacheKey);
+}
+
+/** Scrolls the page to one of its sections, for the section index. */
+function jump(target: "featured" | "delegation" | "pin") {
+  document.getElementById(sectionAnchorId("subagents", target))?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 export default function Subagents({ apiBase }: { apiBase: string }) {
@@ -57,6 +65,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     setChosen(next);
   }, []);
   const delegation = useSubagentDelegation(apiBase);
+  /** The Claude Code pin as the pin panel last read or wrote it, for the summary tiles. */
+  const [pin, setPin] = useState<string | null | undefined>(undefined);
   const [ultraState, setUltraState] = useState<{ apiBase: string; mode: UltraModeState } | null>(null);
   const ultraModeCurrent = ultraState?.apiBase === apiBase;
   const ultraMode = ultraModeCurrent ? ultraState.mode : UNLOADED_ULTRA_MODE;
@@ -364,10 +374,25 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     );
   }
 
+  const firstOption = delegation.available.find(option => option.namespaced === delegation.model);
+  const firstModel = !delegation.model ? ""
+    : firstOption ? formatNamespacedModelId(`${firstOption.provider}/${firstOption.model}`, t) : delegation.model;
+
   return (
     <>
-      <div className="page-head">
+      <div className="page-head flex-col items-start gap-1.5">
         <h2>{t("nav.subagents")}</h2>
+        <p className="m-0 text-[14px] text-fg-muted">{t("subagentsV2.lede")}</p>
+      </div>
+      <div className="mt-5 mb-6">
+        <InEffectSummary
+          chosen={chosen}
+          max={FEATURED_MAX}
+          firstModel={firstModel}
+          firstEffort={delegation.effort}
+          pin={pin}
+          onJump={jump}
+        />
       </div>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
@@ -378,20 +403,23 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           <button type="button" className="btn btn-ghost btn-sm" disabled={fallbackLoading} onClick={() => { setFallbackLoading(true); void loadFallback(); }}>{t("common.retry")}</button>
         </Notice>
       )}
-      <SubagentForceControl key={apiBase} apiBase={apiBase} roster={chosen} />
-      <WorkflowBudgetPanel apiBase={apiBase} />
       <SubagentsWorkspace
         available={available}
         fallbackAvailable={fallbackAvailable ?? []}
         chosen={chosen}
         onToggle={toggle}
         onMove={move}
-          fallback={fallback}
-          fallbackPollMs={fallbackPollMs}
-          fallbackBusy={fallbackBusy || !fallbackLoaded}
-          onFallbackChange={models => { fallbackRevision.current += 1; setFallback(models); }}
-          onFallbackPollMsChange={pollMs => { fallbackRevision.current += 1; setFallbackPollMs(pollMs); }}
-          onFallbackSave={() => { void saveFallback(); }}
+        fallback={fallback}
+        fallbackPollMs={fallbackPollMs}
+        fallbackBusy={fallbackBusy || !fallbackLoaded}
+        onFallbackChange={models => { fallbackRevision.current += 1; setFallback(models); }}
+        onFallbackPollMsChange={pollMs => { fallbackRevision.current += 1; setFallbackPollMs(pollMs); }}
+        onFallbackSave={() => { void saveFallback(); }}
+        settingsExtra={<>
+          <SubagentForceControl key={apiBase} apiBase={apiBase} roster={chosen}
+            id={sectionAnchorId("subagents", "pin")} onForceChange={setPin} />
+          <WorkflowBudgetPanel apiBase={apiBase} id={sectionAnchorId("subagents", "budget")} />
+        </>}
         delegation={{
           apiBase,
           model: delegation.model,

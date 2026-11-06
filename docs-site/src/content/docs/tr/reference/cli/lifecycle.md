@@ -54,7 +54,7 @@ Gözetimsiz Link Child kapanma sinyalinde her yazmadan önce bağlantıyı doğr
 
 Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
-yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
+yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin kenar çubuğundaki proxy kolunu sonuna kadar çekmek aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
 
 Bağlı bir hub istemcisinde `ocx stop`, API üzerinden başarılı durdurma dahil, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur; `ocx start` bunları yeniden sunar. Remote Link Child açıkça durdurulduğunda ise paylaşılan geri yükleme başarılıysa yerel Codex yönlendirmesi, katalog ve yedeklenmiş oturum sürdürme geçmişi meta verileri geri yüklenir, yönetilen Grok yapılandırması kaldırılır. Kayıtlı Home bağlantısı korunur; `ocx disconnect` ile kaldırılır.
 
