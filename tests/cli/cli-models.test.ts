@@ -101,6 +101,9 @@ describe("ocx models", () => {
       for (const args of [["models", "--json"], ["models", "list-custom", "--json"]]) {
         const result = runCli(args, { OPENCODEX_HOME: dir });
         expect(result.status).toBe(0);
+        const json = JSON.parse(result.stdout);
+        if (args.includes("list-custom")) expect(Array.isArray(json)).toBe(true);
+        else expect(Array.isArray(json.models)).toBe(true);
         if (kind === "retired-provider") expect(result.stderr).toContain("opencode-free support was removed");
         if (kind === "malformed") expect(result.stderr).toMatch(/invalid|parse/i);
         expect(readFileSync(configPath, "utf8")).toBe(contents);
