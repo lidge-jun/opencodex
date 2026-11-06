@@ -86,7 +86,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           const { sameClientConnectionOwner } = await import("../client/state");
           const applied = result.connection;
           const outcome = await restartRuntimeAfterApply(result.appliedRecord, {
-            restart: startWhenStopped => deps.handleProxyRestart(startWhenStopped),
+            restart: (startWhenStopped, onSupervised) => deps.handleProxyRestart(startWhenStopped, onSupervised),
             recoveryStart: recovering => deps.handleRestartStartWhenStopped(recovering),
             connectionUnchanged: () => {
               const current = readClientConnectionState();
