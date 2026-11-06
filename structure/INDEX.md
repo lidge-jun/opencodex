@@ -255,6 +255,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/update-restart.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
+| `src/client/hub-client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/client/link-connection.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
@@ -403,6 +404,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/remote/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
@@ -421,6 +423,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/claude-messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/context-history.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/images.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
@@ -437,8 +440,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/messages-native-tool-guard.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/messages-native.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/messages-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -519,6 +524,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/usage/summary.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/usage/user-cost-overlays.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/user-cost-validation.ts` | [`pricing.md`](pricing.md) |

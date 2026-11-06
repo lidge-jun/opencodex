@@ -28,9 +28,10 @@ export function classifyUsageClient(headers: Headers): UsageClient {
   if (originator === "codex_cli_rs" || originator === "codex-tui") originClient = "codex_cli";
   else if (originator === "Codex Desktop") originClient = "codex_desktop";
   else if (originator === "codex_vscode") originClient = "codex_ide";
+  else if (originator === "opencode") originClient = "opencode";
 
   const agentClient: UsageClient | undefined = /^claude-code\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)
-    ? "claude_code" : undefined;
+    ? "claude_code" : /^opencode\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent) ? "opencode" : undefined;
   if (originClient && agentClient && originClient !== agentClient) return "unknown";
   return originClient ?? agentClient ?? "unknown";
 }

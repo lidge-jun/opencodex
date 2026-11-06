@@ -170,6 +170,27 @@ afterEach(() => {
 });
 
 describe("link management routes", () => {
+  test("usage device inventory requires a dashboard session and exposes no key material", async () => {
+    const h = harness();
+    const record = { id: "lnk_0123456789abcdef", alias: "fixture-device", direction: "client-initiated" as const,
+      hostKeyFingerprint: "SHA256:fixture", tunnelPort: 2222, apiKeyId: "key-one", createdAt: "2026-01-01T00:00:00Z" };
+    h.deps.readLinkStore = () => ({ version: 1, listenerPort: null, links: [record] });
+    expect((await call("/api/usage/devices", "GET", undefined, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(403);
+    expect((await call("/api/usage/devices", "GET", undefined, h.deps, "gui-session", true, "tailscale-identity", true, h.config))?.status).toBe(403);
+    expect((await call("/api/usage/devices", "GET", undefined, h.deps, "gui-session", true, "pairing", false, h.config))?.status).toBe(403);
+    expect((await call("/api/usage/devices", "GET", undefined, h.deps, "gui-session", true, "pairing", true, { ...h.config, runtimeRole: "client" }))?.status).toBe(403);
+    const unauthUrl = new URL("http://127.0.0.1/api/usage/devices");
+    expect((await handleManagementAPI(new Request(unauthUrl), unauthUrl, h.config, h.deps))?.status).toBe(403);
+    const allowed = await call("/api/usage/devices", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config);
+    expect(allowed?.status).toBe(200);
+    expect(await allowed?.json()).toEqual({ devices: [{ apiKeyId: "key-one", alias: "fixture-device" }] });
+    h.deps.readLinkStore = () => ({ version: 1, listenerPort: null, links: [record, { ...record, id: "lnk_fedcba9876543210", alias: "other" }] });
+    const duplicate = await call("/api/usage/devices", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config);
+    expect(await duplicate?.json()).toEqual({ devices: [{ apiKeyId: "key-one", alias: null }] });
+    h.deps.readLinkStore = () => { throw new Error("damaged store"); };
+    expect((await call("/api/usage/devices", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(503);
+  });
+
   test("enforces dashboard, loopback admin, and Tailscale route principals", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-routes-"));
     const h = harness();

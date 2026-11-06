@@ -12,6 +12,7 @@ import {
 import {
   createUsageSummaryAccumulator,
   type UsageSummaryAccumulator,
+  type UsageSummaryFilterInput,
 } from "../../usage/summary";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
 import type { UsageTimeWindow } from "../../usage/time-range";
@@ -293,21 +294,19 @@ function normalizeExactFilterValue(value: string | null | undefined): string | n
   return normalized || null;
 }
 
-export async function getFilteredUsageAggregate(filter: {
-  provider?: string | null;
-  model?: string | null;
-  apiKeyId?: string | null;
-}, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
+export async function getFilteredUsageAggregate(filter: UsageSummaryFilterInput, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
   const fixedWindow = window ? Object.freeze({ ...window }) : undefined;
   const normalizedFilter = {
     provider: normalizeFilterValue(filter.provider),
     model: normalizeFilterValue(filter.model),
     apiKeyId: normalizeExactFilterValue(filter.apiKeyId),
+    ...(filter.sourceFilter ? { sourceFilter: { client: filter.sourceFilter.client, device: { ...filter.sourceFilter.device } } } : {}),
   };
   const key = JSON.stringify([
     normalizedFilter.provider,
     normalizedFilter.model,
     normalizedFilter.apiKeyId,
+    normalizedFilter.sourceFilter ?? null,
     fixedWindow?.since ?? null,
     fixedWindow?.until ?? null,
   ]);
@@ -330,6 +329,7 @@ type NormalizedUsageFilter = {
   provider: string | null;
   model: string | null;
   apiKeyId: string | null;
+  sourceFilter?: UsageSummaryFilterInput["sourceFilter"];
 };
 
 function trimRetainedFilteredAggregates(): void {

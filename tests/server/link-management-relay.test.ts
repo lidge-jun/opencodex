@@ -239,6 +239,26 @@ afterEach(async () => {
 });
 
 describe("Remote Link management relay on the Home", () => {
+  test("new source filters stay bound to the admitted link key for GET and HEAD", async () => {
+    const base = await linkBase();
+    const own = "/v1/link-management/api/usage?client=codex&device=key&apiKeyId=linked-key";
+    const forbidden = [
+      "?client=codex&device=all", "?client=codex&device=no-key",
+      "?client=codex&device=key&apiKeyId=other-key", "?client=codex&device=key",
+      "?client=codex&device=key&apiKeyId=linked-key&apiKeyId=other-key",
+    ];
+    for (const method of ["GET", "HEAD"]) {
+      expect((await get(base, own, LINKED_KEY, { method })).status).toBe(200);
+      for (const query of forbidden) {
+        expect((await get(base, `/v1/link-management/api/usage${query}`, LINKED_KEY, { method })).status).toBe(403);
+      }
+      expect((await get(base, "/v1/link-management/api/usage", LINKED_KEY, { method })).status).toBe(200);
+    }
+    const { handleLinkManagementRequest } = await import("../../src/server/index/link-management");
+    const url = new URL(`http://127.0.0.1${own}`);
+    expect((await handleLinkManagementRequest(new Request(url), url, config(), {}, undefined, undefined)).status).toBe(403);
+  });
+
   test("admits allowlisted reads only with the link key", async () => {
     const base = await linkBase();
     for (const credential of [undefined, ENV_KEY, OTHER_KEY]) {

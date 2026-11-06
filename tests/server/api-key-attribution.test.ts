@@ -8,7 +8,7 @@ import { AUTH_MATRIX } from "../../src/server/auth-cors";
 import { clearApiKeyUsageCacheForTests, readApiKeyUsageRollup, rollupApiKeyUsage } from "../../src/server/management/api-key-usage";
 import { resetUsageAggregateCacheForTests } from "../../src/server/management/usage-aggregate-cache";
 import * as usageLedgerScannerModule from "../../src/usage/ledger-scanner";
-import { normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../../src/usage/log";
+import { appendUsageEntry, normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../../src/usage/log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -70,6 +70,35 @@ afterEach(() => {
 });
 
 describe("attribution reaches usage.jsonl", () => {
+  test("usage source filters reject ambiguous requests and echo the selected scope", async () => {
+    saveConfig(remoteConfig());
+    const now = Date.now();
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 1, usageStatus: "unreported" as const };
+    appendUsageEntry({ ...base, requestId: "old" });
+    appendUsageEntry({ ...base, requestId: "keyed", client: "codex_cli", apiKeyId: "key-one" });
+    appendUsageEntry({ ...base, requestId: "unknown", client: "unknown" });
+    const server = startServer(0);
+    const get = (query: string) => fetch(new URL(`/api/usage?${query}`, server.url), {
+      headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+    });
+    try {
+      const response = await get("range=7d&surface=all&client=codex&device=no-key");
+      expect(response.status).toBe(200);
+      const body = await response.json() as { summary: { requests: number }; sourceFilter: unknown; legacyUnclassifiedRequests: number };
+      expect(body.summary.requests).toBe(1);
+      expect(body.legacyUnclassifiedRequests).toBe(1);
+      expect(body.sourceFilter).toEqual({ client: "codex", device: { kind: "no-key" } });
+      for (const query of ["client=codex", "client=codex&device=no-key&apiKeyId=key-one",
+        "client=codex&device=all&surface=claude", "client=codex&device=all&jev=1",
+        "client=codex&device=all&failures=1", "client=codex&client=all&device=all"]) {
+        expect((await get(query)).status).toBe(400);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("records only the classified inbound client on the request row", async () => {
     saveConfig(remoteConfig());
     const server = startServer(0);

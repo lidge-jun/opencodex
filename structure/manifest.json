@@ -983,8 +983,15 @@
       "scope": "Privacy-bounded client labels carried from request ingress into usage records.",
       "documents": [
         "src/usage/client.ts",
+        "src/usage/source-filter.ts",
+        "src/usage/summary.ts",
         "src/server/request-log.ts",
-        "src/server/index/"
+        "src/server/index/",
+        "src/server/management/logs-usage-routes.ts",
+        "src/server/management/usage-aggregate-cache.ts",
+        "src/server/hub-usage.ts",
+        "src/remote/hub-usage.ts",
+        "src/client/hub-client.ts"
       ]
     },
     {

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyUsageClient, normalizeRecordedClient } from "../../src/usage/client";
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
+import { createUsageSummaryAccumulator } from "../../src/usage/summary";
+import { parseUsageSource } from "../../src/usage/source-filter";
 import { addFinalRequestLog, addRequestLog, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage, type RequestLogEntry } from "../../src/server/request-log";
 import { log } from "../helpers/request-log-entry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -15,12 +17,15 @@ describe("usage client attribution", () => {
     expect(classifyUsageClient(new Headers({ originator: "Codex Desktop" }))).toBe("codex_desktop");
     expect(classifyUsageClient(new Headers({ originator: "codex_vscode" }))).toBe("codex_ide");
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-code/2.1.207" }))).toBe("claude_code");
+    expect(classifyUsageClient(new Headers({ originator: "opencode" }))).toBe("opencode");
+    expect(classifyUsageClient(new Headers({ "user-agent": "opencode/1.2.3 runtime/bun" }))).toBe("opencode");
   });
 
   test("does not infer an app from unknown, malformed, conflicting or oversized headers", () => {
     expect(classifyUsageClient(new Headers())).toBe("unknown");
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-code/" }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "claude-code/1.0" }))).toBe("unknown");
+    expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "opencode/1.2.3" }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ originator: "x".repeat(1025) }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ "user-agent": "private-header-marker" }))).toBe("unknown");
   });
@@ -63,6 +68,88 @@ describe("usage client attribution", () => {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previous;
       removeTreeWithRetry(testDir);
+    }
+  });
+
+  test("app and device selections intersect and retain a range-aware legacy count", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 10, usageStatus: "unreported" as const };
+    const rows = [
+      { ...base, requestId: "legacy-now" },
+      { ...base, requestId: "legacy-old", timestamp: now - 10 * 86400_000 },
+      { ...base, requestId: "codex", client: "codex_cli" as const, apiKeyId: "Key-A" },
+      { ...base, requestId: "unclassified", client: "unknown" as const },
+      { ...base, requestId: "claude", client: "claude_code" as const },
+    ];
+    const accumulator = createUsageSummaryAccumulator({ filter: {
+      sourceFilter: { client: "codex", device: { kind: "no-key" } },
+    } });
+    for (const row of rows) accumulator.add(row);
+    const week = accumulator.summarize("7d", now);
+    expect(week.summary.requests).toBe(1);
+    expect(week.legacyUnclassifiedRequests).toBe(1);
+    expect(accumulator.summarize("30d", now).legacyUnclassifiedRequests).toBe(2);
+    const clone = accumulator.clone();
+    clone.add({ ...base, requestId: "legacy-appended" });
+    expect(clone.summarize("7d", now).legacyUnclassifiedRequests).toBe(2);
+    expect(accumulator.summarize("7d", now).legacyUnclassifiedRequests).toBe(1);
+
+    const keyed = createUsageSummaryAccumulator({ filter: {
+      sourceFilter: { client: "codex", device: { kind: "key", id: "Key-A" } },
+    } });
+    for (const row of rows) keyed.add(row);
+    expect(keyed.summarize("7d", now).summary.requests).toBe(1);
+    const wrongCase = createUsageSummaryAccumulator({ filter: {
+      sourceFilter: { client: "codex", device: { kind: "key", id: "key-a" } },
+    } });
+    for (const row of rows) wrongCase.add(row);
+    expect(wrongCase.summarize("7d", now).summary.requests).toBe(0);
+  });
+
+  test("custom windows and caller mutation do not change the captured source filter", () => {
+    const now = Date.now();
+    const filter = { client: "codex" as const, device: { kind: "no-key" as const } };
+    const accumulator = createUsageSummaryAccumulator({ filter: { sourceFilter: filter }, window: { since: now - 500, until: now } });
+    const base = { timestamp: now - 250, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 10, usageStatus: "unreported" as const };
+    Object.assign(filter.device, { kind: "all" });
+    accumulator.add({ ...base, requestId: "inside" });
+    accumulator.add({ ...base, requestId: "outside", timestamp: now - 1000 });
+    accumulator.add({ ...base, requestId: "keyed", client: "codex_cli", apiKeyId: "key" });
+    const report = accumulator.summarize("30d", now);
+    expect(report.summary.requests).toBe(1);
+    expect(report.legacyUnclassifiedRequests).toBe(1);
+    expect(report.sourceFilter).toEqual({ client: "codex", device: { kind: "no-key" } });
+    Object.assign(report.sourceFilter!.device, { kind: "all" });
+    accumulator.add({ ...base, requestId: "another-key", client: "codex_cli", apiKeyId: "key" });
+    expect(accumulator.summarize("30d", now).summary.requests).toBe(1);
+  });
+
+  test("all apps includes unknown rows without classifying old Claude rows as Codex", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "mock", model: "gpt-test", status: 200,
+      durationMs: 10, usageStatus: "unreported" as const };
+    const rows = [{ ...base, requestId: "old-codex" },
+      { ...base, requestId: "old-claude", surface: "claude" as const },
+      { ...base, requestId: "new-unknown", client: "unknown" as const }];
+    for (const [client, expected] of [["all", 3], ["codex", 1], ["unknown", 2]] as const) {
+      const accumulator = createUsageSummaryAccumulator({ filter: { sourceFilter: { client, device: { kind: "all" } } } });
+      for (const row of rows) accumulator.add(row);
+      expect(accumulator.summarize("7d", now).summary.requests).toBe(expected);
+    }
+  });
+
+  test("source query parser rejects conflicting, duplicate and incomplete dimensions", () => {
+    expect(parseUsageSource(new URLSearchParams("apiKeyId=legacy-key"))).toEqual({ kind: "legacy" });
+    expect(parseUsageSource(new URLSearchParams("client=codex&device=key&apiKeyId=Key-A"))).toEqual({
+      kind: "filtered", filter: { client: "codex", device: { kind: "key", id: "Key-A" } },
+    });
+    for (const query of ["client=codex", "device=all", "client=bad&device=all", "client=codex&device=key",
+      "client=codex&device=key&apiKeyId=%20key", "client=codex&device=all&apiKeyId=key",
+      "client=codex&device=all&surface=claude", "client=codex&device=all&surface=all&surface=all",
+      "client=codex&device=all&failures=1", "client=codex&device=all&jev=1"]) {
+      expect(parseUsageSource(new URLSearchParams(query))).toEqual({ kind: "invalid" });
     }
   });
 });

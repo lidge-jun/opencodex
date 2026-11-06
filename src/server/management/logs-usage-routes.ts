@@ -23,6 +23,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { getFailureProjection } from "../../usage/failure-projection-cache";
+import { parseUsageSource } from "../../usage/source-filter";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -185,7 +186,27 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     return jsonResponse(setDebugSettings(partial));
   }
 
+  if (url.pathname === "/api/usage/devices" && req.method === "GET") {
+    const { auth, readStoreFor } = await import("./link-route-state");
+    const denied = auth(ctx, "dashboard");
+    if (denied) return denied;
+    if (ctx.config.runtimeRole === "client") return jsonResponse({ error: "device inventory unavailable on a child" }, 403);
+    try {
+      const aliases = new Map<string, string | null>();
+      for (const link of readStoreFor(ctx).links) {
+        aliases.set(link.apiKeyId, aliases.has(link.apiKeyId) ? null : link.alias);
+      }
+      const devices = [...aliases].sort(([left], [right]) => left.localeCompare(right))
+        .map(([apiKeyId, alias]) => ({ apiKeyId, alias }));
+      return Response.json({ devices }, { headers: { "cache-control": "no-store" } });
+    } catch {
+      return jsonResponse({ error: "link_store_unavailable" }, 503);
+    }
+  }
+
   if (url.pathname === "/api/usage" && req.method === "GET") {
+    const source = parseUsageSource(url.searchParams);
+    if (source.kind === "invalid") return jsonResponse({ error: "invalid usage source filter" }, 400);
     if (url.searchParams.get("jev") === "1") {
       const range = parseRange(url.searchParams.get("range"));
       const rawComboId = url.searchParams.get("comboId");
@@ -244,8 +265,9 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       provider: url.searchParams.get("provider"),
       model: url.searchParams.get("model"),
       apiKeyId: url.searchParams.get("apiKeyId"),
+      ...(source.kind === "filtered" ? { sourceFilter: source.filter } : {}),
     };
-    const filterRequested = window !== undefined || [filter.provider, filter.model, filter.apiKeyId]
+    const filterRequested = source.kind === "filtered" || window !== undefined || [filter.provider, filter.model, filter.apiKeyId]
       .some(value => typeof value === "string" && value.trim() !== "");
     const now = Date.now();
     try {

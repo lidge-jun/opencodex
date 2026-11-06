@@ -7,3 +7,18 @@ request-header signatures without retaining the header values. HTTP request cont
 the field remain absent, while invalid present values become `unknown`. Combo child adoption
 cannot replace the inbound label. The label is caller-supplied evidence, not an authorization
 decision. `tests/usage/usage-client-attribution.test.ts` covers the normalization boundary.
+
+`src/usage/source-filter.ts` defines app and device filters. A Codex filter includes recognized
+Codex clients and legacy Codex-surface rows; it reports the latter as a separate unclassified
+count, without assigning a client subtype. A no-key filter means the stored key ID is absent,
+including pre-attribution and environment-admitted rows; it does not prove physical origin.
+`src/usage/summary.ts` applies filters before aggregation and retains range-aware unclassified
+counts. `src/server/management/usage-aggregate-cache.ts` keys retained aggregates by both source
+dimensions, and `src/server/management/logs-usage-routes.ts` validates the complete query before
+special projections. The device inventory requires a dashboard session and refuses child scope.
+
+`src/server/index/link-management.ts` binds new source-filtered relay reads to the admitted link
+key. Requests without these dimensions retain the previous relay behavior and are not newly scoped
+by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
+key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
+`src/client/hub-client.ts` rejects a missing or mismatched echo.

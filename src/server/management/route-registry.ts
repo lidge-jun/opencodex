@@ -289,6 +289,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/storage/trash", module: "server/management/logs-usage-routes", mutates: false },
   { method: "GET", path: "/api/storage/trash/restore/test-stream", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "test-seam", why: "Opt-in streaming seam declared at src/storage/restore-job.ts:34." } },
   { method: "GET", path: "/api/usage", module: "server/management/logs-usage-routes", mutates: false },
+  { method: "GET", path: "/api/usage/devices", module: "server/management/logs-usage-routes", mutates: false },
   // server/management/usage-timeline-routes
   { method: "GET", path: "/api/usage/timeline", module: "server/management/usage-timeline-routes", mutates: false },
   // server/management/advisor-routes

@@ -80,6 +80,28 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("client and device filters retain separate caches across incremental appends", async () => {
+    const path = join(testDir, "usage.jsonl");
+    const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId?: string) => ({
+      ...entry(id), client, ...(apiKeyId ? { apiKeyId } : {}),
+    });
+    writeFileSync(path, [row("codex-local", "codex_cli"), row("codex-key", "codex_cli", "Key-A"),
+      row("claude", "claude_code")].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const local = { sourceFilter: { client: "codex" as const, device: { kind: "no-key" as const } } };
+    const keyed = { sourceFilter: { client: "codex" as const, device: { kind: "key" as const, id: "Key-A" } } };
+    const claude = { sourceFilter: { client: "claude_code" as const, device: { kind: "all" as const } } };
+    const [localFirst, keyFirst, claudeFirst] = await Promise.all([
+      getFilteredUsageAggregate(local), getFilteredUsageAggregate(keyed), getFilteredUsageAggregate(claude),
+    ]);
+    expect([requests(localFirst), requests(keyFirst), requests(claudeFirst)]).toEqual([1, 1, 1]);
+    appendFileSync(path, `${JSON.stringify(row("codex-new", "codex_cli"))}\n`);
+    const [localNext, keyNext, claudeNext] = await Promise.all([
+      getFilteredUsageAggregate(local), getFilteredUsageAggregate(keyed), getFilteredUsageAggregate(claude),
+    ]);
+    expect([requests(localNext), requests(keyNext), requests(claudeNext)]).toEqual([2, 1, 1]);
+    expect(localNext.update).toBe("append");
+  });
+
   test("JEV projections share a cold scan and read only a verified append suffix", async () => {
     const path = join(testDir, "usage.jsonl");
     const jevEntry = (requestId: string, model: string): PersistedUsageEntry => ({
