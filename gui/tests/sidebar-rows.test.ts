@@ -27,19 +27,20 @@ test("the sidebar is eleven group rows in three tiers, owning every sidebar page
   expect(NAV_TIERS.map(entry => entry.tier)).toEqual(["daily", "setup", "advanced"]);
   // The exact rows, in order. A count alone would pass if a row were swapped for another.
   expect(NAV_GROUPS.map(group => [group.id, group.tier])).toEqual([
-    ["home", "daily"], ["connect", "daily"], ["models", "daily"], ["accounts", "daily"], ["subagents", "daily"], ["usage-logs", "daily"],
+    ["home", "daily"], ["connect", "daily"], ["providers", "daily"], ["models", "daily"], ["accounts", "daily"], ["subagents", "daily"], ["usage-logs", "daily"],
     ["startup", "setup"], ["remote", "setup"],
     ["proxy", "advanced"], ["advisor", "advanced"], ["advanced", "advanced"],
   ]);
   expect(Object.fromEntries(NAV_GROUPS.map(group => [group.id, [...group.pages]]))).toEqual({
     home: ["home"],
     models: ["models"],
-    // Codex's account pool and every provider's quota answer the same daily question.
-    accounts: ["codex-set", "providers"],
+    accounts: ["codex-set"],
+    // Providers sits on its own row under Route.
+    providers: ["providers"],
     subagents: ["subagents"],
     // Usage leads, so the row opens Usage first.
     "usage-logs": ["usage", "logs", "storage"],
-    // Claude is a tab inside the Connect page, owned through `embedded`.
+    // Claude is a tab inside the Route page, owned through `embedded`.
     connect: ["integrations", "setup"],
     startup: ["startup"],
     remote: ["remote", "remote-workspace"],

@@ -1,7 +1,7 @@
 /**
  * The sidebar's rows, in order.
  *
- * A row is a navigation group, not a page. Most rows hold one page; Accounts, Usage & Logs,
+ * A row is a navigation group, not a page. Most rows hold one page; Usage & Logs,
  * Route and Remote Link each hold several existing pages, reached through the section switcher
  * App renders above the page. Grouping changes no route: every member keeps the hash it
  * always had, so bookmarks and deep links still open the same page, and the row that
@@ -15,11 +15,12 @@
  */
 import type { Page } from "./app-routing";
 import type { TKey } from "./i18n/shared";
-import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconList, IconMonitor, IconPower, IconRoute, IconServer, IconStar } from "./icons";
+import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconList, IconMonitor, IconPlug, IconPower, IconRoute, IconServer, IconStar } from "./icons";
 
 export type NavGroupId =
   | "home"
   | "models"
+  | "providers"
   | "accounts"
   | "subagents"
   | "usage-logs"
@@ -57,10 +58,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   // Route: where each client's traffic goes (integrations, the setup checklist, Claude as a tab).
   // It sits above Models because choosing the route comes before choosing the model.
   { id: "connect", tier: "daily", tkey: "nav.connect", Icon: IconRoute, pages: ["integrations", "setup"], embedded: ["claude"] },
+  // Providers: every non-Codex upstream and its quota, on its own row right under Route,
+  // since adding a provider is the step that gives a route somewhere to go.
+  { id: "providers", tier: "daily", tkey: "nav.providers", Icon: IconPlug, pages: ["providers"] },
   { id: "models", tier: "daily", tkey: "nav.models", Icon: IconBoxes, pages: ["models"] },
-  // Codex's account pool and every provider's quota answer the same daily question —
-  // "which account is serving me and how much is left" — so they share one row.
-  { id: "accounts", tier: "daily", tkey: "shellV2.navAccounts", Icon: IconCodex, pages: ["codex-set", "providers"] },
+  // Codex's account pool: which account is serving and how much it has left.
+  { id: "accounts", tier: "daily", tkey: "shellV2.navAccounts", Icon: IconCodex, pages: ["codex-set"] },
   // Which model a helper agent runs on is changed as often as the main model.
   { id: "subagents", tier: "daily", tkey: "nav.subagents", Icon: IconBot, pages: ["subagents"] },
   { id: "usage-logs", tier: "daily", tkey: "nav.usageLogs", Icon: IconActivity, pages: ["usage", "logs", "storage"] },

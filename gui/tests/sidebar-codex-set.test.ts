@@ -33,8 +33,8 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    * now lives in nav-groups.ts.
    */
   const groups = await Bun.file(new URL("../src/nav-groups.ts", import.meta.url)).text();
-  // Design system v2 folds Codex Set into the "Accounts & limits" row it leads.
-  expect(groups).toContain('{ id: "accounts", tier: "daily", tkey: "shellV2.navAccounts", Icon: IconCodex, pages: ["codex-set", "providers"] }');
+  // Codex Set is the "Accounts & limits" row; Providers has its own row under Route.
+  expect(groups).toContain('{ id: "accounts", tier: "daily", tkey: "shellV2.navAccounts", Icon: IconCodex, pages: ["codex-set"] }');
   expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}');
 });
 
