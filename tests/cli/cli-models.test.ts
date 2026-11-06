@@ -101,10 +101,30 @@ describe("ocx models", () => {
       for (const args of [["models", "--json"], ["models", "list-custom", "--json"]]) {
         const result = runCli(args, { OPENCODEX_HOME: dir });
         expect(result.status).toBe(0);
+        if (kind === "retired-provider") expect(result.stderr).toContain("opencode-free support was removed");
+        if (kind === "malformed") expect(result.stderr).toMatch(/invalid|parse/i);
         expect(readFileSync(configPath, "utf8")).toBe(contents);
         expect(readdirSync(dir).sort()).toEqual(names);
         if (process.platform !== "win32") expect([dir, configPath, authPath].map(path => statSync(path).mode & 0o777)).toEqual(modes);
       }
+      if (kind === "retired-provider") {
+        const filtered = runCli(["models", "--provider", "opencode-free"], { OPENCODEX_HOME: dir });
+        expect(filtered.status).toBe(1);
+        expect(filtered.stderr).toContain("opencode-free support was removed");
+        expect(filtered.stderr).toContain("not configured");
+        expect(readFileSync(configPath, "utf8")).toBe(contents);
+        expect(readdirSync(dir).sort()).toEqual(names);
+      }
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("models help describes local router-known IDs and process-local cache", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["models", "--help"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("router-known");
+      expect(result.stdout).toContain("process-local");
     } finally { removeTreeWithRetry(dir); }
   });
 

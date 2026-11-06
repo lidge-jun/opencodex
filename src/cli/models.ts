@@ -530,7 +530,7 @@ export async function handleModels(args: string[], deps: ModelsCommandDeps = {})
     return;
   }
   if (subcommand === "list-custom") {
-    await runPassiveRead(async () => { handleCustomList(rest); });
+    await runPassiveRead(async () => { handleCustomList(rest); }, { onDiagnostic: message => console.error(message) });
     return;
   }
   if (isModelsRuntimeSubcommand(subcommand)) {
@@ -539,5 +539,5 @@ export async function handleModels(args: string[], deps: ModelsCommandDeps = {})
     if (code !== null) process.exitCode = code;
     return;
   }
-  await runPassiveRead(async () => { handleConfiguredModels(subcommand === "list" ? rest : args); });
+  await runPassiveRead(async () => { handleConfiguredModels(subcommand === "list" ? rest : args); }, { onDiagnostic: message => console.error(message) });
 }
