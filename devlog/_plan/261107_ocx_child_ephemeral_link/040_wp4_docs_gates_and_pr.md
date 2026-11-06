@@ -1,5 +1,7 @@
 # `wp4` — Source-of-Truth Documentation, Full Verification Matrix, & PR Publication
 
+> Continuity handoff (`LOOP-CONTINUITY-01` from `wp3` D at `a49f471b98`): `wp3` completed Home discovery, detached `ocx-child` enrollment preflight, `package.json` scripts, and the compiled-binary E2E suite (`104 pass, 0 fail`). Revalidated `040_wp4_docs_gates_and_pr.md` against `a49f471b98`: all referenced repository paths are tracked in git and `INV-LINK-CHILD-01` is present in `tests/clients/link-ocx-child-conformance.test.ts:1`. Architect consultation: covered by `ARCH-07` (`ALIGNED` on `01a1b18b-a2f3-7b53-971a-9b2c9cccecf7`, `000_roadmap.md` §3.1).
+
 - **Phase ID**: `wp4` (depends on `wp3`; satisfies `c-5`)
 - **Header dependencies**:
   - References implemented paths `native/ocx-child/Cargo.toml`, `native/ocx-child/src/lib.rs`, `src/link/ephemeral-child.ts`, `src/link/ssh-argv.ts`, `src/link/remote-windows.ts`, `src/server/management/link-enrollment.ts`, `tests/fixtures/link/ocx-child-conformance.json`, `tests/clients/link-ocx-child-conformance.test.ts`, and `tests/clients/link-ocx-child-e2e.test.ts`.

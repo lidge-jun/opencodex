@@ -1325,6 +1325,8 @@ starts and then once a minute; the Home keeps reports in memory only, so after a
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
 
+Lightweight `ocx-child` Child hosts speak the same `sync --expect-link <id> [--json]`, `status [--json]`, and `disconnect` / `detach` contracts: `sync` rolls over `ocx-child serve` when settings change and posts a fresh parity report, while `disconnect` / `detach` restores `~/.codex` files offline and stops `ocx-child serve` with zero background daemon left running.
+
 ## Remote Link Child attestations
 
 A peer that sends work through a Remote Link Child can check two more facts in the Child's
