@@ -379,7 +379,8 @@ before selecting the fixed incomplete or compaction sentence. Internal overflow 
 status stay separate
 from this client-message check: a coded raw-collector throughput refusal still answers 400 without
 selecting the compaction sentence. The shared `isContextOverflowError` adds `upstream_server_error`
-to the generic codes; its remaining source and the #8128 suite stay byte-identical, enforced by
+to the generic codes and ignores conditional context-window matches while still checking later matches;
+its remaining source and the #8128 suite stay byte-identical, enforced by
 `tests/claude-integration/messages-overflow-baseline-contract.test.ts`. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
 The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. All other paths keep their baseline comparisons; the fixture data is not regenerated.

@@ -115,6 +115,8 @@ test("a direct reader exception quoting overflow wording does not gain an overfl
 for (const [status, message, expectedStatus, expectedCode] of [
   [500, "Your input exceeds the context window of this model", 400, "context_length_exceeded"],
   [500, "x".repeat(450) + " Your input exceeds the context window of this model", 400, "context_length_exceeded"],
+  [500, "If input exceeds the context window, shorten it; the server is unavailable", 529, undefined],
+  [500, "If input exceeds the context window, shorten it. This input exceeds the context window.", 400, "context_length_exceeded"],
   [402, "Your input exceeds the context window of this model", 402, undefined],
   [429, "Your input exceeds the context window of this model", 429, undefined],
 ] as const) {
@@ -139,6 +141,7 @@ for (const [status, message, expectedStatus, expectedCode] of [
         expect(error.message).toBe("prompt is too long: The request exceeds the model's context window.");
       } else {
         expect(error.code).not.toBe("context_length_exceeded");
+        if (status === 500) expect(sends).toBe(3);
       }
     } finally { globalThis.fetch = originalFetch; releaseSpend(); }
   });

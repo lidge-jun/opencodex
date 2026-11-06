@@ -162,8 +162,10 @@ function assertsOverflow(message: string): boolean {
   if (tooLong && !NEGATION_RE.test(tooLong[1] ?? "") && !CONDITIONAL_LEAD_RE.test(text.slice(0, tooLong.index))) return true;
   const counts = STATED_COUNTS_RE.exec(text);
   if (counts && Number(counts[2]) > Number(counts[1])) return true;
-  const exceeds = EXCEEDS_TEXT_RE.exec(text);
-  return exceeds !== null && !NEGATION_RE.test(exceeds[0]);
+  for (const exceeds of text.matchAll(new RegExp(EXCEEDS_TEXT_RE, "gi"))) {
+    if (!NEGATION_RE.test(exceeds[0]) && !CONDITIONAL_LEAD_RE.test(text.slice(0, exceeds.index))) return true;
+  }
+  return false;
 }
 
 /**
