@@ -1237,7 +1237,7 @@ tag. Before stopping anything, npm installations run a bounded Unix cache owners
 check. Nested symlinks are checked with `lstat` but not followed; Windows explicitly skips this
 Unix-only check. A failure aborts while the tray and proxy are still running.
 For Bun installations, `ocx update` runs an early configuration preflight before stopping the proxy:
-if `config.json` cannot be read (including dangling symlinks) or its diagnostics report a fallback,
+if `config.json` cannot be read (including dangling symlinks) or requires diagnostics fallback or salvage,
 the update aborts with exit code 1 while the service and tray continue running, advising
 you to run `ocx config validate` to repair the file. Reparable configurations do not abort. A running proxy is
 then stopped before files are replaced; an installed service is rebuilt and started automatically,
