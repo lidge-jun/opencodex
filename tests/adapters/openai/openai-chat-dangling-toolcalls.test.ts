@@ -259,7 +259,8 @@ describe("openai-chat dangling tool_calls hardening", () => {
     assertWireInvariants(messages);
     const answers = messages.filter(m => m.role === "tool");
     expect(answers.map(m => m.tool_call_id)).toEqual(["call_a", "call_b"]);
-    expect(answers[0]!.content).toBe("first\n\nlate");
+    expect(answers[0]!.content).toBe("first");
+    expect(messages.at(-1)?.content).toEqual([{ type: "text", text: "[ocx] additional output for tool call call_a:\nlate" }]);
   });
 
   test("repeated orphan results share one synthetic call and preserve both outputs", () => {
@@ -272,7 +273,8 @@ describe("openai-chat dangling tool_calls hardening", () => {
     assertWireInvariants(messages);
     const answers = messages.filter(m => m.role === "tool");
     expect(answers.map(m => m.tool_call_id)).toEqual(["call_ghost", "call_other"]);
-    expect(answers[0]!.content).toBe("first\n\nlate");
+    expect(answers[0]!.content).toBe("first");
     expect(answers[1]!.content).toBe("other");
+    expect(messages.at(-1)?.content).toEqual([{ type: "text", text: "[ocx] additional output for tool call call_ghost:\nlate" }]);
   });
 });

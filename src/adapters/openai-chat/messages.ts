@@ -410,18 +410,28 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           && answeredToolResults.has(toolCallId)
           && !pendingToolCalls.some(c => c.id === toolCallId)
         ) {
-          // Same call, another result: fold it into the answer already on the wire instead of
-          // repeating the `role:"tool"` reply the upstream already answered. Nothing is dropped;
-          // the model still reads every recorded output in arrival order.
-          appendAnsweredToolResultText(
-            answeredToolResults.get(toolCallId)!,
-            toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
-          );
-          pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
-          pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
-          if (pendingToolCalls.length === 0) {
-            flushToolResultImages();
-            flushToolResultAudio();
+          const answer = answeredToolResults.get(toolCallId)!;
+          const text = toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true);
+          if (out[out.length - 1] === answer && deferredBarrierMessages.length === 0) {
+            // Adjacent results can share one reply without moving anything across a later turn.
+            appendAnsweredToolResultText(answer, text);
+            pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
+            pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
+            if (pendingToolCalls.length === 0) {
+              flushToolResultImages();
+              flushToolResultAudio();
+            }
+          } else {
+            // Chat cannot repeat a tool reply. Keep late text and media together at their
+            // recorded position, identified by call ID; an open tool block must close first.
+            const media = typeof msg.content === "string" ? [] : msg.content.flatMap(part => [
+              ...toolResultImageChatParts([part]), ...toolResultAudioChatParts([part]),
+            ]);
+            const carrier = { role: "user", content: [
+              { type: "text", text: `[ocx] additional output for tool call ${toolCallId}:\n${text}` },
+              ...media,
+            ] };
+            (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(carrier);
           }
         } else {
           if (!toolCallId) toolCallId = `call_orphan_${out.length}`;
