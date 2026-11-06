@@ -8,10 +8,11 @@
  * which attaches the link key only after the tunnel listener proves the link identity. Anything
  * outside the shared read allowlist is refused here, before a request exists.
  */
-import { HUB_RELAY_RESPONSE_BODY_MAX_BYTES } from "./hub-relay";
+import { HUB_RELAY_DEFAULT_TIMEOUT_MS, HUB_RELAY_RESPONSE_BODY_MAX_BYTES } from "./hub-relay";
 import type { LinkIngress } from "./link-ingress";
 import { relayLinkDataRequest } from "./link-relay";
 import { parseUsageSource } from "../usage/source-filter";
+import { readBoundedResponseBytes } from "../lib/bounded-body";
 import {
   LINK_MANAGEMENT_PREFIX,
   linkChildManagementRefusal,
@@ -69,9 +70,19 @@ export async function relayLinkManagementRead(
     routeAllowed: linkManagementRouteAllowed,
   });
   if (source.kind !== "filtered" || !response.ok) return response;
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
+    try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
+    return Response.json({ error: "link_usage_filter_unconfirmed" }, { status: 502 });
+  }
   try {
-    // relayLinkDataRequest already bounds this non-streaming response body.
-    const body: unknown = await response.json();
+    const requestedTimeout = ingress.relay?.headerTimeoutMs;
+    const deadline = requestedTimeout && requestedTimeout > 0
+      ? Math.min(requestedTimeout, HUB_RELAY_DEFAULT_TIMEOUT_MS) : HUB_RELAY_DEFAULT_TIMEOUT_MS;
+    const result = await readBoundedResponseBytes(response, { maxBytes: HUB_RELAY_RESPONSE_BODY_MAX_BYTES,
+      signal: AbortSignal.any([req.signal, AbortSignal.timeout(deadline)]), inactivityTimeoutMs: deadline });
+    if (result.oversized) throw new Error("response too large");
+    const body: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.bytes));
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("invalid response");
     const echo = (body as Record<string, unknown>).sourceFilter;
     if (!echo || typeof echo !== "object" || Array.isArray(echo)) throw new Error("missing source filter");

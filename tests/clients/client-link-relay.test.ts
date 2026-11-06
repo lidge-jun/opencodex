@@ -22,7 +22,7 @@ import {
 import { LinkRelayAuthenticationError, LinkRelayAuthTimeoutError } from "../../src/client/link-relay-transport";
 import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import { LINK_RELAY_AUTH_PATH } from "../../src/link/relay-auth";
-import { HUB_RELAY_REQUEST_BODY_MAX_BYTES } from "../../src/client/hub-relay";
+import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, HUB_RELAY_RESPONSE_BODY_MAX_BYTES } from "../../src/client/hub-relay";
 import { HOME_UNREACHABLE_MESSAGE } from "../../src/client/home-unreachable";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -137,6 +137,32 @@ describe("client link HTTP relay", () => {
     expect((await call(own)).status).toBe(502);
     payload = { sourceFilter: { client: "codex", device: { kind: "key", id: "Key-A" } } };
     expect((await call(own)).status).toBe(200);
+  });
+
+  test("source-filtered reads reject SSE and time out a stalled JSON body", async () => {
+    let stalledCancelled = false;
+    let release!: () => void;
+    const stalled = new ReadableStream<Uint8Array>({ start(controller) { release = () => controller.close(); },
+      cancel() { stalledCancelled = true; } });
+    let response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(HUB_RELAY_RESPONSE_BODY_MAX_BYTES + 1)); controller.close(); },
+    }), { headers: { "content-type": "text/event-stream" } });
+    const ingress: LinkIngress = { tunnelPort: 12000, apiKeyId: "Key-A", linkId: "lnk_aaaaaaaaaaaaaaaa",
+      policy: {}, linkKey: () => LINK_KEY, relay: { tunnel: connectedTunnel, headerTimeoutMs: 20,
+        fetchImpl: (async () => response) as typeof fetch } };
+    const call = () => relayLinkManagementRead(new Request("http://127.0.0.1/api/machine/hub-relay/api/usage"),
+      "/api/usage?client=codex&device=key&apiKeyId=Key-A", ingress, "Home");
+    expect((await call()).status).toBe(502);
+    response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(HUB_RELAY_RESPONSE_BODY_MAX_BYTES + 1)); controller.close(); },
+    }), { headers: { "content-type": "application/json" } });
+    expect((await call()).status).toBe(502);
+    response = new Response(stalled, { headers: { "content-type": "application/json" } });
+    const pending = call();
+    const result = await Promise.race([pending, new Promise<null>(resolve => setTimeout(() => resolve(null), 250))]);
+    if (result === null) release();
+    expect(result?.status).toBe(502);
+    expect(stalledCancelled).toBe(true);
   });
 
   test("replaces every caller credential with the link key and filters hop-by-hop headers", () => {

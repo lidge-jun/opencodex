@@ -30,9 +30,13 @@ export function classifyUsageClient(headers: Headers): UsageClient {
   else if (originator === "codex_vscode") originClient = "codex_ide";
   else if (originator === "opencode") originClient = "opencode";
 
-  const agentClient: UsageClient | undefined = /^claude-code\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)
-    ? "claude_code" : /^opencode\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent) ? "opencode"
-    : /^codex_cli_rs\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent) ? "codex_cli" : undefined;
+  const claudeEntrypoint = /^claude-cli\/[A-Za-z0-9][A-Za-z0-9._+-]* \(external, ([A-Za-z0-9._-]+)(?:, [^,()]+)*\)$/i.exec(userAgent)?.[1]?.toLowerCase();
+  let agentClient: UsageClient | undefined;
+  if (claudeEntrypoint === "cli" || claudeEntrypoint === "sdk-cli") agentClient = "claude_code";
+  else if (claudeEntrypoint === "claude-desktop" || claudeEntrypoint === "claude-desktop-3p" || claudeEntrypoint === "local-agent") agentClient = "claude_desktop";
+  else if (/^claude-code\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "claude_code";
+  else if (/^opencode\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "opencode";
+  else if (/^codex_cli_rs\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "codex_cli";
   if (originClient && agentClient && originClient !== agentClient
     && !(originClient.startsWith("codex_") && agentClient.startsWith("codex_"))) return "unknown";
   return originClient ?? agentClient ?? "unknown";

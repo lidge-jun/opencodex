@@ -131,6 +131,24 @@ describe("attribution reaches usage.jsonl", () => {
     }
   });
 
+  test("records established Claude and OpenCode user agents as app enums", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const userAgent of ["claude-cli/2.1.282 (external, cli)",
+        "claude-cli/2.1.282 (external, claude-desktop)", "opencode/1.2.3 runtime/bun"]) {
+        await fetch(new URL("/v1/chat/completions", server.url), {
+          method: "POST", headers: { "content-type": "application/json", "x-opencodex-api-key": "ocx_data_attributionone", "user-agent": userAgent },
+          body: JSON.stringify({ model: "test/gpt-test", messages: [{ role: "user", content: "hello" }] }),
+        });
+      }
+      expect(usageRows().slice(-3).map(row => row.client)).toEqual(["claude_code", "claude_desktop", "opencode"]);
+      expect(readFileSync(usageLogPath(), "utf8")).not.toContain("runtime/bun");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("traffic before, during, and after rotation stays in one apiKeyId bucket", async () => {
     saveConfig(remoteConfig());
     const server = startServer(0);

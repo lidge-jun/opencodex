@@ -19,6 +19,8 @@ describe("usage client attribution", () => {
     expect(classifyUsageClient(new Headers({ "user-agent": "codex_cli_rs/0.154.0" }))).toBe("codex_cli");
     expect(classifyUsageClient(new Headers({ originator: "codex_vscode" }))).toBe("codex_ide");
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-code/2.1.207" }))).toBe("claude_code");
+    expect(classifyUsageClient(new Headers({ "user-agent": "claude-cli/2.1.282 (external, cli)" }))).toBe("claude_code");
+    expect(classifyUsageClient(new Headers({ "user-agent": "claude-cli/2.1.282 (external, claude-desktop)" }))).toBe("claude_desktop");
     expect(classifyUsageClient(new Headers({ originator: "opencode" }))).toBe("opencode");
     expect(classifyUsageClient(new Headers({ "user-agent": "opencode/1.2.3 runtime/bun" }))).toBe("opencode");
   });
@@ -26,6 +28,7 @@ describe("usage client attribution", () => {
   test("does not infer an app from unknown, malformed, conflicting or oversized headers", () => {
     expect(classifyUsageClient(new Headers())).toBe("unknown");
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-code/" }))).toBe("unknown");
+    expect(classifyUsageClient(new Headers({ "user-agent": "claude-cli/2.1.282 (external, arbitrary-token)" }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "claude-code/1.0" }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "opencode/1.2.3" }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ originator: "x".repeat(1025) }))).toBe("unknown");
