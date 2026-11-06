@@ -361,6 +361,11 @@ MiMo model Command Code serves.
 **Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
+- For translated OAuth requests, caller system instructions move to the beginning of the first
+  user turn. If the history starts with an assistant message, the adapter adds an initial user
+  turn for those instructions. The compatibility identity and OpenCodex tool contract remain in
+  top-level `system`; the relocated instructions retain an explicit prompt-cache breakpoint.
+  API-key requests and native Messages passthrough keep their existing instruction placement.
 - Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
   options to preserve their prompt-cache prefix. Summary requests disable search/media
   sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`, as does a
