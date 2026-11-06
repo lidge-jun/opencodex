@@ -1852,9 +1852,13 @@ export async function prepareAdapterExchange(
           parsed.options.reasoning = downgrade.effort;
           // The same-target cache keys on parsed identity, so a mutated effort needs a token bump.
           invalidateSameTargetRequest();
-          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-          const result = await rebuildAndRefetch("reasoning-effort-downgrade");
-          if ("failed" in result) return result.failed;
+          const failedResponse = await retainFailureResponse();
+          const result = await rebuildAndRefetch("reasoning-effort-downgrade", undefined, failedResponse);
+          if ("failed" in result) {
+            if (result.failed !== failedResponse) return result.failed;
+            break recovery;
+          }
+          try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
           upstreamResponse = result;
           continue recovery;
         }

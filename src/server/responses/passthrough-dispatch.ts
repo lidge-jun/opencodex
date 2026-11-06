@@ -1832,13 +1832,30 @@ export async function preparePassthroughExchange(
             rejectionText,
           });
       if (downgrade && !configuredTransientSendBudgetExhausted()) {
+        const allowance = recoverySendAllowance(
+          transientSendAttempts(),
+          recoveryClassFor("reasoning-effort-downgrade"),
+          `${route.providerName}|${route.modelId}|reasoning-effort-downgrade`,
+          { allowFinalRecoveryReserve: transientSendPolicy() === null },
+        );
+        if (allowance.attempts < 1) {
+          allowance.permit?.release();
+          return upstreamResponse;
+        }
+        sendBudgetState.pendingHopPermit = allowance.permit;
         reasoningEffortDowngradeGuard.attempted = true;
         parsed.options.reasoning = downgrade.effort;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("reasoning-effort-downgrade");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
-        continue passthroughRecovery;
+        try {
+          const result = await rebuildAndRefetch("reasoning-effort-downgrade");
+          sendBudgetState.pendingHopPermit = undefined;
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue passthroughRecovery;
+        } finally {
+          if (sendBudgetState.pendingHopPermit === allowance.permit) sendBudgetState.pendingHopPermit = undefined;
+          allowance.permit?.release();
+        }
       }
     }
 

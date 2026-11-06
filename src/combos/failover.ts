@@ -394,6 +394,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
+    if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
     let payload: unknown;
     try { payload = JSON.parse(text); } catch { return false; }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;

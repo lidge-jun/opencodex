@@ -524,6 +524,17 @@ describe("bounded optional-control error envelopes", () => {
     expect(comboFailureDecision(400, message, { code: "unsupported_value" })).toBe("hop");
     expect(comboFailureCooldownScope(400, message, { code: "unsupported_value" })).toBe("none");
   });
+  test("exact reasoning effort refusal hops when wrapped in single-line data: prefix", () => {
+    const payload = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
+    for (const msg of [
+      payload,
+      `data: ${payload}`,
+      `Provider error 400: data: ${payload}`,
+    ]) {
+      expect(comboFailureDecision(400, msg)).toBe("hop");
+      expect(comboFailureCooldownScope(400, msg)).toBe("none");
+    }
+  });
 });
 
 describe("image rejection classifier bounds", () => {
