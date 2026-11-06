@@ -148,6 +148,75 @@ describe("Devin reasoning continuation across turns", () => {
     }
   }
 
+  test.each(["text", "tool"])("late signature stays beside non-leading thinking after %s", async prefix => {
+    for (const hidden of [false, true]) {
+      for (const earlyEnd of [false, true]) {
+        async function* upstream(): AsyncGenerator<AdapterEvent> {
+          if (prefix === "text") yield { type: "text_delta", text: "I will inspect this." };
+          else {
+            yield { type: "tool_call_start", id: "call_earlier", name: "list" };
+            yield { type: "tool_call_delta", arguments: "{}" };
+            yield { type: "tool_call_end" };
+          }
+          yield { type: "thinking_delta", thinking: "non-leading thought" };
+          yield { type: "tool_call_start", id: "call_owner", name: "read" };
+          yield { type: "tool_call_delta", arguments: "{}" };
+          if (earlyEnd) yield { type: "tool_call_end" };
+          yield { type: "thinking_signature", signature: encodeDevinSignature(SEALED, "sealed"), afterOutput: true };
+          if (!earlyEnd) yield { type: "tool_call_end" };
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } };
+        }
+        const wire = await new Response(bridgeToResponsesSSE(
+          upstream(), "swe-2", undefined, undefined, undefined, undefined, 2000,
+          { hideThinkingSummary: hidden },
+        )).text();
+        const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+        const live = events.filter(event => event.type === "response.output_item.done").map(event => event.item);
+        const snapshot = events.find(event => event.type === "response.completed").response.output;
+        for (const output of [live, snapshot]) {
+          for (const idless of [false, true]) {
+            const parsed = parseRequest({ model: "devin/swe-2", input: [
+              { role: "user", content: "go" },
+              ...output.map(({ id, ...item }: any) => idless ? item : { ...item, id }),
+            ] });
+            const history = mapOcxMessagesToDevin(parsed);
+            const assistant = history.find(message => message.role === "assistant");
+            expect(assistant?.thinking).toBe("non-leading thought");
+            expect(assistant?.signature).toBe(SEALED);
+            expect(assistant?.signature_type).toBe("sealed");
+            const prompt = assistantPrompt(history);
+            expect(prompt.get(11)).toBe("non-leading thought");
+            expect(prompt.get(12)).toBe(SEALED);
+            expect(prompt.get(18)).toBe("sealed");
+            if (!hidden) {
+              const parts = parsed.context.messages.find(message => message.role === "assistant")!.content;
+              expect(parts.map(part => part.type)).toEqual([prefix === "text" ? "text" : "toolCall", "thinking", "thinking", "toolCall"]);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  test.each([false, true])("late adjacency keeps multiple thinking blocks conservative, earlierSigned=%s", earlierSigned => {
+    const signature = encodeDevinSignature(SEALED, "sealed");
+    const parsed = parseRequest({ model: "devin/swe-2", input: [
+      { type: "message", role: "assistant", content: "preface" },
+      { type: "reasoning", summary: [{ type: "summary_text", text: "first" }],
+        ...(earlierSigned ? { encrypted_content: encodeReasoningEnvelope({ sig: "earlier-signature" }) } : {}) },
+      { type: "function_call", call_id: "call_earlier", name: "list", arguments: "{}" },
+      { type: "reasoning", summary: [{ type: "summary_text", text: "second" }] },
+      { type: "function_call", id: "fc_owner", call_id: "call_owner", name: "read", arguments: "{}" },
+      { type: "reasoning", summary: [], encrypted_content: encodeReasoningEnvelope({ sig: signature, aft: "fc_owner", red: ["opaque"] }) },
+    ] });
+    const parts = parsed.context.messages[0]!.content;
+    expect(parts.map(part => part.type)).toEqual(["text", "thinking", "toolCall", "thinking", "thinking", "toolCall"]);
+    expect(parts[4]).toMatchObject({ type: "thinking", thinking: "", signature, redacted: ["opaque"] });
+    const history = mapOcxMessagesToDevin(parsed);
+    expect(history[0]?.signature).toBeUndefined();
+    expect(assistantPrompt(history).has(12)).toBe(false);
+  });
+
   test.each(["wrong", "user-boundary", "system-boundary", "typed-system-boundary"])("a trailer with a %s owner cannot sign the next turn", variant => {
     const history = mapOcxMessagesToDevin(parseRequest({
       model: "devin/swe-2", input: [

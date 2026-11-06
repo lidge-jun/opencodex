@@ -470,8 +470,9 @@ export function parseRequest(
             || ((previousItem?.type === "message" || previousItem?.type === undefined) && previousItem?.role === "assistant");
           if (envelope.sig && properOutput && previous?.role === "assistant"
             && (previousItem?.id === undefined || previousItem.id === envelope.aft)) {
-            const firstOutput = previous.content.findIndex(part => part.type !== "thinking");
-            previous.content.splice(firstOutput < 0 ? previous.content.length : firstOutput, 0, {
+            // Preserve thinking/signature adjacency even after prefatory text or earlier calls.
+            const afterThinking = previous.content.findLastIndex(part => part.type === "thinking") + 1;
+            previous.content.splice(afterThinking, 0, {
               type: "thinking", thinking: thinkingText, signature: envelope.sig,
               ...(envelope.red ? { redacted: envelope.red } : {}),
               ...(reasoning.id ? { itemId: reasoning.id } : {}),
