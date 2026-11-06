@@ -164,6 +164,49 @@ describe("ocx models", () => {
     }
   });
 
+  test("listing honors provider caps and canonical native custom context limits", () => {
+    const { dir } = freshConfig({
+      providers: {
+        "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key", models: ["gpt-6-astra"] },
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      },
+      providerContextCaps: { "openai-apikey": 100000, openai: 100000 },
+      customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "openai", modelId: "gpt-6-luna", contextWindow: 2000000 }],
+    });
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "openai-apikey" && row.model === "gpt-6-astra").contextWindow).toBe(100000);
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "openai" && row.model === "gpt-6-luna").contextWindow).toBe(100000);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("listing respects explicit reasoning capability denial for seeded models", () => {
+    const { dir } = freshConfig({ providers: { xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1",
+      models: ["grok-4.7"], modelCapabilities: { "grok-4.7": { supportsReasoningEffort: false } } } } });
+    try {
+      const result = runCli(["models", "--provider", "xai", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).models.find((row: { model: string }) => row.model === "grok-4.7").reasoningEfforts).toEqual([]);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("listing bounds custom native reasoning to pinned levels and preserves empty ladders", () => {
+    const { dir } = freshConfig({ providers: { test: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] } },
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "test", modelId: "gpt-6-luna", reasoningEfforts: ["ultra"] },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "test", modelId: "gpt-6-astra", reasoningEfforts: [] },
+      ] });
+    try {
+      const result = runCli(["models", "--provider", "test", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { model: string }) => row.model === "gpt-6-luna").reasoningEfforts).toEqual(["medium"]);
+      expect(rows.find((row: { model: string }) => row.model === "gpt-6-astra").reasoningEfforts).toEqual([]);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("listing reads a stale reasoning snapshot without attempting network or liveness", () => {
     const { dir } = freshConfig({ providers: { test: { adapter: "openai-chat",
       baseUrl: "https://opencode.ai/zen/go/v1", models: ["fixture-model"] } } });
