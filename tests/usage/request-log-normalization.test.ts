@@ -83,6 +83,54 @@ describe("request log metadata", () => {
     }
   });
 
+  for (const shape of ["non-enumerable", "inherited"] as const) test(`projection preserves ${shape} client and loss marker`, () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-projected-client-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    resetUsageReadCacheForTests();
+    try {
+      const entry = log({});
+      if (shape === "inherited") Object.setPrototypeOf(entry, { client: "codex_cli" });
+      else Object.defineProperty(entry, "client", { value: "codex_cli", enumerable: false });
+      Object.defineProperty(entry, "attemptNormalizationDropped", { value: true, enumerable: false });
+      Object.assign(entry, { upstreamError: "private-upstream-marker" });
+      addRequestLog(entry);
+      const live = getRequestLogEntries()[0]!;
+      expect(live.client).toBe("codex_cli");
+      expect(requestLogDto(live)).toHaveProperty("attemptNormalizationDropped", true);
+      expect(readUsageEntries()[0]).toMatchObject({ client: "codex_cli", attemptNormalizationDropped: true });
+      expect(JSON.stringify(requestLogDto(live))).not.toContain("private-upstream-marker");
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("frozen rows with changing getters cannot expose later upstream text", () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-accessor-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    try {
+      let expose = false;
+      const entry = log({ client: "codex_cli" });
+      Object.defineProperty(entry, "upstreamError", { enumerable: true, get: () => expose ? "private-upstream-marker" : undefined });
+      Object.freeze(entry);
+      addRequestLog(entry);
+      expose = true;
+      expect(JSON.stringify(requestLogDto(getRequestLogEntries()[0]!))).not.toContain("private-upstream-marker");
+    } finally {
+      clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
   test("sanitizing a normalized lossy row preserves its loss marker across surfaces", () => {
     const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
       status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" } as const;

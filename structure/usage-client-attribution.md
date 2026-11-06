@@ -8,8 +8,9 @@ the field remain absent, while invalid present values become `unknown`. Combo ch
 cannot replace the inbound label. The label is caller-supplied evidence, not an authorization
 decision. New direct log writes without a valid client record `unknown`; reading an older row
 without the field still preserves its absence. The live log detaches mutable caller rows so a
-later caller mutation cannot replace a recorded client with raw text; immutable normalized rows
-can retain their identity. Normalizing a new write also preserves any existing attempt-loss marker.
+later caller mutation cannot replace a recorded client with raw text; frozen normalized rows with
+only data properties can retain their identity. Client values are captured before error projection,
+and normalizing a new write also preserves any existing attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and
 `tests/usage/request-log-normalization.test.ts` cover those boundaries.
 
