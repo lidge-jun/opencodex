@@ -372,10 +372,34 @@ describe("client machine listener in link mode", () => {
       const response = await fetch(new URL("/readyz", server.url));
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ status: "pending", link: { state: "unavailable", reason: "client_state_changed" } });
-      const status = await fetch(new URL("/api/machine/status", server.url), { headers });
-      expect(status.status).toBe(503);
-      expect(await status.json()).toEqual({ error: "client_state_changed" });
+      for (const path of ["/api/machine/status", "/api/machine/clients", "/api/link/status"]) {
+        const status = await fetch(new URL(path, server.url), { headers });
+        expect(status.status).toBe(503);
+        expect(await status.json()).toEqual({ error: "client_state_changed" });
+      }
     }
+  });
+
+  test("readiness rechecks durable ownership after an in-flight tunnel probe", async () => {
+    const state = linkConnection();
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: state }));
+    let resolveProbe!: () => void;
+    let notifyProbe!: () => void;
+    const started = new Promise<void>(resolve => { notifyProbe = resolve; });
+    const pending = new Promise<void>(resolve => { resolveProbe = resolve; });
+    const server = startMachineListener(0, {
+      state, managementAuthState: authState(), linkReadiness: async () => { notifyProbe(); await pending; return { ready: true }; },
+    });
+    servers.push(server);
+    try {
+      const responsePromise = fetch(new URL("/readyz", server.url));
+      await started;
+      writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {} }));
+      resolveProbe();
+      const response = await responsePromise;
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ link: { state: "unavailable", reason: "client_state_changed" } });
+    } finally { resolveProbe(); }
   });
 
   function linkListener(options: {

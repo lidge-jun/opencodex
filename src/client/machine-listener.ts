@@ -263,7 +263,7 @@ export function startMachineListener(
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
           return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
         }
-        if (linkMode && connectionChanged() && (url.pathname === "/api/machine/status" || url.pathname === "/api/link/status")) {
+        if (linkMode && connectionChanged() && (url.pathname === "/api/machine/status" || url.pathname === "/api/machine/clients" || url.pathname === "/api/link/status")) {
           return Response.json({ error: "client_state_changed" }, { status: 503, headers: { "Cache-Control": "no-store" } });
         }
         // A loopback dashboard session proves possession, not user presence: any local
