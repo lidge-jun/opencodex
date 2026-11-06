@@ -395,8 +395,9 @@ describe("native Messages candidates in a combo", () => {
     settings.combos!.waterfall!.targets = targets;
     const translatorBudget = createTranslatorBudget();
     const body = { ...source, stream: true };
+    const envelope = createProtocolEnvelope({ inbound: "messages", body, translatorBudget });
     const lanes = createComboProtocolLanes({
-      source: { inbound: "messages", envelope: createProtocolEnvelope({ inbound: "messages", body, translatorBudget }), dispatchNativeChild: async () => new Response() },
+      source: { inbound: "messages", envelope, dispatchNativeChild: async () => new Response() },
       req: new Request("http://localhost/v1/messages"), config: settings, logCtx: { model: "", provider: "" },
       admissionScope: undefined, comboId: "waterfall", targets,
     })!;
@@ -404,8 +405,18 @@ describe("native Messages candidates in a combo", () => {
     expect(translatorBudget.snapshot().currentBytes).toBe(0);
     expect(lanes.nativeChild(targets[2]!, routeConcreteModel(settings, "pinned/claude-sonnet-4-6"), createRequestExecutionBudget())).toBeUndefined();
     expect(translatorBudget.snapshot().currentBytes).toBe(0);
-    expect(lanes.nativeChild(targets[0]!, routeConcreteModel(settings, "anth/claude-sonnet-4-6"), createRequestExecutionBudget())).toBeDefined();
+    const plan = lanes.nativeChild(targets[0]!, routeConcreteModel(settings, "anth/claude-sonnet-4-6"), createRequestExecutionBudget());
+    expect(plan).toBeDefined();
     expect(translatorBudget.snapshot().currentBytes).toBe(jsonUtf8Bytes(body));
+    // A failed child hands its copy back before failover, so the next target's copy fits again.
+    const { dispatchNativeComboChild } = await import("../../src/server/responses/core-combo-native");
+    const failed = await dispatchNativeComboChild({
+      source: { inbound: "messages", envelope, dispatchNativeChild: async () => new Response("{}", { status: 503 }) },
+      plan: plan!, logCtx: { model: "", provider: "" }, childLog: { model: "", provider: "" }, attempt: {} as never, startedAt: Date.now(),
+      onFirstOutput: () => {}, callbacks: { onTerminal: () => {}, onCancel: () => {}, onResponseComplete: () => {} },
+    });
+    expect(failed.status).toBe(503);
+    expect(translatorBudget.snapshot().currentBytes).toBe(0);
     // A budget with no room for one more copy still judges every candidate: judging reads in place.
     const tight = createTranslatorBudget({ maxTurnBytes: jsonUtf8Bytes(body) - 1 });
     const tightLanes = createComboProtocolLanes({
@@ -421,6 +432,28 @@ describe("native Messages candidates in a combo", () => {
     const { text } = await send({ tools: [...source.tools, { type: "web_fetch_20250910", name: "web_fetch" }] });
     expect(text).not.toContain("fallback reply");
     expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+  });
+  test("a restricted web_search falls back only to a child that carries its restriction", async () => {
+    answer = () => stream(prelude + refusal);
+    const restricted = [...source.tools, { type: "web_search_20250305", name: "web_search", allowed_domains: ["example.com"] }];
+    const blocked = await send({ tools: restricted });
+    expect(blocked.text).not.toContain("fallback reply");
+    expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+    seen = [];
+    clearComboTargetCooldowns();
+    const open = await send({ tools: [...source.tools, { type: "web_search_20250305", name: "web_search" }] });
+    expect(open.text).toContain("fallback reply");
+    // A first-party Anthropic bridge child carries the typed original, so it stays a fallback.
+    seen = [];
+    clearComboTargetCooldowns();
+    const settings = config();
+    settings.providers.pinned = { ...settings.providers.anth!, pinnedReasoningEffort: "low" };
+    settings.combos!.waterfall!.targets = [{ provider: "anth", model: "claude-sonnet-4-6" }, { provider: "pinned", model: "claude-sonnet-4-6" }];
+    answer = (_body, _native) => seen.length === 1 ? stream(prelude + refusal) : stream(prelude + textStart + textDelta + terminal);
+    const bridged = await send({ config: settings, tools: restricted });
+    expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com", "api.anthropic.com"]);
+    expect(seen[1]!.body.tools).toContainEqual(expect.objectContaining({ type: "web_search_20250305", allowed_domains: ["example.com"] }));
+    expect(bridged.response.status).toBe(200);
   });
   test("a combo chosen by an ocx-route directive answers with the caller's model", async () => {
     const system = [...source.system, { type: "text", text: "<!-- ocx-route: combo/waterfall -->" }];

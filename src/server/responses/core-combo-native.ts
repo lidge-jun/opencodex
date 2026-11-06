@@ -47,7 +47,7 @@ import type { NativeMessagesFinishLog } from "../messages-native";
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
-import { declaredAnthropicServerTools, hasNativeOnlyTool } from "../../claude/inbound-content-options";
+import { hasAnthropicOnlyServerTool, hasNativeOnlyTool } from "../../claude/inbound-content-options";
 import { nativeMessagesInlineToolNames } from "../messages-native-tool-guard";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -206,7 +206,7 @@ export function createComboProtocolLanes(input: {
   const verdicts = new Map<string, CandidateVerdict>();
   let skipRecorded = false;
   let nativeOnlyTool: boolean | undefined;
-  let declaresWebFetch: boolean | undefined;
+  let anthropicOnlyTool: boolean | undefined;
   // The bridge keeps only text from system messages, so an active inline tool_addition definition
   // has no translated equivalent either; fail closed like a top-level native-only tool.
   const declaresNativeOnlyTool = (body: Record<string, unknown>) =>
@@ -242,12 +242,11 @@ export function createComboProtocolLanes(input: {
         }
       }
       // Under any policy: the source chose a native-only tool, so a translated child never runs it.
-      // web_fetch has no translated equivalent; only a first-party Anthropic child carries it out of body.
+      // web_fetch and a restricted web_search only travel out of body, to a first-party Anthropic child.
       if (!native && inbound === "messages") {
         const provider = (settled ?? targetRoute).provider;
         if ((nativeOnlyTool ??= declaresNativeOnlyTool(envelope.readBody()))
-          || ((declaresWebFetch ??= declaredAnthropicServerTools(envelope.readBody())
-            ?.some(tool => String(tool.type).startsWith("web_fetch_")) === true)
+          || ((anthropicOnlyTool ??= hasAnthropicOnlyServerTool(envelope.readBody()))
             && !(provider.adapter === "anthropic" && credentialDomainFor(provider)?.firstPartyAnthropic))) {
           verdict.nativeOnly = true;
         }
@@ -421,7 +420,9 @@ export async function dispatchNativeComboChild(input: {
       input.onFirstOutput();
     },
   };
-  const response = await (input.source.inbound === "messages"
+  let response: Response | undefined;
+  try {
+    response = await (input.source.inbound === "messages"
     ? input.source.dispatchNativeChild({ ...child, finishLog: (status, message, meta) => {
       if (meta?.terminalStatus === "incomplete") {
         childLog.terminalHttpStatus = status;
@@ -433,6 +434,10 @@ export async function dispatchNativeComboChild(input: {
         : meta?.closeReason && meta.closeReason !== "non_stream" ? "terminal" : "non_stream");
     } })
     : input.source.dispatchNativeChild({ ...child, finishLog }));
+  } finally {
+    // A failed child's copy is spent; the next target takes its own, so this charge must not outlive it.
+    if (!response?.ok) input.source.envelope.releaseBody(plan.body);
+  }
   if (!response.ok && outputSeen) markResponseNonReplayable(response);
   return markClientWire(response, inbound);
 }
