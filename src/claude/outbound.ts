@@ -137,7 +137,8 @@ export function isThroughputLimitText(message: string): boolean {
 }
 
 /** Codes that say nothing about the cause, so the message decides (#8127). */
-const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "api_error", "internal_error"]);
+/** Generic 5xx responses use `upstream_server_error`; 503 uses `server_is_overloaded`. */
+const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "upstream_server_error", "api_error", "internal_error"]);
 const NON_OVERFLOW_ERROR_TYPES: ReadonlySet<string> = new Set(["rate_limit_error", "authentication_error", "permission_error"]);
 const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
 /**
@@ -161,8 +162,10 @@ function assertsOverflow(message: string): boolean {
   if (tooLong && !NEGATION_RE.test(tooLong[1] ?? "") && !CONDITIONAL_LEAD_RE.test(text.slice(0, tooLong.index))) return true;
   const counts = STATED_COUNTS_RE.exec(text);
   if (counts && Number(counts[2]) > Number(counts[1])) return true;
-  const exceeds = EXCEEDS_TEXT_RE.exec(text);
-  return exceeds !== null && !NEGATION_RE.test(exceeds[0]);
+  for (const exceeds of text.matchAll(new RegExp(EXCEEDS_TEXT_RE, "gi"))) {
+    if (!NEGATION_RE.test(exceeds[0]) && !CONDITIONAL_LEAD_RE.test(text.slice(0, exceeds.index))) return true;
+  }
+  return false;
 }
 
 /**
