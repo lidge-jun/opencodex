@@ -45,7 +45,7 @@ import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureAdmissionPolicy } from "./capture-admission-policy";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
-import { declaredAnthropicServerTools, replayedAnthropicServerBlocks } from "../claude/inbound-content-options";
+import { declaredAnthropicServerTools, replayedAnthropicServerBlocks, systemCachePrefix } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
@@ -1286,6 +1286,7 @@ async function handleClaudeMessagesWithBudget(
     // Out of body like the replay above: the core hands these to an Anthropic destination only.
     anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
+    anthropicSystemCachePrefix: isRec(anthropicBody) ? systemCachePrefix(anthropicBody.system) : undefined,
     // Preserve the original catalog through late fallback; only the physical adapter projects it.
     anthropicToolLoadingSource: cacheKeySource === "metadata" && isRec(anthropicBody)
       && Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0
