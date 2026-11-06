@@ -383,7 +383,7 @@ function normalizedFailureCode(code?: string | null): string {
 }
 
 /** Parse one bounded error record from an HTTP 400 body or a single SSE data frame. */
-function http400ErrorRecord(message: string): Record<string, unknown> | undefined {
+export function http400ErrorRecord(message: string): Record<string, unknown> | undefined {
   if (message.length > 16_384) return undefined;
   let text = message.trim();
   if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
@@ -404,28 +404,37 @@ function http400ErrorRecord(message: string): Record<string, unknown> | undefine
   }
 }
 
-/** Identify known malformed structured-output diagnostics that must remain terminal. */
-function isMalformedResponseFormatRequest(status: number, message: string): boolean {
-  if (status !== 400) return false;
-  const record = http400ErrorRecord(message);
+/** Check whether a parsed error record or raw diagnostic text represents a malformed response_format. */
+export function isMalformedResponseFormatRecord(record?: Record<string, unknown>, rawText?: string): boolean {
   const fields = record
     ? [record.message, record.detail].filter((value): value is string => typeof value === "string")
     : [];
-  if (fields.length === 0) fields.push(message);
+  if (fields.length === 0 && rawText) fields.push(rawText);
   return fields.some(detail =>
     /\binvalid schema(?: for)? response_format\b/i.test(detail)
     || /\bresponse_format(?:\.[a-z_]+)*\s+must be (?:one of|valid|a valid)\b/i.test(detail));
 }
 
-/** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */
-function isOpenRouterOpaque400Envelope(message: string): boolean {
-  const record = http400ErrorRecord(message);
-  const metadata = record?.metadata;
-  return record?.message === "Provider returned error"
-    && record.code === 400
+/** Identify known malformed structured-output diagnostics that must remain terminal. */
+export function isMalformedResponseFormatRequest(status: number, message: string): boolean {
+  if (status !== 400) return false;
+  return isMalformedResponseFormatRecord(http400ErrorRecord(message), message);
+}
+
+/** Check whether a parsed error record matches OpenRouter's uncoded numeric-400 opaque wrapper. */
+export function isOpenRouterOpaque400Record(record?: Record<string, unknown>): boolean {
+  if (!record) return false;
+  const metadata = record.metadata;
+  return record.message === "Provider returned error"
+    && (record.code === 400 || record.code === "400")
     && record.type === undefined
     && metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)
     && (metadata as Record<string, unknown>).raw === "ERROR";
+}
+
+/** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */
+export function isOpenRouterOpaque400Envelope(message: string): boolean {
+  return isOpenRouterOpaque400Record(http400ErrorRecord(message));
 }
 
 /** Check for an uncoded generic 400 that may safely advance without cooling its target. */
@@ -434,9 +443,20 @@ function isUncodedUpstream400(
   message: string,
   code?: string | null,
   upstreamType?: string | null,
+  options?: {
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
+  },
 ): boolean {
-  if (status !== 400 || normalizedFailureCode(code) || isMalformedResponseFormatRequest(status, message)) return false;
-  return normalizedFailureCode(upstreamType) === "upstream_error" || isOpenRouterOpaque400Envelope(message);
+  if (status !== 400 || (code && code !== "400" && normalizedFailureCode(code))) return false;
+  const malformed = options?.malformedResponseFormat !== undefined
+    ? options.malformedResponseFormat
+    : isMalformedResponseFormatRequest(status, message);
+  if (malformed) return false;
+  const opaqueOpenRouter = options?.openRouterOpaque400 !== undefined
+    ? options.openRouterOpaque400
+    : isOpenRouterOpaque400Envelope(message);
+  return normalizedFailureCode(upstreamType) === "upstream_error" || opaqueOpenRouter;
 }
 
 /**
@@ -705,7 +725,12 @@ function isResponseFormatCapabilityRefusal(
 export function comboFailureCooldownScope(
   status: number,
   message: string,
-  options?: { code?: string | null; upstreamType?: string | null },
+  options?: {
+    code?: string | null;
+    upstreamType?: string | null;
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
+  },
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
   if (isAnthropicBillingFailure(status, message, options?.code)) return "provider";
@@ -732,7 +757,7 @@ export function comboFailureCooldownScope(
   // An explicitly generic provider error, or OpenRouter's opaque numeric-code wrapper, may be
   // target-specific (for example a gateway rejecting a model's translated payload). It may
   // advance the combo, but says nothing about target health and must not quarantine the target.
-  if (isUncodedUpstream400(status, message, options?.code, options?.upstreamType)) return "none";
+  if (isUncodedUpstream400(status, message, options?.code, options?.upstreamType, options)) return "none";
   return "target";
 }
 
@@ -856,6 +881,8 @@ export function comboFailureDecision(
     failedAdapter?: string;
     /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
     verifiedPlanRefusal?: boolean;
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -959,7 +986,7 @@ export function comboFailureDecision(
   // opaque failure as a numeric 400 with `metadata.raw: "ERROR"` and no type. Let a heterogeneous
   // combo try another target in either case, while keeping malformed response_format diagnostics
   // terminal and preserving any structured code.
-  if (isUncodedUpstream400(status, message, options?.code, options?.upstreamType)) return "hop";
+  if (isUncodedUpstream400(status, message, options?.code, options?.upstreamType, options)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

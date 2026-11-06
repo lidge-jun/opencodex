@@ -8,7 +8,14 @@ import {
   pickComboTarget,
   targetKey,
 } from "../../src/combos";
-import { codexAccountModelRefusalHardStopCode, comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
+import {
+  codexAccountModelRefusalHardStopCode,
+  comboFailureCooldownScope,
+  comboFailureDecision,
+  isMalformedResponseFormatRequest,
+  isOpenRouterOpaque400Envelope,
+} from "../../src/combos/failover";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
 
@@ -123,6 +130,64 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureDecision(400, message, {
       ...genericUpstream,
       code: "invalid_request_error",
+    })).toBe("stop");
+  });
+
+  test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {
+    const longPadding = "x".repeat(600);
+    const longOpenRouterBody = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false, note: longPadding },
+      },
+      user_id: "user_test",
+    });
+    expect(longOpenRouterBody.length).toBeGreaterThan(500);
+    expect(longOpenRouterBody.length).toBeLessThan(16_384);
+    expect(isOpenRouterOpaque400Envelope(longOpenRouterBody)).toBe(true);
+
+    const openRouterFailure = await consumeComboFailure(new Response(longOpenRouterBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(openRouterFailure.openRouterOpaque400).toBe(true);
+    expect(openRouterFailure.classificationText.length).toBeLessThanOrEqual(500);
+    expect(comboFailureDecision(400, openRouterFailure.classificationText, {
+      code: openRouterFailure.upstreamCode,
+      upstreamType: openRouterFailure.upstreamType,
+      openRouterOpaque400: openRouterFailure.openRouterOpaque400,
+      malformedResponseFormat: openRouterFailure.malformedResponseFormat,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, openRouterFailure.classificationText, {
+      code: openRouterFailure.upstreamCode,
+      upstreamType: openRouterFailure.upstreamType,
+      openRouterOpaque400: openRouterFailure.openRouterOpaque400,
+      malformedResponseFormat: openRouterFailure.malformedResponseFormat,
+    })).toBe("none");
+
+    const longMalformedBody = JSON.stringify({
+      error: {
+        message: "Upstream request failed",
+        type: "upstream_error",
+        padding: longPadding,
+        detail: "response_format.json_schema.schema must be a valid JSON schema.",
+      },
+    });
+    expect(longMalformedBody.length).toBeGreaterThan(500);
+    expect(longMalformedBody.length).toBeLessThan(16_384);
+    expect(isMalformedResponseFormatRequest(400, longMalformedBody)).toBe(true);
+
+    const malformedFailure = await consumeComboFailure(new Response(longMalformedBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(malformedFailure.malformedResponseFormat).toBe(true);
+    expect(comboFailureDecision(400, malformedFailure.classificationText, {
+      code: malformedFailure.upstreamCode,
+      upstreamType: malformedFailure.upstreamType,
+      openRouterOpaque400: malformedFailure.openRouterOpaque400,
+      malformedResponseFormat: malformedFailure.malformedResponseFormat,
     })).toBe("stop");
   });
 

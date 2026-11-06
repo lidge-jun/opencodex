@@ -1,6 +1,12 @@
 import { carryProxyErrorPresentation } from "../../lib/client-error-body";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
-import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
+import {
+  codexAccountModelRefusal,
+  codexAccountModelRefusalHardStopCode,
+  isMalformedResponseFormatRequest,
+  isOpenRouterOpaque400Envelope,
+  type CodexAccountModelRefusal,
+} from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxUsage } from "../../types";
@@ -49,6 +55,8 @@ export async function consumeComboFailure(
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
+  let malformedResponseFormat: boolean | undefined;
+  let openRouterOpaque400: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
@@ -79,7 +87,11 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
-      if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
+      if (response.status === 400) {
+        codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
+        malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
+        openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
+      }
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
@@ -155,6 +167,8 @@ export async function consumeComboFailure(
     ...(verifiedPlanRefusal ? { verifiedPlanRefusal: true } : {}),
     classificationText,
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
+    ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
+    ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
