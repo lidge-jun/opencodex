@@ -75,6 +75,7 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     lease = io.acquire();
     const home = candidate.home;
     if (JSON.stringify(io.home()) !== JSON.stringify(home)) throw new Error("home_changed");
+    if (candidate.runtime.hostname !== undefined && !candidate.runtime.hostname.trim()) throw new Error("target");
     const marker = parseUpdateRestartMarker(JSON.stringify({ home, version: candidate.cliVersion, port: candidate.target.port,
       hostname: normalizeBindHostname(candidate.runtime.hostname), deadlineAt }));
     if (normalizeBindHostname(candidate.target.hostname) !== marker.hostname) throw new Error("target");

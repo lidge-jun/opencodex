@@ -87,6 +87,33 @@ describe("CLI update restart transaction", () => {
     expect(await runUpdateRestart(legacy, 5000, s.io)).toEqual({ ok: true, live: s.live });
     expect(s.calls.filter(call => call === "stop")).toHaveLength(1);
   });
+  test.each(["", " \t "])("a present blank runtime hostname %j refuses before stop", async hostname => {
+    const s = setup();
+    const bad = { ...candidate, runtime: { ...candidate.runtime, hostname } };
+    s.io.runtime = () => bad.runtime;
+    const result = await runUpdateRestart(bad, 5000, s.io);
+    expect(s.calls).toEqual(["acquire", "release"]);
+    expect(result).toEqual({ ok: false, code: "update_restart_eligibility_failed" });
+  });
+  test.each([["127.0.0.1", "127.0.0.1"], ["localhost", "127.0.0.1"], ["::1", "::1"], ["0.0.0.0", "0.0.0.0"], ["::", "::"], ["[::]", "[::]"], ["*", "*"]])("preserves bind %s in the transaction with injected eligibility", async (hostname, expectedHost) => {
+    const s = setup();
+    const bound = { ...candidate, target: { ...candidate.target, hostname }, runtime: { ...candidate.runtime, hostname } };
+    const live = { ...s.live, hostname };
+    s.io.runtime = () => bound.runtime;
+    s.io.start = marker => { expect(marker.hostname).toBe(expectedHost); s.calls.push("start"); return { pid: 456, exitCode: null, signalCode: null }; };
+    s.io.observe = async () => live;
+    expect(await runUpdateRestart(bound, 5000, s.io)).toEqual({ ok: true, live });
+    expect(s.calls.filter(call => call === "stop")).toHaveLength(1);
+  });
+  test.each(["0.0.0.0", "::", "*"])("refuses a wildcard target %s with a default runtime bind", async hostname => {
+    for (const runtimeHost of [undefined, "127.0.0.1"]) {
+      const s = setup();
+      const bad = { ...candidate, target: { ...candidate.target, hostname }, runtime: { ...candidate.runtime, hostname: runtimeHost } };
+      s.io.runtime = () => bad.runtime;
+      expect(await runUpdateRestart(bad, 5000, s.io)).toEqual({ ok: false, code: "update_restart_eligibility_failed" });
+      expect(s.calls).toEqual(["acquire", "release"]);
+    }
+  });
   test("stops only the captured target, settles, launches once and verifies expected child/version", async () => {
     const s = setup();
     expect(await runUpdateRestart(candidate, 5000, s.io)).toEqual({ ok: true, live: s.live });
