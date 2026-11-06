@@ -1,5 +1,7 @@
 # Search Data Plane
 
+The Responses sidecar parser in `src/web-search/parse.ts` closes collection at the first terminal event or `[DONE]`. Later frames in that network chunk cannot change text, sources, error state or decoded accounting. `tests/web-search/web-search-eof.test.ts` checks this with whole and fragmented bodies.
+
 The opt-in key-auth Responses hosted-search bridge follows the
 [continuation binding contract](../providers-and-adapters.md#hosted-search-continuation-binding).
 `src/web-search/loop.ts` follows [prepaid initial sends](../transports/responses-spend.md#prepaid-initial-sends)

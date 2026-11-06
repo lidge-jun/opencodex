@@ -396,7 +396,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   };
 
   const handle = (payload: string): void => {
-    if (!payload) return;
+    if (!payload || acc.terminalEvent) return;
     if (payload === "[DONE]") {
       acc.terminalEvent = true;
       return;
