@@ -32,6 +32,11 @@ const DIRECT_OVERFLOW_BASELINE_RECOVERY = new Map<string, boolean>([
   ["sweep-code-upstream_error-phrase", true],
 ]);
 
+// Reviewed #8129 deltas: the generic 5xx code and the translated plain-text verdict.
+// These are fixture identities, not classifications derived from the implementation.
+const GENERIC_5XX_LANES = new Set(["converter", "direct-stream", "direct-fold", "translated-http", "translated-fold", "translated-json"]);
+const GENERIC_5XX_DIRECT_IDS = new Set(["shared-8128-12", "shared-8128-13"]);
+
 function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   const outcome = golden.outcomes[key(base)]!;
   expect(outcome).toBeDefined();
@@ -41,14 +46,28 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     mediaType: golden.mediaTypes[outcome[7]], clientError: outcome[8], bodySha256: outcome[9], bodyLength: outcome[10] };
   const correctedOverflow = DIRECT_OVERFLOW_BASELINE_RECOVERY.has(base.input.id)
     && (base.lane === "direct-stream" || base.lane === "direct-fold");
-  const expected = correctedOverflow ? {
+  const directGeneric = GENERIC_5XX_DIRECT_IDS.has(base.input.id) && (base.lane === "direct-stream" || base.lane === "direct-fold");
+  const genericCode = base.input.id === "sweep-code-upstream_server_error-phrase" && GENERIC_5XX_LANES.has(base.lane);
+  const plainText = base.input.id === "shape-plain-text-400" && (base.lane === "translated-http" || base.lane === "translated-json");
+  const correctedGeneric = directGeneric || genericCode || plainText;
+  if (correctedGeneric) {
+    const wasFold = base.lane === "direct-fold";
+    expect(before.status).toBe(wasFold || (genericCode && base.lane === "translated-json") ? 502 : ["translated-http", "translated-json", "translated-fold"].includes(base.lane) ? 400 : 200);
+    expect(before.type).toBe(directGeneric ? "overloaded_error" : genericCode && base.lane === "translated-json" ? "api_error" : "invalid_request_error");
+    expect(before.code).toBeUndefined();
+    expect(before.clientRecognizes).toBe(directGeneric ? base.input.id === "shared-8128-13" : true);
+    expect(before.internalDecisions).toEqual(base.lane === "translated-json" || base.lane === "translated-http" ? { writer: false }
+      : wasFold ? { status: false, writer: false, "direct-collector": false } : { status: false, writer: false });
+  }
+  const expected = correctedOverflow || correctedGeneric ? {
     ...before,
-    status: base.lane === "direct-fold" ? 400 : 200,
+    status: ["direct-fold", "translated-http", "translated-fold", "translated-json"].includes(base.lane) ? 400 : 200,
     clientRecognizes: true,
+    type: "invalid_request_error",
     code: "context_length_exceeded",
     internalDecisions: base.lane === "direct-fold"
       ? { status: true, writer: true, "direct-collector": true }
-      : { status: true, writer: true },
+      : base.lane === "translated-json" || base.lane === "translated-http" ? { writer: true } : { status: true, writer: true },
   } : before;
   if (correctedOverflow) {
     // Keep the original observation explicit; an unrelated baseline change is not a delta.
@@ -77,7 +96,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     if (!base.input.fault) expect(base.input.eventLanes).toContain(base.lane);
   }
   expect(before.clientRecognizes).toBe(base.input.recovery[base.lane]);
-  expect(after.clientRecognizes).toBe(correctedOverflow ? true : base.input.recovery[base.lane]);
+  expect(after.clientRecognizes).toBe(correctedOverflow || correctedGeneric ? true : base.input.recovery[base.lane]);
   expect(after.clientRecognizes).toBe(expected.clientRecognizes);
   expect(after.internalDecisions).toEqual(expected.internalDecisions);
   const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
@@ -98,7 +117,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   expect(after.envelopeType).toBe("error");
   if (before.clientError) expect(after.compactionSentence).toBe(expected.clientRecognizes);
   expect(ANTHROPIC_ERROR_TYPES.has(after.type ?? "")).toBe(true);
-  if (ANTHROPIC_ERROR_TYPES.has(before.type ?? "")) expect(after.type).toBe(before.type);
+  if (ANTHROPIC_ERROR_TYPES.has(expected.type ?? "")) expect(after.type).toBe(expected.type);
   expect(after.code).toBe(typeof expected.code === "string" && expected.code !== "thread_unsupported_request" && ANTHROPIC_ERROR_CODES.has(expected.code) ? expected.code : undefined);
 }
 
