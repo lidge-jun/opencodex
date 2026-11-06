@@ -195,6 +195,7 @@ export function registerComboContextOverflowCases<Server>({
       'Invalid value for "user": "maximum context length" is not allowed.',
       "Unsupported parameter: user; supplied value 'The conversation has exceeded this model's context limit.'",
       "The model's context window is not full; the request is invalid",
+      "The input does not exceed the allowed limit; the context window is available.",
       "Your input does not exceed the context window",
       "Your input does not actually exceed the context window",
       JSON.stringify({ error: { code: "invalid_value", param: "tools[0].function.name" },

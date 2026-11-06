@@ -24,13 +24,13 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 
 /** Provider wording that says the conversation has reached/passed its model's context capacity. */
 const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
-  /\b(?:history|conversation|input|prompt|request|turn|messages?)\b.{0,120}\b(?:at(?:\s+or\s+past)?|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b.{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
-  /\b(?:context\s+(?:window|length|limit)|model(?:'s)?\s+context(?:\s+(?:window|length|limit))?)\b.{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted|at\s+capacity)\b/i,
+  /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at(?:\s+or\s+past)?|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+  /\b(?:context\s+(?:window|length|limit)|model(?:'s)?\s+context(?:\s+(?:window|length|limit))?)\b[^;!?\n.]{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted|at\s+capacity)\b/i,
 ];
 
 /** Explicit provider wording that an input is too long for a model's context capacity. */
 const CONTEXT_WINDOW_TOO_LONG_VERDICTS: readonly RegExp[] = [
-  /\b(?:prompt|input|request|messages?)\s+(?:is|are|was|were)\s+too\s+long\s+for\b.{0,60}\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+  /\b(?:prompt|input|request|messages?)\s+(?:is|are|was|were)\s+too\s+long\s+for\b[^;!?\n.]{0,60}\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
 ];
 
 /**
