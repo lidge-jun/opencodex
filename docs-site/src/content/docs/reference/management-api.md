@@ -448,7 +448,9 @@ of the Codex option for the chosen device, regardless of the selected app. This 
 For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
 256 characters, or more than 65,536 total ID characters rather than silently truncating them.
 Client labels are best-effort classifications of inbound headers, not authentication, and raw
-headers are not stored as client attribution. The `/v1/usage` data-key endpoint accepts `client`
+headers are not stored as client attribution. The current classifier recognizes documented Codex,
+Claude and OpenCode signatures; it does not yet identify Grok, Aside or other Chat API apps
+automatically, so their unrecognized requests remain `unknown`. The `/v1/usage` data-key endpoint accepts `client`
 and echoes its authenticated-key scope without exposing the key ID. A Remote Link management relay
 accepts new source filters only for its authenticated link key; source-filtered snapshot bounds
 describe matching rows, not the whole ledger. The Child requires the Home to echo the requested
