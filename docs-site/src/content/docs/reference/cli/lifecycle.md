@@ -152,6 +152,12 @@ unreadable command line in the approved proxy's supervision chain (or surviving 
 stopped manager) leaves wrapper ownership unknown, so the guarded stop cannot report success.
 Missing or unreadable evidence blocks the guarded stop.
 
+New runtime records include the bound hostname. For older records that omit it, a guarded
+stop accepts the discovered default loopback address only when the remaining approval and
+ownership checks agree. An omitted hostname cannot independently prove the listener's bind
+scope. When the record contains a hostname, it must match the approved value exactly;
+wildcard and loopback binds remain distinct.
+
 ### `ocx restart`
 
 When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
@@ -317,6 +323,33 @@ restart the proxy using the intended current installation; for a background serv
 `ocx service repair` would reload nothing and keep the old process serving. If the proxy is newer, upgrade the CLI
 or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
 change whether requests are allowed.
+
+If an update restart reports a blank hostname in the runtime record, it leaves the proxy running.
+Use `ocx status` and `ocx service status` as clues, not proof of ownership or the actual bind.
+Once ownership is verified, for a service use the owning installation's `ocx service restart`;
+for Desktop, use the app; for a foreground proxy, use its terminal. A standalone proxy started by `ocx ensure` may be
+detached and have no terminal:
+
+1. Independently verify the process identity, installation, home, supervisor and actual listening
+   address and port. Use OS process and listener inspection with sufficient permissions; check
+   IPv4, IPv6 and wildcard listeners as applicable. A PID alone can be reused, and missing or
+   incomplete inspection results do not prove ownership or absence. For example, on macOS or
+   Linux where `lsof` is available, `ps -p <pid> -o pid=,ppid=,args=` and
+   `lsof -nP -iTCP:<port> -sTCP:LISTEN` provide process and listener clues. They do not by
+   themselves establish the home, supervisor, or complete visibility; use the appropriate OS
+   tools and permissions to verify those separately.
+2. Only if those facts are verified and forced termination is acceptable, the owner can run
+   `ocx stop` from the owning installation and home. It tries a graceful stop first, but may
+   fall back to forced termination if that fails; it can also refuse, including when the blank
+   hostname prevents guarded ownership verification. Do not bypass a refusal.
+3. Independently confirm the identified process has exited, no supervisor will restart it,
+   and the intended address and port are free. A successful stop or a status result alone is
+   not proof of all three. Once confirmed, run `ocx start` from the intended installation and
+   home with the intended bind and port settings; a successful start regenerates the record.
+
+If any check is incomplete, the stop fails or is refused, or forced termination is unacceptable,
+stop and ask the owner or administrator to investigate. Do not edit the runtime record or kill
+unrelated processes. Retry the update restart if needed after the new proxy is running.
 
 Identical version strings and the `unknown` / `0.0.0` placeholders suppress the warning, as does
 an absent proxy version. Doctor does not report placeholders as a confirmed match. Different
