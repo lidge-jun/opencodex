@@ -158,7 +158,14 @@ async function* replay(
   }
 }
 
-/** A limit terminal is replayable only as the first meaningful event. */
+/**
+ * Classifies an adapter terminal event that reached an output token limit before producing output.
+ *
+ * When an upstream candidate exhausts its max output token budget without emitting any text or tool
+ * calls, this classifies the event as an HTTP 502 `zero_output_token_limit` error so combo failover
+ * can attempt a backup target. Candidate cooling is request-local (`comboFailureCooldownScope` returns
+ * "none") because the failure is specific to the requested token limit rather than provider unhealthiness.
+ */
 export function classifyZeroOutputTokenLimit(event: AdapterEvent): Extract<AdapterEvent, { type: "error" }> | undefined {
   const zeroOutputLimit = event.type === "incomplete"
     ? event.reason === "max_output_tokens" && event.retryable !== false && event.endTurn !== false && !event.providerState

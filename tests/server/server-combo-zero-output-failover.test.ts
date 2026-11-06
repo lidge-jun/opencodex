@@ -7,7 +7,7 @@ import { comboProviderFactory } from "../helpers/combo-provider";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
@@ -535,6 +535,7 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(response.status).toBe(200);
       expect(body).toContain("zero-output failover backup");
       expect(hits).toEqual(["m1", "m2"]);
+      expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
     });
   }
 

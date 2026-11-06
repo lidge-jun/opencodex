@@ -798,13 +798,15 @@ bounded pre-output prefix of the selected child's Responses SSE. If the stream r
 `response.failed` terminal before any text, reasoning, tool call, or other output event, the child
 is recorded as failed and the combo may try its next eligible target. A zero-output
 `response.incomplete` follows the same path when its reason is missing or is `adapter_eof`,
-`missing_terminal_event`, or `upstream_stall_timeout`. Explicit semantic reasons such as
-`max_output_tokens` and `content_filter` remain terminal, as does an explicit null reason.
-A reasonless final snapshot that already contains output items is also kept. Once any output event begins,
-the target is committed: a later stream failure is returned to the client and is never replayed on
-another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
-its safety cap without a terminal or output boundary, OpenCodex also commits the current target
-instead of growing memory without a bound.
+`missing_terminal_event`, `upstream_stall_timeout`, or an explicit `max_output_tokens` limit
+before any output is emitted (which advances to another eligible target without cooling the healthy
+candidate). Other explicit semantic reasons such as `content_filter` remain terminal, as do
+post-output `max_output_tokens` limits and an explicit null reason. A reasonless final snapshot that
+already contains output items is also kept. Once any output event begins, the target is committed: a
+later stream failure is returned to the client and is never replayed on another provider, which
+prevents duplicate text and tool execution. If the pre-output buffer reaches its safety cap without a
+terminal or output boundary, OpenCodex also commits the current target instead of growing memory
+without a bound.
 
 ## Request-local target compatibility
 
