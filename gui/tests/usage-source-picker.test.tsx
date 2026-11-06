@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import Usage from "../src/pages/Usage";
 import { matchesFacetWindow } from "../src/components/v2-usage/usage-source";
-import { configureApiTargets, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, usageSessionSnapshot } from "../src/api";
+import { configureApiTargets, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, SESSION_UNAVAILABLE_EVENT, usageSessionSnapshot } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
 
 const names = ["document", "window", "navigator", "localStorage", "sessionStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -414,7 +414,7 @@ test("logout immediately clears reports and aliases and fences a late successful
   expect(host.textContent).toContain("Could not load usage data");
 });
 
-test.each([401, 403])("a %s report response revokes previously shown usage and source inventory", async status => {
+test.each([401])("a %s report response revokes previously shown usage and source inventory", async status => {
   installSharedSession(`ocx_session_test_${status}`);
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -470,7 +470,7 @@ test("a new shared session rejects a previous session's late success", async () 
 });
 
 
-test("an unrelated policy 403 does not revoke Usage, but a Usage 403 does", async () => {
+test("policy 403 responses do not revoke the Usage session", async () => {
   installSharedSession("ocx_session_policy");
   Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: async () => new Response(null, { status: 403 }) });
   installApiAuthFetch();
@@ -481,7 +481,7 @@ test("an unrelated policy 403 does not revoke Usage, but a Usage 403 does", asyn
   await win.fetch("http://localhost/api/usage/devices");
   expect(usageSessionSnapshot().blocked).toBe(false);
   await win.fetch("http://localhost/api/usage?client=codex&device=all");
-  expect(usageSessionSnapshot().blocked).toBe(true);
+  expect(usageSessionSnapshot().blocked).toBe(false);
 });
 
 test("a stale 403 cannot revoke a replacement shared session", async () => {
@@ -597,6 +597,8 @@ test("raw admin facet 403 preserves the report and its Retry action", async () =
 
 test("Usage 401 hides old data while renewing the session and then recovers", async () => {
   installSharedSession("ocx_session_expired");
+  let unavailableEvents = 0;
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailableEvents++; });
   let expired = false;
   const usageTokens: (string | null)[] = [];
   let releaseBootstrap: (() => void) | undefined;
@@ -627,6 +629,7 @@ test("Usage 401 hides old data while renewing the session and then recovers", as
   await act(async () => { releaseBootstrap!(); await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(usageSessionSnapshot().blocked).toBe(false);
   expect(usageTokens).toContain("ocx_session_renewed");
+  expect(unavailableEvents).toBe(0);
   expect(host.textContent).toContain("No usage recorded yet");
   expect(host.textContent).not.toContain("Could not load usage data");
 });
@@ -699,4 +702,157 @@ test.each([undefined, 0])("an absent or zero unavailable-key count keeps valid f
   expect(radio("Laptop")).toBeTruthy();
   expect(radio("Codex").textContent).toContain("30");
   expect(document.body.textContent).not.toContain("Configured keys unavailable for selection");
+});
+
+test("raw admin unconfigured 403 shows a local error and another device recovers", async () => {
+  const meta = document.createElement("meta"); meta.name = "opencodex-management-auth-required"; meta.content = "1"; document.head.append(meta);
+  resetApiAuthFetchForTests(async verify => (await verify("raw-admin")) === "accepted" ? "raw-admin" : null);
+  configureApiTargets(standaloneApiTargets(""));
+  const raw = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (url.pathname === "/opencodex-session") return new Response(null, { status: 403 });
+    if (token !== "raw-admin") return new Response(null, { status: 401 });
+    if (url.pathname === "/api/combos") return response({});
+    if (url.pathname === "/api/usage/source-facets" || url.pathname === "/api/usage/devices") return new Response(null, { status: 403 });
+    if (url.pathname === "/api/usage" && url.searchParams.get("device") === "unconfigured") return new Response(null, { status: 403 });
+    if (url.pathname === "/api/usage") return response({ ...report(url.href), range: url.searchParams.get("range") });
+    return new Response(null, { status: 404 });
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  expect((await fetch("http://localhost/api/combos")).status).toBe(200);
+  await mount({}, "http://localhost"); await click(trigger());
+  expect(host.textContent).toContain("2 older requests");
+  await click(radio("Unconfigured keys"));
+  expect(host.textContent).toContain("Could not load usage data");
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Retry")!;
+  await click(retry);
+  expect(host.textContent).toContain("Could not load usage data");
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  await click(radio("All devices"));
+  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).not.toContain("Could not load usage data");
+});
+
+test.each([401, 403])("a late aborted report %s cannot block the newly selected source", async status => {
+  let release: ((result: Response) => void) | undefined;
+  let oldSignal: AbortSignal | undefined;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return Promise.resolve(response(facets(url)));
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [] }));
+    if (url.includes("client=grok")) { oldSignal = init?.signal ?? undefined; return new Promise<Response>(resolve => { release = resolve; }); }
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  await mount(); await click(trigger()); await click(radio("Grok"));
+  expect(release).toBeDefined();
+  await click(radio("Codex"));
+  expect(oldSignal?.aborted).toBe(true);
+  expect(host.textContent).toContain("2 older requests");
+  await act(async () => release!(new Response(null, { status })));
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  expect(host.textContent).toContain("2 older requests");
+});
+
+test.each([403, 503])("detached Usage recovery reports unavailable when bootstrap returns %s", async status => {
+  installSharedSession(`ocx_session_detached_${status}`);
+  let release: ((response: Response) => void) | undefined;
+  let usageSignal: AbortSignal | undefined;
+  let unavailableEvents = 0;
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, event => { if ((event as CustomEvent<{ plane: string }>).detail.plane === "shared") unavailableEvents++; });
+  const raw = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/opencodex-session") return new Promise<Response>(resolve => { release = resolve; });
+    if (url.pathname === "/api/usage") { usageSignal = init?.signal ?? undefined; return Promise.resolve(new Response(null, { status: 401 })); }
+    return Promise.resolve(new Response(null, { status: 404 }));
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  await mount({}, "http://localhost");
+  expect(release).toBeDefined();
+  expect(usageSignal?.aborted).toBe(true);
+  await act(async () => { release!(new Response(null, { status })); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(unavailableEvents).toBe(1);
+  expect(usageSessionSnapshot().blocked).toBe(true);
+});
+
+test("superseded detached recovery does not report the newer session unavailable", async () => {
+  installSharedSession("ocx_session_old_detached");
+  let release: ((response: Response) => void) | undefined;
+  let unavailableEvents = 0;
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailableEvents++; });
+  const raw = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/opencodex-session") return new Promise<Response>(resolve => { release = resolve; });
+    if (url.pathname === "/api/usage" && new Headers(init?.headers).get("X-OpenCodex-API-Key") === "ocx_session_old_detached") return Promise.resolve(new Response(null, { status: 401 }));
+    if (url.pathname === "/api/usage") return Promise.resolve(response({ ...report(url.href), range: url.searchParams.get("range") }));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  await mount({}, "http://localhost");
+  expect(release).toBeDefined();
+  await act(async () => installSharedSession("ocx_session_new_detached"));
+  expect(host.textContent).toContain("2 older requests");
+  await act(async () => { release!(new Response(null, { status: 403 })); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(unavailableEvents).toBe(0);
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  expect(host.textContent).toContain("2 older requests");
+});
+
+test.each([false, true])("a cancelled detached recovery reports unavailable only for the current session (superseded=%s)", async superseded => {
+  let cancel: (() => void) | undefined;
+  resetApiAuthFetchForTests(async () => new Promise<string | null>(resolve => { cancel = () => resolve(null); }));
+  const meta = document.createElement("meta"); meta.name = "opencodex-management-auth-required"; meta.content = "1"; document.head.append(meta);
+  installSharedSession("ocx_session_prompt_old");
+  let unavailableEvents = 0;
+  let usageSignal: AbortSignal | undefined;
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailableEvents++; });
+  const raw = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (url.pathname === "/opencodex-session") return Promise.resolve(new Response(null, { status: 403 }));
+    if (url.pathname === "/api/usage" && token === "ocx_session_prompt_old") { usageSignal = init?.signal ?? undefined; return Promise.resolve(new Response(null, { status: 401 })); }
+    if (url.pathname === "/api/usage") return Promise.resolve(response({ ...report(url.href), range: url.searchParams.get("range") }));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  await mount({}, "http://localhost");
+  expect(cancel).toBeDefined();
+  expect(usageSignal?.aborted).toBe(true);
+  if (superseded) await act(async () => installSharedSession("ocx_session_prompt_new"));
+  await act(async () => { cancel!(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(unavailableEvents).toBe(superseded ? 0 : 1);
+  expect(usageSessionSnapshot().blocked).toBe(!superseded);
+  if (superseded) expect(host.textContent).toContain("2 older requests");
+});
+
+test.each([false, true])("a rejected detached recovery reports unavailable only while current (superseded=%s)", async superseded => {
+  let fail: (() => void) | undefined;
+  resetApiAuthFetchForTests(async () => new Promise<string | null>((_resolve, reject) => { fail = () => reject(new Error("prompt failed")); }));
+  const meta = document.createElement("meta"); meta.name = "opencodex-management-auth-required"; meta.content = "1"; document.head.append(meta);
+  installSharedSession("ocx_session_throw_old");
+  let unavailableEvents = 0;
+  window.addEventListener(SESSION_UNAVAILABLE_EVENT, () => { unavailableEvents++; });
+  const raw = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (url.pathname === "/opencodex-session") return Promise.resolve(new Response(null, { status: 403 }));
+    if (url.pathname === "/api/usage" && token === "ocx_session_throw_old") return Promise.resolve(new Response(null, { status: 401 }));
+    if (url.pathname === "/api/usage") return Promise.resolve(response({ ...report(url.href), range: url.searchParams.get("range") }));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  await mount({}, "http://localhost");
+  expect(fail).toBeDefined();
+  if (superseded) await act(async () => installSharedSession("ocx_session_throw_new"));
+  await act(async () => { fail!(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(unavailableEvents).toBe(superseded ? 0 : 1);
+  expect(usageSessionSnapshot().blocked).toBe(!superseded);
+  if (superseded) expect(host.textContent).toContain("2 older requests");
 });

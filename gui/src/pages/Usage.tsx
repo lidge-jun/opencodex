@@ -24,7 +24,7 @@ import UsageCompanionView from "./usage-companion-view";
 import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
 import { useUsageSession } from "../components/v2-usage/use-usage-session";
-import { useUsageReport, UsageWindowMismatchError } from "../components/v2-usage/use-usage-report";
+import { useUsageReport, UsageAccessDeniedError, UsageWindowMismatchError } from "../components/v2-usage/use-usage-report";
 import { UsageSourcePicker } from "../components/v2-usage/usage-source-picker";
 import type { SourceClient, SourceDevice, SourceFilter } from "../components/v2-usage/usage-source";
 import type { UsageTopology } from "../api-targets";
@@ -254,7 +254,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId, topology =
           <p className="m-0 max-w-[56ch] text-[14px] text-fg">
             {state.error instanceof UsageWindowMismatchError
               ? `${t("usage.loadError")} ${t("dash.codexRestartMalformed")}`
-              : state.error instanceof UsageReadFailedError ? t("usage.loadError")
+              : state.error instanceof UsageReadFailedError || state.error instanceof UsageAccessDeniedError ? t("usage.loadError")
               : connected ? t("usage.hubOffline") : state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}
           </p>
           <Button variant="outline" size="sm" onClick={() => resource.refresh()}>{t("common.retry")}</Button>

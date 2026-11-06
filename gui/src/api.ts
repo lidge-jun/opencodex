@@ -577,13 +577,11 @@ export function installApiAuthFetch(): void {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     let mutation = false;
     let usageRequest = false;
-    let usageReport = false;
     try {
       const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
       const path = relativeTargetPath(state.target, url);
       mutation = classified.plane === "shared" && sourceInventoryMutation(path, method);
-      usageReport = path === "/api/usage";
-      usageRequest = usageReport || path === "/api/usage/devices" || path === "/api/usage/source-facets";
+      usageRequest = path === "/api/usage" || path === "/api/usage/devices" || path === "/api/usage/source-facets";
     } catch { /* A malformed URL cannot name an inventory mutation. */ }
     const mutationBase = state.target.baseUrl;
     const finish = (result: Response) => {
@@ -602,7 +600,7 @@ export function installApiAuthFetch(): void {
     if (callerSignal?.aborted && (response.status === 401 || response.status === 403)) return response;
     const recoverUsage = usageRequest && !callerSignal?.aborted;
     if (!classified.bootstrap && classified.plane === "shared" && state.generation === generation
-      && (response.status === 401 || (response.status === 403 && usageReport))) denyUsageSession(usageGeneration);
+      && response.status === 401) denyUsageSession(usageGeneration);
     if (classified.bootstrap || response.status !== 401) return finish(response);
     if (runtimes.get(classified.plane) !== state || state.logoutBarrier) return response;
     const refreshed = state.session.token;
@@ -621,12 +619,25 @@ export function installApiAuthFetch(): void {
     // arrived, let the existing single-flight recovery finish independently; a request
     // already cancelled before the 401 must not start recovery.
     const recoverySignal = recoverUsage ? undefined : callerSignal ?? undefined;
-    const next = await resolveTokenAfter401(classified.plane, token, recoverySignal);
-    if (!next || !isCurrentRevision(classified.plane, next) || callerSignal?.aborted) return response;
-    if (!next.token) {
-      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+    const recoveryRevision = sessionSnapshot(state);
+    let next: SessionSnapshot | null;
+    try {
+      next = await resolveTokenAfter401(classified.plane, token, recoverySignal);
+    } catch (error) {
+      if (!recoverUsage) throw error;
+      if (isCurrentRevision(classified.plane, recoveryRevision) && !state.logoutBarrier && !state.session.token) {
+        reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+      }
       return response;
     }
+    if (!next || !isCurrentRevision(classified.plane, next) || state.logoutBarrier) return response;
+    if (!next.token) {
+      // Usage recovery is deliberately detached after an observed 401: its loader was
+      // aborted by session invalidation, but the still-current recovery owns this notice.
+      if ((recoverUsage || !callerSignal?.aborted) && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+      return response;
+    }
+    if (callerSignal?.aborted) return response;
     const [retryInput, retryInit] = withAuth(classified.plane, input, init, next.token);
     const retry = await originalFetch(retryInput, retryInit);
     if (retry.status === 401 && isCurrentRevision(classified.plane, next)) {
