@@ -24,6 +24,11 @@ Non-forward Copilot routes defer this check until Auto negotiation settles the a
 `src/server/responses/request-transport.ts` repeats the check after every negotiation, including
 credential and session renewal; a static Responses route cannot silently become incompatible Chat.
 Policy and combo children carry the local refusal identity; direct requests retain the same 400.
+Auto-pause credential refresh maps the same typed refusal before returning from recovery, while its
+unused hop reservation is released. Adapter and native Responses error delivery carry that identity
+through response rebuilding so policy traversal also works after a mid-dispatch renegotiation.
+Every refresh exception cancels its original response and releases the exchange's abort linkage;
+caller cancellation is captured before cleanup aborts the upstream, so cleanup cannot manufacture it.
 
 Normal virtual-model wire mapping remains attached to its admitted selector and does not add a new
 eligible model. Policy traversal records settled physical destinations and skips a destination already
