@@ -101,3 +101,17 @@ In `src/server/management/link-routes.ts`:
 - Bare host `apply` with `plant: true` + simulated `child_relay_failed` -> key revoked, tunnel stopped, and `remotePurgePlantedChildArgv` invoked to remove planted binary.
 - `ocx-child` `connect` returning `ocx-child-conflict:child_external_provider_conflict` -> `409 child_external_provider_conflict` without `residual: true` and with link compensated cleanly.
 
+## 4. `wp2` P-Phase Continuity & Architect Reflection Amendments (`01a1b316-9e8c-7a23-845e-da43f6554f0e`)
+
+- **Continuity from `wp1` D**: Resumed from `wp1` D conclusion ("Next cycle wp2 implements Home Management API enrollment/plant/purge routes").
+- **Architect `01a1b316-9e8c-7a23-845e-da43f6554f0e` verdict**: `ALIGNED` on `W2-ARCH-01..W2-ARCH-03`.
+- **Folded refinements**:
+  1. Add `resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource` to `ManagementApiDeps` in `src/server/management/context.ts` so server route tests can deterministically inject verified/unavailable binary resolutions across targets.
+  2. In `apply` (`src/server/management/link-enrollment.ts`), route EVERY exit after `plantedFreshBinary = true` (including `remote_port` and `child_preflight` refusals such as `child_port_busy` and `child_curl_missing`) through `await failed(...)` so newly planted binaries are always purged on failure; keep `confirmedHosts` intact on pre-plant `409 remote_ocx_missing` / `remote_plant_unavailable`; and reset `remoteMayBeConnected = false` on classified pre-write attach conflicts (`child_port_busy`, `child_external_provider_conflict`).
+  3. Enforce strict key sets: `probe` requires `includeVersion === true` when `allowMissing` is supplied; `confirmHost` accepts `{ alias, fingerprint }` or `{ alias, fingerprint, allowMissing }`; `apply` accepts `{ alias, fingerprint?, plant? }` (all 4 exact subsets); `DELETE /api/link/:id` accepts empty/null body or `{ force?, purge? }` and rejects `force === true && purge === true` with `400 invalid_body`.
+
+## 5. `wp2` A-Phase Audit Fold-Backs (`01a1b322-c1e1-7c41-a560-45f51e35dca3`, `GO-WITH-FIXES`)
+
+1. **`W2-BLK-01` (Folded — Purge exception safety & `residual` reconciliation)**: Wrap `remotePurgePlantedChildArgv` inside `failed()` in a once-only `try/catch` (`plantedFreshBinary = false`). If rollback purge exits `0`, reset `remoteMayBeConnected = false` (no residual left on Child); if rollback purge returns nonzero or throws, set `remoteMayBeConnected = true` with recovery `"Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying."`.
+2. **`W2-BLK-02` (Folded — Public DTO projection, boolean guards, & `context.ts` seam)**: Add `src/server/management/context.ts` (`resolveChildBinarySource` seam) to the File Change Map, project only explicit public DTO fields from `confirmHost` (never leaking `knownHostLine`, `probedAt`, `sshLatencyMs`, or `remotePlatform`), validate `typeof allowMissing === "boolean"` in `probe`/`confirmHost` and `typeof plant === "boolean"` in `apply` (`400 invalid_body`), and wire `ctx.deps.resolveChildBinarySource ?? resolveChildBinarySource` in all three handlers.
+
