@@ -432,6 +432,8 @@ MiMo model Command Code serves.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- Antigravity's Gemini 4 Argon requests include the selected thinking tier when thought summaries
+  are enabled, allowing its thought summaries to appear in supported clients.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending

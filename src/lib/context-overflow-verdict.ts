@@ -63,7 +63,6 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
 }
 
 function isDefiniteContextOverflowMessage(text: string): boolean {
-  if (PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text))) return false;
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
@@ -83,9 +82,10 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
  * arbitrary field that happens to sit in the first 500 bytes authorize a hop, so it fails closed.
  *
  * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
+ * An optional caller matcher specializes the verdict on the unwrapped, validated leaf.
  * Exported for the sidecar loops, which classify their own provider failures with the same rule.
  */
-export function isDefiniteContextOverflow(status: number, message: string): boolean {
+export function isDefiniteContextOverflow(status: number, message: string, matchMessage = isDefiniteContextOverflowMessage): boolean {
   if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
   if (message.length > 16_384) return false;
   let text = message.trim();
@@ -93,7 +93,7 @@ export function isDefiniteContextOverflow(status: number, message: string): bool
   for (let unwrapped = 0; unwrapped <= MAX_CONTEXT_OVERFLOW_ENVELOPES; unwrapped += 1) {
     const providerPrefix = /^Provider error \d{3}:\s*/.exec(text);
     if (providerPrefix) text = text.slice(providerPrefix[0].length).trim();
-    if (!text.startsWith("{")) return isDefiniteContextOverflowMessage(text);
+    if (!text.startsWith("{")) return !PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text)) && matchMessage(text);
     if (unwrapped === MAX_CONTEXT_OVERFLOW_ENVELOPES) return false;
     let payload: unknown;
     try { payload = JSON.parse(text); } catch { return false; }
