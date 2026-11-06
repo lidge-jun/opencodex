@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -159,15 +159,20 @@ test.each(["headers", "body"])("a stalled facet %s times out, reports unavailabl
     Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: (ms: number) => { requestedDeadline = ms; return ++deadlines === 1 ? timeout.signal : originalTimeout.value(ms); } });
     await click(trigger());
     expect(requestedDeadline).toBe(60_000);
+    jest.useFakeTimers();
     await act(async () => { timeout.abort(); await Promise.resolve(); });
     expect(document.body.textContent).toContain("Counts unavailable or incomplete");
     expect(calls.find(call => call.url.includes("source-facets"))?.init?.signal?.aborted).toBe(true);
-    await act(async () => { win.dispatchEvent(new win.Event("focus")); });
+    await act(async () => { jest.advanceTimersByTime(15_000); await Promise.resolve(); });
     expect(scans).toBe(2);
     expect(radio("Laptop").textContent).toContain("12");
-    await act(async () => { resolveLate(stage === "headers" ? response(facets(calls.find(call => call.url.includes("source-facets"))!.url)) : facets(calls.find(call => call.url.includes("source-facets"))!.url)); });
+    const stale = facets(calls.find(call => call.url.includes("source-facets"))!.url);
+    stale.devices[2]!.requests = 999;
+    await act(async () => { resolveLate(stage === "headers" ? response(stale) : stale); });
     expect(radio("Laptop").textContent).toContain("12");
+    expect(radio("Laptop").textContent).not.toContain("999");
   } finally {
+    jest.useRealTimers();
     Object.defineProperty(AbortSignal, "timeout", originalTimeout);
   }
 });
@@ -448,6 +453,33 @@ function installSharedSession(token: string) {
   const html = `<meta name="opencodex-session-token" content="${token}"><meta name="opencodex-session-csrf" content="csrf"><meta name="opencodex-session-origin" content="http://localhost"><meta name="opencodex-session-server-origin" content="http://localhost">`;
   expect(installApiSessionFromHtml("shared", html)).toBe(true);
 }
+
+test.each(["switch", "unmount"])("a failed facet cancels its pending inventory before %s and a late 401", async next => {
+  installSharedSession("ocx_session_sibling_failure");
+  let scans = 0;
+  let deviceSignal: AbortSignal | null | undefined;
+  let releaseDevice!: (value: Response) => void;
+  const raw = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/usage/source-facets") return Promise.resolve(++scans === 1 ? new Response(null, { status: 503 }) : response(facets(url.href)));
+    if (url.pathname === "/api/usage/devices") {
+      if (scans > 1) return Promise.resolve(response({ devices: [] }));
+      deviceSignal = init?.signal;
+      return new Promise<Response>(resolve => { releaseDevice = resolve; });
+    }
+    if (url.pathname === "/api/usage") return Promise.resolve(response(report(url.href)));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  await mount({}, "http://localhost"); await click(trigger());
+  expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+  expect(deviceSignal?.aborted).toBe(true);
+  if (next === "switch") await click(radio("Grok"));
+  else await act(async () => root.unmount());
+  await act(async () => { releaseDevice(new Response(null, { status: 401 })); await Promise.resolve(); });
+  expect(usageSessionSnapshot().blocked).toBe(false);
+});
 
 test("logout immediately clears reports and aliases and fences a late successful report", async () => {
   installSharedSession("ocx_session_test_logout");
