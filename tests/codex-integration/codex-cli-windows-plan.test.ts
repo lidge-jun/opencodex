@@ -18,16 +18,19 @@ import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { trackBackgroundWork } from "../../src/lib/background-work";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../../src/update/codex-cli-update-launch-policy.mjs";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
 const liveWorkerRoots = new Set<string>();
+let planCleanupEpoch = 0;
 async function cleanupPlanFixture(root: string): Promise<boolean> {
   if (liveWorkerRoots.has(root)) return false;
   await removeTreeAfterBackgroundWork(root);
   return true;
 }
 afterEach(async () => {
+  planCleanupEpoch++;
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
@@ -235,7 +238,60 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
 
+native("Windows plan fixture job terminates a live descendant when its owner exits", async () => {
+  const { dlopen } = await import("bun:ffi");
+  const kernel = dlopen("kernel32.dll", {
+    OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
+    WaitForSingleObject: { args: ["u64", "u32"], returns: "u32" },
+    TerminateProcess: { args: ["u64", "u32"], returns: "i32" },
+    CloseHandle: { args: ["u64"], returns: "i32" },
+  });
+  const source = `import {spawn} from 'node:child_process';
+    const p=spawn(process.execPath,['-e',${JSON.stringify('globalThis.fixtureServer=Bun.serve({port:0,fetch(){return new Response("ok")}}); console.log("READY");')}],{detached:true,stdio:['ignore','pipe','ignore'],windowsHide:true});
+    let s=''; for await(const v of p.stdout) { s+=v.toString(); if(s.includes('\\n'))break; }
+    if(!s.includes('READY'))throw Error('descendant exited'); console.log('READY:'+p.pid);
+    for await(const chunk of Bun.stdin.stream()){void chunk;}`;
+  const child = Bun.spawn([process.execPath, "--preload", helperPath("windows-plan-child-processes.ts"), "-e", source],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const errors = new Response(child.stderr).text();
+  const reader = child.stdout.getReader();
+  let descendant = 0n;
+  try {
+    let ready = ""; const decoder = new TextDecoder();
+    while (!ready.includes("\n")) {
+      const part = await reader.read();
+      if (part.done) throw new Error(`fixture job owner exited early: ${await errors}`);
+      ready += decoder.decode(part.value, { stream: true });
+    }
+    const match = /^READY:(\d+)\n$/.exec(ready);
+    expect(match).not.toBeNull();
+    descendant = kernel.symbols.OpenProcess(0x100001, 0, Number(match![1])); // SYNCHRONIZE | PROCESS_TERMINATE
+    expect(descendant).not.toBe(0n);
+    expect(kernel.symbols.WaitForSingleObject(descendant, 0)).toBe(258); // WAIT_TIMEOUT: still alive.
+    child.kill();
+    await child.exited;
+    expect(kernel.symbols.WaitForSingleObject(descendant, INTERNAL_DEADLINE_MS)).toBe(0); // WAIT_OBJECT_0
+  } finally {
+    reader.releaseLock();
+    if (child.exitCode === null) { child.kill(); await child.exited; }
+    if (descendant) {
+      // The retained process handle can address only this owned descendant, even if a PID is reused.
+      if (kernel.symbols.WaitForSingleObject(descendant, 0) === 258) {
+        if (!kernel.symbols.TerminateProcess(descendant, 1)) throw new Error("owned descendant termination failed");
+        if (kernel.symbols.WaitForSingleObject(descendant, INTERNAL_DEADLINE_MS) !== 0) throw new Error("owned descendant exit unconfirmed");
+      }
+      expect(kernel.symbols.CloseHandle(descendant)).not.toBe(0);
+    }
+    kernel.close();
+  }
+}, SPAWN_BUDGET_MS);
+
+// This case owns a real Bun child, its real lifetime-probe child, and Windows ACL
+// subprocesses. It reached 5.02s locally against Bun's 5s default; Windows CI
+// already supplies 60s. The shared spawn budget bounds the same intrinsic work.
 native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
+  const epoch = planCleanupEpoch;
+  try {
   // The child may outlive this test and the preload sandbox after a timeout.
   // Its fixture therefore lives outside every ownership-marked test sandbox.
   const local = process.env.LOCALAPPDATA?.trim();
@@ -281,12 +337,15 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     let ready = "";
     while (!ready.includes("\n")) {
       const chunk = await reader.read();
+      if (planCleanupEpoch !== epoch) return;
       if (chunk.done) throw new Error(`Windows plan child exited before readiness: ${await errorsPromise}`);
       ready += decoder.decode(chunk.value, { stream: true });
     }
     expect(ready).toBe("WINDOWS_CLI_PLAN_UNSAFE_CASE_READY\n");
     // Exercise the actual teardown while the real child is held before its work.
-    expect(await cleanupPlanFixture(f.root)).toBe(false);
+    const cleaned = await cleanupPlanFixture(f.root);
+    if (planCleanupEpoch !== epoch) return;
+    expect(cleaned).toBe(false);
     expect(existsSync(f.root)).toBe(true);
     expect(process.env.OPENCODEX_HOME).toBe(parentHome);
     expect(process.env.OPENCODEX_ADMIN_AUTH_TOKEN).toBe(parentAdmin);
@@ -306,10 +365,20 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     } finally { reader.releaseLock(); }
   })();
   const [exit, output, errors] = await Promise.all([child.exited, outputPromise, errorsPromise]);
+  if (planCleanupEpoch !== epoch) {
+    console.error(`[test] timed-out Windows plan child exited with ${exit}; fixture retained`);
+    return;
+  }
   if (exit !== 0) throw new Error(`Windows plan child failed: ${errors}`);
   expect(output.trim()).toBe("WINDOWS_CLI_PLAN_UNSAFE_CASE_PASS");
   liveWorkerRoots.delete(f.root);
-});
+  } catch (error) {
+    if (planCleanupEpoch === epoch) throw error;
+    // Bun already failed the timed-out test. Preserve its independently owned
+    // root and report a late child error without throwing into the next test.
+    console.error(`[test] Windows plan fixture settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}, SPAWN_BUDGET_MS);
 
 native("a published-size Windows npm backing binds; one past the shared finite limit refuses", async () => {
   const f = fixture();
