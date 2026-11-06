@@ -352,13 +352,15 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` 是 `ocx models` 的別名。無子指令時，列出已設定供應商中靜態播種的模型。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
+`ocx model` 是 `ocx models` 的別名。無子指令時，列出已儲存及路由器已知的模型 ID，包括 registry 預設、自訂模型和目前 CLI 程序的探索快取。新 CLI 程序的快取可能為空，這不是執行中代理的目錄。部分舊版金鑰預設在變更連線位址後仍可能保留 registry 預設。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
+
+`reasoningEfforts` 清單僅在使用 `--json` 時顯示。`null` 表示清單未知或未查詢，包括查詢需要開啟系統鑰匙圈的情況。空陣列 `[]` 表示明確設定了空清單，或該模型的推理強度已停用，例如透過 `noReasoningModels` 停用。使用 `ocx models live` 查看執行中代理的目錄。
 
 `add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
-| `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
+| `list`（預設） | `--provider <name>`, `--json` | 列出本機已儲存及路由器已知的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本機註冊自訂模型，或使用 `--live` 在執行中的代理上註冊。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |

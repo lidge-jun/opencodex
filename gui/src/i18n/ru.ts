@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Не удалось сохранить лимиты рабочих процессов.",
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
+  ...shellV2Copy("ru"),
+  ...modelsV2Copy("ru"),
+  ...accountsV2Copy("ru"),
+  ...subagentsV2Copy("ru"),
+  ...usageV2Copy("ru"),
+  ...logsV2Copy("ru"),
+  ...connectV2Copy("ru"),
+  ...startupV2Copy("ru"),
+  ...proxyV2Copy("ru"),
   "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
   "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
   "claude.tierDefaults.title": "Модели CLI по умолчанию",
@@ -2113,7 +2131,7 @@ export const ru: Record<TKey, string> = {
   "modal.useOauthLogin": "← Войти через OAuth",
 "nav.codexAuth": "Аутентификация Codex",
   "nav.codexSet": "Codex",
-  "nav.connect": "Подключение",
+  "nav.connect": "Маршрут",
   "nav.usageLogs": "Использование и журналы",
   "nav.sectionNavigation": "Страницы раздела",
   "codexSet.tab.multiauth": "Мультиаутентификация",

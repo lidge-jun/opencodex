@@ -17,6 +17,7 @@ import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
 import { isProxyError } from "../lib/client-error-body";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
+import type { UsageClient } from "../usage/client";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -25,6 +26,7 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
+  client?: UsageClient;
   responsesActivity?: CodexWebSocketActivity;
   nativeControl?: NativeResponseControl;
   /** Content-free per-turn explanation; never a model capability assertion. */
@@ -107,12 +109,14 @@ export function buildResponsesWsData(
   admission: DataPlaneAdmission,
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
   sessionLaneId?: string,
+  client?: UsageClient,
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
   return {
     headers,
     admission,
+    ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),
   };

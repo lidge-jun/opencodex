@@ -1,15 +1,9 @@
-.advisor-editor-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: var(--space-2) 0;
-}
-.advisor-editor-label { min-width: 11rem; }
-.advisor-editor-row > input, .advisor-editor-row > select { min-width: 0; max-width: 100%; }
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
+/* The consent box is a native checkbox; paint it with the primary (inverse) colour. */
+.advisor-consent-check { accent-color: var(--ocx-accent); }
+/* AdvisorModelSelect renders its own hint under the picker: keep it small inside the row. */
+.advisor-model-row #advisor-model-hint { margin: 6px 0 0; font-size: 12px; line-height: 16px; }
 .advisor-activity-table th, .advisor-activity-table td { white-space: nowrap; }
-
-@media (max-width: 760px) {
-  .advisor-editor-row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
-  .advisor-editor-label { min-width: 0; }
-  .advisor-editor-row > input, .advisor-editor-row > select { width: 100%; min-height: 44px; }
 }

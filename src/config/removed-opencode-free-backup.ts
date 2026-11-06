@@ -1,7 +1,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { atomicWriteFileNoFollow } from "./atomic-write";
-import { isPassiveRead } from "../lib/passive-read";
+import { isPassiveRead, passiveReadDiagnostic } from "../lib/passive-read";
 import { redactUserPath } from "../lib/redact";
 import { sanitizeRemovedOpenCodeFreeForLoad } from "./removed-opencode-free";
 import { verifySecretPathAcl, windowsSecretAclApplies } from "../lib/windows-secret-acl";
@@ -81,9 +81,12 @@ function backupOriginal(configPath: string, rawBytes: Uint8Array): string | null
   return null;
 }
 
-/** Disk-load boundary only; imported text and passive reads never publish or notify. */
+/** Disk-load boundary only; passive reads may report a diagnostic but never publish. */
 export function preserveRemovedOpenCodeFree(configPath: string, rawBytes: Uint8Array): void {
-  if (isPassiveRead()) return;
+  if (isPassiveRead()) {
+    passiveReadDiagnostic("opencode-free support was removed; its entries and dependent references are disabled. The configuration file has not been changed.");
+    return;
+  }
   const backup = backupOriginal(configPath, rawBytes);
   if (warned) return;
   warned = true;

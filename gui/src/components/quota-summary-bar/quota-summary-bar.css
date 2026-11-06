@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 .quota-summary-bar {
   position: sticky;
   top: 0;
@@ -325,4 +328,5 @@
     height: 100%;
     min-height: 0;
   }
+}
 }
