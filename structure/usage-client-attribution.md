@@ -18,7 +18,9 @@ dimensions, and `src/server/management/logs-usage-routes.ts` validates the compl
 special projections. The device inventory requires a dashboard session and refuses child scope.
 
 `src/server/index/link-management.ts` binds new source-filtered relay reads to the admitted link
-key. Requests without these dimensions retain the previous relay behavior and are not newly scoped
-by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
+key. Source-filtered snapshot bounds cover only matching rows. `src/client/link-management-relay.ts`
+requires the Home's matching source echo and refuses filtered HEAD reads, whose empty body cannot
+confirm the scope. Requests without these dimensions retain the previous relay behavior and are not
+newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.

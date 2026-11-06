@@ -70,6 +70,21 @@ afterEach(() => {
 });
 
 describe("attribution reaches usage.jsonl", () => {
+  test("data and raw admin keys cannot read dashboard-only device inventory", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const [token, status] of [["ocx_data_attributionone", 401], [ADMIN_TOKEN, 403]] as const) {
+        const response = await fetch(new URL("/api/usage/devices", server.url), {
+          headers: { "x-opencodex-api-key": token },
+        });
+        expect(response.status).toBe(status);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("usage source filters reject ambiguous requests and echo the selected scope", async () => {
     saveConfig(remoteConfig());
     const now = Date.now();

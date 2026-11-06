@@ -438,8 +438,11 @@ environment-admitted records; it does not prove a request came from a particular
 Client labels are best-effort classifications of inbound headers, not authentication, and raw
 headers are not stored as client attribution. The `/v1/usage` data-key endpoint accepts `client`
 and echoes its authenticated-key scope without exposing the key ID. A Remote Link management relay
-accepts new source filters only for its authenticated link key. Existing requests without the new
-source dimensions retain their earlier behavior.
+accepts new source filters only for its authenticated link key; source-filtered snapshot bounds
+describe matching rows, not the whole ledger. The Child requires the Home to echo the requested
+scope and refuses an unconfirmed response. Source-filtered HEAD requests through the Child return
+405 because a bodyless response cannot confirm the scope. Existing requests without the new source
+dimensions retain their earlier behavior.
 
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather

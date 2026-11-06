@@ -1,4 +1,6 @@
 import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
+import { relayLinkManagementRead } from "../../src/client/link-management-relay";
+import type { LinkIngress } from "../../src/client/link-ingress";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,6 +119,26 @@ afterEach(async () => {
 });
 
 describe("client link HTTP relay", () => {
+  test("source-filtered management reads require the own key and a matching Home echo", async () => {
+    let calls = 0;
+    let payload: unknown = {};
+    const ingress: LinkIngress = { tunnelPort: 12000, apiKeyId: "Key-A", linkId: "lnk_aaaaaaaaaaaaaaaa",
+      policy: {}, linkKey: () => LINK_KEY, relay: { tunnel: connectedTunnel,
+        fetchImpl: (async () => { calls++; return Response.json(payload); }) as typeof fetch } };
+    const call = (query: string, method = "GET") => relayLinkManagementRead(
+      new Request("http://127.0.0.1/api/machine/hub-relay/api/usage", { method }), `/api/usage?${query}`, ingress, "Home");
+    const own = "client=codex&device=key&apiKeyId=Key-A";
+    expect((await call("client=codex&device=all")).status).toBe(403);
+    expect((await call("client=codex&device=key&apiKeyId=Key-B")).status).toBe(403);
+    expect((await call(own, "HEAD")).status).toBe(405);
+    expect(calls).toBe(0);
+    expect((await call(own)).status).toBe(502);
+    payload = { sourceFilter: { client: "codex", device: { kind: "key", id: "Key-B" } } };
+    expect((await call(own)).status).toBe(502);
+    payload = { sourceFilter: { client: "codex", device: { kind: "key", id: "Key-A" } } };
+    expect((await call(own)).status).toBe(200);
+  });
+
   test("replaces every caller credential with the link key and filters hop-by-hop headers", () => {
     const caller = new Headers({
       Authorization: "Bearer caller-chatgpt-oauth",

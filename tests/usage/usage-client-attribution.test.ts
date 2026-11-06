@@ -15,6 +15,8 @@ describe("usage client attribution", () => {
     expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs" }))).toBe("codex_cli");
     expect(classifyUsageClient(new Headers({ originator: "codex-tui" }))).toBe("codex_cli");
     expect(classifyUsageClient(new Headers({ originator: "Codex Desktop" }))).toBe("codex_desktop");
+    expect(classifyUsageClient(new Headers({ originator: "codex_desktop", "user-agent": "codex_cli_rs/0.154.0" }))).toBe("codex_desktop");
+    expect(classifyUsageClient(new Headers({ "user-agent": "codex_cli_rs/0.154.0" }))).toBe("codex_cli");
     expect(classifyUsageClient(new Headers({ originator: "codex_vscode" }))).toBe("codex_ide");
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-code/2.1.207" }))).toBe("claude_code");
     expect(classifyUsageClient(new Headers({ originator: "opencode" }))).toBe("opencode");
@@ -124,6 +126,20 @@ describe("usage client attribution", () => {
     Object.assign(report.sourceFilter!.device, { kind: "all" });
     accumulator.add({ ...base, requestId: "another-key", client: "codex_cli", apiKeyId: "key" });
     expect(accumulator.summarize("30d", now).summary.requests).toBe(1);
+  });
+
+  test("source-filtered snapshot bounds do not reveal unmatched rows", () => {
+    const now = Date.now();
+    const base = { provider: "openai", model: "gpt-test", status: 200, durationMs: 1, usageStatus: "unreported" as const };
+    const accumulator = createUsageSummaryAccumulator({ filter: { sourceFilter: {
+      client: "codex", device: { kind: "key", id: "Key-A" },
+    } } });
+    accumulator.add({ ...base, requestId: "other-old", timestamp: now - 100_000, client: "codex_cli", apiKeyId: "Key-B" });
+    expect(accumulator.snapshotWindow).toEqual({ start: null, end: null });
+    accumulator.add({ ...base, requestId: "own", timestamp: now, client: "codex_cli", apiKeyId: "Key-A" });
+    accumulator.add({ ...base, requestId: "other-new", timestamp: now + 100_000, client: "codex_cli", apiKeyId: "Key-B" });
+    expect(accumulator.snapshotWindow).toEqual({ start: now, end: now });
+    expect(accumulator.clone().snapshotWindow).toEqual({ start: now, end: now });
   });
 
   test("all apps includes unknown rows without classifying old Claude rows as Codex", () => {
