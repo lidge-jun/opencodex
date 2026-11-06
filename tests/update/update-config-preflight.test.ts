@@ -266,6 +266,8 @@ describe("update config pre-flight", () => {
     expect(stops).toEqual([]);
     expect(errors.some(e => e.includes("Configuration preflight failed"))).toBe(true);
     expect(errors.join("\n")).not.toContain("synthetic-value");
+    expect(errors.join("\n")).toContain("Run 'ocx config validate' to diagnose");
+    expect(errors.join("\n")).toContain("does not change the file");
 
     // A schema-invalid routing profile is salvageable at runtime but must not reach stop.
     const raw = JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
@@ -311,5 +313,39 @@ describe("update config pre-flight", () => {
 
     expect(passingResult).toBe(0);
     expect(stops).toEqual(["stop"]);
+  });
+
+  test("update refusal gives recovery guidance for an occupied unreadable path", async () => {
+    const source = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
+    const start = source.indexOf("  const configPath = getConfigPath(), configPreflight = runConfigPreflight(configPath);");
+    const end = source.indexOf("  // Remember whether a background service", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const runGate = updateSourceFunction("deps", `with (deps) { return (async () => {
+      ${source.slice(start, end)}
+      throw new Error("preflight did not refuse");
+    })(); }`);
+    const paths: string[] = [];
+    if (canSymlink) {
+      const link = home.path("dangling-config");
+      symlinkSync(home.path("missing-target.json"), link, "file");
+      paths.push(link);
+    }
+    const directory = home.path("directory-config");
+    mkdirSync(directory);
+    paths.push(directory);
+    for (const path of paths) {
+      const errors: string[] = [];
+      expect(await runGate({ getConfigPath: () => path, runConfigPreflight,
+        console: { error: (message: string) => errors.push(message) } })).toBe(1);
+      const guidance = errors.join("\n");
+      expect(guidance).toContain(path);
+      expect(guidance).toContain("symlink");
+      expect(guidance).toContain("permissions");
+      expect(guidance).toContain("restore");
+      expect(guidance).toContain("ocx config validate");
+      expect(guidance).toContain("may report defaults");
+      expect(guidance).not.toContain("inspect and repair configuration issues");
+    }
   });
 });

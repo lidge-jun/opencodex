@@ -566,7 +566,12 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   if (!configPreflight.ok) {
     console.error(`⚠️  Configuration preflight failed for ${configPath}; aborting update before stopping services.`);
     if (configPreflight.error) console.error(`    ${configPreflight.error}`);
-    console.error("    Run 'ocx config validate' to inspect and repair configuration issues.");
+    if (configPreflight.reason === "read_error") {
+      console.error("    Inspect the config path, permissions, and any symlink target; correct them or restore a readable regular config from a trusted backup, then retry.");
+      console.error("    'ocx config validate' may report defaults if a symlink target is missing; it does not change the file.");
+    } else {
+      console.error("    Run 'ocx config validate' to diagnose the configuration; it does not change the file. Back up and correct the file, then retry.");
+    }
     return 1;
   }
 
