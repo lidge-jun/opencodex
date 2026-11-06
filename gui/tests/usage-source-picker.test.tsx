@@ -135,6 +135,66 @@ test("discards old facet responses after selection and rejects mismatched facet 
   expect(radio("Codex").textContent).not.toContain("30");
 });
 
+test.each(["headers", "body"])("a stalled facet %s times out, reports unavailable, and retries", async stage => {
+  const timeout = new AbortController();
+  const originalTimeout = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")!;
+  let requestedDeadline = 0;
+  let deadlines = 0;
+  let resolveLate!: (value: Response | unknown) => void;
+  let scans = 0;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input); calls.push({ url, init });
+    if (url.includes("source-facets")) {
+      if (++scans > 1) return Promise.resolve(response(facets(url)));
+      if (stage === "headers") return new Promise<Response>(resolve => { resolveLate = resolve as (value: unknown) => void; });
+      const pending = response(facets(url));
+      pending.json = () => new Promise(resolve => { resolveLate = resolve; });
+      return Promise.resolve(pending);
+    }
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [{ apiKeyId: "key-a", alias: "Laptop" }] }));
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  await mount();
+  try {
+    Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: (ms: number) => { requestedDeadline = ms; return ++deadlines === 1 ? timeout.signal : originalTimeout.value(ms); } });
+    await click(trigger());
+    expect(requestedDeadline).toBe(60_000);
+    await act(async () => { timeout.abort(); await Promise.resolve(); });
+    expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+    expect(calls.find(call => call.url.includes("source-facets"))?.init?.signal?.aborted).toBe(true);
+    await act(async () => { win.dispatchEvent(new win.Event("focus")); });
+    expect(scans).toBe(2);
+    expect(radio("Laptop").textContent).toContain("12");
+    await act(async () => { resolveLate(stage === "headers" ? response(facets(calls.find(call => call.url.includes("source-facets"))!.url)) : facets(calls.find(call => call.url.includes("source-facets"))!.url)); });
+    expect(radio("Laptop").textContent).toContain("12");
+  } finally {
+    Object.defineProperty(AbortSignal, "timeout", originalTimeout);
+  }
+});
+
+test("unmount aborts a pending facet read and removes its refresh listeners", async () => {
+  let resolveLate!: (value: Response) => void;
+  let pendingSignal: AbortSignal | null | undefined;
+  let facetUrl = "";
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input); calls.push({ url, init });
+    if (url.includes("source-facets")) {
+      facetUrl = url; pendingSignal = init?.signal;
+      return new Promise<Response>(resolve => { resolveLate = resolve; });
+    }
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [] }));
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(pendingSignal?.aborted).toBe(false);
+  await act(async () => root.unmount());
+  expect(pendingSignal?.aborted).toBe(true);
+  const countBefore = calls.length;
+  await act(async () => { resolveLate(response(facets(facetUrl))); win.dispatchEvent(new win.Event("focus")); });
+  expect(calls).toHaveLength(countBefore);
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
 test("unconfigured reports require no-store, clear on focus, and reject late responses", async () => {
   const waiting: { url: string; resolve: (value: Response) => void }[] = [];
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {

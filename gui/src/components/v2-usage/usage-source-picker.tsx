@@ -6,6 +6,7 @@ import { IconCheck, IconGlobe, IconKey, IconMonitor } from "../../icons";
 import { Select } from "../../ui";
 import { cn } from "../../lib/utils";
 import { hostOs } from "../../lib/desktop-shell";
+import { withFetchDeadline } from "../../bounded-fetch";
 import { denyUsageSession, usageSessionSnapshot, USAGE_SESSION_CHANGED, USAGE_SOURCE_INVENTORY_CHANGED, sourceInventoryEventMatches } from "../../api";
 import { matchesFacetWindow, matchesSource, noStore, sourceQuery, SOURCE_CLIENTS, type SourceClient, type SourceDevice, type SourceFilter } from "./usage-source";
 
@@ -76,35 +77,38 @@ function subscribeToFacets({ apiBase, requested, generation, identity, resultKey
     const currentController = controller;
     setResult({ key: resultKey });
     try {
-      const get = async (url: string) => {
-        const response = await fetch(url, { signal: currentController.signal, cache: "no-store" });
-        if (response.status === 401 && !currentController.signal.aborted && id === sequence) denyUsageSession(generation);
-        if (!response.ok || !noStore(response)) throw new Error("usage source unavailable");
-        return response;
-      };
-      const [response, inventoryResponse] = await Promise.all([
-        get(`${apiBase}/api/usage/source-facets?${sourceQuery(requested)}`),
-        get(`${apiBase}/api/usage/devices`),
-      ]);
-      const facets = await response.json() as Facets;
-      if (!validFacets(facets, requested)) throw new Error("invalid facets");
-      const body: unknown = await inventoryResponse.json();
-      if (!body || typeof body !== "object" || !Array.isArray((body as { devices?: unknown }).devices)) throw new Error("invalid inventory");
-      const inventory = (body as { devices: Inventory }).devices;
-      if (inventory.length > 1024) throw new Error("inventory too large");
-      const ids = new Set<string>(); let size = 0;
-      for (const item of inventory) {
-        if (!item || typeof item.apiKeyId !== "string" || !item.apiKeyId || item.apiKeyId.length > 256
-          || (size += item.apiKeyId.length) > 65536 || ids.has(item.apiKeyId) || (item.alias !== null && (typeof item.alias !== "string" || !item.alias.trim() || item.alias.length > 255))) throw new Error("invalid inventory");
-        ids.add(item.apiKeyId);
-      }
-      const selectableInventory = inventory.filter(item => item.apiKeyId === item.apiKeyId.trim());
+      const { facets, selectableInventory } = await withFetchDeadline(60_000, currentController.signal, async signal => {
+        const get = async (url: string) => {
+          const response = await fetch(url, { signal, cache: "no-store" });
+          if (response.status === 401 && !signal.aborted && id === sequence) denyUsageSession(generation);
+          if (!response.ok || !noStore(response)) throw new Error("usage source unavailable");
+          return response;
+        };
+        const [response, inventoryResponse] = await Promise.all([
+          get(`${apiBase}/api/usage/source-facets?${sourceQuery(requested)}`),
+          get(`${apiBase}/api/usage/devices`),
+        ]);
+        const facets = await response.json() as Facets;
+        if (!validFacets(facets, requested)) throw new Error("invalid facets");
+        const body: unknown = await inventoryResponse.json();
+        if (!body || typeof body !== "object" || !Array.isArray((body as { devices?: unknown }).devices)) throw new Error("invalid inventory");
+        const inventory = (body as { devices: Inventory }).devices;
+        if (inventory.length > 1024) throw new Error("inventory too large");
+        const ids = new Set<string>(); let size = 0;
+        for (const item of inventory) {
+          if (!item || typeof item.apiKeyId !== "string" || !item.apiKeyId || item.apiKeyId.length > 256
+            || (size += item.apiKeyId.length) > 65536 || ids.has(item.apiKeyId) || (item.alias !== null && (typeof item.alias !== "string" || !item.alias.trim() || item.alias.length > 255))) throw new Error("invalid inventory");
+          ids.add(item.apiKeyId);
+        }
+        return { facets, selectableInventory: inventory.filter(item => item.apiKeyId === item.apiKeyId.trim()) };
+      });
       if (!disposed && id === sequence && usageSessionSnapshot().generation === generation) {
         setKnownInventory({ identity, items: selectableInventory });
         setRoster({ identity, devices: facets.devices.map(row => row.device) });
         setResult({ key: resultKey, facets, inventory: selectableInventory });
       }
     } catch {
+      currentController.abort();
       if (!disposed && id === sequence) setResult({ key: resultKey, failed: true });
     } finally {
       if (!disposed && id === sequence) timer = setTimeout(load, 15_000);
