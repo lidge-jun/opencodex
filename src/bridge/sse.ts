@@ -999,6 +999,7 @@ export function bridgeToResponsesSSE(
               }
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
+              if (currentMsg && hiddenRawReasoning.bytes > 0) closeCurrentMessage("commentary");
               flushHiddenRawReasoning();
               // Reasoning consumed by a REAL text turn, not a tool call: no cache target.
               // Empty text deltas must not wipe reasoning that precedes a tool call
