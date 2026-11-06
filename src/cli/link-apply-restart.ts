@@ -72,8 +72,8 @@ export function applyRestartMessage(outcome: ApplyRestartOutcome): string {
     case "connection-changed": return "The connection changed during sync; the client runtime was not restarted. Run 'ocx sync' again.";
     case "restarted": return "Client runtime restarted after applying the Home's settings.";
     case "deferred-supervisor": return outcome.supervisor === "desktop"
-      ? "The settings take effect when OpenCodex Desktop restarts the client runtime; quit and reopen OpenCodex Desktop."
-      : "The settings take effect when the background service restarts the client runtime; run `ocx service restart`.";
+      ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+      : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.";
     case "failed": return "The client runtime restart did not complete; the previous runtime keeps serving. If a background service or the desktop app owns it, restart it there; otherwise retry with 'ocx restart' or 'ocx sync'.";
   }
 }

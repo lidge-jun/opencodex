@@ -113,8 +113,9 @@ describe("ocx sync restarts the runtime after an apply", () => {
       });
       const outcome = await restartRuntimeAfterApply(record, value);
       expect(outcome).toEqual({ kind: "deferred-supervisor", supervisor });
-      expect(applyRestartMessage(outcome)).toContain("take effect when");
-      expect(applyRestartMessage(outcome)).toContain(supervisor === "desktop" ? "Desktop" : "ocx service restart");
+      expect(applyRestartMessage(outcome)).toBe(supervisor === "desktop"
+        ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+        : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.");
       expect(calls).toEqual([]);
     });
   }

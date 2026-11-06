@@ -215,7 +215,9 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
         handleRestartStartWhenStopped: async () => { throw new Error("must not start a runtime"); } } as unknown as CliDispatchDeps;
       const code = await dispatchCommand({ kind: "command", command: "sync", args }, deps);
       expect(code).toBe(0);
-      expect(errors.join("\n")).toContain("take effect when");
+      expect(errors).toContain(supervisor === "desktop"
+        ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+        : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.");
       expect(JSON.parse(output.at(-1)!)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "synced", exit: 0 }, fanout: { state: "not-applicable", reason: null }, children: [] });
       expect(classifySyncResult({ code, stdout: `ocx-fanout:stdout-begin\n${output.at(-1)}`, stderr: "ocx-fanout:selected:2.97.0\n" })).toEqual({ state: "synced", reason: null });
       process.exitCode = 1;
