@@ -14,8 +14,8 @@ import { createManagementSessionControl, initializeManagementAuthState, issueGui
 import type { ManagementContext } from "../../src/server/management/context";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { OcxConfig } from "../../src/types";
-import { trustWindowsTempFixtureAncestry } from "./windows-temp-ancestry";
 import { assertWindowsPlanChildrenExited } from "./windows-plan-child-processes";
+import { observeWindowsPlanJunction } from "./windows-plan-junction-observer";
 
 const root = realpathSync.native(process.env.OCX_TEST_OWNED_ROOT!);
 const tempParent = realpathSync.native(process.env.OCX_TEST_TEMP_PARENT!);
@@ -67,7 +67,7 @@ try {
 assertWindowsPlanChildrenExited();
 
 await hardenSecretDirAsync(root, { required: true });
-trustWindowsTempFixtureAncestry(root, tempParent);
+const junctionObservation = observeWindowsPlanJunction(root, configDir);
 const prefix = join(root, "npm");
 const packageRoot = join(prefix, "node_modules", "@openai", "codex");
 const backing = join(packageRoot, "bin", "node_modules", "@openai", "codex-win32-x64");
@@ -153,9 +153,14 @@ expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
 const pairedRequest = requestFor(paired);
 expect(sessionControl.isPaired(pairedRequest, config)).toBe(true);
 expect(managementSessionIssuance(pairedRequest, state)).toBe("pairing");
-const response = await handleCodexCliUpdateRoutes(contextFor(pairedRequest));
+let response: Response | null;
+let pairedEvidence: string[];
+junctionObservation.begin();
+try { response = await handleCodexCliUpdateRoutes(contextFor(pairedRequest)); }
+finally { pairedEvidence = junctionObservation.end(); }
 expect(response?.status).toBe(503);
 expect(await response?.json()).toEqual({ error: "unsafe_store" });
+expect(pairedEvidence).toEqual(["ancestry-ok", "junction-reparse"]);
 expect(response?.headers.get("Retry-After")).toBeNull();
 expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
 let leaseAttempts = 0, installAttempts = 0;
