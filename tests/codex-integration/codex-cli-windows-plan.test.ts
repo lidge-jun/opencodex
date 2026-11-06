@@ -19,6 +19,7 @@ import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PRO
 import { trackBackgroundWork } from "../../src/lib/background-work";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../../src/update/codex-cli-update-launch-policy.mjs";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { proveWindowsPlanJobExit } from "../helpers/windows-plan-job-proof";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
@@ -276,6 +277,11 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   writeFileSync(join(f.backing, "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"), "changed backing bytes");
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
+
+native("Windows plan fixture job close terminates its handle-bound child", () => {
+  proveWindowsPlanJobExit(false); // Real child stays alive until its own release event.
+  proveWindowsPlanJobExit(true); // Same fixture job configuration used by the child preload.
+}, SPAWN_BUDGET_MS);
 
 native("Windows plan cleanup stops its owned child before releasing its fixture", async () => {
   const epoch = planCleanupEpoch;
