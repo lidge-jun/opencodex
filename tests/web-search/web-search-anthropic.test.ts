@@ -152,6 +152,13 @@ describe("parseAnthropicSidecarSSE", () => {
     expect(out.error).toBeDefined();
   });
 
+  test("does not hide malformed data before message_stop", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: {broken\n\ndata: {"type":"message_stop"}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
   test("reports a failed reader after preserving decoded text", async () => {
     const encoded = new TextEncoder().encode(`data: ${JSON.stringify(partial)}\n\n`);
     let sent = false;

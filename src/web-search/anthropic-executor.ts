@@ -127,7 +127,9 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
   const processFrame = (rawFrame: string, complete = true): void => {
     const invalidFrame = (): void => {
       cleanEof = false;
-      if (sawMessageStop) failure ??= "anthropic sidecar returned data after completion";
+      failure ??= sawMessageStop
+        ? "anthropic sidecar returned data after completion"
+        : "anthropic sidecar returned an invalid stream frame";
     };
     const dataLines: string[] = [];
     let eventName: string | undefined;
