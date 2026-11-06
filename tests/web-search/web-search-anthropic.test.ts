@@ -89,6 +89,83 @@ describe("web-search anthropic backend resolution", () => {
 });
 
 describe("parseAnthropicSidecarSSE", () => {
+  const partial = { type: "content_block_delta", delta: { type: "text_delta", text: "partial answer" } };
+  const delta = (reason: string) => ({ type: "message_delta", delta: { stop_reason: reason } });
+
+  test.each([
+    ["upstream error", [partial, { type: "error", error: { type: "overloaded_error" } }]],
+    ["missing completion", [partial]],
+    ["search tool error", [{ type: "content_block_start", content_block: { type: "web_search_tool_result", content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" } } }, partial, { type: "message_stop" }]],
+    ["max_tokens", [partial, delta("max_tokens"), { type: "message_stop" }]],
+    ["error stop reason", [partial, delta("error"), { type: "message_stop" }]],
+    ["content after stop reason", [partial, delta("end_turn"), partial]],
+  ])("reports %s without losing partial text", async (_name, frames) => {
+    const out = await parseAnthropicSidecarSSE(sseResponse(frames));
+    expect(out.text).toContain("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts clean EOF after a complete successful message_delta and ping", async () => {
+    const out = await parseAnthropicSidecarSSE(sseResponse([partial, delta("end_turn"), { type: "ping" }]));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("does not accept an unterminated message_delta as clean EOF", async () => {
+    const out = await parseAnthropicSidecarSSE(sseResponse([partial, delta("end_turn")], { unterminated: true }));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not treat ping-named terminal data as completion", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\nevent: ping\ndata: {"type":"message_stop"}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("a partial frame after a completed delta invalidates clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nevent: content_block_delta\ndata: {"type":`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("a trailing SSE comment keeps the clean EOF completion", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\n: keepalive\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("accepts CR-only framing and a clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\r\rdata: ${JSON.stringify(delta("end_turn"))}\r\r`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("reports malformed data after message_stop", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: {"type":"message_stop"}\n\ndata: {`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("reports a failed reader after preserving decoded text", async () => {
+    const encoded = new TextEncoder().encode(`data: ${JSON.stringify(partial)}\n\n`);
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(encoded); }
+        else controller.error(new Error("synthetic read failure"));
+      },
+    }, { highWaterMark: 0 });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
   test("folds web_search_tool_result + text + citations into {text, sources} and dedups by url", async () => {
     const res = sseResponse([
       { type: "message_start" },
@@ -209,7 +286,7 @@ describe("Anthropic sidecar byte boundaries", () => {
     }, { highWaterMark: 0 }));
     const out = await parseAnthropicSidecarSSE(res);
     expect(cancelled).toBe(true);
-    expect(out).toEqual({ text: "prefix 한글", sources: [] });
+    expect(out).toEqual({ text: "prefix 한글", sources: [], error: "anthropic sidecar response exceeded the byte limit" });
   });
 });
 
