@@ -1,0 +1,434 @@
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde::{Deserialize, Serialize};
+
+use crate::codex_settings::HomeCodexSettings;
+use crate::platform::{reject_symlink, sha256_hex, write_private_atomic, write_regular_atomic};
+use crate::state::ChildPaths;
+use crate::toml_surgeon::{
+    ChildInjectedLedger, apply_design_b_config, detect_unowned_root_routing_conflict,
+    surgical_detach_config,
+};
+
+pub const CHILD_JOURNAL_SCHEMA: &str = "ocx.child.journal/1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChildJournalV1 {
+    pub schema: String,
+    pub link_id: String,
+    pub api_key_id: String,
+    pub opencodex_home: String,
+    pub codex_home: String,
+    pub catalog_path: String,
+    pub pre_attach_config_existed: bool,
+    pub pre_attach_config_bytes_b64: Option<String>,
+    pub pre_attach_config_sha256: Option<String>,
+    pub first_injected_config_sha256: String,
+    pub latest_injected_config_sha256: String,
+    pub untouched_by_external_writer: bool,
+    pub pre_attach_catalog_existed: bool,
+    pub pre_attach_catalog_bytes_b64: Option<String>,
+    pub latest_catalog_sha256: String,
+    pub pre_attach_models_cache_existed: bool,
+    pub pre_attach_models_cache_bytes_b64: Option<String>,
+    pub latest_models_cache_sha256: Option<String>,
+    pub ledger: ChildInjectedLedger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachOutcome {
+    ExactRestore,
+    SurgicalRestore,
+    NotAttached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetachError {
+    Conflict(String),
+    Io(String),
+}
+
+pub fn read_journal(path: &Path) -> Result<Option<ChildJournalV1>, String> {
+    reject_symlink(path)?;
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("failed reading journal {}: {e}", path.display())),
+    };
+    let parsed: ChildJournalV1 =
+        serde_json::from_slice(&bytes).map_err(|e| format!("corrupt child journal: {e}"))?;
+    if parsed.schema != CHILD_JOURNAL_SCHEMA {
+        return Err(format!("unsupported journal schema: {}", parsed.schema));
+    }
+    Ok(Some(parsed))
+}
+
+pub fn write_journal(path: &Path, journal: &ChildJournalV1) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec_pretty(journal)
+        .map_err(|e| format!("failed serializing journal: {e}"))?;
+    bytes.push(b'\n');
+    write_private_atomic(path, &bytes)
+}
+
+/// Fail-closed check ensuring full `ocx` does not own `$OPENCODEX_HOME` or `$CODEX_HOME`.
+pub fn assert_no_full_ocx_conflict(paths: &ChildPaths) -> Result<(), String> {
+    for name in [
+        "runtime-port.json",
+        "ocx.pid",
+        "service-api-token",
+        "client-connect-pending",
+    ] {
+        let candidate = paths.opencodex_home.join(name);
+        if candidate.exists() {
+            return Err(format!(
+                "attach refused: full OpenCodex runtime state exists at {}",
+                candidate.display()
+            ));
+        }
+    }
+    let cfg_json = paths.opencodex_home.join("config.json");
+    if let Ok(raw) = fs::read(&cfg_json) {
+        let non_empty = serde_json::from_slice::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .is_some_and(|obj| !obj.is_empty());
+        if non_empty {
+            return Err(format!(
+                "attach refused: full OpenCodex config.json exists at {}",
+                cfg_json.display()
+            ));
+        }
+    }
+    for jname in ["opencodex-journal.json", ".opencodex-journal.json"] {
+        let jpath = paths.codex_home.join(jname);
+        if jpath.exists() {
+            return Err(format!(
+                "attach refused: full OpenCodex Codex journal exists at {}",
+                jpath.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_catalog_json(bytes: &[u8]) -> Result<Vec<serde_json::Value>, String> {
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err("downloaded catalog exceeds 4 MiB safety bound".to_owned());
+    }
+    let val: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("invalid catalog JSON: {e}"))?;
+    let models = val
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "catalog JSON missing models array".to_owned())?;
+    if models.len() > 2000 {
+        return Err("catalog models array exceeds 2000 entries".to_owned());
+    }
+    let mut seen = HashSet::with_capacity(models.len());
+    for item in models {
+        let slug = item
+            .get("slug")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty() && s.bytes().all(|b| (0x21..=0x7e).contains(&b)))
+            .ok_or_else(|| "catalog contains missing or invalid model slug".to_owned())?;
+        if !seen.insert(slug.to_owned()) {
+            return Err(format!("catalog contains duplicate slug: {slug}"));
+        }
+    }
+    Ok(models.clone())
+}
+
+/// Updates `$CODEX_HOME/models_cache.json` matching `invalidateCodexModelsCacheWithPermitOutcome`.
+pub fn refresh_codex_models_cache(
+    cache_path: &Path,
+    catalog_models: &[serde_json::Value],
+) -> Result<String, String> {
+    reject_symlink(cache_path)?;
+    let existing_bytes = match fs::read(cache_path) {
+        Ok(b) => Some(b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("failed reading models_cache.json: {e}")),
+    };
+    let catalog_slugs: HashSet<&str> = catalog_models
+        .iter()
+        .filter_map(|m| m.get("slug").and_then(serde_json::Value::as_str))
+        .collect();
+    let mut observed_native = Vec::new();
+    if let Some(raw) = &existing_bytes
+        && let Ok(val) = serde_json::from_slice::<serde_json::Value>(raw)
+        && let Some(arr) = val.get("models").and_then(serde_json::Value::as_array)
+    {
+        for entry in arr {
+            let is_obs = entry
+                .get("opencodex_account_observed_native")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            let slug = entry
+                .get("slug")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if is_obs && !slug.is_empty() && !catalog_slugs.contains(slug) {
+                observed_native.push(entry.clone());
+            }
+        }
+    }
+    let mut combined = Vec::with_capacity(catalog_models.len() + observed_native.len());
+    combined.extend_from_slice(catalog_models);
+    combined.extend(observed_native);
+    let wrapper = serde_json::json!({
+        "fetched_at": "2000-01-01T00:00:00Z",
+        "client_version": "0.0.0",
+        "models": combined,
+    });
+    let mut rendered = serde_json::to_vec_pretty(&wrapper)
+        .map_err(|e| format!("failed serializing models_cache.json: {e}"))?;
+    rendered.push(b'\n');
+    let digest = sha256_hex(&rendered);
+    if existing_bytes.as_deref() != Some(rendered.as_slice()) {
+        write_regular_atomic(cache_path, &rendered)?;
+    }
+    Ok(digest)
+}
+
+pub fn apply_attach_or_sync(
+    paths: &ChildPaths,
+    link_id: &str,
+    api_key_id: &str,
+    listen_port: u16,
+    catalog_bytes: &[u8],
+    settings: &HomeCodexSettings,
+) -> Result<ChildJournalV1, String> {
+    assert_no_full_ocx_conflict(paths)?;
+    let catalog_models = validate_catalog_json(catalog_bytes)?;
+    let config_path = paths.codex_config_path();
+    let catalog_path = paths.codex_catalog_path();
+    let cache_path = paths.codex_models_cache_path();
+    reject_symlink(&config_path)?;
+    reject_symlink(&catalog_path)?;
+    reject_symlink(&cache_path)?;
+
+    let existing_journal = read_journal(&paths.journal_file)?;
+    let current_cfg_bytes = match fs::read(&config_path) {
+        Ok(b) => Some(b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("failed reading {}: {e}", config_path.display())),
+    };
+    let current_cfg_text = match &current_cfg_bytes {
+        Some(b) => std::str::from_utf8(b)
+            .map_err(|_| "config.toml is not valid UTF-8".to_owned())?
+            .to_owned(),
+        None => String::new(),
+    };
+
+    if existing_journal.is_none() && !current_cfg_text.is_empty() {
+        detect_unowned_root_routing_conflict(&current_cfg_text)?;
+    }
+
+    let catalog_path_str = catalog_path.to_string_lossy().into_owned();
+    let (next_cfg_text, next_ledger) = apply_design_b_config(
+        &current_cfg_text,
+        listen_port,
+        &catalog_path_str,
+        settings,
+        existing_journal.as_ref().map(|j| &j.ledger),
+    )?;
+    let next_cfg_sha = sha256_hex(next_cfg_text.as_bytes());
+    let next_cat_sha = sha256_hex(catalog_bytes);
+
+    let (pre_cfg_existed, pre_cfg_b64, pre_cfg_sha, first_inj_sha, untouched) =
+        if let Some(prev) = &existing_journal {
+            let cur_sha = current_cfg_bytes.as_ref().map(|b| sha256_hex(b));
+            let still_untouched = prev.untouched_by_external_writer
+                && cur_sha.as_deref() == Some(prev.latest_injected_config_sha256.as_str());
+            (
+                prev.pre_attach_config_existed,
+                prev.pre_attach_config_bytes_b64.clone(),
+                prev.pre_attach_config_sha256.clone(),
+                prev.first_injected_config_sha256.clone(),
+                still_untouched,
+            )
+        } else {
+            let b64 = current_cfg_bytes.as_ref().map(|b| BASE64.encode(b));
+            let sha = current_cfg_bytes.as_ref().map(|b| sha256_hex(b));
+            (
+                current_cfg_bytes.is_some(),
+                b64,
+                sha,
+                next_cfg_sha.clone(),
+                true,
+            )
+        };
+
+    let (pre_cat_existed, pre_cat_b64) = if let Some(prev) = &existing_journal {
+        (
+            prev.pre_attach_catalog_existed,
+            prev.pre_attach_catalog_bytes_b64.clone(),
+        )
+    } else {
+        match fs::read(&catalog_path) {
+            Ok(b) => (true, Some(BASE64.encode(&b))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None),
+            Err(e) => return Err(format!("failed reading {}: {e}", catalog_path.display())),
+        }
+    };
+
+    let (pre_cache_existed, pre_cache_b64) = if let Some(prev) = &existing_journal {
+        (
+            prev.pre_attach_models_cache_existed,
+            prev.pre_attach_models_cache_bytes_b64.clone(),
+        )
+    } else {
+        match fs::read(&cache_path) {
+            Ok(b) => (true, Some(BASE64.encode(&b))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None),
+            Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+        }
+    };
+
+    write_regular_atomic(&catalog_path, catalog_bytes)?;
+    write_private_atomic(&paths.catalog_backup_file, catalog_bytes)?;
+    let latest_cache_sha = refresh_codex_models_cache(&cache_path, &catalog_models)?;
+    write_regular_atomic(&config_path, next_cfg_text.as_bytes())?;
+
+    let journal = ChildJournalV1 {
+        schema: CHILD_JOURNAL_SCHEMA.to_owned(),
+        link_id: link_id.to_owned(),
+        api_key_id: api_key_id.to_owned(),
+        opencodex_home: paths.opencodex_home.to_string_lossy().into_owned(),
+        codex_home: paths.codex_home.to_string_lossy().into_owned(),
+        catalog_path: catalog_path_str,
+        pre_attach_config_existed: pre_cfg_existed,
+        pre_attach_config_bytes_b64: pre_cfg_b64,
+        pre_attach_config_sha256: pre_cfg_sha,
+        first_injected_config_sha256: first_inj_sha,
+        latest_injected_config_sha256: next_cfg_sha,
+        untouched_by_external_writer: untouched,
+        pre_attach_catalog_existed: pre_cat_existed,
+        pre_attach_catalog_bytes_b64: pre_cat_b64,
+        latest_catalog_sha256: next_cat_sha,
+        pre_attach_models_cache_existed: pre_cache_existed,
+        pre_attach_models_cache_bytes_b64: pre_cache_b64,
+        latest_models_cache_sha256: Some(latest_cache_sha),
+        ledger: next_ledger,
+    };
+    write_journal(&paths.journal_file, &journal)?;
+    Ok(journal)
+}
+
+/// Performs 100% offline two-tier restoration of `config.toml`, `opencodex-catalog.json`, and `models_cache.json`.
+pub fn offline_detach(
+    paths: &ChildPaths,
+    keep_catalog: bool,
+) -> Result<DetachOutcome, DetachError> {
+    let Some(journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
+        return Ok(DetachOutcome::NotAttached);
+    };
+    let config_path = paths.codex_config_path();
+    let catalog_path = Path::new(&journal.catalog_path);
+    let cache_path = paths.codex_models_cache_path();
+    reject_symlink(&config_path).map_err(DetachError::Io)?;
+    reject_symlink(catalog_path).map_err(DetachError::Io)?;
+    reject_symlink(&cache_path).map_err(DetachError::Io)?;
+
+    if !keep_catalog && catalog_path.exists() {
+        let cat_bytes = fs::read(catalog_path)
+            .map_err(|e| DetachError::Io(format!("failed reading catalog: {e}")))?;
+        let cur_cat_sha = sha256_hex(&cat_bytes);
+        if cur_cat_sha != journal.latest_catalog_sha256 {
+            let matches_prior = journal
+                .pre_attach_catalog_bytes_b64
+                .as_ref()
+                .and_then(|b64| BASE64.decode(b64).ok())
+                .is_some_and(|prior| prior == cat_bytes);
+            if !matches_prior {
+                return Err(DetachError::Conflict(
+                    "client_catalog_ownership_changed: opencodex-catalog.json was modified externally".to_owned(),
+                ));
+            }
+        }
+    }
+
+    let cur_cfg_bytes = match fs::read(&config_path) {
+        Ok(b) => Some(b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(DetachError::Io(format!("failed reading config.toml: {e}"))),
+    };
+
+    let outcome = match cur_cfg_bytes {
+        None => DetachOutcome::SurgicalRestore,
+        Some(bytes) => {
+            let cur_sha = sha256_hex(&bytes);
+            if journal.untouched_by_external_writer
+                && cur_sha == journal.latest_injected_config_sha256
+            {
+                if journal.pre_attach_config_existed {
+                    let orig = journal
+                        .pre_attach_config_bytes_b64
+                        .as_ref()
+                        .ok_or_else(|| {
+                            DetachError::Conflict("missing pre-attach config snapshot".to_owned())
+                        })
+                        .and_then(|b64| {
+                            BASE64.decode(b64).map_err(|e| {
+                                DetachError::Conflict(format!("bad snapshot base64: {e}"))
+                            })
+                        })?;
+                    write_regular_atomic(&config_path, &orig).map_err(DetachError::Io)?;
+                } else {
+                    let _ = fs::remove_file(&config_path);
+                }
+                DetachOutcome::ExactRestore
+            } else {
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|_| DetachError::Conflict("config.toml is not UTF-8".to_owned()))?;
+                let stripped =
+                    surgical_detach_config(text, &journal.ledger).map_err(DetachError::Conflict)?;
+                match stripped {
+                    Some(updated) => {
+                        write_regular_atomic(&config_path, updated.as_bytes())
+                            .map_err(DetachError::Io)?;
+                    }
+                    None => {
+                        let _ = fs::remove_file(&config_path);
+                    }
+                }
+                DetachOutcome::SurgicalRestore
+            }
+        }
+    };
+
+    if !keep_catalog {
+        if journal.pre_attach_catalog_existed {
+            if let Some(b64) = &journal.pre_attach_catalog_bytes_b64
+                && let Ok(prior_bytes) = BASE64.decode(b64)
+            {
+                write_regular_atomic(catalog_path, &prior_bytes).map_err(DetachError::Io)?;
+            }
+        } else {
+            let _ = fs::remove_file(catalog_path);
+        }
+    }
+
+    if cache_path.exists() {
+        if journal.pre_attach_models_cache_existed {
+            if let Some(b64) = &journal.pre_attach_models_cache_bytes_b64
+                && let Ok(prior_cache) = BASE64.decode(b64)
+            {
+                let _ = write_regular_atomic(&cache_path, &prior_cache);
+            }
+        } else if let Ok(cur_cache) = fs::read(&cache_path)
+            && Some(sha256_hex(&cur_cache)) == journal.latest_models_cache_sha256
+        {
+            let _ = fs::remove_file(&cache_path);
+        }
+    }
+
+    let _ = fs::remove_file(&paths.catalog_backup_file);
+    let _ = fs::remove_file(&paths.journal_file);
+    Ok(outcome)
+}

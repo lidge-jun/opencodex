@@ -105,9 +105,9 @@ Add `native/ocx-child` source artifacts to `"files"` and add scripts `build:ocx-
 
 Register all three new test files in `scripts/test-layout/layout-clients.json` and `tests/fixtures/test-layout-expected.json`:
 
-1. `tests/clients/link-ephemeral-child-discovery.test.ts` (`"clients"`): POSIX & Windows candidate discovery precedence (`ocx` beats `ocx-child`; fallback selects `ocx-child`), Windows encoded PowerShell `< 8000` chars, and `native/ocx-child/Cargo.toml` == `package.json` version lock.
+1. `tests/clients/link-ephemeral-child-discovery.test.ts` (`"clients"`): POSIX & Windows candidate discovery precedence (`ocx` beats `ocx-child`; fallback selects `ocx-child`), Windows encoded PowerShell `< 8000` chars, and `OCX_PROTOCOL_COMPAT_VERSION` (`>= 2.93.0`) compatibility check via `classifyVersionProbe`.
 2. `tests/server/link-enrollment-ephemeral-child.test.ts` (`"server"`): Home `probe -> confirm-host -> apply` and `DELETE /api/link/:id` across clean detached `ocx-child`, already-attached `ocx-child` (`409`), busy-port foreign listener (`409`), and full-`ocx` standalone Child (`202`).
-3. `tests/clients/ocx-child-e2e.test.ts` (`"clients"`): End-to-end integration driving the real compiled `ocx-child` Rust binary against a real in-process Home `hub-link` + management server (`RUSTUP_HOME` / `CARGO_HOME` preserved from `OCX_REAL_HOME` per `#7884`): enroll -> SSE inference relay with caller credential stripping -> Home `ocx sync` fan-out updating catalog & Home Codex settings -> daemon rollover (`startedAt >= appliedAt`) + immediate `child-parity` POST verified on Home `GET /api/link/status` -> Child `status --json` -> `--expect-link` mismatch exit `5` (`child-link-mismatch:other_link`) -> `#1798` comment-stripped `DELETE /api/link/:id` & offline `detach` -> byte-accurate restoration and zero running `ocx-child` process.
+3. `tests/clients/link-ocx-child-e2e.test.ts` (`"clients"` — `link-*` prefix per `seeds.json`): End-to-end integration driving the real compiled `ocx-child` Rust binary against a real in-process Home `hub-link` + management server (`RUSTUP_HOME` / `CARGO_HOME` preserved from `OCX_REAL_HOME` per `#7884`): enroll -> SSE inference relay with caller credential stripping -> Home `ocx sync` fan-out updating catalog & Home Codex settings -> daemon rollover (`startedAt >= appliedAt`) + immediate `child-parity` POST verified on Home `GET /api/link/status` -> Child `status --json` -> `--expect-link` mismatch exit `5` (`child-link-mismatch:other_link`) -> `#1798` comment-stripped `DELETE /api/link/:id` & offline `detach` -> byte-accurate restoration and zero running `ocx-child` process.
 
 ## 2. Conditional-Path Activation Scenarios (`C-ACTIVATION-GROUNDING-01`)
 
@@ -118,6 +118,6 @@ Register all three new test files in `scripts/test-layout/layout-clients.json` a
 
 ## 3. Phase Verifiers
 
-- `bun test tests/clients/link-ephemeral-child-discovery.test.ts tests/server/link-enrollment-ephemeral-child.test.ts tests/clients/ocx-child-e2e.test.ts tests/server/link-enrollment.test.ts tests/clients/link-pinned-sync-argv.test.ts tests/clients/link-ssh-argv.test.ts tests/clients/link-ssh-argv-discovery.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/lab/core-link-boundary.test.ts tests/lab/core-lab-boundary.test.ts` (exit `0`)
+- `bun test tests/clients/link-ephemeral-child-discovery.test.ts tests/server/link-enrollment-ephemeral-child.test.ts tests/clients/link-ocx-child-e2e.test.ts tests/server/link-enrollment.test.ts tests/clients/link-pinned-sync-argv.test.ts tests/clients/link-ssh-argv.test.ts tests/clients/link-ssh-argv-discovery.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/lab/core-link-boundary.test.ts tests/lab/core-lab-boundary.test.ts` (exit `0`)
 - `bun run typecheck` (exit `0`)
 - `bun run privacy:scan` (exit `0`)

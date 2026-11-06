@@ -1,5 +1,7 @@
 # `wp2` — Standalone Lightweight Rust Child Crate (`native/ocx-child`)
 
+> Continuity handoff (`LOOP-CONTINUITY-01` from `wp1` D at `07f50076e5`): `wp1` landed the 74-vector `tests/fixtures/link/ocx-child-conformance.json` and `tests/clients/link-ocx-child-conformance.test.ts` (`65 pass, 0 fail`). Revalidated `020_wp2_rust_ocx_child.md` against `07f50076e5` and folded the `wp0` non-blocking Medium note: `Cargo.toml` sets crate `version = "0.1.0"` (matching `native/remote-workspace-helper/Cargo.toml:3`) while `pub const OCX_PROTOCOL_COMPAT_VERSION: &str = "2.98.0"` drives `--version` (`opencodex 2.98.0`) and peer headers, preventing `dev-version-bump.yml` drift on `package.json` bumps. Architect consultation: covered by `ARCH-01..ARCH-04` (`ALIGNED` on `01a1b18b-a2f3-7b53-971a-9b2c9cccecf7`, `000_roadmap.md` §3.1).
+
 - **Phase ID**: `wp2` (depends on `wp1`; satisfies `c-3`, `c-6`)
 - **Header dependencies**:
   - Consumes shared fixture `ConformanceSuite` (`tests/fixtures/link/ocx-child-conformance.json`) and wire/schema contracts `EphemeralChildConfigProjection` (`src/link/ephemeral-child.ts`), `HomeCodexSettingsDocument` / `HomeCodexSettings` (`src/link/codex-settings.ts:30`), `LinkChildParityReport` (`src/link/child-parity.ts:28`), `ClientSyncMismatchReason` (`src/client/sync-expectation.ts:17`), and `FanoutDocument` (`src/cli/sync-fanout.ts:86`).
@@ -15,7 +17,7 @@
 ```toml
 [package]
 name = "opencodex-child"
-version = "2.98.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
@@ -68,7 +70,7 @@ All modules set `#![deny(unsafe_op_in_unsafe_fn)]` at crate root (`lib.rs` / `ma
 
 1. `src/lib.rs` & `src/main.rs`:
    - Exports testable library modules (`routes`, `http_wire`, `relay_auth`, `codex_settings`, `parity`, `toml_surgeon`, `journal`, `state`, `platform`, `relay`, `daemon`, `cli`).
-   - `OCX_COMPAT_VERSION: &str = env!("CARGO_PKG_VERSION")` (`2.98.0`, matching `package.json`, `>= 2.93.0`).
+   - `pub const OCX_PROTOCOL_COMPAT_VERSION: &str = "2.98.0";` (`>= 2.93.0`, decoupled from crate `0.1.0` so automated `package.json` bumps never cause version-lock drift).
 2. `src/platform/mod.rs`, `src/platform/unix.rs`, `src/platform/windows.rs`:
    - `fill_random_bytes(&mut [u8])`: reads `/dev/urandom` on Unix and `BCryptGenRandom(..., BCRYPT_USE_SYSTEM_PREFERRED_RNG)` on Windows.
    - `volatile_zero_bytes(&mut [u8])`: `core::ptr::write_volatile` byte loop + `core::sync::atomic::compiler_fence(Ordering::SeqCst)` (`SecretBytes` zeroes on `Drop`).
