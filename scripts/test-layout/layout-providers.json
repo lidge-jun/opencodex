@@ -1,4 +1,5 @@
 {
+  "claude-chat-gateway-tool-schema.test.ts": "providers",
   "provider-anthropic-usage-windows.test.ts": "providers",
   "xai-additional-tools.test.ts": "providers/xai",
   "xai-replay-provenance.test.ts": "providers/xai",

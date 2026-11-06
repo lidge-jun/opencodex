@@ -392,7 +392,7 @@
   "audio-client.test.ts": "server", "audio-dictation.test.ts": "server",
   "audio-transcriptions.test.ts": "server", "auto-compact-budget.test.ts": "providers",
   "autostart-health.test.ts": "service", "azure-adapter.test.ts": "providers",
-  "azure-model-router-tool-schema.test.ts": "providers", "bare-echo-alias.test.ts": "responses",
+  "azure-model-router-tool-schema.test.ts": "providers", "claude-chat-gateway-tool-schema.test.ts": "providers", "bare-echo-alias.test.ts": "responses",
   "baseten-provider.test.ts": "providers", "bearer-admission-routed-provider.test.ts": "codex-integration",
   "bounded-body.test.ts": "server", "brand-favicons.test.ts": "ci-workflows",
   "bridge-legacy-shell-normalization.test.ts": "adapters", "bridge-lifecycle.test.ts": "adapters",
