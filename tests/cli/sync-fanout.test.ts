@@ -124,6 +124,9 @@ test("connected skipped Children make fan-out partial with actionable hints", as
   expect(json.schema).toBe("ocx.sync.fanout/1");
   expect(json.children.map((child: { reason: string }) => child.reason)).toEqual(reasons);
   expect(json.children[0].hint).toContain("2.93.0");
+  expect(json.children[0].hint).toContain("host0");
+  expect(json.children[0].hint).toContain("installer that owns");
+  expect(json.children[0].hint).not.toContain("Update OpenCodex Desktop");
   expect(json.children[0].hint).toContain("Check for Updates");
   expect(json.children[1].hint).toContain("re-link");
   expect(json.children[2].hint).toContain("re-link");
