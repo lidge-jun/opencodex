@@ -198,6 +198,10 @@ describe("usage client attribution", () => {
     const sourceFilter = { client: "all" as const, device: { kind: "unconfigured" as const } };
     expect(() => createUsageSummaryAccumulator({ filter: { sourceFilter, configuredApiKeyIds: ["x".repeat(257)] } })).toThrow();
     expect(() => createUsageSummaryAccumulator({ filter: { sourceFilter, configuredApiKeyIds: Array.from({ length: 1025 }, (_, i) => `id-${i}`) } })).toThrow();
+    const ids = Array.from({ length: 257 }, (_, i) => `${String(i).padStart(3, "0")}${"x".repeat(253)}`);
+    const allowed = createUsageSummaryAccumulator({ filter: { sourceFilter, configuredApiKeyIds: ids.slice(0, 256) } });
+    expect(allowed.estimatedBytes).toBeGreaterThan(256 * 256 * 2);
+    expect(() => createUsageSummaryAccumulator({ filter: { sourceFilter, configuredApiKeyIds: ids } })).toThrow();
   });
 
   test("source facets count matching rows in both dimensions without retaining arbitrary key IDs", () => {
