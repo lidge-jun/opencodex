@@ -424,10 +424,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
       if (acceptDecodedChars(data.delta.length)) streamedPart(data).delta += data.delta;
     } else if (type === "response.output_text.done" && typeof data.text === "string") {
       // The `done` event carries the full, authoritative text for one content part.
-      if (acceptDecodedChars(data.text.length)) {
-        const part = streamedPart(data);
-        part.done = (part.done ?? "") + data.text;
-      }
+      if (acceptDecodedChars(data.text.length)) streamedPart(data).done = data.text;
     } else if (type === "response.completed" || type === "response.done") {
       acc.terminalEvent = true;
       const resp = data.response as { output?: OutputItem[] } | undefined;
