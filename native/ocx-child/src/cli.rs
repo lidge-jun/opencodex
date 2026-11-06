@@ -16,7 +16,7 @@ use crate::journal::{DetachError, apply_attach_or_sync, offline_detach};
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
     FileLock, LockAcquireError, SecretBytes, format_iso8601_utc, now_epoch_ms, random_hex,
-    resolve_codex_home, resolve_opencodex_home,
+    resolve_codex_home, resolve_opencodex_home, write_private_atomic, write_regular_atomic,
 };
 use crate::relay::{
     RelayCredentials, fetch_home_authenticated, post_child_parity_report, serve_foreground,
@@ -190,6 +190,81 @@ fn fetch_home_settings_doc(
         .ok_or_else(|| "Home codex-settings failed strict schema validation".to_owned())
 }
 
+struct AttachRollbackSnapshot {
+    prior_state: Option<ChildStateV1>,
+    prior_was_serving: bool,
+    journal: Option<Vec<u8>>,
+    config: Option<Vec<u8>>,
+    catalog: Option<Vec<u8>>,
+    catalog_backup: Option<Vec<u8>>,
+    models_cache: Option<Vec<u8>>,
+    key: Option<SecretBytes>,
+    state_bytes: Option<Vec<u8>>,
+}
+
+impl AttachRollbackSnapshot {
+    fn capture(paths: &ChildPaths, prior_state: Option<ChildStateV1>) -> Self {
+        let prior_was_serving = prior_state.as_ref().is_some_and(|st| {
+            probe_local_healthz(st.listen_port, Duration::from_millis(300)).is_some()
+        });
+        Self {
+            prior_state,
+            prior_was_serving,
+            journal: fs::read(&paths.journal_file).ok(),
+            config: fs::read(paths.codex_config_path()).ok(),
+            catalog: fs::read(paths.codex_catalog_path()).ok(),
+            catalog_backup: fs::read(&paths.catalog_backup_file).ok(),
+            models_cache: fs::read(paths.codex_models_cache_path()).ok(),
+            key: fs::read(&paths.key_file).ok().map(SecretBytes::new),
+            state_bytes: fs::read(&paths.state_file).ok(),
+        }
+    }
+
+    fn restore_path(path: &std::path::Path, bytes: Option<&[u8]>, private: bool) {
+        match bytes {
+            Some(b) => {
+                let _ = if private {
+                    write_private_atomic(path, b)
+                } else {
+                    write_regular_atomic(path, b)
+                };
+            }
+            None => {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    fn restore(&self, paths: &ChildPaths) {
+        Self::restore_path(&paths.journal_file, self.journal.as_deref(), true);
+        Self::restore_path(&paths.codex_config_path(), self.config.as_deref(), false);
+        Self::restore_path(&paths.codex_catalog_path(), self.catalog.as_deref(), false);
+        Self::restore_path(
+            &paths.catalog_backup_file,
+            self.catalog_backup.as_deref(),
+            true,
+        );
+        Self::restore_path(
+            &paths.codex_models_cache_path(),
+            self.models_cache.as_deref(),
+            false,
+        );
+        Self::restore_path(
+            &paths.key_file,
+            self.key.as_ref().map(SecretBytes::as_slice),
+            true,
+        );
+        Self::restore_path(&paths.state_file, self.state_bytes.as_deref(), true);
+        if let Some(mut prev) = self.prior_state.clone()
+            && self.prior_was_serving
+            && probe_local_healthz(prev.listen_port, Duration::from_millis(250)).is_none()
+            && start_or_rollover_daemon(paths, &mut prev, None).is_ok()
+        {
+            let _ = write_child_state(&paths.state_file, &prev);
+        }
+    }
+}
+
 fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> u8 {
     let mut link_id: Option<String> = None;
     let mut tunnel_port: Option<u16> = None;
@@ -260,22 +335,10 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         StateReadOutcome::Valid(st) => Some(*st),
         _ => None,
     };
-    let existing_pid = if let Some(prev) = &prior_state {
-        if prev.listen_port != listen_port {
-            if let Err(e) = stop_owned_daemon(prev) {
-                eprintln!(
-                    "attach failed stopping previous relay on port {}: {e}",
-                    prev.listen_port
-                );
-                return 1;
-            }
-            None
-        } else {
-            prev.daemon_pid
-        }
-    } else {
-        None
-    };
+    let existing_pid = prior_state
+        .as_ref()
+        .filter(|prev| prev.listen_port == listen_port)
+        .and_then(|prev| prev.daemon_pid);
     if let Err(e) = ensure_port_available_for_attach(listen_port, existing_pid) {
         eprintln!("{e}");
         return 1;
@@ -345,6 +408,8 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
+    let rollback = AttachRollbackSnapshot::capture(&paths, prior_state.clone());
+
     let journal = match apply_attach_or_sync(
         &paths,
         &link_id,
@@ -355,12 +420,14 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
     ) {
         Ok(j) => j,
         Err(e) => {
+            rollback.restore(&paths);
             eprintln!("{e}");
             return 1;
         }
     };
 
     if let Err(e) = write_link_key(&paths.key_file, raw_key_str) {
+        rollback.restore(&paths);
         eprintln!("{e}");
         return 1;
     }
@@ -371,10 +438,22 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
     let shutdown_secret = match random_hex(24) {
         Ok(s) => s,
         Err(e) => {
+            rollback.restore(&paths);
             eprintln!("{e}");
             return 1;
         }
     };
+    if let Some(prev) = &prior_state
+        && prev.listen_port != listen_port
+        && let Err(e) = stop_owned_daemon(prev)
+    {
+        rollback.restore(&paths);
+        eprintln!(
+            "attach failed stopping previous relay on port {}: {e}",
+            prev.listen_port
+        );
+        return 1;
+    }
     let mut state = ChildStateV1 {
         schema: CHILD_STATE_SCHEMA.to_owned(),
         link_id: link_id.clone(),
@@ -400,6 +479,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }),
     };
     if let Err(e) = write_child_state(&paths.state_file, &state) {
+        rollback.restore(&paths);
         eprintln!("{e}");
         return 1;
     }
@@ -419,6 +499,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
                 let _ = post_child_parity_report(tunnel_port, &creds, &report);
             }
             Err(e) => {
+                rollback.restore(&paths);
                 eprintln!("{e}");
                 return 1;
             }

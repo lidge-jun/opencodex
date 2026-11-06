@@ -14,7 +14,7 @@
 1. **Finding #1 (`journal.rs:296`, P1 — Write-ahead recovery journal before overwriting Codex files)**:
    - Split `prepare_codex_models_cache(cache_path, catalog_models) -> Result<(Option<Vec<u8>>, String), String>` so the target `models_cache.json` bytes and SHA-256 digest are computed *before* mutating any file in `$CODEX_HOME`.
    - Call `write_journal(&paths.journal_file, &journal)?` **first** (before writing `catalog_path`, `catalog_backup_file`, `cache_path`, and `config_path`).
-   - In `offline_detach`, treat `Some(cur_sha.as_str()) == journal.pre_attach_config_sha256.as_deref()` (or `!config_path.exists() && !journal.pre_attach_config_existed`) under `untouched_by_external_writer` as `ExactRestore` as well, so a crash immediately after `write_journal` (before `config.toml` or after partial `catalog.json` write) detaches cleanly back to exact pre-attach state.
+   - Preserve each file's last known-owned on-disk SHA-256 (`previous_injected_config_sha256`, `previous_catalog_sha256`, `previous_models_cache_sha256`) across consecutive interrupted syncs without adopting external edits as owned, and treat `pre_attach_config_sha256` / `previous_*_sha256` under `untouched_by_external_writer` as `ExactRestore` during `offline_detach` (removing Child-created `models_cache.json` even if a sync interrupted before the next cache write).
 2. **Finding #2 (`toml_surgeon.rs:199`, P1 — Multiline TOML string/collection boundary tracking)**:
    - Port `markStructuralLines` from `src/codex/toml-source-lines.ts:158-223` into `mark_structural_lines(lines: &[&str]) -> Vec<bool>` tracking `"""..."""` (with backslash escapes and 3–5 closing quotes), `'''...'''` (3–5 closing quotes), `[...]` depth, and `{...}` depth.
    - Gate every structural scan (`root_end_index`, `detect_unowned_root_routing_conflict`, `external_codex_model_provider`, `insert_root_lines`, `strip_owned_root_urls`, `strip_owned_web_search`, `ensure_root_web_search`, `set_root_catalog_path`, `strip_opencodex_catalog_path`, `upsert_table_bool`, `apply_subagent_defaults`, `strip_subagent_defaults`, `strip_features_ledger`, `surgical_detach_config`, and blank-line collapsing) on `structural[i] == true` so `[Important]` or `openai_base_url = ...` inside multiline `developer_instructions` is untouched data.
@@ -28,7 +28,8 @@
 - Add 2 new shared golden vectors to `tests/fixtures/link/ocx-child-conformance.json` (verified in both `bun test` and `cargo test`):
   1. `multiline_developer_instructions_bracket_line`: `developer_instructions = """\n[Important]\nKeep literal\n"""\n` -> attach inserts root keys *after* the closing `"""` (not inside the string!), and surgical detach after `#1798` comment strip restores cleanly.
   2. `restore_overwritten_user_features_on_surgical_detach`: pre-attach `[features]\nfast_mode = false\nmulti_agent_v2 = true\n` -> attach sets `fastMode: true, multiAgentMode: "v1"` -> user appends `[extra]\nk = 1\n` -> surgical detach restores `fast_mode = false` and `multi_agent_v2 = true` while keeping `[extra]`.
-- Add a Rust unit/integration test simulating a crash after `write_journal` + `catalog.json` write (before `config.toml` write) and asserting `offline_detach` restores exact pre-attach state.
+- Add `multiline_features_agents_and_blank_lines_surgical` to shared conformance vectors (`[features]`, `fast_mode = true`, repeated blank lines, and `[agents]` inside multiline string with `fastMode` and `subagentDefaults` active).
+- Add deterministic `JournalWriteFault` (`AfterJournalWrite` and `AfterCatalogWrite`) consecutive-failed-sync tests in `native/ocx-child/tests/conformance.rs` verifying `ExactRestore` of `config.toml` and `pre_attach_catalog` plus removal of previous injected `models_cache.json`.
 
 ## 3. Verifiers
 

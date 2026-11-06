@@ -102,11 +102,11 @@ Deterministic JSON document (`"schema": "ocx.child.conformance/1"`) containing 6
    - `conflict_tampered_catalog_refused`: attach wrote `opencodex-catalog.json` -> user hand-edits `opencodex-catalog.json` -> detach refuses (`expectedDetachOutcome: "refuse_conflict"`) rather than deleting user-modified catalog.
    - `refuse_external_model_provider_on_attach`: `preAttachToml` has `model_provider = "openrouter"` + `[model_providers.openrouter]\nbase_url = "https://openrouter.ai/api/v1"` -> `expectedAttachOk: false`, `expectedDetachOutcome: "not_attached"`.
 
-### 1.3 NEW `tests/clients/ocx-child-conformance.test.ts` & Test-Layout Shards
+### 1.3 NEW `tests/clients/link-ocx-child-conformance.test.ts` & Test-Layout Shards
 
 - Resolves fixture via `fixturePath("link", "ocx-child-conformance.json")` from `../helpers/repo-root`.
 - Verifies every vector in `routeCases`, `framingCases`, `relayAuthCases`, `settingsDigestCases`, `childParityCases`, and `journalRoundtripCases` against OpenCodex's live TypeScript implementations (`linkRouteAllowed`, `linkManagementRouteAllowed`, `validateHubRelayRequestHeaders`, `computeLinkRelayProof`, `computeLinkConnectionProof`, `codexSettingsDigestPayload`, `codexSettingsDigest`, `parseLinkChildParityReport`, `externalCodexModelProvider`, `stripJournaledOpenaiBaseUrl`, `ensureRootWebSearchDisabled`), plus unit tests for `isDetachedEphemeralChildConfig` and `isEphemeralChildHealth`.
-- Registers `"ocx-child-conformance.test.ts": "clients"` in BOTH:
+- Registers `"link-ocx-child-conformance.test.ts": "clients"` in BOTH:
   - `scripts/test-layout/layout-clients.json`
   - `tests/fixtures/test-layout-expected.json`
 
@@ -122,8 +122,3 @@ Deterministic JSON document (`"schema": "ocx.child.conformance/1"`) containing 6
 - `bun test tests/clients/link-ocx-child-conformance.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/lab/core-link-boundary.test.ts tests/lab/core-lab-boundary.test.ts` (exit `0`)
 - `bun run typecheck` (exit `0`)
 - `bun run privacy:scan` (exit `0`)
-- Registers `"link-ocx-child-conformance.test.ts": "clients"` in BOTH:
-  - `scripts/test-layout/layout-clients.json`
-  - `tests/fixtures/test-layout-expected.json`
-
-## 2. Conditional-Path Activation Scenarios (`C-ACTIVATION-GROUNDING-01`)

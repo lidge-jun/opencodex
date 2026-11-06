@@ -867,12 +867,12 @@ fn strip_subagent_defaults(content_lf: &str, written: Option<&WrittenSubagentDef
         for d in &mut drop[ag_idx..end_idx] {
             *d = true;
         }
-        if ag_idx > 0
-            && structural[ag_idx - 1]
-            && lines[ag_idx - 1].trim() == MANAGED_AGENTS_TABLE_MARKER
-        {
-            drop[ag_idx - 1] = true;
-        }
+    }
+    if ag_idx > 0
+        && structural[ag_idx - 1]
+        && lines[ag_idx - 1].trim() == MANAGED_AGENTS_TABLE_MARKER
+    {
+        drop[ag_idx - 1] = true;
     }
     lines
         .into_iter()

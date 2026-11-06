@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -41,7 +41,17 @@ pub struct ChildJournalV1 {
     pub pre_attach_models_cache_existed: bool,
     pub pre_attach_models_cache_bytes_b64: Option<String>,
     pub latest_models_cache_sha256: Option<String>,
+    #[serde(default)]
+    pub previous_models_cache_sha256: Option<String>,
     pub ledger: ChildInjectedLedger,
+}
+
+/// Deterministic fault-injection points for write-ahead crash-recovery tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JournalWriteFault {
+    AfterJournalWrite,
+    AfterCatalogWrite,
+    AfterCacheWrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +226,26 @@ pub fn apply_attach_or_sync(
     catalog_bytes: &[u8],
     settings: &HomeCodexSettings,
 ) -> Result<ChildJournalV1, String> {
+    apply_attach_or_sync_with_fault(
+        paths,
+        link_id,
+        api_key_id,
+        listen_port,
+        catalog_bytes,
+        settings,
+        None,
+    )
+}
+
+pub fn apply_attach_or_sync_with_fault(
+    paths: &ChildPaths,
+    link_id: &str,
+    api_key_id: &str,
+    listen_port: u16,
+    catalog_bytes: &[u8],
+    settings: &HomeCodexSettings,
+    fault: Option<JournalWriteFault>,
+) -> Result<ChildJournalV1, String> {
     assert_no_full_ocx_conflict(paths)?;
     let catalog_models = validate_catalog_json(catalog_bytes)?;
     let config_path = paths.codex_config_path();
@@ -256,16 +286,24 @@ pub fn apply_attach_or_sync(
     let (pre_cfg_existed, pre_cfg_b64, pre_cfg_sha, first_inj_sha, prev_inj_sha, untouched) =
         if let Some(prev) = &existing_journal {
             let cur_sha = current_cfg_bytes.as_ref().map(|b| sha256_hex(b));
+            let cur_matches_owned = cur_sha.as_deref()
+                == Some(prev.latest_injected_config_sha256.as_str())
+                || (cur_sha.is_some() && cur_sha == prev.previous_injected_config_sha256);
             let still_untouched = prev.untouched_by_external_writer
-                && (cur_sha.as_deref() == Some(prev.latest_injected_config_sha256.as_str())
-                    || cur_sha == prev.pre_attach_config_sha256
-                    || (cur_sha.is_some() && cur_sha == prev.previous_injected_config_sha256));
+                && (cur_matches_owned || cur_sha == prev.pre_attach_config_sha256);
+            let carried_prev_cfg = if cur_matches_owned {
+                cur_sha
+            } else {
+                prev.previous_injected_config_sha256
+                    .clone()
+                    .or_else(|| Some(prev.latest_injected_config_sha256.clone()))
+            };
             (
                 prev.pre_attach_config_existed,
                 prev.pre_attach_config_bytes_b64.clone(),
                 prev.pre_attach_config_sha256.clone(),
                 prev.first_injected_config_sha256.clone(),
-                Some(prev.latest_injected_config_sha256.clone()),
+                carried_prev_cfg,
                 still_untouched,
             )
         } else {
@@ -282,28 +320,35 @@ pub fn apply_attach_or_sync(
         };
 
     let (pre_cat_existed, pre_cat_b64, prev_cat_sha) = if let Some(prev) = &existing_journal {
+        let mut carried_prev_cat = prev
+            .previous_catalog_sha256
+            .clone()
+            .or_else(|| Some(prev.latest_catalog_sha256.clone()));
         if catalog_path.exists() {
             let existing_cat = fs::read(&catalog_path)
                 .map_err(|e| format!("failed reading {}: {e}", catalog_path.display()))?;
             let existing_cat_sha = sha256_hex(&existing_cat);
-            let matches_ours = existing_cat_sha == prev.latest_catalog_sha256
-                || Some(existing_cat_sha.as_str()) == prev.previous_catalog_sha256.as_deref()
-                || prev
-                    .pre_attach_catalog_bytes_b64
-                    .as_ref()
-                    .and_then(|b64| BASE64.decode(b64).ok())
-                    .is_some_and(|p| p == existing_cat);
-            if !matches_ours {
+            let matches_owned_injected = existing_cat_sha == prev.latest_catalog_sha256
+                || Some(existing_cat_sha.as_str()) == prev.previous_catalog_sha256.as_deref();
+            let matches_pre_attach = prev
+                .pre_attach_catalog_bytes_b64
+                .as_ref()
+                .and_then(|b64| BASE64.decode(b64).ok())
+                .is_some_and(|p| p == existing_cat);
+            if !matches_owned_injected && !matches_pre_attach {
                 return Err(
                     "client_catalog_ownership_changed: opencodex-catalog.json was modified externally"
                         .to_owned(),
                 );
             }
+            if matches_owned_injected {
+                carried_prev_cat = Some(existing_cat_sha);
+            }
         }
         (
             prev.pre_attach_catalog_existed,
             prev.pre_attach_catalog_bytes_b64.clone(),
-            Some(prev.latest_catalog_sha256.clone()),
+            carried_prev_cat,
         )
     } else {
         match fs::read(&catalog_path) {
@@ -313,15 +358,37 @@ pub fn apply_attach_or_sync(
         }
     };
 
-    let (pre_cache_existed, pre_cache_b64) = if let Some(prev) = &existing_journal {
+    let (pre_cache_existed, pre_cache_b64, prev_cache_sha) = if let Some(prev) = &existing_journal {
+        let carried_prev_cache = match fs::read(&cache_path) {
+            Ok(existing_cache) => {
+                let existing_cache_sha = sha256_hex(&existing_cache);
+                let matches_owned = Some(existing_cache_sha.as_str())
+                    == prev.latest_models_cache_sha256.as_deref()
+                    || Some(existing_cache_sha.as_str())
+                        == prev.previous_models_cache_sha256.as_deref();
+                if matches_owned {
+                    Some(existing_cache_sha)
+                } else {
+                    prev.previous_models_cache_sha256
+                        .clone()
+                        .or_else(|| prev.latest_models_cache_sha256.clone())
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => prev
+                .previous_models_cache_sha256
+                .clone()
+                .or_else(|| prev.latest_models_cache_sha256.clone()),
+            Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+        };
         (
             prev.pre_attach_models_cache_existed,
             prev.pre_attach_models_cache_bytes_b64.clone(),
+            carried_prev_cache,
         )
     } else {
         match fs::read(&cache_path) {
-            Ok(b) => (true, Some(BASE64.encode(&b))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None),
+            Ok(b) => (true, Some(BASE64.encode(&b)), None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None, None),
             Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
         }
     };
@@ -350,14 +417,24 @@ pub fn apply_attach_or_sync(
         pre_attach_models_cache_existed: pre_cache_existed,
         pre_attach_models_cache_bytes_b64: pre_cache_b64,
         latest_models_cache_sha256: Some(latest_cache_sha),
+        previous_models_cache_sha256: prev_cache_sha,
         ledger: next_ledger,
     };
     // Persist recovery journal BEFORE mutating any file in $CODEX_HOME (write-ahead durability).
     write_journal(&paths.journal_file, &journal)?;
+    if fault == Some(JournalWriteFault::AfterJournalWrite) {
+        return Err("injected fault: AfterJournalWrite".to_owned());
+    }
     write_regular_atomic(&catalog_path, catalog_bytes)?;
     write_private_atomic(&paths.catalog_backup_file, catalog_bytes)?;
+    if fault == Some(JournalWriteFault::AfterCatalogWrite) {
+        return Err("injected fault: AfterCatalogWrite".to_owned());
+    }
     if let Some(cache_bytes) = prepared_cache {
         write_regular_atomic(&cache_path, &cache_bytes)?;
+    }
+    if fault == Some(JournalWriteFault::AfterCacheWrite) {
+        return Err("injected fault: AfterCacheWrite".to_owned());
     }
     write_regular_atomic(&config_path, next_cfg_text.as_bytes())?;
     Ok(journal)
@@ -397,6 +474,58 @@ pub fn offline_detach(
             }
         }
     }
+
+    enum CacheDetachPlan {
+        Noop,
+        Remove,
+        Write(Vec<u8>),
+    }
+
+    let cache_plan = if cache_path.exists() {
+        let cur_cache = fs::read(&cache_path)
+            .map_err(|e| DetachError::Io(format!("failed reading models_cache.json: {e}")))?;
+        let cur_cache_sha = sha256_hex(&cur_cache);
+        let cache_untouched = Some(cur_cache_sha.as_str())
+            == journal.latest_models_cache_sha256.as_deref()
+            || Some(cur_cache_sha.as_str()) == journal.previous_models_cache_sha256.as_deref();
+        if journal.pre_attach_models_cache_existed {
+            let prior_cache = journal
+                .pre_attach_models_cache_bytes_b64
+                .as_ref()
+                .ok_or_else(|| {
+                    DetachError::Conflict("missing pre-attach models_cache snapshot".to_owned())
+                })
+                .and_then(|b64| {
+                    BASE64.decode(b64).map_err(|e| {
+                        DetachError::Conflict(format!("bad models_cache snapshot: {e}"))
+                    })
+                })?;
+            if cache_untouched || cur_cache == prior_cache {
+                if cur_cache != prior_cache {
+                    CacheDetachPlan::Write(prior_cache)
+                } else {
+                    CacheDetachPlan::Noop
+                }
+            } else {
+                let reconciled = reconcile_modified_models_cache(
+                    &cur_cache,
+                    Some(&prior_cache),
+                    &paths.catalog_backup_file,
+                )
+                .map_err(DetachError::Conflict)?;
+                CacheDetachPlan::Write(reconciled)
+            }
+        } else if cache_untouched {
+            CacheDetachPlan::Remove
+        } else {
+            let reconciled =
+                reconcile_modified_models_cache(&cur_cache, None, &paths.catalog_backup_file)
+                    .map_err(DetachError::Conflict)?;
+            CacheDetachPlan::Write(reconciled)
+        }
+    } else {
+        CacheDetachPlan::Noop
+    };
 
     let cur_cfg_bytes = match fs::read(&config_path) {
         Ok(b) => Some(b),
@@ -463,48 +592,18 @@ pub fn offline_detach(
         }
     }
 
-    if cache_path.exists() {
-        let cur_cache = fs::read(&cache_path)
-            .map_err(|e| DetachError::Io(format!("failed reading models_cache.json: {e}")))?;
-        let cur_cache_sha = sha256_hex(&cur_cache);
-        let cache_untouched =
-            Some(cur_cache_sha.as_str()) == journal.latest_models_cache_sha256.as_deref();
-        if journal.pre_attach_models_cache_existed {
-            let prior_cache = journal
-                .pre_attach_models_cache_bytes_b64
-                .as_ref()
-                .ok_or_else(|| {
-                    DetachError::Conflict("missing pre-attach models_cache snapshot".to_owned())
-                })
-                .and_then(|b64| {
-                    BASE64.decode(b64).map_err(|e| {
-                        DetachError::Conflict(format!("bad models_cache snapshot: {e}"))
-                    })
-                })?;
-            if cache_untouched || cur_cache == prior_cache {
-                if cur_cache != prior_cache {
-                    write_regular_atomic(&cache_path, &prior_cache).map_err(DetachError::Io)?;
-                }
-            } else if let Some(reconciled) = reconcile_modified_models_cache(
-                &cur_cache,
-                Some(&prior_cache),
-                &paths.catalog_backup_file,
-            ) {
-                write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
+    match cache_plan {
+        CacheDetachPlan::Noop => {}
+        CacheDetachPlan::Remove => match fs::remove_file(&cache_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(DetachError::Io(format!(
+                    "failed removing models_cache.json: {e}"
+                )));
             }
-        } else if cache_untouched {
-            match fs::remove_file(&cache_path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(DetachError::Io(format!(
-                        "failed removing models_cache.json: {e}"
-                    )));
-                }
-            }
-        } else if let Some(reconciled) =
-            reconcile_modified_models_cache(&cur_cache, None, &paths.catalog_backup_file)
-        {
+        },
+        CacheDetachPlan::Write(reconciled) => {
             write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
         }
     }
@@ -521,61 +620,84 @@ fn reconcile_modified_models_cache(
     cur_cache_bytes: &[u8],
     prior_cache_bytes: Option<&[u8]>,
     last_child_catalog_path: &Path,
-) -> Option<Vec<u8>> {
-    let mut cur_val: serde_json::Value = serde_json::from_slice(cur_cache_bytes).ok()?;
-    let cur_models = cur_val.get("models")?.as_array()?.clone();
-    let child_slugs: HashSet<String> = fs::read(last_child_catalog_path)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| {
-            v.get("models")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-        })
-        .unwrap_or_default()
-        .into_iter()
+) -> Result<Vec<u8>, String> {
+    let mut cur_val: serde_json::Value = serde_json::from_slice(cur_cache_bytes).map_err(|e| {
+        format!("client_models_cache_reconcile_failed: invalid models_cache.json: {e}")
+    })?;
+    let cur_models = cur_val
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            "client_models_cache_reconcile_failed: models_cache.json missing models array"
+                .to_owned()
+        })?;
+    let backup_bytes = fs::read(last_child_catalog_path).map_err(|e| {
+        format!("client_models_cache_reconcile_failed: missing catalog backup: {e}")
+    })?;
+    let backup_val: serde_json::Value = serde_json::from_slice(&backup_bytes).map_err(|e| {
+        format!("client_models_cache_reconcile_failed: invalid catalog backup JSON: {e}")
+    })?;
+    let backup_models = backup_val
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            "client_models_cache_reconcile_failed: catalog backup missing models array".to_owned()
+        })?;
+    let child_by_slug: HashMap<String, serde_json::Value> = backup_models
+        .iter()
         .filter_map(|m| {
             m.get("slug")
                 .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
+                .map(|s| (s.to_owned(), m.clone()))
         })
         .collect();
-    if child_slugs.is_empty() {
-        return None;
-    }
-    let prior_slugs: HashSet<String> = prior_cache_bytes
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
-        .and_then(|v| {
-            v.get("models")
+    let prior_by_slug: HashMap<String, serde_json::Value> = match prior_cache_bytes {
+        Some(raw) => {
+            let pv: serde_json::Value = serde_json::from_slice(raw).map_err(|e| {
+                format!(
+                    "client_models_cache_reconcile_failed: invalid prior models_cache snapshot: {e}"
+                )
+            })?;
+            pv.get("models")
                 .and_then(serde_json::Value::as_array)
-                .cloned()
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|m| {
-            m.get("slug")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect();
+                .ok_or_else(|| {
+                    "client_models_cache_reconcile_failed: prior models_cache missing models array"
+                        .to_owned()
+                })?
+                .iter()
+                .filter_map(|m| {
+                    m.get("slug")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| (s.to_owned(), m.clone()))
+                })
+                .collect()
+        }
+        None => HashMap::new(),
+    };
     let kept: Vec<serde_json::Value> = cur_models
         .into_iter()
-        .filter(|entry| {
+        .filter_map(|entry| {
             let slug = entry
                 .get("slug")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            let is_obs = entry
-                .get("opencodex_account_observed_native")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true);
-            is_obs || prior_slugs.contains(slug) || !child_slugs.contains(slug)
+            if let Some(injected) = child_by_slug.get(slug) {
+                if &entry == injected {
+                    prior_by_slug.get(slug).cloned()
+                } else {
+                    Some(entry)
+                }
+            } else {
+                Some(entry)
+            }
         })
         .collect();
     if let Some(obj) = cur_val.as_object_mut() {
         obj.insert("models".to_owned(), serde_json::Value::Array(kept));
     }
-    let mut out = serde_json::to_vec_pretty(&cur_val).ok()?;
+    let mut out = serde_json::to_vec_pretty(&cur_val)
+        .map_err(|e| format!("client_models_cache_reconcile_failed: {e}"))?;
     out.push(b'\n');
-    Some(out)
+    Ok(out)
 }

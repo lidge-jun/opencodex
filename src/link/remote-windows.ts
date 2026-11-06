@@ -149,7 +149,7 @@ if($env:LOCALAPPDATA){$f+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
 if($env:ProgramFiles){$f+="$env:ProgramFiles\OpenCodex\ocx.exe"}
 $f+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
 $k=@("$u\.local\bin\ocx-child.exe","$u\.cache\opencodex\bin\ocx-child.exe");if($env:LOCALAPPDATA){$k+="$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"};$k+=@((Get-Command ocx-child.exe -Type Application -EA 0).Source)
-$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$u\.opencodex"};$c=if([IO.File]::Exists("$h\child\state.json")){$k+$f}else{$f+$k}
+$r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$c=if([IO.File]::Exists("$h\child\state.json")){$k+$f}else{$f+$k}
 `;
 export function windowsOcxArgv(args: readonly string[]): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`

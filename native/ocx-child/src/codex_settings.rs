@@ -35,8 +35,16 @@ pub struct HomeCodexSettingsDocument {
     pub settings: HomeCodexSettings,
 }
 
+fn is_ecmascript_whitespace(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0009 | 0x000A | 0x000B | 0x000C | 0x000D | 0x0020 | 0x00A0 | 0x1680 | 0x2000
+            ..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000 | 0xFEFF
+    )
+}
+
 pub fn sanitize_safe_label(value: &str, max_utf16_units: usize) -> Option<String> {
-    let trimmed = value.trim();
+    let trimmed = value.trim_matches(is_ecmascript_whitespace);
     let utf16_len = trimmed.encode_utf16().count();
     if trimmed.is_empty() || utf16_len > max_utf16_units {
         return None;

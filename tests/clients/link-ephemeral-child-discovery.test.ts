@@ -65,6 +65,7 @@ describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {
       const childIdx = inflated.indexOf("Get-Command ocx-child.exe");
       expect(ocxIdx).toBeGreaterThan(0);
       expect(childIdx).toBeGreaterThan(ocxIdx);
+      expect(inflated).toContain("$r=if($env:HOME){$env:HOME}elseif($u){$u}else{\".\"};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{\"$r\\.opencodex\"}");
       expect(inflated).toContain("[IO.File]::Exists(\"$h\\child\\state.json\")){$k+$f}else{$f+$k}");
     }
   });

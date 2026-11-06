@@ -493,7 +493,8 @@ mod windows_private_acl {
                 && !dacl.is_null()
                 && IsValidAcl(dacl) != 0
                 && IsValidSid(owner) != 0
-                && EqualSid(owner, user[0] as Ptr) != 0
+                && (EqualSid(owner, user[0] as Ptr) != 0
+                    || EqualSid(owner, admins.as_mut_ptr().cast()) != 0)
                 && (!root || control & 0x1000 != 0)
         };
         if !ok {

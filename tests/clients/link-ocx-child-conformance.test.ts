@@ -28,7 +28,8 @@ import {
   stripOpencodexCatalogPath,
 } from "../../src/codex/inject/config-toml";
 import { stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
-import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../../src/codex/subagent-defaults";
+import { MANAGED_AGENTS_TABLE_MARKER, transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../../src/codex/subagent-defaults";
+import { rootAssignmentKey, rootSourceLines, sourceText, splitSourceLines, type SourceLine } from "../../src/codex/toml-source-lines";
 
 interface ConformanceSuite {
   schema: string;
@@ -145,29 +146,95 @@ function classifyChildIngressCase(row: ConformanceSuite["routeCases"][number]): 
   return { action: "reject_404", authHeader: "none" };
 }
 
+function isStructuralSimpleTable(line: SourceLine, expectedName: string): boolean {
+  if (!line.structural || !/^\s*\[/.test(line.text)) return false;
+  try {
+    const parsed = Bun.TOML.parse(line.text) as Record<string, unknown>;
+    const entry = parsed[expectedName];
+    return (
+      Object.keys(parsed).length === 1 &&
+      typeof entry === "object" &&
+      entry !== null &&
+      !Array.isArray(entry) &&
+      Object.keys(entry).length === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function matchesStructuralBoolAssignment(line: SourceLine, key: string, expected: boolean): boolean {
+  if (!line.structural || rootAssignmentKey(line.text) !== key) return false;
+  try {
+    const parsed = Bun.TOML.parse(line.text) as Record<string, unknown>;
+    return parsed[key] === expected;
+  } catch {
+    return false;
+  }
+}
+
+function collapseStructuralBlankLines(lf: string): string {
+  const lines = splitSourceLines(lf);
+  const out: SourceLine[] = [];
+  let blankRun = 0;
+  let started = false;
+  for (const line of lines) {
+    const isStructBlank = line.structural && line.text.length === 0;
+    if (!started && isStructBlank) continue;
+    started = true;
+    if (isStructBlank) {
+      blankRun += 1;
+      if (blankRun <= 1) out.push(line);
+    } else {
+      blankRun = 0;
+      out.push(line);
+    }
+  }
+  while (out.length > 0 && out[out.length - 1]!.structural && out[out.length - 1]!.text.length === 0) {
+    out.pop();
+  }
+  return sourceText(out);
+}
+
+function findStructuralFeatureLine(content: string, key: string): string | null {
+  const lines = splitSourceLines(content);
+  const featIdx = lines.findIndex(line => isStructuralSimpleTable(line, "features"));
+  if (featIdx === -1) return null;
+  let endIdx = lines.findIndex((line, i) => i > featIdx && line.structural && /^\s*\[/.test(line.text));
+  if (endIdx === -1) endIdx = lines.length;
+  for (let i = featIdx + 1; i < endIdx; i++) {
+    if (lines[i]!.structural && rootAssignmentKey(lines[i]!.text) === key) {
+      return lines[i]!.text;
+    }
+  }
+  return null;
+}
+
 function applyMultiAgentFeature(content: string, mode: HomeCodexSettings["multiAgentMode"]): { content: string; createdKey: boolean; priorLine: string | null } {
   if (mode === null) return { content, createdKey: false, priorLine: null };
   const desired = mode === "v2";
-  const lines = content.split("\n");
-  const featIdx = lines.findIndex(line => /^\s*\[\s*features\s*\]\s*(?:#.*)?$/.test(line));
+  const lines = splitSourceLines(content);
+  const eol = lines.find(l => l.eol)?.eol || "\n";
+  const featIdx = lines.findIndex(line => isStructuralSimpleTable(line, "features"));
   if (featIdx === -1) {
     const trimmed = content.replace(/\n+$/, "");
     const prefix = trimmed.length > 0 ? `${trimmed}\n\n` : "";
     return { content: `${prefix}[features]\nmulti_agent_v2 = ${desired}\n`, createdKey: true, priorLine: null };
   }
-  let endIdx = lines.findIndex((line, i) => i > featIdx && /^\s*\[/.test(line));
+  let endIdx = lines.findIndex((line, i) => i > featIdx && line.structural && /^\s*\[/.test(line.text));
   if (endIdx === -1) endIdx = lines.length;
   for (let i = featIdx + 1; i < endIdx; i++) {
-    if (/^\s*multi_agent_v2\s*=/.test(lines[i]!)) {
-      const priorLine = lines[i]!;
-      lines[i] = `multi_agent_v2 = ${desired}`;
-      return { content: lines.join("\n"), createdKey: false, priorLine };
+    if (lines[i]!.structural && rootAssignmentKey(lines[i]!.text) === "multi_agent_v2") {
+      const priorLine = lines[i]!.text;
+      lines[i]!.text = `multi_agent_v2 = ${desired}`;
+      return { content: sourceText(lines), createdKey: false, priorLine };
     }
   }
   let insertAt = endIdx;
-  while (insertAt > featIdx + 1 && lines[insertAt - 1]!.trim() === "") insertAt--;
-  lines.splice(insertAt, 0, `multi_agent_v2 = ${desired}`);
-  return { content: lines.join("\n"), createdKey: true, priorLine: null };
+  while (insertAt > featIdx + 1 && lines[insertAt - 1]!.structural && lines[insertAt - 1]!.text.trim() === "") insertAt--;
+  if (insertAt > 0 && !lines[insertAt - 1]!.eol) lines[insertAt - 1]!.eol = eol;
+  lines.splice(insertAt, 0, { text: `multi_agent_v2 = ${desired}`, eol, structural: true });
+  return { content: sourceText(lines), createdKey: true, priorLine: null };
 }
 
 function stripSurgicalTableFeatures(
@@ -178,48 +245,52 @@ function stripSurgicalTableFeatures(
   priorUserMultiAgentV2Line: string | null,
 ): string {
   if (wroteFastMode === null && wroteMultiAgentV2 === null) return content;
-  const lines = content.split("\n");
-  const featIdx = lines.findIndex(line => /^\s*\[\s*features\s*\]\s*(?:#.*)?$/.test(line));
+  const lines = splitSourceLines(content);
+  const eol = lines.find(l => l.eol)?.eol || "\n";
+  const featIdx = lines.findIndex(line => isStructuralSimpleTable(line, "features"));
   if (featIdx === -1) return content;
-  let endIdx = lines.findIndex((line, i) => i > featIdx && /^\s*\[/.test(line));
+  let endIdx = lines.findIndex((line, i) => i > featIdx && line.structural && /^\s*\[/.test(line.text));
   if (endIdx === -1) endIdx = lines.length;
-  const body: string[] = [];
+  const body: SourceLine[] = [];
   for (const line of lines.slice(featIdx + 1, endIdx)) {
-    if (wroteFastMode !== null && new RegExp(`^\\s*fast_mode\\s*=\\s*${wroteFastMode}\\s*(?:#.*)?$`).test(line)) {
-      if (priorUserFastModeLine !== null) body.push(priorUserFastModeLine);
+    if (wroteFastMode !== null && matchesStructuralBoolAssignment(line, "fast_mode", wroteFastMode)) {
+      if (priorUserFastModeLine !== null) body.push({ text: priorUserFastModeLine, eol: line.eol || eol, structural: true });
       continue;
     }
-    if (wroteMultiAgentV2 !== null && new RegExp(`^\\s*multi_agent_v2\\s*=\\s*${wroteMultiAgentV2}\\s*(?:#.*)?$`).test(line)) {
-      if (priorUserMultiAgentV2Line !== null) body.push(priorUserMultiAgentV2Line);
+    if (wroteMultiAgentV2 !== null && matchesStructuralBoolAssignment(line, "multi_agent_v2", wroteMultiAgentV2)) {
+      if (priorUserMultiAgentV2Line !== null) body.push({ text: priorUserMultiAgentV2Line, eol: line.eol || eol, structural: true });
       continue;
     }
     body.push(line);
   }
-  if (body.every(line => line.trim() === "" || line.trim().startsWith("#"))) {
-    const next = [...lines.slice(0, featIdx), ...lines.slice(endIdx)];
-    return next.join("\n").replace(/\n{3,}/g, "\n\n");
+  if (body.every(line => line.structural && (line.text.trim() === "" || line.text.trim().startsWith("#")))) {
+    return collapseStructuralBlankLines(sourceText([...lines.slice(0, featIdx), ...lines.slice(endIdx)]));
   }
-  return [...lines.slice(0, featIdx + 1), ...body, ...lines.slice(endIdx)].join("\n");
+  return sourceText([...lines.slice(0, featIdx + 1), ...body, ...lines.slice(endIdx)]);
 }
 
 function stripSurgicalSubagentDefaults(content: string, written: WrittenSubagentDefaults | null): string {
   if (!written) return content;
   const markerStripped = transformManagedSubagentDefaults(content, null, written);
   let next = markerStripped.ok ? markerStripped.content : content;
-  const lines = next.split("\n");
-  const agIdx = lines.findIndex(line => /^\s*\[\s*agents\s*\]\s*(?:#.*)?$/.test(line));
+  const lines = splitSourceLines(next);
+  const agIdx = lines.findIndex(line => isStructuralSimpleTable(line, "agents"));
   if (agIdx === -1) return next;
-  let endIdx = lines.findIndex((line, i) => i > agIdx && /^\s*\[/.test(line));
+  let endIdx = lines.findIndex((line, i) => i > agIdx && line.structural && /^\s*\[/.test(line.text));
   if (endIdx === -1) endIdx = lines.length;
+  const prefixLines = agIdx > 0 && lines[agIdx - 1]!.structural && lines[agIdx - 1]!.text.trim() === MANAGED_AGENTS_TABLE_MARKER
+    ? lines.slice(0, agIdx - 1)
+    : lines.slice(0, agIdx);
   const body = lines.slice(agIdx + 1, endIdx).filter(line => {
-    if (written.default_subagent_model && line.trim() === `default_subagent_model = ${JSON.stringify(written.default_subagent_model)}`) return false;
-    if (written.default_subagent_reasoning_effort && line.trim() === `default_subagent_reasoning_effort = ${JSON.stringify(written.default_subagent_reasoning_effort)}`) return false;
+    if (!line.structural) return true;
+    if (written.default_subagent_model && line.text.trim() === `default_subagent_model = ${JSON.stringify(written.default_subagent_model)}`) return false;
+    if (written.default_subagent_reasoning_effort && line.text.trim() === `default_subagent_reasoning_effort = ${JSON.stringify(written.default_subagent_reasoning_effort)}`) return false;
     return true;
   });
-  if (body.every(line => line.trim() === "" || line.trim().startsWith("#"))) {
-    next = [...lines.slice(0, agIdx), ...lines.slice(endIdx)].join("\n").replace(/\n{3,}/g, "\n\n");
+  if (body.every(line => line.structural && line.text.trim() === "")) {
+    next = collapseStructuralBlankLines(sourceText([...prefixLines, ...lines.slice(endIdx)]));
   } else {
-    next = [...lines.slice(0, agIdx + 1), ...body, ...lines.slice(endIdx)].join("\n");
+    next = sourceText([...prefixLines, lines[agIdx]!, ...body, ...lines.slice(endIdx)]);
   }
   return next;
 }
@@ -262,8 +333,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     lf = setRootRealtimeWsBaseUrl(lf, target).content;
     if (settings.fastMode !== null) {
       if (wroteFastMode === null) {
-        const fmMatch = lf.split("\n").find(l => /^\s*fast_mode\s*=/.test(l));
-        priorUserFastModeLine = fmMatch ?? null;
+        priorUserFastModeLine = findStructuralFeatureLine(lf, "fast_mode");
       }
       lf = ensureFastModeFeature(lf, settings.fastMode);
       wroteFastMode = settings.fastMode;
@@ -360,10 +430,12 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     };
   }
 
-  for (const line of applyEol(currentToml, "\n").split("\n")) {
-    if (/^\s*(?:openai_base_url|experimental_realtime_ws_base_url|model_catalog_json|web_search)\s*=/.test(line)) {
+  const { lines: curStructLines, rootEnd: curRootEnd } = rootSourceLines(applyEol(currentToml, "\n"));
+  for (let i = 0; i < curRootEnd; i++) {
+    const line = curStructLines[i]!;
+    if (line.structural && /^\s*(?:openai_base_url|experimental_realtime_ws_base_url|model_catalog_json|web_search)\s*=/.test(line.text)) {
       try {
-        Bun.TOML.parse(line);
+        Bun.TOML.parse(line.text);
       } catch {
         return {
           attachOk: true,
@@ -391,7 +463,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     priorUserMultiAgentV2Line,
   );
   surgical = stripSurgicalSubagentDefaults(surgical, wroteSubagent);
-  surgical = surgical.replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n");
+  surgical = collapseStructuralBlankLines(surgical);
   if (surgical.length > 0 && !surgical.endsWith("\n")) surgical += "\n";
   const finalToml = surgical.trim().length === 0 ? null : applyEol(surgical, eol);
   return {
@@ -561,13 +633,14 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
     }, 10100)).toBe(false);
   });
 
-  test("Rust conformance runner passes against the identical shared fixture when cargo is installed", () => {
-    const exeSuffix = process.platform === "win32" ? ".exe" : "";
-    const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
-    const cargo = Bun.which("cargo") ?? join(realHome, ".cargo", "bin", `cargo${exeSuffix}`);
-    if (!existsSync(cargo)) return;
+  const exeSuffix = process.platform === "win32" ? ".exe" : "";
+  const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
+  const cargoBin = Bun.which("cargo") ?? join(realHome, ".cargo", "bin", `cargo${exeSuffix}`);
+  const cargoAvailable = existsSync(cargoBin);
+
+  test.skipIf(!cargoAvailable)("Rust conformance runner passes against the identical shared fixture", () => {
     const run = Bun.spawnSync(
-      [cargo, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"],
+      [cargoBin, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"],
       {
         env: {
           ...process.env,
@@ -579,6 +652,9 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
         timeout: 90_000,
       },
     );
+    if (run.signalCode) {
+      throw new Error(`cargo test conformance terminated by signal ${run.signalCode} (90s timeout check):\n${run.stderr.toString()}`);
+    }
     expect(run.exitCode, run.stderr.toString()).toBe(0);
   }, 90_000);
 });

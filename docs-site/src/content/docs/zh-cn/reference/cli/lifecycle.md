@@ -172,7 +172,7 @@ ocx status --json
 
 传播不会请求重启 Child 上的 Codex 应用或 app-server。如需重启，请使用 GOAT 或在该 Child 上运行 `ocx sync --restart-codex`。不过，Child 的固定目标同步在应用已更改的 Home 设置后，仍可能重启它自己的 OpenCodex 客户端运行时。Home 超时并停止本地 SSH 进程后，已开始的远程同步仍可能在 Child 上继续。
 
-> **Remote Link Child：** `ocx sync` 还会应用 Home 的 Codex 设置；如果客户端运行时在该次应用之前启动，即使没有重启参数也会重启运行时。重启失败时，原有运行时继续提供服务，命令以非零状态退出。`ocx status --json` 和 `ocx link status --json` 中的相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+> **Remote Link Child：** `ocx sync` 还会应用 Home 的 Codex 设置；如果客户端运行时在该次应用之前启动，即使没有重启参数也会重启运行时（在轻量级 `ocx-child` 主机上，成功的 `sync` 会在中继未运行时启动 `ocx-child serve`，在 `runtimeStartedAt < lastApplyAt` 时轮换进程，并在非 `stale` 同步时尽力上报 parity）。重启失败时，原有运行时继续提供服务，命令以非零状态退出。`ocx status --json` 和 `ocx link status --json` 中的相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
 
 显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
 

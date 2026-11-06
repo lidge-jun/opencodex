@@ -109,6 +109,24 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
     );
 
     const childListenPort = await pickFreeLoopbackPort();
+    const privateUtils = join(scratch, "private-utils");
+    mkdirSync(privateUtils, { recursive: true });
+    for (const util of ["sh", "uname", "mktemp", "rm", "sleep", "kill", "wc", "cat", "printf", "awk", "curl"]) {
+      let resolved: string | null = null;
+      for (const sysDir of ["/bin", "/usr/bin"]) {
+        const p = join(sysDir, util);
+        if (existsSync(p)) {
+          resolved = p;
+          break;
+        }
+      }
+      resolved ??= Bun.which(util);
+      if (!resolved) {
+        throw new Error(`missing required POSIX utility for ocx-child E2E: ${util}`);
+      }
+      symlinkSync(resolved, join(privateUtils, util));
+    }
+    const resolvedSh = join(privateUtils, "sh");
     let catalogModels = [{ slug: "home-initial-model" }];
     const observedUpstreamHeaders: Array<Record<string, string>> = [];
 
@@ -200,18 +218,6 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
     const tunnelPort = homeHubLinkServer.port!;
     writeLinkStore(linkStorePath(), { version: 1, listenerPort: tunnelPort, links: [] });
 
-    const privateUtils = join(scratch, "private-utils");
-    mkdirSync(privateUtils, { recursive: true });
-    for (const util of ["sh", "uname", "mktemp", "rm", "sleep", "kill", "wc", "cat", "printf", "awk", "curl"]) {
-      for (const sysDir of ["/bin", "/usr/bin"]) {
-        const p = join(sysDir, util);
-        if (existsSync(p)) {
-          symlinkSync(p, join(privateUtils, util));
-          break;
-        }
-      }
-    }
-
     const childEnv = {
       HOME: childUserHome,
       OPENCODEX_HOME: childOcxHome,
@@ -246,7 +252,7 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
       if (patched.includes("'link' 'port'")) {
         return { code: 0, stdout: JSON.stringify({ port: tunnelPort }) + "\n", stderr: "" };
       }
-      return runShellAsync(["/bin/sh", "-c", patched], stdin);
+      return runShellAsync([resolvedSh, "-c", patched], stdin);
     };
 
     const sshRunner: SshRunner = {

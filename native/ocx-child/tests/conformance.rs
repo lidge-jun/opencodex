@@ -13,7 +13,10 @@ use ocx_child::http_wire::{
     BodyFraming, FramingError, stream_upstream_to_chunked_client,
     validate_and_sanitize_request_headers,
 };
-use ocx_child::journal::{DetachError, DetachOutcome, apply_attach_or_sync, offline_detach};
+use ocx_child::journal::{
+    DetachError, DetachOutcome, JournalWriteFault, apply_attach_or_sync,
+    apply_attach_or_sync_with_fault, offline_detach,
+};
 use ocx_child::parity::parse_link_child_parity_report;
 use ocx_child::relay_auth::{
     compute_connection_proof, compute_relay_proof, relay_proof_matches, token_fingerprint_hex,
@@ -480,10 +483,19 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
     }
 }
 
+struct ScratchGuard(PathBuf);
+
+impl Drop for ScratchGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     let scratch = std::env::temp_dir().join(format!("ocx-child-wal-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
+    let _guard = ScratchGuard(scratch.clone());
     let ocx_home = scratch.join("opencodex");
     let codex_home = scratch.join("codex");
     fs::create_dir_all(&ocx_home).unwrap();
@@ -491,7 +503,9 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     let paths = ChildPaths::new(ocx_home, codex_home);
 
     let pre_toml = "developer_instructions = \"\"\"\n[Important]\nNever inject inside me\n\"\"\"\n";
+    let pre_cat = b"{\"models\":[{\"slug\":\"native-prior\"}]}\n";
     fs::write(paths.codex_config_path(), pre_toml.as_bytes()).unwrap();
+    fs::write(paths.codex_catalog_path(), pre_cat).unwrap();
 
     let settings = HomeCodexSettings {
         fast_mode: Some(true),
@@ -514,25 +528,91 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     let injected = fs::read_to_string(paths.codex_config_path()).unwrap();
     assert!(injected.starts_with(pre_toml), "injected was:\n{injected}");
     assert!(injected.contains("openai_base_url = \"http://127.0.0.1:10100/v1\""));
+    let cache_v1 = fs::read(paths.codex_models_cache_path()).unwrap();
 
-    // 2. Simulate crash during a second sync right after write_journal (config & catalog still hold v1)
+    // 2. Two consecutive interrupted syncs:
+    //    - sync v2 fails right after write_journal (catalog, cache, config remain v1)
+    //    - sync v3 fails right after catalog write (catalog is v3, cache & config remain v1)
     let cat_v2 = b"{\"models\":[{\"slug\":\"m-v2\"}]}\n";
+    let cat_v3 = b"{\"models\":[{\"slug\":\"m-v3\"}]}\n";
     let settings_v2 = HomeCodexSettings {
         fast_mode: Some(false),
         ..settings.clone()
     };
+    let settings_v3 = HomeCodexSettings {
+        multi_agent_mode: Some("v2".to_owned()),
+        ..settings_v2.clone()
+    };
+    assert!(
+        apply_attach_or_sync_with_fault(
+            &paths,
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            cat_v2,
+            &settings_v2,
+            Some(JournalWriteFault::AfterJournalWrite),
+        )
+        .is_err()
+    );
+    assert!(
+        apply_attach_or_sync_with_fault(
+            &paths,
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            cat_v3,
+            &settings_v3,
+            Some(JournalWriteFault::AfterCatalogWrite),
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), cat_v3);
+    assert_eq!(fs::read(paths.codex_models_cache_path()).unwrap(), cache_v1);
+    assert_eq!(
+        fs::read_to_string(paths.codex_config_path()).unwrap(),
+        injected
+    );
+
+    let outcome = offline_detach(&paths, false).unwrap();
+    assert_eq!(outcome, DetachOutcome::ExactRestore);
+    assert_eq!(
+        fs::read_to_string(paths.codex_config_path()).unwrap(),
+        pre_toml
+    );
+    assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), pre_cat);
+    assert!(!paths.codex_models_cache_path().exists());
+
+    // 3. Two consecutive failed catalog writes (AfterJournalWrite twice) with no pre-attach catalog/cache
+    fs::remove_file(paths.codex_catalog_path()).unwrap();
     apply_attach_or_sync(
         &paths,
         "lnk_0123456789abcdef",
         "link:t",
         10100,
-        cat_v2,
-        &settings_v2,
+        cat_v1,
+        &settings,
     )
     .unwrap();
-    // Roll back config.toml and catalog.json on disk to v1 as if process crashed right after write_journal
-    fs::write(paths.codex_config_path(), injected.as_bytes()).unwrap();
-    fs::write(paths.codex_catalog_path(), cat_v1).unwrap();
+    for (cat, set) in [
+        (cat_v2.as_slice(), &settings_v2),
+        (cat_v3.as_slice(), &settings_v3),
+    ] {
+        assert!(
+            apply_attach_or_sync_with_fault(
+                &paths,
+                "lnk_0123456789abcdef",
+                "link:t",
+                10100,
+                cat,
+                set,
+                Some(JournalWriteFault::AfterJournalWrite),
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), cat_v1);
+    assert!(paths.codex_models_cache_path().exists());
 
     let outcome = offline_detach(&paths, false).unwrap();
     assert_eq!(outcome, DetachOutcome::ExactRestore);
@@ -541,7 +621,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
         pre_toml
     );
     assert!(!paths.codex_catalog_path().exists());
-    let _ = fs::remove_dir_all(&scratch);
+    assert!(!paths.codex_models_cache_path().exists());
 }
 
 #[test]
@@ -564,6 +644,27 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     );
     assert!(parse_home_codex_settings_document(ok_doc.as_bytes()).is_some());
     assert!(parse_home_codex_settings_document(bad_doc.as_bytes()).is_none());
+    // ECMAScript trim: U+FEFF is trimmed, while U+0085 is retained (matching String.prototype.trim)
+    let feff_doc = "{\"version\":1,\"home\":{\"name\":\"h\",\"version\":\"2.98.0\"},\"settings\":{\"fastMode\":null,\"multiAgentMode\":null,\"webSearchSidecarEnabled\":true,\"subagentDefaults\":{\"model\":\"\\ufeffgpt-5.6\",\"reasoningEffort\":null}}}";
+    let nel_doc = "{\"version\":1,\"home\":{\"name\":\"h\",\"version\":\"2.98.0\"},\"settings\":{\"fastMode\":null,\"multiAgentMode\":null,\"webSearchSidecarEnabled\":true,\"subagentDefaults\":{\"model\":\"\\u0085gpt-5.6\",\"reasoningEffort\":null}}}";
+    assert_eq!(
+        parse_home_codex_settings_document(feff_doc.as_bytes())
+            .unwrap()
+            .settings
+            .subagent_defaults
+            .unwrap()
+            .model,
+        "gpt-5.6"
+    );
+    assert_eq!(
+        parse_home_codex_settings_document(nel_doc.as_bytes())
+            .unwrap()
+            .settings
+            .subagent_defaults
+            .unwrap()
+            .model,
+        "\u{0085}gpt-5.6"
+    );
 
     // 2. Truncated chunked upstream EOF returns UnexpectedEof without emitting 0\r\n\r\n
     let mut truncated_upstream = std::io::Cursor::new(b"5\r\nhello\r\n".to_vec());
@@ -617,5 +718,52 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
         Err(DetachError::Conflict(_))
     ));
     assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), user_cat);
+
+    // 4. models_cache.json reconciliation fails closed on missing backup or invalid JSON and restores overwritten native entries
     let _ = fs::remove_dir_all(&scratch);
+    let _guard = ScratchGuard(scratch.clone());
+    fs::create_dir_all(&paths.opencodex_home).unwrap();
+    fs::create_dir_all(&paths.codex_home).unwrap();
+    let pre_cache = br#"{"fetched_at":"2000-01-01T00:00:00Z","client_version":"0.0.0","models":[{"slug":"shared-m","context_window":1}]}"#;
+    fs::write(paths.codex_models_cache_path(), pre_cache).unwrap();
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        b"{\"models\":[{\"slug\":\"shared-m\",\"context_window\":2},{\"slug\":\"home-only\",\"context_window\":8}]}\n",
+        &set,
+    )
+    .unwrap();
+    // Invalid cache JSON fails closed without deleting journal
+    fs::write(paths.codex_models_cache_path(), b"{invalid").unwrap();
+    assert!(matches!(
+        offline_detach(&paths, false),
+        Err(DetachError::Conflict(_))
+    ));
+    assert!(paths.journal_file.exists());
+    // Valid modified cache + missing catalog backup also fails closed before restoring config
+    let ext_cache = br#"{"fetched_at":"2000-01-01T00:00:00Z","client_version":"0.0.0","models":[{"slug":"shared-m","context_window":2},{"slug":"home-only","context_window":8},{"slug":"ext-native","context_window":9}]}"#;
+    fs::write(paths.codex_models_cache_path(), ext_cache).unwrap();
+    let saved_backup = fs::read(&paths.catalog_backup_file).unwrap();
+    fs::remove_file(&paths.catalog_backup_file).unwrap();
+    assert!(matches!(
+        offline_detach(&paths, false),
+        Err(DetachError::Conflict(_))
+    ));
+    assert!(paths.journal_file.exists());
+    // Restore backup -> detach succeeds, restores shared-m context_window: 1, drops home-only, preserves ext-native
+    fs::write(&paths.catalog_backup_file, &saved_backup).unwrap();
+    assert_eq!(
+        offline_detach(&paths, false).unwrap(),
+        DetachOutcome::ExactRestore
+    );
+    let final_cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(paths.codex_models_cache_path()).unwrap()).unwrap();
+    let models = final_cache["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0]["slug"], "shared-m");
+    assert_eq!(models[0]["context_window"], 1);
+    assert_eq!(models[1]["slug"], "ext-native");
+    assert_eq!(models[1]["context_window"], 9);
 }

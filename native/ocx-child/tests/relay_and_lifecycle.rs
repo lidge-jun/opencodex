@@ -524,6 +524,44 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
 
     // 8. Shut down Home completely (OFFLINE), simulate #1798 comment strip, then detach!
     home.shutdown();
+    // Failed reattach on a different port (occupied OR unreachable Home) must keep the previous relay alive!
+    let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+    let occupied_port = occupied.local_addr().unwrap().port();
+    let cred_json =
+        "{\"apiKeyId\":\"link:e2e\",\"key\":\"ocx_sk_0123456789abcdef0123456789abcdef\"}";
+    let (rc_occ, _, _) = run_bin(
+        &ocx_home,
+        &codex_home,
+        occupied_port,
+        &[
+            "attach",
+            "--link-id",
+            "lnk_0123456789abcdef",
+            "--tunnel-port",
+            &home.port.to_string(),
+            "--listen-port",
+            &occupied_port.to_string(),
+        ],
+        Some(cred_json.as_bytes()),
+    );
+    assert_ne!(rc_occ, 0);
+    drop(occupied);
+    let (rc_unreach, _, _) = run_bin(
+        &ocx_home,
+        &codex_home,
+        occupied_port,
+        &[
+            "attach",
+            "--link-id",
+            "lnk_0123456789abcdef",
+            "--tunnel-port",
+            &home.port.to_string(),
+            "--listen-port",
+            &occupied_port.to_string(),
+        ],
+        Some(cred_json.as_bytes()),
+    );
+    assert_ne!(rc_unreach, 0);
     let cfg_now = fs::read_to_string(codex_home.join("config.toml")).unwrap();
     let stripped_1798: String = cfg_now
         .lines()
