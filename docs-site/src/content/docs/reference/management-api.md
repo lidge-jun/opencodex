@@ -445,6 +445,9 @@ status. App counts respect the chosen device; device counts respect the chosen a
 counts are limited to configured keys. Its `legacyUnclassifiedRequests` is the unclassified subset
 of the Codex option for the chosen device, regardless of the selected app. This endpoint and
 `unconfigured` reports use `no-store`.
+Configured IDs that cannot be selected exactly, such as IDs with surrounding whitespace, remain in
+the configured snapshot but are omitted from individual device choices and counted in
+`unavailableConfiguredKeys`; they are never silently trimmed or classified as unconfigured.
 For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
 256 characters, or more than 65,536 total ID characters rather than silently truncating them.
 Client labels are best-effort classifications of inbound headers, not authentication, and raw

@@ -7,7 +7,11 @@ import type { UsageTimeWindow } from "./time-range";
 export function createSourceFacetAccumulator(filter: UsageSourceFilter, ids: readonly string[], window: UsageTimeWindow) {
   const configured = new Set(snapshotConfiguredKeyIds(ids));
   const apps = Object.fromEntries(USAGE_SOURCE_CLIENTS.map(client => [client, 0])) as Record<UsageSourceClient, number>;
-  const keys = new Map([...configured].sort().map(id => [id, 0]));
+  // Preserve every exact ID in `configured` for filtering, but do not advertise an
+  // ID the wire contract cannot select (a padded ID cannot be safely trimmed).
+  const selectable = [...configured].filter(id => id === id.trim()).sort();
+  const unavailableConfiguredKeys = configured.size - selectable.length;
+  const keys = new Map(selectable.map(id => [id, 0]));
   let all = 0;
   let noKey = 0;
   let unconfigured = 0;
@@ -40,6 +44,7 @@ export function createSourceFacetAccumulator(filter: UsageSourceFilter, ids: rea
           { device: { kind: "unconfigured" as const }, requests: unconfigured },
         ],
         legacyUnclassifiedRequests,
+        unavailableConfiguredKeys,
       };
     },
   };

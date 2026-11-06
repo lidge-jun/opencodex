@@ -229,4 +229,19 @@ describe("usage client attribution", () => {
     claudeSelected.add({ ...base, requestId: "legacy" });
     expect(claudeSelected.snapshot().legacyUnclassifiedRequests).toBe(1);
   });
+
+  test("an unselectable configured key does not hide other devices or become unconfigured", () => {
+    const now = Date.now();
+    const facets = createSourceFacetAccumulator({ client: "all", device: { kind: "all" } }, ["valid", "odd "], { since: now - 1, until: now });
+    const base = { timestamp: now, provider: "openai", model: "test", status: 200, durationMs: 1,
+      usageStatus: "unreported" as const, admissionKind: "configured" as const };
+    facets.add({ ...base, requestId: "good", apiKeyId: "valid" });
+    facets.add({ ...base, requestId: "odd", apiKeyId: "odd " });
+    const result = facets.snapshot();
+    expect(result.unavailableConfiguredKeys).toBe(1);
+    expect(result.devices).toContainEqual({ device: { kind: "key", id: "valid" }, requests: 1 });
+    expect(result.devices).toContainEqual({ device: { kind: "unconfigured" }, requests: 0 });
+    expect(result.devices.some(row => row.device.kind === "key" && row.device.id === "odd ")).toBe(false);
+    expect(result.apps.all).toBe(2);
+  });
 });

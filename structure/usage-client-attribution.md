@@ -22,6 +22,8 @@ currently configured key IDs; it does not prove historical deletion or device id
 snapshot is included in filtered-cache identity. `src/usage/source-facets.ts` folds the bounded
 30-day app/device counts in one pass, retaining individual counters only for configured IDs;
 its legacy count is the unclassified subset of the Codex app option for the selected device.
+Unselectable padded IDs remain in the configured membership set but are omitted from individual
+rows and counted separately, so they neither hide valid choices nor become unconfigured traffic.
 `src/server/management/usage-source-facets.ts` bounds concurrent scans. The session-only facets
 route rechecks session and inventory after scanning, fails closed on changes and sets no-store.
 Snapshots exceeding 1,024 configured keys, 256 characters per ID or 65,536 total ID characters
