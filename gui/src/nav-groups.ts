@@ -15,7 +15,7 @@
  */
 import type { Page } from "./app-routing";
 import type { TKey } from "./i18n/shared";
-import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconList, IconMonitor, IconPlug, IconPower, IconRoute, IconServer, IconStar } from "./icons";
+import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconList, IconMonitor, IconPlug, IconRoute, IconServer, IconStar } from "./icons";
 
 export type NavGroupId =
   | "home"
@@ -25,22 +25,20 @@ export type NavGroupId =
   | "subagents"
   | "usage-logs"
   | "connect"
-  | "startup"
   | "remote"
   | "proxy"
   | "advisor"
   | "advanced";
 
 /**
- * Design system v2 sorts every row by how often people touch it: things changed or checked
- * every day, things done once while installing, and fine-tuning most people never open.
+ * Design system v2 sorts every row by how often people touch it: things used every day,
+ * and fine-tuning most people never open.
  * The sidebar prints one heading per tier, in this order.
  */
-export type NavTier = "daily" | "setup" | "advanced";
+export type NavTier = "daily" | "advanced";
 
 export const NAV_TIERS: readonly { tier: NavTier; tkey: TKey }[] = [
   { tier: "daily", tkey: "shellV2.tierDaily" },
-  { tier: "setup", tkey: "shellV2.tierSetup" },
   { tier: "advanced", tkey: "shellV2.tierAdvanced" },
 ];
 
@@ -54,7 +52,9 @@ export interface NavGroup {
 }
 
 export const NAV_GROUPS: readonly NavGroup[] = [
-  { id: "home", tier: "daily", tkey: "shellV2.navHome", Icon: IconGrid, pages: ["home"] },
+  // Startup lives inside Home again: how the proxy starts is part of its at-a-glance health,
+  // and Home's switcher reaches it in one click.
+  { id: "home", tier: "daily", tkey: "shellV2.navHome", Icon: IconGrid, pages: ["home", "startup"] },
   // Route: where each client's traffic goes (integrations, the setup checklist, Claude as a tab).
   // It sits above Models because choosing the route comes before choosing the model.
   { id: "connect", tier: "daily", tkey: "nav.connect", Icon: IconRoute, pages: ["integrations", "setup"], embedded: ["claude"] },
@@ -67,10 +67,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   // Which model a helper agent runs on is changed as often as the main model.
   { id: "subagents", tier: "daily", tkey: "nav.subagents", Icon: IconBot, pages: ["subagents"] },
   { id: "usage-logs", tier: "daily", tkey: "nav.usageLogs", Icon: IconActivity, pages: ["usage", "logs", "storage"] },
-  // Done once, but each still gets its own row: a setting two clicks deep behind a hub is a
-  // setting people cannot find.
-  { id: "startup", tier: "setup", tkey: "nav.startup", Icon: IconPower, pages: ["startup"] },
-  { id: "remote", tier: "setup", tkey: "nav.remote", Icon: IconMonitor, pages: ["remote", "remote-workspace"] },
+  // Remote Link follows Usage & Logs: other machines' traffic shows up in that report.
+  { id: "remote", tier: "daily", tkey: "nav.remote", Icon: IconMonitor, pages: ["remote", "remote-workspace"] },
   // Fine-tuning keeps its surfaces visible too; the All settings hub is the searchable index
   // of every one of them, including the ones that live inside other pages.
   { id: "proxy", tier: "advanced", tkey: "shellV2.pageProxyDetails", Icon: IconServer, pages: ["dashboard"] },
