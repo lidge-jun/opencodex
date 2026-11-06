@@ -197,6 +197,7 @@ export async function deliverAdapterResponse(
       ? guardEmptyCompletionEventStream({
           firstEvents: advisorStream,
           continuation: fetchGuardedEmptyCompletionRetry,
+          preserveRetryError: isContinuationBodyStall,
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -347,6 +348,7 @@ export async function deliverAdapterResponse(
         for await (const event of guardEmptyCompletionEventStream({
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchGuardedEmptyCompletionRetry,
+          preserveRetryError: isContinuationBodyStall,
         })) events.push(event);
       } else {
         events = guardedEvents;

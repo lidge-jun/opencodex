@@ -123,7 +123,7 @@ reaching it aborts the upstream and emits `response.incomplete` with reason
 `upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
 
 The adapter's response-body inactivity guard has a separate failure path. When an initial or
-recovery or terminal-guard continuation response body stalls during translated Responses streaming, the terminal event is
+recovery, terminal-guard continuation, or empty-completion retry response body stalls during translated Responses streaming, the terminal event is
 `response.failed` with code `upstream_stall_timeout` and a bounded-duration message. The request
 log classifies that terminal as 504 and can record the duration as `body_stall`. HTTP headers
 already sent for the stream cannot change. A buffered initial or continuation body stall returns

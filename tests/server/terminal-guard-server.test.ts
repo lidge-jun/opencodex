@@ -424,6 +424,36 @@ describe("server terminal guard integration", () => {
     expect(text).not.toContain("client closed request during terminal continuation");
   });
 
+  test.each([true, false])("an empty-completion retry body stall preserves 504 classification (stream=%s)", async stream => {
+    takeInheritedSpendHome();
+    const stallConfig = { ...config, emptyCompletionRetry: true, stallTimeoutSec: 1 } as unknown as OcxConfig;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) return stream
+        ? anthropicSse('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n')
+        : Response.json({ id: "msg_fixture", type: "message", role: "assistant", model: "se-claude-opus-4.8",
+            content: [], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 1 } });
+      return new Response(new ReadableStream<Uint8Array>({}), {
+        status: 200, headers: { "content-type": stream ? "text/event-stream" : "application/json" },
+      });
+    }) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "se-claude-opus-4.8", input: "Hi", stream }),
+    }), stallConfig, { model: "", provider: "" });
+    const text = await response.text();
+    const failure = stream
+      ? JSON.parse(text.split("\n").find(line => line.startsWith("data: ") && line.includes('"type":"response.failed"'))!.slice(6)).response
+      : JSON.parse(text);
+    expect(sends).toBe(2);
+    expect(response.status).toBe(stream ? 200 : 504);
+    expect(failure.error).toMatchObject({ code: "upstream_stall_timeout", message: "Upstream response body stalled for 1000ms" });
+    expect(httpStatusFromTerminalError(failure.error)).toBe(504);
+    expect(errorDetailFor({ status: 504, upstreamError: failure.error.message }).failureDetail)
+      .toEqual({ code: "body_stall", value: 1000 });
+  });
+
   test("a stalled buffered continuation returns 504 with the failed response", async () => {
     takeInheritedSpendHome();
     const stallConfig = { ...config, stallTimeoutSec: 1 } as unknown as OcxConfig;
