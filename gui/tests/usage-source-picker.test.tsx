@@ -5,6 +5,8 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import Usage from "../src/pages/Usage";
 import { matchesFacetWindow } from "../src/components/v2-usage/usage-source";
+import { configureApiTargets, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, usageSessionSnapshot } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const names = ["document", "window", "navigator", "localStorage", "sessionStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let old: Map<string, PropertyDescriptor | undefined>;
@@ -20,8 +22,8 @@ function echo(url: string) {
   return { client: query.get("client"), device: query.get("device") === "key" ? { kind: "key", id: query.get("apiKeyId") } : { kind: query.get("device") } };
 }
 function report(url: string) {
-  return { sourceFilter: echo(url), legacyUnclassifiedRequests: 2, range: "30d", surface: "all", since: null,
-    summary: { requests: 0, totalTokens: 0 }, days: [], models: [], providers: [] };
+  return { sourceFilter: echo(url), legacyUnclassifiedRequests: 2, range: "30d", surface: "all", since: null, generatedAt: Date.now(), historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
+    summary: { requests: 0, measuredRequests: 0, reportedRequests: 0, unreportedRequests: 0, unsupportedRequests: 0, estimatedRequests: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 0 }, days: [], models: [], providers: [] };
 }
 function facets(url: string) {
   return { sourceFilter: echo(url), window: { since: Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() - 29), until: Date.now(), timeZone: "UTC" }, apps: counts,
@@ -34,6 +36,7 @@ beforeEach(() => {
   old = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   win = new Window({ url: "http://localhost/" });
   for (const name of names) Object.defineProperty(globalThis, name, { configurable: true, value: name === "IS_REACT_ACT_ENVIRONMENT" ? true : name === "window" ? win : (win as unknown as Record<string, unknown>)[name] });
+  resetApiAuthFetchForTests();
   win.localStorage.setItem("ocx-lang", "en");
   calls = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -46,6 +49,7 @@ beforeEach(() => {
 afterEach(async () => {
   if (root) await act(async () => root.unmount());
   globalThis.fetch = originalFetch;
+  resetApiAuthFetchForTests();
   win.close();
   for (const name of names) { const descriptor = old.get(name); if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); }
 });
@@ -300,4 +304,190 @@ test("ambiguous linked device labels remain distinct after selecting and closing
   await click(trigger());
   expect(trigger().textContent).toContain("Unknown linked device 2");
   expect(trigger().textContent).not.toContain("key-b");
+});
+
+test.each([
+  ["missing summary", (value: ReturnType<typeof report>) => ({ ...value, summary: undefined })],
+  ["invalid days", (value: ReturnType<typeof report>) => ({ ...value, days: {} })],
+  ["invalid models", (value: ReturnType<typeof report>) => ({ ...value, models: [{ model: "BAD" }] })],
+  ["unsafe count", (value: ReturnType<typeof report>) => ({ ...value, summary: { ...value.summary, requests: Number.MAX_SAFE_INTEGER + 1 } })],
+  ["nonfinite tokens", (value: ReturnType<typeof report>) => ({ ...value, summary: { ...value.summary, totalTokens: Infinity } })],
+])("rejects a correctly echoed malformed report: %s", async (_name, mutate) => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const body = mutate(report(String(input)));
+    const result = response(body);
+    result.json = async () => body;
+    return result;
+  }) as typeof fetch;
+  await mount();
+  expect(host.textContent).toContain("Could not load usage data");
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(sessionStorage.length).toBe(0);
+});
+
+test.each(["missing", "duplicate", "duplicate-key", "long-key", "too-many"])("rejects invalid facet device roster: %s", async scenario => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) {
+      const body = facets(url);
+      if (scenario === "missing") body.devices = body.devices.filter(row => row.device.kind !== "unconfigured");
+      if (scenario === "duplicate") body.devices.push({ device: { kind: "all" }, requests: 0 });
+      if (scenario === "duplicate-key") body.devices.push({ device: { kind: "key", id: "key-a" }, requests: 0 });
+      if (scenario === "long-key") body.devices.push({ device: { kind: "key", id: "x".repeat(257) }, requests: 0 });
+      if (scenario === "too-many") for (let i = 0; i < 1025; i++) body.devices.push({ device: { kind: "key", id: `extra-${i}` }, requests: 0 });
+      return response(body);
+    }
+    if (url.includes("/devices")) return response({ devices: [] });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+  expect(radio("Codex").textContent).not.toContain("30");
+});
+
+test.each(["no-store missing", "duplicate", "invalid", "failed"])("rejects invalid inventory: %s", async scenario => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return response(facets(url));
+    if (url.includes("/devices")) {
+      if (scenario === "failed") return new Response(null, { status: 500 });
+      if (scenario === "no-store missing") return Response.json({ devices: [] });
+      if (scenario === "duplicate") return response({ devices: [{ apiKeyId: "key-a", alias: "a" }, { apiKeyId: "key-a", alias: "b" }] });
+      return response({ devices: [{ apiKeyId: "key-a", alias: 42 }] });
+    }
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+  expect(radio("Codex").textContent).not.toContain("30");
+});
+
+test("selecting a key retains the focused radio while new counts load or fail", async () => {
+  let pending: ((value: Response) => void) | undefined;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets") && url.includes("device=key")) return new Promise<Response>(resolve => { pending = resolve; });
+    if (url.includes("source-facets")) return Promise.resolve(response(facets(url)));
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [{ apiKeyId: "key-a", alias: "Laptop" }] }));
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  const device = radio("Laptop"); device.focus(); await click(device);
+  expect(document.activeElement).toBe(device);
+  expect(radio("Laptop")).toBe(device);
+  expect(device.getAttribute("aria-checked")).toBe("true");
+  expect(device.textContent).not.toContain("12");
+  await act(async () => pending!(new Response(null, { status: 500 })));
+  expect(document.activeElement).toBe(device);
+  expect(radio("Laptop")).toBe(device);
+  expect(device.textContent).not.toContain("12");
+});
+
+function installSharedSession(token: string) {
+  configureApiTargets(standaloneApiTargets(""));
+  const html = `<meta name="opencodex-session-token" content="${token}"><meta name="opencodex-session-csrf" content="csrf"><meta name="opencodex-session-origin" content="http://localhost"><meta name="opencodex-session-server-origin" content="http://localhost">`;
+  expect(installApiSessionFromHtml("shared", html)).toBe(true);
+}
+
+test("logout immediately clears reports and aliases and fences a late successful report", async () => {
+  installSharedSession("ocx_session_test_logout");
+  let release: ((response: Response) => void) | undefined;
+  let pendingUrl = "";
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return Promise.resolve(response(facets(url)));
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [{ apiKeyId: "key-a", alias: "Private laptop" }] }));
+    if (url.includes("client=grok")) { pendingUrl = url; return new Promise<Response>(resolve => { release = resolve; }); }
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  Object.defineProperty(win, "fetch", { configurable: true, value: async () => new Response(null, { status: 200 }) });
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Private laptop");
+  await click(radio("Grok"));
+  expect(release).toBeDefined();
+  sessionStorage.setItem("ocx.usage.v2:old", "private historical usage");
+  await act(async () => { expect(await logoutApiSession("shared")).toBe(true); });
+  expect(document.body.textContent).not.toContain("Private laptop");
+  expect(sessionStorage.getItem("ocx.usage.v2:old")).toBeNull();
+  await act(async () => release!(response(report(pendingUrl))));
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).toContain("Could not load usage data");
+});
+
+test.each([401, 403])("a %s report response revokes previously shown usage and source inventory", async status => {
+  installSharedSession(`ocx_session_test_${status}`);
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return response(facets(url));
+    if (url.includes("/devices")) return response({ devices: [{ apiKeyId: "key-a", alias: "Private laptop" }] });
+    if (url.includes("client=grok")) return new Response(null, { status });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Private laptop");
+  await click(radio("Grok"));
+  expect(document.body.textContent).not.toContain("Private laptop");
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).toContain("Could not load usage data");
+});
+
+test.each([401, 403])("a %s facet denial clears active report, counts, and inventory immediately", async status => {
+  installSharedSession(`ocx_session_facet_${status}`);
+  let rejectFacets = false;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return rejectFacets ? new Response(null, { status }) : response(facets(url));
+    if (url.includes("/devices")) return response({ devices: [{ apiKeyId: "key-a", alias: "Private laptop" }] });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(host.textContent).toContain("2 older requests");
+  expect(document.body.textContent).toContain("Private laptop");
+  rejectFacets = true;
+  await act(async () => win.dispatchEvent(new win.Event("focus")));
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(document.body.textContent).not.toContain("Private laptop");
+  expect(radio("Codex").textContent).not.toContain("30");
+});
+
+test("a new shared session rejects a previous session's late success", async () => {
+  installSharedSession("ocx_session_old");
+  let release: ((response: Response) => void) | undefined;
+  let initialUrl = "";
+  let first = true;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (first) { first = false; initialUrl = url; return new Promise<Response>(resolve => { release = resolve; }); }
+    return Promise.resolve(response(report(url)));
+  }) as typeof fetch;
+  await mount();
+  expect(release).toBeDefined();
+  await act(async () => installSharedSession("ocx_session_new"));
+  expect(host.textContent).toContain("2 older requests");
+  await act(async () => release!(response({ ...report(initialUrl), legacyUnclassifiedRequests: 17 })));
+  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).not.toContain("17 older requests");
+});
+
+
+test("an unrelated policy 403 does not revoke Usage, but a Usage 403 does", async () => {
+  installSharedSession("ocx_session_policy");
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: async () => new Response(null, { status: 403 }) });
+  installApiAuthFetch();
+  await win.fetch("http://localhost/api/link/candidates");
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  await win.fetch("http://localhost/api/usage?client=codex&device=all");
+  expect(usageSessionSnapshot().blocked).toBe(true);
+});
+
+test("a stale 403 cannot revoke a replacement shared session", async () => {
+  installSharedSession("ocx_session_stale");
+  let release: ((response: Response) => void) | undefined;
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: () => new Promise<Response>(resolve => { release = resolve; }) });
+  installApiAuthFetch();
+  const old = win.fetch("http://localhost/api/usage?client=codex&device=all");
+  installSharedSession("ocx_session_replacement");
+  release!(new Response(null, { status: 403 }));
+  expect((await old).status).toBe(403);
+  expect(usageSessionSnapshot().blocked).toBe(false);
 });

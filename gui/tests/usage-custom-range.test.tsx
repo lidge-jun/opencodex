@@ -172,7 +172,7 @@ async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
 
-test("a stale connected report identifies ledger read failure instead of a hub outage", async () => {
+test("a connected read failure after remount does not resurrect a prior report", async () => {
   await mount(true);
   await respond(0, "last-readable-marker");
   await act(async () => { root!.unmount(); });
@@ -184,23 +184,23 @@ test("a stale connected report identifies ledger read failure instead of a hub o
     requests[1]!.resolve(Response.json({ error: "read_failed" }, { status: 500 }));
   });
 
-  expect(container.textContent).toContain("last-readable-marker");
+  expect(container.textContent).not.toContain("last-readable-marker");
   expect(container.textContent).toContain(en["usage.loadError"]);
   expect(container.textContent).not.toContain(en["usage.hubOffline"]);
 });
 
-test("incomplete usage notice survives held cache and remains visible with no readable rows", async () => {
+test("incomplete usage notice is shown after a fresh report with no readable rows", async () => {
   await mount();
   const partial = { ...report(requests[0], "readable-model"), usageIncomplete: true, usageIncompleteReason: "oversized_rows" };
   await act(async () => { requests[0].resolve(Response.json(partial)); });
   expect(container.textContent).toContain("Some usage records could not be included");
   expect(container.textContent).toContain("readable-model");
-  expect(sessionEntries().some(([, value]) => value?.includes('"usageIncomplete":true'))).toBe(true);
+  expect(sessionEntries()).toHaveLength(0);
   await act(async () => { root!.unmount(); });
   root = undefined;
   clearClientResourceStoresForTests();
   await mount();
-  expect(container.textContent).toContain("Some usage records could not be included");
+  expect(container.textContent).toContain("Loading usage data");
   await act(async () => { requests[1].resolve(Response.json({ ...partial,
     summary: { ...partial.summary, requests: 0, totalTokens: 0 }, days: [], models: [],
   })); });
@@ -331,12 +331,12 @@ test("America/Santiago midnight DST retains final-day activity and tooltip", asy
   if (process.env.OCX_USAGE_SANTIAGO_CHILD === "1") console.log("OCX_SANTIAGO_CASE_COMPLETED");
 }, process.env.OCX_USAGE_SANTIAGO_CHILD === "1" ? 10000 : 15000);
 
-test("Apply submits inclusive bounds once; Clear restores the held preset without custom cache entries", async () => {
+test("Apply submits inclusive bounds once; Clear refetches the preset without session cache entries", async () => {
   await mount();
   expect(requests[0].url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all`);
   await respond(0, "preset-report-marker");
   const held = sessionEntries();
-  expect(held).toHaveLength(1);
+  expect(held).toHaveLength(0);
   await enter("2020-09-15T10:20", "2020-09-15T10:21");
   expect(requests).toHaveLength(1);
   expect(container.textContent).toContain("preset-report-marker");
@@ -352,8 +352,7 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   await respond(1, "custom-report-marker");
   expect(container.textContent).toContain("custom-report-marker");
   expect(sessionEntries()).toEqual(held);
-  // Resource eviction is scheduled on a zero-delay timer. Drain that turn before Clear
-  // so this explicitly covers restoring a held preset after its resource store was evicted.
+  // Drain resource eviction so Clear must fetch a fresh preset.
   await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)); });
   // A one-day historical window must not produce a year grid anchored to today's date.
   expect(container.querySelectorAll(".heatmap-grid .heatmap-cell")).toHaveLength(7);
@@ -368,7 +367,7 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   expect(endInput().value).toBe("");
   expect(interval()).toBeUndefined();
   expect(preset("30d").getAttribute("aria-pressed")).toBe("true");
-  expect(container.textContent).toContain("preset-report-marker");
+  expect(container.textContent).toContain("Loading usage data");
   expect(container.textContent).not.toContain("custom-report-marker");
   expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all`);
   await act(async () => { root!.unmount(); });
@@ -376,7 +375,7 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   container.remove();
   clearClientResourceStoresForTests();
   await mount();
-  expect(container.textContent).toContain("preset-report-marker");
+  expect(container.textContent).toContain("Loading usage data");
   await enter("2020-09-15T10:20", "2020-09-15T10:21");
   await apply();
   // Reopening that exact custom window must not resurrect a module/session-held report.
@@ -437,7 +436,7 @@ test("new bounds never show a held report or a superseded request that settles l
   expect(container.textContent).toContain("Loading usage data");
   await respond(3, "latest-custom-marker");
   expect(container.textContent).toContain("latest-custom-marker");
-  expect(sessionEntries()).toHaveLength(1);
+  expect(sessionEntries()).toHaveLength(0);
 });
 
 test("Apply preserves machine key, surface and hub scope; choosing a preset clears custom", async () => {
@@ -589,6 +588,11 @@ for (const invalid of [null, "20", "Infinity", NaN, Infinity, -Infinity, 0, -5])
     const response = Response.json(data);
     response.json = async () => data;
     await act(async () => { requests[0].resolve(response); });
+    if (invalid !== 0) {
+      expect(container.textContent).toContain(en["usage.loadError"]);
+      expect(container.textContent).not.toContain("invalid-throughput-model");
+      return;
+    }
     const title = en["usage.throughput.unmeasured"];
     expect(container.querySelector(`.usage-fact[title="${title}"] .usage-fact-value`)?.textContent).toBe("—");
     for (const section of ["models", "providers"]) {

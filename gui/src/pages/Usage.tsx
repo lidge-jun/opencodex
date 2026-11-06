@@ -23,6 +23,7 @@ import {
 import UsageCompanionView from "./usage-companion-view";
 import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
+import { useUsageSession } from "../components/v2-usage/use-usage-session";
 import { useUsageReport, UsageWindowMismatchError } from "../components/v2-usage/use-usage-report";
 import { UsageSourcePicker } from "../components/v2-usage/usage-source-picker";
 import type { SourceClient, SourceDevice, SourceFilter } from "../components/v2-usage/usage-source";
@@ -153,7 +154,8 @@ export default function Usage({ apiBase, connected = false, apiKeyId, topology =
   const restricted = connected && (scope === "machine" || topology === "link" || topology === "unknown");
   const effectiveDevice: SourceDevice | null = restricted ? (apiKeyId?.trim() && apiKeyId === apiKeyId.trim() ? { kind: "key", id: apiKeyId } : null) : device;
   const filter: SourceFilter | null = effectiveDevice ? { client, device: effectiveDevice } : null;
-  const resource = useUsageReport(apiBase, range, filter, since, until);
+  const session = useUsageSession();
+  const resource = useUsageReport(apiBase, range, filter, session, since, until);
   const { state } = resource;
   const data = resource.data ?? null;
 
@@ -213,7 +215,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId, topology =
       <section className="usage-range flex flex-col gap-3">
         <UsageToolbarRow>
           <UsageSourcePicker apiBase={apiBase} filter={filter} onClient={setClient} onDevice={setDevice}
-            deviceLocked={restricted} facetsAllowed={topology === "home" || topology === "hub"} homeScope={connected} t={t} locale={locale} />
+            session={session} deviceLocked={restricted} facetsAllowed={topology === "home" || topology === "hub"} homeScope={connected} t={t} locale={locale} />
           <UsageFilters range={customWindow ? null : range} onRange={selectRange} t={t} />
           <UsageRangeToggle
             open={rangeOpen}

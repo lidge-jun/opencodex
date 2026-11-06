@@ -6,7 +6,7 @@ import { IconCheck, IconGlobe, IconKey, IconMonitor } from "../../icons";
 import { Select } from "../../ui";
 import { cn } from "../../lib/utils";
 import { hostOs } from "../../lib/desktop-shell";
-import { USAGE_SOURCE_INVENTORY_CHANGED, sourceInventoryEventMatches } from "../../api";
+import { denyUsageSession, usageSessionSnapshot, USAGE_SESSION_CHANGED, USAGE_SOURCE_INVENTORY_CHANGED, sourceInventoryEventMatches } from "../../api";
 import { matchesFacetWindow, matchesSource, noStore, sourceQuery, SOURCE_CLIENTS, type SourceClient, type SourceDevice, type SourceFilter } from "./usage-source";
 
 type Facets = { sourceFilter: unknown; window: { since: number; until: number; timeZone: string }; apps: Record<SourceClient, number>;
@@ -20,28 +20,44 @@ function validFacets(value: Facets, filter: SourceFilter): boolean {
     || !matchesFacetWindow(value.window) || typeof value.usageIncomplete !== "boolean" || !value.apps
     || !SOURCE_CLIENTS.every(client => validCount(value.apps[client])) || !validCount(value.legacyUnclassifiedRequests)
     || !Array.isArray(value.devices)) return false;
-  return value.devices.every(row => row && validCount(row.requests) && row.device &&
-    (["all", "no-key", "unconfigured"].includes(row.device.kind) || (row.device.kind === "key" && typeof row.device.id === "string" && !!row.device.id)));
+  if (value.devices.length > 1027) return false;
+  const seen = new Set<string>(); const keyIds = new Set<string>(); let total = 0;
+  for (const row of value.devices) {
+    if (!row || !validCount(row.requests) || !row.device || typeof row.device !== "object") return false;
+    const device = row.device;
+    if (device.kind === "key") {
+      if (typeof device.id !== "string" || !device.id || device.id !== device.id.trim() || device.id.length > 256 || (total += device.id.length) > 65536 || Object.keys(device).sort().join(",") !== "id,kind") return false;
+      if (keyIds.has(device.id)) return false;
+      keyIds.add(device.id);
+    } else {
+      if (!["all", "no-key", "unconfigured"].includes(device.kind) || Object.keys(device).join(",") !== "kind" || seen.has(device.kind)) return false;
+      seen.add(device.kind);
+    }
+  }
+  return ["all", "no-key", "unconfigured"].every(kind => seen.has(kind));
 }
 
-export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceLocked, facetsAllowed, homeScope, t, locale }: {
+export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceLocked, facetsAllowed, homeScope, session, t, locale }: {
   apiBase: string; filter: SourceFilter | null; onClient: (client: SourceClient) => void; onDevice: (device: SourceDevice) => void;
-  deviceLocked: boolean; facetsAllowed: boolean; homeScope: boolean; t: TFn; locale: Locale;
+  deviceLocked: boolean; facetsAllowed: boolean; homeScope: boolean; session: ReturnType<typeof usageSessionSnapshot>; t: TFn; locale: Locale;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [result, setResult] = useState<{ key: string; facets?: Facets; inventory?: Inventory; failed?: boolean }>({ key: "" });
-  const [knownInventory, setKnownInventory] = useState<{ apiBase: string; items: Inventory }>({ apiBase: "", items: [] });
+  const [knownInventory, setKnownInventory] = useState<{ identity: string; items: Inventory }>({ identity: "", items: [] });
+  const [roster, setRoster] = useState<{ identity: string; devices: SourceDevice[] }>({ identity: "", devices: [] });
+  const identity = JSON.stringify([apiBase, session.generation]);
   const input = useRef<HTMLInputElement>(null);
   const filterKey = JSON.stringify(filter);
   const clientLabel = (client: SourceClient) => clientNames[client] || t(client === "all" ? "usageV2.allApps" : client === "other" ? "usageV2.otherApps" : "usageV2.unknown");
-  const data = result.key === filterKey ? result : { key: filterKey };
+  const resultKey = JSON.stringify([filterKey, identity]);
+  const data = !session.blocked && result.key === resultKey ? result : { key: resultKey };
   const deviceLabel = (device: SourceDevice) => {
     if (device.kind === "all") return t("usageV2.allDevices");
     if (device.kind === "no-key") return t(homeScope ? "usageV2.homeDevice" : hostOs() === "macos" ? "usageV2.thisMac" : "usageV2.thisDevice");
     if (device.kind === "unconfigured") return t("usageV2.unconfigured");
     if (device.kind === "key") {
-      const inventory = data.inventory ?? (knownInventory.apiBase === apiBase ? knownInventory.items : []);
+      const inventory = data.inventory ?? (!session.blocked && knownInventory.identity === identity ? knownInventory.items : []);
       const inventoryIndex = inventory.findIndex(item => item.apiKeyId === device.id);
       const entry = inventory[inventoryIndex];
       const facetIndex = data.facets?.devices.filter(row => row.device.kind === "key").findIndex(row => sameDevice(row.device, device)) ?? -1;
@@ -53,7 +69,7 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
   };
   useEffect(() => {
     const requested = JSON.parse(filterKey) as SourceFilter | null;
-    if (!open || !requested || !facetsAllowed) return;
+    if (!open || !requested || !facetsAllowed || session.blocked) return;
     let disposed = false;
     let sequence = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -61,25 +77,37 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
     const load = async () => {
       const id = ++sequence;
       controller?.abort(); controller = new AbortController();
-      setResult({ key: filterKey });
+      setResult({ key: resultKey });
       try {
+        const get = async (url: string) => {
+          const response = await fetch(url, { signal: controller!.signal, cache: "no-store" });
+          if (response.status === 401 || response.status === 403) denyUsageSession(session.generation);
+          if (!response.ok || !noStore(response)) throw new Error("usage source unavailable");
+          return response;
+        };
         const [response, inventoryResponse] = await Promise.all([
-          fetch(`${apiBase}/api/usage/source-facets?${sourceQuery(requested)}`, { signal: controller.signal, cache: "no-store" }),
-          fetch(`${apiBase}/api/usage/devices`, { signal: controller.signal, cache: "no-store" }),
+          get(`${apiBase}/api/usage/source-facets?${sourceQuery(requested)}`),
+          get(`${apiBase}/api/usage/devices`),
         ]);
-        if (!response.ok || !noStore(response)) throw new Error("facets unavailable");
         const facets = await response.json() as Facets;
         if (!validFacets(facets, requested)) throw new Error("invalid facets");
-        let inventory: Inventory = [];
-        if (inventoryResponse.ok) {
-          const body: unknown = await inventoryResponse.json();
-          if (body && typeof body === "object" && Array.isArray((body as { devices?: unknown }).devices)) {
-            inventory = (body as { devices: Inventory }).devices.filter(item => item && typeof item.apiKeyId === "string" && (typeof item.alias === "string" || item.alias === null));
-          }
+        const body: unknown = await inventoryResponse.json();
+        if (!body || typeof body !== "object" || !Array.isArray((body as { devices?: unknown }).devices)) throw new Error("invalid inventory");
+        const inventory = (body as { devices: Inventory }).devices;
+        if (inventory.length > 1024) throw new Error("inventory too large");
+        const ids = new Set<string>(); let size = 0;
+        for (const item of inventory) {
+          if (!item || typeof item.apiKeyId !== "string" || !item.apiKeyId || item.apiKeyId !== item.apiKeyId.trim() || item.apiKeyId.length > 256
+            || (size += item.apiKeyId.length) > 65536 || ids.has(item.apiKeyId) || (item.alias !== null && (typeof item.alias !== "string" || !item.alias.trim() || item.alias.length > 255))) throw new Error("invalid inventory");
+          ids.add(item.apiKeyId);
         }
-        if (!disposed && id === sequence) { setKnownInventory({ apiBase, items: inventory }); setResult({ key: filterKey, facets, inventory }); }
+        if (!disposed && id === sequence && usageSessionSnapshot().generation === session.generation) {
+          setKnownInventory({ identity, items: inventory });
+          setRoster({ identity, devices: facets.devices.map(row => row.device) });
+          setResult({ key: resultKey, facets, inventory });
+        }
       } catch {
-        if (!disposed && id === sequence) setResult({ key: filterKey, failed: true });
+        if (!disposed && id === sequence) setResult({ key: resultKey, failed: true });
       } finally {
         if (!disposed && id === sequence) timer = setTimeout(load, 15_000);
       }
@@ -90,13 +118,15 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
     window.addEventListener("focus", focus);
     window.addEventListener(USAGE_SOURCE_INVENTORY_CHANGED, inventoryChanged);
     return () => { disposed = true; sequence++; controller?.abort(); if (timer) clearTimeout(timer); window.removeEventListener("focus", focus); window.removeEventListener(USAGE_SOURCE_INVENTORY_CHANGED, inventoryChanged); };
-  }, [open, apiBase, facetsAllowed, filterKey]);
+  }, [open, apiBase, facetsAllowed, filterKey, identity, resultKey, session.blocked, session.generation]);
   useEffect(() => {
-    const clear = () => setKnownInventory({ apiBase: "", items: [] });
+    const clear = () => setKnownInventory({ identity: "", items: [] });
     const changed = (event: Event) => { if (sourceInventoryEventMatches(event, apiBase)) clear(); };
+    const sessionChanged = () => { clear(); setRoster({ identity: "", devices: [] }); setResult({ key: "" }); };
     window.addEventListener("focus", clear);
     window.addEventListener(USAGE_SOURCE_INVENTORY_CHANGED, changed);
-    return () => { window.removeEventListener("focus", clear); window.removeEventListener(USAGE_SOURCE_INVENTORY_CHANGED, changed); };
+    window.addEventListener(USAGE_SESSION_CHANGED, sessionChanged);
+    return () => { window.removeEventListener("focus", clear); window.removeEventListener(USAGE_SOURCE_INVENTORY_CHANGED, changed); window.removeEventListener(USAGE_SESSION_CHANGED, sessionChanged); };
   }, [apiBase]);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
@@ -122,7 +152,10 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
   const q = search.trim().toLocaleLowerCase(locale);
   const visible = (text: string) => !q || text.toLocaleLowerCase(locale).includes(q);
   const count = (value: number | undefined) => data.facets && !data.facets.usageIncomplete && value !== undefined ? value.toLocaleString(locale) : "—";
-  const devices: SourceDevice[] = deviceLocked ? (filter ? [filter.device] : []) : data.facets?.devices.map(row => row.device) ?? [{ kind: "all" }, { kind: "no-key" }, { kind: "unconfigured" }];
+  const defaults: SourceDevice[] = [{ kind: "all" }, { kind: "no-key" }, { kind: "unconfigured" }];
+  const available = !session.blocked && roster.identity === identity ? roster.devices : defaults;
+  const selectedDevice = filter?.device;
+  const devices: SourceDevice[] = deviceLocked ? (filter ? [filter.device] : []) : selectedDevice && !available.some(item => sameDevice(item, selectedDevice)) ? [...available, selectedDevice] : available;
   const visibleClients = SOURCE_CLIENTS.filter(client => visible(`${clientLabel(client)} ${appDetail(client)}`));
   const visibleDevices = devices.filter(device => visible(deviceLabel(device)));
   return <Select.Popup open={open} onOpenChange={next => { setOpen(next); if (!next) setResult({ key: "" }); else setSearch(""); }}

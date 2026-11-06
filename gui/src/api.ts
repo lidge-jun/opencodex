@@ -2,6 +2,31 @@ import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dial
 import { createBoundedFetch, withFetchDeadline } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
+/** Non-secret generation fencing every Usage report and inventory. */
+export const USAGE_SESSION_CHANGED = "opencodex:usage-session-changed";
+type UsageSessionSnapshot = { generation: number; blocked: boolean };
+let usageSession: UsageSessionSnapshot = { generation: 0, blocked: false };
+export function usageSessionSnapshot(): UsageSessionSnapshot { return usageSession; }
+export function purgeLegacyUsageCache(): void {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith("ocx.usage.v2:")) sessionStorage.removeItem(key);
+    }
+  } catch { /* Storage may be unavailable. */ }
+}
+function changeUsageSession(blocked: boolean): void {
+  usageSession = { generation: usageSession.generation + 1, blocked };
+  purgeLegacyUsageCache();
+  if (typeof window !== "undefined") {
+    try { window.dispatchEvent(new window.Event(USAGE_SESSION_CHANGED)); } catch { /* Non-browser event environments. */ }
+  }
+}
+/** An old request cannot revoke a newer session. */
+export function denyUsageSession(generation: number): void {
+  if (usageSession.generation === generation && !usageSession.blocked) changeUsageSession(true);
+}
+
 /** A successful management mutation may change the source-facet inventory. */
 export const USAGE_SOURCE_INVENTORY_CHANGED = "opencodex:usage-source-inventory-changed";
 
@@ -79,6 +104,7 @@ const sessionHandoffOwners = new WeakMap<ApiSessionState, object>();
 
 function reportSessionEvent(plane: ApiPlane, event: string): void {
   if (typeof window === "undefined") return;
+  if (plane === "shared" && event === SESSION_UNAVAILABLE_EVENT && !usageSession.blocked) changeUsageSession(true);
   // Take the constructor off the same window we dispatch on: a test harness (and a
   // sandboxed embed) can supply a document without installing CustomEvent globally.
   const Ctor = (window as unknown as { CustomEvent?: typeof CustomEvent }).CustomEvent
@@ -89,9 +115,10 @@ function reportSessionEvent(plane: ApiPlane, event: string): void {
   } catch { /* a shell that cannot receive the notice must not break the fetch path */ }
 }
 
-function advanceSessionGeneration(state: TargetRuntime): void {
+function advanceSessionGeneration(state: TargetRuntime, notifyUsage = true): void {
   state.generation = {};
   state.resolutionInFlight = null;
+  if (notifyUsage && state.target.id === "shared") changeUsageSession(!!state.logoutBarrier || !state.session.token);
 }
 
 function sessionSnapshot(state: TargetRuntime): SessionSnapshot {
@@ -109,10 +136,11 @@ function isCurrentRecovery(recovery: RecoveryAttempt): boolean {
 function updateSession(state: TargetRuntime, session: ApiSessionState, recovery?: RecoveryAttempt): void {
   if (recovery && !isCurrentRecovery(recovery)) return;
   const changed = state.session.token !== session.token;
-  advanceSessionGeneration(state);
+  advanceSessionGeneration(state, false);
   state.session = session;
   // Advance our own recovery before synchronous session-event listeners can supersede it.
   if (recovery) recovery.generation = state.generation;
+  if (state.target.id === "shared") changeUsageSession(!session.token);
   if (changed) reportSessionEvent(state.target.id, SESSION_CHANGED_EVENT);
 }
 
@@ -228,7 +256,10 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
   } finally {
     bounded.clear();
     barrier.pending--;
-    if (!barrier.pending && !barrier.completed && state.logoutBarrier === barrier) state.logoutBarrier = null;
+    if (!barrier.pending && !barrier.completed && state.logoutBarrier === barrier) {
+      state.logoutBarrier = null;
+      if (plane === "shared") changeUsageSession(!state.session.token);
+    }
   }
 }
 
@@ -541,12 +572,16 @@ export function installApiAuthFetch(): void {
     if (!classified) return originalFetch(input, init);
     const state = runtime(classified.plane);
     const generation = state.generation;
+    const usageGeneration = usageSession.generation;
     const token = state.session.token;
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     let mutation = false;
+    let usageRequest = false;
     try {
       const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
-      mutation = classified.plane === "shared" && sourceInventoryMutation(relativeTargetPath(state.target, url), method);
+      const path = relativeTargetPath(state.target, url);
+      mutation = classified.plane === "shared" && sourceInventoryMutation(path, method);
+      usageRequest = path === "/api/usage" || path === "/api/usage/devices" || path === "/api/usage/source-facets";
     } catch { /* A malformed URL cannot name an inventory mutation. */ }
     const mutationBase = state.target.baseUrl;
     const finish = (result: Response) => {
@@ -561,6 +596,8 @@ export function installApiAuthFetch(): void {
     const pairingExchange = classified.bootstrap && method === "POST";
     const [firstInput, firstInit] = withAuth(classified.plane, input, init, pairingExchange ? null : undefined);
     const response = await originalFetch(firstInput, firstInit);
+    if (!classified.bootstrap && classified.plane === "shared" && state.generation === generation
+      && (response.status === 401 || (response.status === 403 && usageRequest))) denyUsageSession(usageGeneration);
     if (classified.bootstrap || response.status !== 401) return finish(response);
     if (runtimes.get(classified.plane) !== state || state.logoutBarrier) return response;
     const refreshed = state.session.token;
@@ -603,6 +640,7 @@ export function fetchAudioUpload(endpoint: string, init: RequestInit): Promise<R
 }
 
 export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = defaultAdminTokenPrompt): void {
+  changeUsageSession(false);
   installed = false;
   rawFetch = null;
   configuredTargets = null;

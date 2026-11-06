@@ -334,7 +334,7 @@ test("Usage names the loaded window when history is truncated", async () => {
   expect(page).toContain('<Notice tone="warn">');
 });
 
-test("Usage falls back to the generic caveat when a reported bound is unrenderable", async () => {
+test("Usage rejects a report whose timestamp exceeds the safe numeric range", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
@@ -389,8 +389,8 @@ test("Usage falls back to the generic caveat when a reported bound is unrenderab
       root.render(createElement(LanguageProvider, null, createElement(Usage, { apiBase: "http://usage-invalid-window-test" })));
     });
     const deadline = Date.now() + 1_000;
-    while (!(container.textContent ?? "").includes("Totals cover available history only")) {
-      if (Date.now() >= deadline) throw new Error("Usage fallback qualification did not render");
+    while (!(container.textContent ?? "").includes("Could not load usage data")) {
+      if (Date.now() >= deadline) throw new Error("Usage invalid response was not rejected");
       await act(async () => {
         await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10));
       });
