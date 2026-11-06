@@ -256,7 +256,14 @@ Use the actual sample rate of mono PCM16 audio. Wait for `session.started`, then
 send `{"type":"audio.append","audio":"<base64 PCM bytes>"}`. These are JSON text
 frames, not WAV files or binary WebSocket frames. The gateway accepts sample
 rates from 8,000 through 192,000 Hz; upstream support is account/service-dependent.
-Client frames are limited to 64 KiB and sessions to five minutes. Unsupported or
+Client frames are limited to 64 KiB. The proxy allows up to ten minutes
+(600,000 ms) for recording from relay attachment. A valid `session.close` before
+that deadline replaces the recording timer with a separate, bounded 60-second
+window for final transcripts. Keep the WebSocket open during finalization.
+`config.session_ttl_ms` accepts 1–600,000 and is forwarded unchanged; it does not
+set the proxy's recording timer (existing clients may still send 300,000).
+These are OpenCodex application budgets, not demonstrated official OpenAI limits.
+GPT Live and other audio transports retain their existing lifetimes. Unsupported or
 malformed event/config fields close the stream with code 1008.
 
 `transcript.segment` and `transcript.final` contain `utterance_id`, `revision`, and

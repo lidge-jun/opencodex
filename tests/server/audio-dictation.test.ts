@@ -8,7 +8,9 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex
 import * as routing from "../../src/codex/routing";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { createDictationFrameValidator } from "../../src/server/audio-dictation";
+import { createDictationFrameValidator, DICTATION_SESSION_MAX_MS, DICTATION_FINALIZATION_MAX_MS } from "../../src/server/audio-dictation";
+import { attachLiveSidebandUpstream, beginAudioFinalization } from "../../src/server/index/live-sideband";
+import type { WsData } from "../../src/server/ws-bridge";
 import { abortAndReleaseAllTurns, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { LiveCallBindings } from "../../src/server/live-call-bindings";
 import type { OcxConfig } from "../../src/types";
@@ -171,8 +173,72 @@ describe("dictation protocol validation", () => {
     expect(validate(JSON.stringify({ type: "audio.append", audio: "AAA=" }))).toBe(false);
   });
   test("bad formats and oversized configurations do not start sessions", () => {
-    for (const change of [{ num_channels: 2 }, { sample_rate_hz: 0 }, { session_ttl_ms: 300001 }, { max_buffer_size_bytes: 4194305 }]) {
+    for (const change of [{ num_channels: 2 }, { sample_rate_hz: 0 }, { session_ttl_ms: 600001 }, { max_buffer_size_bytes: 4194305 }]) {
       expect(createDictationFrameValidator()(JSON.stringify({ ...startEvent, config: { ...startEvent.config, ...change } }))).toBe(false);
+    }
+  });
+  test("ten-minute application ceiling accepts the old TTL and rejects larger TTLs", () => {
+    expect(DICTATION_SESSION_MAX_MS).toBe(600_000);
+    for (const ttl of [300_000, 600_000]) {
+      expect(createDictationFrameValidator()(JSON.stringify({ ...startEvent, config: { ...startEvent.config, session_ttl_ms: ttl } }))).toBe(true);
+    }
+  });
+  test("relay recording and finalization clocks are bounded and cleaned on expiry or cancel", () => {
+    for (const mode of ["recording", "finalizing", "cancel", "complete", "other-transport"] as const) {
+      let now = 0;
+      let id = 0;
+      const timers = new Map<number, { at: number; run: () => void }>();
+      const set = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, ms: number) => {
+        timers.set(++id, { at: now + ms, run }); return id;
+      }) as typeof setTimeout);
+      const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((key: number) => { timers.delete(key); }) as typeof clearTimeout);
+      const advance = (ms: number) => {
+        now += ms;
+        for (const [key, timer] of [...timers]) if (timer.at <= now) { timers.delete(key); timer.run(); }
+      };
+      const upstream = new EventTarget() as EventTarget & { readyState: number; close: () => void };
+      upstream.readyState = WebSocket.OPEN;
+      upstream.close = () => { upstream.readyState = WebSocket.CLOSED; upstream.dispatchEvent(new CloseEvent("close", { code: 1000 })); };
+      let releases = 0;
+      const outcomes: unknown[] = [];
+      const data: WsData = {
+        liveUpstream: upstream as unknown as WebSocket,
+        liveUpstreamHandoff: { failure: () => undefined, take: () => ({ ok: true, frames: [] }) },
+        liveMaxSessionMs: DICTATION_SESSION_MAX_MS, liveFinalizationMs: DICTATION_FINALIZATION_MAX_MS,
+        liveFinish: outcome => { outcomes.push(outcome); },
+        liveTurnAdmissionLease: { release: () => { releases++; } } as never,
+      };
+      const ws = { data, readyState: WebSocket.OPEN, close() {} };
+      if (mode === "other-transport") data.liveFinalizationMs = undefined;
+      try {
+        attachLiveSidebandUpstream(ws as never);
+        expect(data.liveConnectTimer).toBeUndefined();
+        advance(599_999);
+        expect(releases).toBe(0);
+        if (mode === "recording") advance(1);
+        else {
+          beginAudioFinalization(ws as never, '{"type":"session.close"}');
+          if (mode === "other-transport") {
+            expect(data.liveFinalizing).toBeUndefined();
+            advance(1);
+          } else {
+            advance(1);
+            expect(releases).toBe(0);
+            if (mode === "cancel") data.cancel!();
+            else if (mode === "complete") upstream.close();
+            else {
+              advance(59_998);
+              expect(releases).toBe(0);
+              advance(1);
+            }
+          }
+        }
+        expect(releases).toBe(1);
+        expect(outcomes).toEqual([["cancel", "complete", "other-transport"].includes(mode) ? undefined : "timeout"]);
+        expect(timers.size).toBe(0);
+        expect(data.liveSessionTimer).toBeUndefined();
+        expect(data.liveAbortListener).toBeUndefined();
+      } finally { set.mockRestore(); clear.mockRestore(); }
     }
   });
 });

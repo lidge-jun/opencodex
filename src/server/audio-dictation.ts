@@ -7,7 +7,8 @@ import { resolveAudioUpstream, TRANSCRIPTION_MODEL, type AudioUpstream } from ".
 import type { RequestLogContext } from "./request-log";
 import { authorizationCredential } from "../lib/authorization-scheme";
 
-export const DICTATION_SESSION_MAX_MS = 300_000;
+export const DICTATION_SESSION_MAX_MS = 600_000;
+export const DICTATION_FINALIZATION_MAX_MS = 60_000;
 const DICTATION_FRAME_MAX_BYTES = 64 * 1024;
 type JsonObject = Record<string, unknown>;
 function object(value: unknown): value is JsonObject { return !!value && typeof value === "object" && !Array.isArray(value); }
@@ -54,6 +55,7 @@ export interface AudioSocketTarget {
   protocols?: string[];
   validateFrame?: (frame: string | Buffer) => boolean;
   maxSessionMs: number;
+  finalizationMs?: number;
   finish: (outcome?: number | "timeout" | "connect_error") => void;
 }
 
@@ -90,6 +92,7 @@ export async function resolveDictationSocket(
     protocols: ["chatgpt-dictation", `openai-bearer.${token}`, "codex-desktop"],
     validateFrame: createDictationFrameValidator(),
     maxSessionMs: DICTATION_SESSION_MAX_MS,
+    finalizationMs: DICTATION_FINALIZATION_MAX_MS,
     finish: finishAudioUpstream(relay),
   };
 }
