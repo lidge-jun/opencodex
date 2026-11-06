@@ -561,6 +561,56 @@ opencodex를 로컬 OpenAI 호환 서버로 향하게 하세요 — 보통은 �
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …)는
 [설정 레퍼런스](/ko/reference/configuration/)를 참고하세요.
 
+### 사용자 지정 원격 게이트웨이 검증
+
+등록 전에 운영자로부터 사용이 허가된 Chat Completions 베이스 URL, API 키, 지원 모델 ID를 확보하세요.
+예를 들어 `https://api.example.com/v1`은 실제 엔드포인트가 아닌 자리표시자입니다. 프록시가 꺼져 있다면
+시작한 다음 대시보드에서 **Custom**을 선택하고 이름을 `my-gateway`, 어댑터를 `openai-chat`으로 정한 뒤
+허가된 URL과 키를 입력하고 저장하세요. 키를 명령이나 공유 예시에 넣지 마세요. 저장 성공만으로 모델 목록 조회나
+추론 성공이 증명되지는 않습니다.
+
+각 단계를 따로 확인하세요. 기본 포트가 아니면 설정한 로컬 포트를 사용합니다.
+
+```sh
+curl -fsS http://127.0.0.1:10100/healthz
+ocx ready
+ocx provider test my-gateway
+ocx models live --provider my-gateway --json
+```
+
+Health와 readiness는 프록시 상태이며 업스트림의 텍스트 생성 성공을 뜻하지 않습니다. `--model` 없는
+provider test는 추론이 아닌 모델 목록 조회를 검사합니다. 정적 카탈로그에 실시간 모델 조회 엔드포인트가 없으면
+`applicable: false`가 나올 수 있으며 이는 추론 성공이 아닙니다. 공개 모델 목록의 성공도 키 유효성을
+증명하지 않을 수 있습니다. 모델 목록 조회가 실패하거나 모델이 없다면 선택 전에 URL, 자격 증명, 업스트림 접근 권한과
+프로바이더 설정을 확인하세요.
+
+live 카탈로그에서 실제 `id`, `namespaced`, `disabled`, `initialSelectionPending`을 확인하세요.
+초기 선택에 따라 모델이 꺼져 있거나 대기 상태일 수 있습니다. [초기 모델 선택](/ko/reference/configuration/providers/)을
+참고하세요. 목록의 정확한 routed `namespaced` 값으로 원하는 모델 하나만 켭니다.
+
+```sh
+ocx models enable '<목록의-정확한-namespaced-ID>'
+```
+
+routed ID에는 `my-gateway/model-id`처럼 프로바이더 접두사가 있습니다. 접두사 없는 네이티브 모델 ID는
+다른 경로를 선택할 수 있고, 업스트림 `id` 자체에도 슬래시가 들어갈 수 있습니다. 표시 이름이나 추측한
+reasoning 접미사 대신 정확한 카탈로그 값을 쓰세요. 접미사는 별도 업스트림 모델 ID일 수 있으며 reasoning
+강도는 별도 설정입니다. 필요하면 `ocx sync`로 클라이언트 카탈로그에 반영합니다. 진행 중인 작업을 보존하고
+클라이언트나 프록시 재시작을 기본 복구 단계로 삼지 마세요. 자세한 내용은 [CLI 레퍼런스](/reference/cli/providers-accounts/)를 참고하세요.
+
+지원되는 키 인증 원격 설정에서 실제 응답 생성 요청 하나를 검증하려면 `my-gateway/` 접두사를 제외한 행의
+**업스트림 원본 `id`**를 사용합니다.
+
+```sh
+ocx provider test my-gateway --model '<원본-업스트림-ID>'
+```
+
+이 명령은 제한된 요청 하나를 보내며 쿼터를 사용하고 요금이 발생할 수 있습니다. 비용을 승인한 뒤에만 기본값이
+No인 확인 질문에 동의하세요. 비대화형 또는 JSON 사용에는 `--yes`가 필요합니다. 응답 생성 테스트의
+`applicable: false`는 요청을 보내지 않았다는 뜻이며 종료 코드가 0이어도 통과가 아닙니다. 텍스트 생성 성공
+한 번은 도구 호출, 구조화 출력, 연속 호출 또는 모델의 실제 정체를 증명하지 않습니다. 업스트림이 보고한
+모델명은 메타데이터입니다. 이후 호환성 문제는 비식별 fixture로 해당 프로토콜을 따로 재현하세요.
+
 
 ### Antigravity 쿼터 조회 실패 확인
 
