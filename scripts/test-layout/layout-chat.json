@@ -8,5 +8,6 @@
   "client-error-body.test.ts": "lib",
   "chat-error-body-normalization.test.ts": "responses",
   "chat-error-collector-verdicts.test.ts": "responses",
-  "server-chat-error-body-evidence.test.ts": "server"
+  "server-chat-error-body-evidence.test.ts": "server",
+  "chat-native-mistral-content.test.ts": "responses"
 }

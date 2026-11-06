@@ -89,6 +89,11 @@ transport; it does not infer subscription attribution from the inbound protocol.
   Adjacent text blocks share inline-tag parsing; typed thinking resets it.
   Unsupported or malformed array blocks return an upstream error. Other hosts
   keep their existing behavior. This does not add Mistral signature replay.
+- Native `/v1/chat/completions` passthrough to `https://api.mistral.ai/v1` (key auth)
+  converts the same arrays into Chat strings: thinking arrives as `reasoning_content`
+  and text as `content`, streamed in source order. A non-streaming reply joins each
+  into `message.reasoning_content` and `message.content`. Unsupported blocks return
+  an upstream error.
 - Suppresses bare `<tool_call>` text when it duplicates a structured call, and collapses two
   immediately adjacent identical blocks when exactly one structured call agrees with their function
   and input. A doubled `input` is reduced to one copy, joined either directly or by one newline,

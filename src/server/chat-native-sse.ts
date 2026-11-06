@@ -1,3 +1,4 @@
+import { chatContentEvents } from "../adapters/openai-chat/response-events";
 import { ownedChatErrorPayload, canonicalSseErrorBlock } from "../lib/client-error-body";
 import { legacyFailureVerdict, type FailureVerdictSink } from "../chat/failure-verdict";
 import { chatCompletionsErrorBody, type ChatCompletionsCollectorSource } from "../chat/outbound";
@@ -114,6 +115,82 @@ function normalizedChunk(value: Rec, requestedModel: string): Rec {
   };
 }
 
+type ChatStringField = "content" | "reasoning_content";
+
+/** Mistral typed blocks as Chat string runs in source order; null when a block is unsupported. */
+function mistralContentRuns(content: unknown[], baseUrl: string): { field: ChatStringField; text: string }[] | null {
+  const runs: { field: ChatStringField; text: string }[] = [];
+  for (const event of chatContentEvents(content, baseUrl)) {
+    if (event.type === "error") return null;
+    const field = event.type === "text_delta" ? "content" : "reasoning_content";
+    const last = runs.at(-1);
+    if (last?.field === field) last.text += event.text;
+    else runs.push({ field, text: event.text });
+  }
+  return runs;
+}
+
+/**
+ * Mistral reasoning models stream `delta.content` as typed `thinking`/`text` blocks, while native
+ * Chat clients parse strings. Each run becomes its own chunk in source order, thinking as
+ * `reasoning_content` and text as `content`. `role` rides the first chunk; the last keeps the
+ * remaining delta fields, `finish_reason` and `usage`. Every emitted choice carries its index.
+ * Chunks without typed content pass through unchanged.
+ */
+export function mistralTypedContentChunks(value: Rec, baseUrl: string): Rec[] | null {
+  const choices = Array.isArray(value.choices) ? value.choices : [];
+  if (!choices.some(choice => isRec(choice) && isRec(choice.delta) && Array.isArray(choice.delta.content))) return [value];
+  const { choices: _choices, usage, ...chunk } = value;
+  const split: unknown[] = [];
+  for (const [position, choice] of choices.entries()) {
+    if (!isRec(choice) || !isRec(choice.delta) || !Array.isArray(choice.delta.content)) {
+      split.push(isRec(choice) && typeof choice.index !== "number" ? { ...choice, index: position } : choice);
+      continue;
+    }
+    const runs = mistralContentRuns(choice.delta.content, baseUrl);
+    if (!runs) return null;
+    const { content: _content, role, ...delta } = choice.delta;
+    const index = typeof choice.index === "number" ? choice.index : position;
+    const first = role === undefined ? {} : { role };
+    const last = runs.pop() ?? { field: "content", text: "" };
+    runs.forEach((run, ordinal) => split.push({
+      index, delta: { ...(ordinal === 0 ? first : {}), [run.field]: run.text }, finish_reason: null,
+    }));
+    const prior = typeof delta[last.field] === "string" ? delta[last.field] as string : "";
+    split.push({ ...choice, index, delta: { ...(runs.length === 0 ? first : {}), ...delta, [last.field]: prior + last.text } });
+  }
+  return split.map((choice, position) => ({
+    ...chunk,
+    choices: [choice],
+    ...(position === split.length - 1 && usage !== undefined ? { usage } : {}),
+  }));
+}
+
+/** Buffered form of {@link mistralTypedContentChunks}: text joins `content`, thinking joins `reasoning_content`. */
+export function mistralTypedContentCompletion(value: Rec, baseUrl: string): Rec | null {
+  if (!Array.isArray(value.choices)) return value;
+  let changed = false;
+  const choices: unknown[] = [];
+  for (const choice of value.choices) {
+    if (!isRec(choice) || !isRec(choice.message) || !Array.isArray(choice.message.content)) {
+      choices.push(choice);
+      continue;
+    }
+    const runs = mistralContentRuns(choice.message.content, baseUrl);
+    if (!runs) return null;
+    const joined = (field: ChatStringField) => runs.filter(run => run.field === field).map(run => run.text).join("");
+    const reasoning = joined("reasoning_content");
+    const prior = typeof choice.message.reasoning_content === "string" ? choice.message.reasoning_content : "";
+    choices.push({
+      ...choice,
+      // `null` for a thinking- or tool-only reply, matching the streamed collector's message.
+      message: { ...choice.message, content: joined("content") || null, ...(reasoning ? { reasoning_content: prior + reasoning } : {}) },
+    });
+    changed = true;
+  }
+  return changed ? { ...value, choices } : value;
+}
+
 export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: TranslatorBudget): string {
   const id = typeof value.id === "string" ? value.id : `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const created = typeof value.created === "number" ? value.created : Math.floor(Date.now() / 1000);
@@ -188,6 +265,8 @@ interface NativeChatSseOptions {
    * `stallTimeoutSec` then resolves to disabled so a slow local model is not cut mid-turn.
    */
   localUpstream?: boolean;
+  /** Canonical Mistral Chat base URL; set only for that destination, it converts typed content blocks. */
+  mistralBaseUrl?: string;
   clientDeclaredEmptyToolCatalog?: boolean;
   declaredLegacyFunctionNames?: ReadonlySet<string>;
   onFirstOutput?: () => void;
@@ -397,6 +476,13 @@ export function nativeChatSse(
       fail(controller, UNDECLARED_CHAT_TOOL_MESSAGE, UNDECLARED_TOOL_CALL_ERROR_CODE);
       return;
     }
+    const normalized = normalizedChunk(parsed, options.requestedModel);
+    // Replay capture above keeps reading the upstream chunk; only the client copy is converted.
+    const clientChunks = options.mistralBaseUrl ? mistralTypedContentChunks(normalized, options.mistralBaseUrl) : [normalized];
+    if (!clientChunks) {
+      fail(controller, "unsupported Mistral content block", "upstream_sse_invalid");
+      return;
+    }
     const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
     const finished = choices.some(choice => isRec(choice) && typeof choice.finish_reason === "string" && choice.finish_reason.length > 0);
     if (hasPendingToolName() && choices.some((choice, position) => isRec(choice)
@@ -406,7 +492,7 @@ export function nativeChatSse(
       return;
     }
     if (finished) sawFinish = true;
-    const hasText = choices.some(choice => {
+    const hasText = clientChunks.flatMap(chunk => Array.isArray(chunk.choices) ? chunk.choices : []).some(choice => {
       if (!isRec(choice) || !isRec(choice.delta)) return false;
       const delta = choice.delta;
       return (typeof delta.content === "string" && delta.content.length > 0)
@@ -445,10 +531,12 @@ export function nativeChatSse(
       options.collectorSource?.retain(JSON.stringify(payload), parsed);
       relay(controller, (eventName === "error" ? "event: error\n" : "") + canonicalSseErrorBlock(payload));
     } else {
-      const normalized = normalizedChunk(parsed, options.requestedModel);
-      const choiceError = choices.some(choice => isRec(choice) && choice.error !== undefined && choice.error !== null);
-      relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(normalized))
-        : replaceSseDataPayload(block, JSON.stringify(normalized)) + delimiter);
+      for (const chunk of clientChunks) {
+        const chunkChoices = Array.isArray(chunk.choices) ? chunk.choices : [];
+        const choiceError = chunkChoices.some(choice => isRec(choice) && choice.error !== undefined && choice.error !== null);
+        relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(chunk))
+          : replaceSseDataPayload(block, JSON.stringify(chunk)) + delimiter);
+      }
     }
   };
 
