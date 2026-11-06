@@ -447,6 +447,8 @@ entrées de catalogue ; `enable`, `disable` et `provider` contrôlent la visibi
 liste d'autorisation des fournisseurs ; `context` contrôle les plafonds de contexte du fournisseur ; et `shadow` gère l'arrière-plan
 interception d'appel fantôme.
 
+Le champ `reasoningEfforts` apparaît uniquement avec `--json`. La valeur `null` signifie que la liste est inconnue ou n’a pas été consultée, notamment si sa vérification nécessiterait d’ouvrir le trousseau du système. Le tableau vide `[]` indique une liste explicitement vide ou un effort de raisonnement désactivé pour le modèle, par exemple par `noReasoningModels`. Utilisez `ocx models live` pour consulter le catalogue du proxy actif.
+
 `add` et `remove` enregistrent localement par défaut ; `--live` modifie le proxy actif. Sans proxy, un enregistrement local `--json` renvoie `sync.status: "not-attempted"`, `needsSync: true` et le code 0. Une synchronisation tentée mais échouée conserve la sauvegarde et renvoie un code non nul. `list-custom` reste local. `display-name` prend l’ID amont brut ; `order` prend les IDs publics du sélecteur. Voir les contraintes de permutation complète, de préfixe featured et de réinitialisation native dans le [guide anglais](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Sous-commande | Drapeaux pris en charge | Actions |

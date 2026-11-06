@@ -345,6 +345,8 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 
 `ocx model` は `ocx models` の別名です。サブコマンドを使用しない場合、保存済みモデルとルーターが認識するモデル ID を一覧表示します。レジストリのシード、カスタムモデル、この CLI プロセス自身の検出キャッシュが含まれます。新しい CLI プロセスのキャッシュは空の場合があり、実行中のプロキシのカタログとは異なります。従来のキー方式プリセットでは、接続先を変更してもレジストリのシードが残る場合があります。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
 
+`reasoningEfforts` は `--json` でのみ表示されます。`null` は一覧が不明または未照会であることを示し、OS のキーチェーンを開く必要がある場合も含みます。空配列 `[]` は明示的な空の一覧、または `noReasoningModels` などによってそのモデルの推論 effort が無効であることを示します。稼働中のプロキシのカタログは `ocx models live` で確認できます。
+
 `add` と `remove` は既定でローカル保存し、`--live` で稼働中のプロキシを変更します。ローカル `--json` 保存時にプロキシがなければ `sync.status: "not-attempted"`、`needsSync: true`、終了コード 0 を返します。試行した同期が失敗しても保存は維持され、終了コードは非ゼロです。`list-custom` はローカル一覧です。`display-name` は raw upstream ID、`order` は picker の public ID を使います。完全な並べ替え、featured 接頭部、native 順序のリセット制約は[英語版](/reference/cli/providers-accounts/#display-names-and-picker-identities)を参照してください。
 
 |サブコマンド |サポートされているフラグ |アクション |

@@ -1209,9 +1209,11 @@ catalog entries; `enable`, `disable`, and `provider` control visibility; `select
 provider allowlist; `context` controls provider context caps; and `shadow` manages background
 shadow-call interception.
 
-For destinations with credential-scoped learned reasoning refusals, a local listing reports an
-unknown reasoning ladder for an OS-keychain reference instead of opening the keychain. Use
-`ocx models live` to inspect the running proxy's catalog.
+The `reasoningEfforts` ladder appears only with `--json`. A `null` value means the ladder is
+unknown or was not looked up, including when credential-scoped learned refusals would require
+opening the OS keychain. An empty array `[]` means an explicitly empty ladder or that reasoning
+effort is disabled for the model, such as by `noReasoningModels`. Use `ocx models live` to inspect
+the running proxy's catalog.
 
 Model prices are estimates in USD per million tokens. `ocx models --json` includes a
 `price` object with `cost4` rates and their source; `ocx models price --json` keeps

@@ -379,6 +379,8 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 `disable` 和 `provider` 控制可见性；`selected` 控制提供方允许列表；`context` 控制提供方
 上下文上限；`shadow` 管理后台 shadow-call 拦截。
 
+`reasoningEfforts` 列表仅在使用 `--json` 时显示。`null` 表示列表未知或未查询，包括查询需要打开系统钥匙串的情况。空数组 `[]` 表示明确设置了空列表，或该模型的推理强度已被禁用，例如通过 `noReasoningModels` 禁用。使用 `ocx models live` 查看运行中代理的目录。
+
 `add` 和 `remove` 默认保存到本地；`--live` 修改运行中的代理。本地 `--json` 保存时若无代理，返回 `sync.status: "not-attempted"`、`needsSync: true`，退出码为 0。实际尝试的同步失败时保留保存结果，以非零码退出。`list-custom` 是本地列表。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前缀与 native 顺序重置限制见[英文步骤](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子命令 | 支持的标志 | 操作 |
