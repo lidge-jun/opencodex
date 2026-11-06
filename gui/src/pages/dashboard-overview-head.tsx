@@ -129,7 +129,7 @@ export function DashboardMultiAgentControl({ maMode, maSupportsPlaintextV2, maBu
         aria-label={t("dash.multiAgent")}
         value={maMode}
         onChange={mode => { if (mode !== maMode) void switchMaMode(mode); }}
-        items={subagentSurfaceModes(maSupportsPlaintextV2).map(mode => ({ value: mode, label: t(`models.v2Mode_${mode}` as TKey) }))}
+        items={subagentSurfaceModes(maSupportsPlaintextV2 || maMode === "v2-plaintext").map(mode => ({ value: mode, label: t(`models.v2Mode_${mode}` as TKey) }))}
       />
     </fieldset>
   );

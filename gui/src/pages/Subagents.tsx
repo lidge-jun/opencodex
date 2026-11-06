@@ -169,6 +169,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       setStatus(t("sub.ultraModeSaved"));
     } catch (error) {
       if (currentUltraApiBase.current !== requestApiBase) return;
+      if (patch.multiAgentMode === "v2-plaintext") {
+        // A failed receipt cannot prove the write failed. Reconcile this server's state
+        // without turning the original save failure into a success notification.
+        try { await loadUltraMode(); } catch { /* retain the save error */ }
+        if (currentUltraApiBase.current !== requestApiBase) return;
+      }
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
     } finally {

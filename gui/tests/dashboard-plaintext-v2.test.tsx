@@ -17,15 +17,21 @@ test("the redesigned dashboard switch offers plaintext only with capability and 
   win.document.body.append(host);
   const root = createRoot(host);
   const selections: string[] = [];
-  const render = async (supported: boolean, busy = false) => {
+  const render = async (supported: boolean, busy = false, mode: "default" | "v2-plaintext" = "default") => {
     await act(async () => root.render(<LanguageProvider>
-      <DashboardMultiAgentControl maMode="default" maSupportsPlaintextV2={supported} maBusy={busy}
+      <DashboardMultiAgentControl maMode={mode} maSupportsPlaintextV2={supported} maBusy={busy}
         switchMaMode={async mode => { selections.push(mode); }} />
     </LanguageProvider>));
   };
   try {
     await render(false);
     expect(host.querySelectorAll('[role="radio"]').length).toBe(3);
+    await render(false, false, "v2-plaintext");
+    const cached = host.querySelectorAll('[role="radio"]');
+    expect(cached.length).toBe(4);
+    expect(cached[3]!.getAttribute("aria-checked")).toBe("true");
+    await act(async () => { (cached[3] as unknown as HTMLButtonElement).click(); });
+    expect(selections).toEqual([]);
     await render(true);
     const radios = host.querySelectorAll('[role="radio"]');
     expect(radios.length).toBe(4);
