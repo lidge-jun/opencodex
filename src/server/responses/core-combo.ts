@@ -1475,7 +1475,7 @@ export async function executeComboResponses(
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
-    const failureCooldownScope = comboFailureCooldownScope(failure.response.status, failure.classificationText, {
+    const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
     const failedTargetKey = targetKey(pick.target);

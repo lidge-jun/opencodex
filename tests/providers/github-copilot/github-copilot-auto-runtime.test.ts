@@ -15,7 +15,7 @@ import type { OcxConfig } from "../../../src/types";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import { isNonReplayableResponse } from "../../../src/lib/upstream-retry";
 import { clearComboSelectionState } from "../../../src/combos/resolve";
-import { clearComboTargetCooldowns } from "../../../src/combos/failover";
+import { clearComboTargetCooldowns, isComboTargetInCooldown } from "../../../src/combos/failover";
 import { closeRequestHistoryIndex } from "../../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../../src/responses/state";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
@@ -217,6 +217,15 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
     expect(fallbackBodies).toHaveLength(1); expect(fallbackBodies[0].tool_choice).toEqual(choice);
     expect(fallbackBodies[0].tools).toEqual(tools); expect(log.provider).toBe(mode === "combo" ? "combo" : "fallback");
+    if (mode === "combo") {
+      expect(isComboTargetInCooldown("mandatoryAuto", { provider: "github-copilot", model: "auto" })).toBe(false);
+      clearComboSelectionState(); // Reset selection history, retaining any real target cooldown.
+      const compatible = await handleResponses(request("hello", true, { model: "combo/mandatoryAuto" }), f.config, {});
+      expect(compatible.status).toBe(200);
+      await compatible.text();
+      expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+      expect(fallbackBodies).toHaveLength(1);
+    }
   });
   test.each([false, true])("auto-pause negotiation refusal stays local after native=%s inference", async native => {
     const { a, b } = await accounts();
