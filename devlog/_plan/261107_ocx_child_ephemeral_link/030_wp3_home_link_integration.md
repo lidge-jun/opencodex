@@ -1,5 +1,7 @@
 # `wp3` — Home-Side Ephemeral Child Discovery, Enrollment, Sync Fan-Out, & E2E Integration
 
+> Continuity handoff (`LOOP-CONTINUITY-01` from `wp2` D at `072d491771`): `wp2` delivered `native/ocx-child` (878 KiB stripped release binary, 6/6 Rust conformance + live lifecycle suites passing). Revalidated `030_wp3_home_link_integration.md` against `072d491771`: all paths, hunks, `link-*` test-layout shard entries, and real-binary E2E steps match the compiled `ocx-child` contract. Architect consultation: covered by `ARCH-05` & `ARCH-07` (`ALIGNED` on `01a1b18b-a2f3-7b53-971a-9b2c9cccecf7`, `000_roadmap.md` §3.1).
+
 - **Phase ID**: `wp3` (depends on `wp2`; satisfies `c-4`, `c-6`)
 - **Header dependencies**:
   - Consumes `isDetachedEphemeralChildConfig` (`src/link/ephemeral-child.ts`), `POWERSHELL_ENCODED_MAX` (`src/link/remote-windows.ts:8`), `isChildHealth`, `remoteChildHttpArgv`, `REMOTE_CURL_PREFLIGHT` (`src/link/remote-probe.ts:20-40`), `classifySyncResult` (`src/cli/sync-fanout.ts:52`), and compiled `ocx-child` binary.

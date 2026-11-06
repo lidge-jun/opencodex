@@ -154,6 +154,15 @@ while :; do
   directory=\${remaining%%:*}
   try_ocx "\${directory:-.}/ocx" "$@"
   case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
+done
+for candidate in "$HOME/.local/bin/ocx-child" "$HOME/.cache/opencodex/bin/ocx-child"; do
+  try_ocx "$candidate" "$@"
+done
+remaining=$PATH
+while :; do
+  directory=\${remaining%%:*}
+  try_ocx "\${directory:-.}/ocx-child" "$@"
+  case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
 done`;
 
 export const REMOTE_OCX_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"

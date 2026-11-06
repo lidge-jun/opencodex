@@ -148,6 +148,9 @@ const OCX_CANDIDATES = String.raw`$u=$env:USERPROFILE;$c=@("$u\.opencodex-deskto
 if($env:LOCALAPPDATA){$c+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
 if($env:ProgramFiles){$c+="$env:ProgramFiles\OpenCodex\ocx.exe"}
 $c+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
+$c+=@("$u\.local\bin\ocx-child.exe","$u\.cache\opencodex\bin\ocx-child.exe")
+if($env:LOCALAPPDATA){$c+="$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"}
+$c+=@((Get-Command ocx-child.exe -Type Application -EA 0).Source)
 `;
 export function windowsOcxArgv(args: readonly string[]): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`
