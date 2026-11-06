@@ -500,8 +500,8 @@ so an override can never shorten the budgets that prevent a duplicate proxy, and
 `src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
 constants in child processes.
 
-The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe
-`src/update/proxy-liveness-probe.mjs`, decided by
+In Bun installs (`src/update/index.ts`), `runConfigPreflight` opens `config.json` and parses that file's bytes with passive diagnostics before stopping the proxy: an unreadable entry (including a dangling symlink) or fallback diagnostics aborts with code 1 before tray handoff or `ocx stop`. Reparable configs and readable symlinks to regular files pass; a genuinely missing config is allowed. The check does not prevent later edits. npm/pnpm flows (`bin/ocx.mjs`) keep their existing stop sequence.
+The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe `src/update/proxy-liveness-probe.mjs`, decided by
 `src/update/stop-decision.mjs`. A refused dial is `dead`. A dial that is only dropped or times
 out, which is what a listener bound to a tailnet address produces once it is gone, falls back to
 one transient exclusive bind of the same host and port, only when the host is a literal IP address
