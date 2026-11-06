@@ -1,4 +1,4 @@
-import { useId, useState, type RefObject } from "react";
+import { useEffect, useId, useState, type RefObject } from "react";
 import { useT } from "../i18n/shared";
 import { useModalDialog } from "../pages/dashboard-shared";
 import { kiroVerificationLink } from "../kiro-device-login-helpers";
@@ -29,8 +29,12 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
   const { state } = login;
   const view = state.view;
   const destination = view?.verificationUriComplete ?? view?.verificationUri;
-  const safeLink = kiroVerificationLink(destination);
+  const safeLink = kiroVerificationLink(destination, view?.method);
   const cancel = () => { void login.close(); onClose(); };
+  const finished = state.phase === "done" || state.phase === "failed" || state.phase === "expired" || state.phase === "ended";
+  // A clean success has nothing left to read, and this modal would sit over the models notice and block it.
+  const cleanSuccess = state.phase === "done" && !view?.warning;
+  useEffect(() => { if (cleanSuccess) onClose(); }, [cleanSuccess, onClose]);
   return (
     <dialog ref={dialogRef} className="kiro-device-dialog" aria-modal="true" aria-labelledby={titleId}
       onCancel={event => { event.preventDefault(); cancel(); }}>
@@ -80,7 +84,7 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
         {(state.phase === "failed" || state.phase === "expired" || state.phase === "ended") && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={login.reset}>{t("kiroLogin.tryAgain")}</button>
         )}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t("common.cancel")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t(finished ? "common.close" : "common.cancel")}</button>
       </div>
     </dialog>
   );
