@@ -133,21 +133,22 @@ function applyCacheControlToLeadText(blocks: Array<Record<string, unknown>>, cc:
  * Prepend caller instructions without inserting text into a tool-result turn. Assistant-leading
  * histories get a separate initial user turn, leaving existing call/result pairs adjacent.
  */
-function prependTextToFirstUserMessage(messages: unknown[], text: string): void {
+function prependTextToFirstUserMessage(messages: unknown[], texts: string[]): void {
+  const blocks = texts.map(text => ({ type: "text", text }));
   const first = messages[0] as Record<string, unknown> | undefined;
   if (!first || first.role !== "user") {
-    messages.unshift({ role: "user", content: [{ type: "text", text }] });
+    messages.unshift({ role: "user", content: blocks });
     return;
   }
   if (typeof first.content === "string") {
-    first.content = [{ type: "text", text }, { type: "text", text: first.content }];
+    first.content = [...blocks, { type: "text", text: first.content }];
     return;
   }
   if (Array.isArray(first.content)) {
-    first.content = [{ type: "text", text }, ...(first.content as unknown[])];
+    first.content = [...blocks, ...(first.content as unknown[])];
     return;
   }
-  messages.unshift({ role: "user", content: [{ type: "text", text }] });
+  messages.unshift({ role: "user", content: blocks });
 }
 
 type PromptCachingOptions = {
@@ -159,6 +160,8 @@ type PromptCachingOptions = {
    * requests that share the caller prompt can reuse it.
    */
   relocatedSystemPrefix?: boolean;
+  /** The last system block is the caller's uncached per-turn tail; mark the block before it. */
+  uncachedSystemTail?: boolean;
 };
 
 /** Place explicit cache_control breakpoints on the built Anthropic body. */
@@ -203,7 +206,8 @@ function applyPromptCaching(
     }
     used++;
   } else if (system && system.length > 0) {
-    applyCacheControlToLast(system, cc);
+    const i = system.length - (options.uncachedSystemTail && system.length > 1 ? 2 : 1);
+    system[i] = { ...system[i], cache_control: cc };
     used++;
   }
   if (used >= explicitLimit || !messages) return;
@@ -805,7 +809,7 @@ function messagesToAnthropicFormat(
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
   relocateCallerSystem = false,
-): { system: string | undefined; callerSystem: string | undefined; messages: unknown[] } {
+): { system: string[]; callerSystem: string[]; messages: unknown[] } {
   // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
   // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
   const pendingReplay = new Map(serverReplay);
@@ -833,13 +837,17 @@ function messagesToAnthropicFormat(
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
   const callerParts = parsed.context.systemPrompt ?? [];
-  const callerSystem = relocateCallerSystem && callerParts.length
-    ? identifyRoutedModel(callerParts.join("\n\n"), parsed.modelId) || undefined
-    : undefined;
-  const systemParts = [...(relocateCallerSystem ? [] : callerParts), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
-  const system = systemParts.length
-    ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
-    : undefined;
+  const systemParts = [...callerParts, ...(relocateCallerSystem ? [] : toolCatalogNudge ? [toolCatalogNudge] : [])];
+  // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
+  const prefix = parsed._anthropicSystemCachePrefix
+    ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
+  const head = prefix && systemParts[0] ? identifyRoutedModel(systemParts[0], parsed.modelId) : systemParts[0];
+  const texts = prefix && head?.startsWith(`${prefix}\n\n`)
+    ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
+    : [systemParts.join("\n\n")];
+  const normalized = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
+  const callerSystem = relocateCallerSystem ? normalized : [];
+  const system = relocateCallerSystem ? (toolCatalogNudge ? [identifyRoutedModel(toolCatalogNudge, parsed.modelId)].filter(Boolean) : []) : normalized;
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -1132,14 +1140,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // tool contract in system, matching the existing Codex Responses request shape.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [{ type: "text", text: system }] : []),
+          ...system.map(text => ({ type: "text", text })),
         ];
-        if (callerSystem) {
+        if (callerSystem.length > 0) {
           prependTextToFirstUserMessage(messages, callerSystem);
           relocatedCallerSystem = true;
         }
-      } else if (system) {
-        body.system = [{ type: "text", text: system }];
+      } else if (system.length > 0) {
+        body.system = system.map(text => ({ type: "text", text }));
       }
       if (tools) body.tools = tools;
       if (parsed.options.temperature !== undefined) body.temperature = parsed.options.temperature;
@@ -1336,6 +1344,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         maxExplicitBreakpoints: explicitLimit,
         skipLastUser: !!automaticPromptCaching,
         relocatedSystemPrefix: relocatedCallerSystem,
+        uncachedSystemTail: system.length > 1,
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);

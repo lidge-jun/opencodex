@@ -55,6 +55,19 @@ function leadBlock(message: WireMessage | undefined): WireBlock | undefined {
 }
 
 describe("anthropic oauth caller system shape", () => {
+  test("relocated instructions preserve the stable cache prefix ahead of a changing tail", async () => {
+    for (const tail of ["Environment A", "Environment B"]) {
+      const request = parsed([{ role: "user", content: "hello", timestamp: 0 }], [CALLER_SYSTEM + "\n\n" + tail]);
+      request._anthropicSystemCachePrefix = CALLER_SYSTEM;
+      const body = await bodyOf(request);
+      expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION]);
+      expect(texts(body.messages[0]?.content)).toEqual([CALLER_SYSTEM, tail, "hello"]);
+      const blocks = body.messages[0]?.content as WireBlock[];
+      expect(blocks[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+      expect(blocks[1]?.cache_control).toBeUndefined();
+    }
+  });
+
   test("caller instructions travel in the first user turn, not the top-level system array", async () => {
     const body = await bodyOf(parsed([{ role: "user", content: "hello", timestamp: 0 }], [CALLER_SYSTEM]));
 

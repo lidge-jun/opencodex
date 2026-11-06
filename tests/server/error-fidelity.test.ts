@@ -34,6 +34,10 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 describe("error fidelity", () => {
+  test("a structured upstream stall is 504 and an ordinary upstream failure stays 502", () => {
+    expect(httpStatusFromTerminalError({ type: "upstream_error", code: "upstream_stall_timeout", message: "Upstream response body stalled for 1000ms" })).toBe(504);
+    expect(httpStatusFromTerminalError({ type: "upstream_error", code: "upstream_server_error", message: "Upstream connection failed" })).toBe(502);
+  });
   test("classifyError maps Codex-recognized context/quota/rate failures", () => {
     expect(classifyError(400, "upstream_error", "Your input exceeds the context window")).toMatchObject({
       type: "invalid_request_error",

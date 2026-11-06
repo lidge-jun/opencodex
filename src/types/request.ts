@@ -87,6 +87,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /**
+   * The caller's `instructions` prefix through its last cache-marked system block. The anthropic
+   * adapter ends a system block there so the breakpoint stays off the per-turn tail.
+   */
+  _anthropicSystemCachePrefix?: string;
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.

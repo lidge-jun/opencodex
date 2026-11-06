@@ -28,6 +28,17 @@ function payload(base: string, tiers: readonly string[] = efforts) {
 }
 afterEach(() => { registerAntigravityDiscoveredWireModels(baseUrl, []); clearModelCache("family-test"); });
 
+test("discovered Argon repeats the selected tier only for requested summaries", () => {
+  registerAntigravityDiscoveredWireModels(baseUrl, parseAntigravityAvailableModels(payload("gemini-4-argon"))!);
+  for (const [effort, tier] of [["low", "low"], ["medium", "medium"], ["high", "high"],
+    ["xhigh", "high"], [undefined, "medium"], ["unknown", "medium"], ["toString", "medium"]] as const) {
+    expect(resolveAntigravityEffortWireModel("gemini-4-argon", effort, baseUrl, { includeThoughts: true }))
+      .toEqual({ wireModelId: `gemini-4-argon-${tier}`, thinkingLevel: tier });
+    expect(resolveAntigravityEffortWireModel("gemini-4-argon", effort, baseUrl))
+      .toEqual({ wireModelId: `gemini-4-argon-${tier}` });
+  }
+});
+
 for (const base of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-6-2", "future-flash"]) {
   test(`${base}: complete discovery collapses independent of version, label and order`, () => {
     const rows = parseAntigravityAvailableModels(payload(base, ["high", "low", "medium"]))!;
@@ -97,4 +108,11 @@ test("an evidenced overlapping base takes routing precedence over a parent tier 
   expect(rows.map(row => row.id).sort()).toEqual(["foo", "foo-low"]);
   expect(resolveAntigravityEffortWireModel("foo-low", "high", baseUrl)).toEqual({ wireModelId: "foo-low-high" });
   expect(resolveAntigravityEffortWireModel("foo", "low", baseUrl)).toEqual({ wireModelId: "foo-low" });
+});
+
+test("a lone discovered Argon tier keeps its level so thought text still streams", () => {
+  const rows = parseAntigravityAvailableModels(payload("gemini-4-argon", ["high"]))!;
+  registerAntigravityDiscoveredWireModels(baseUrl, rows);
+  expect(resolveAntigravityEffortWireModel("gemini-4-argon-high", undefined, baseUrl, { includeThoughts: true }))
+    .toEqual({ wireModelId: "gemini-4-argon-high", thinkingLevel: "high" });
 });
