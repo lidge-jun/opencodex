@@ -43,10 +43,10 @@ const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b',
   '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
 ].join('\r\n');
-function fixture(separateNodeToolchain = false, tempParent = tmpdir()) {
-  const root = realpathSync.native(mkdtempSync(join(tempParent, "ocx-windows-plan-"))); roots.push(root);
+function fixture(separateNodeToolchain = false) {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-windows-plan-"))); roots.push(root);
   hardenSecretDir(root, { required: true });
-  trustWindowsTempFixtureAncestry(root, tempParent);
+  trustWindowsTempFixtureAncestry(root);
   const prefix = join(root, "npm");
   const toolchainPrefix = separateNodeToolchain ? join(root, "nodejs") : prefix;
   const npmRoot = join(toolchainPrefix, "node_modules", "npm");
@@ -247,7 +247,11 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     if (parent === ancestor) break;
     ancestor = parent;
   }
-  const f = fixture(false, tempParent);
+  const root = realpathSync.native(mkdtempSync(join(tempParent, "ocx-windows-plan-")));
+  roots.push(root);
+  // No fixture subprocess may start before ownership is registered.
+  liveWorkerRoots.add(root);
+  const f = { root, deps: { configDir: join(root, "absent-home") } };
   expect(isTestHomeGuardArmed()).toBe(true);
   assertNotRealHomeUnderTest(f.deps.configDir);
   const temp = join(f.root, "tmp"), localAppData = join(f.root, "AppData", "Local");
@@ -264,9 +268,9 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     OCX_TEST_PROTECTED_HOME: protectedHomeForTests() };
   // Register before spawning or awaiting. A failed or unsettled child retains its
   // independently owned root; only a successful, drained child releases it.
-  liveWorkerRoots.add(f.root);
   const parentHome = process.env.OPENCODEX_HOME, parentAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-  const child = Bun.spawn([process.execPath, helperPath("windows-cli-plan-unsafe-case.ts")], {
+  const child = Bun.spawn([process.execPath, "--preload", helperPath("windows-plan-child-processes.ts"),
+    helperPath("windows-cli-plan-unsafe-case.ts")], {
     cwd: f.root, env, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const errorsPromise = new Response(child.stderr).text();
