@@ -1622,5 +1622,6 @@
   "link-ocx-child-conformance.test.ts": "clients",
   "link-ephemeral-child-discovery.test.ts": "clients",
   "link-enrollment-ephemeral-child.test.ts": "server",
-  "link-ocx-child-e2e.test.ts": "clients"
+  "link-ocx-child-e2e.test.ts": "clients",
+  "link-child-plant-foundations.test.ts": "clients"
 }

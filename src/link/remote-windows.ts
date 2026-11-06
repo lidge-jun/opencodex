@@ -152,9 +152,46 @@ $k=@("$u\.local\bin\ocx-child.exe","$u\.cache\opencodex\bin\ocx-child.exe");if($
 $r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$c=if([IO.File]::Exists("$h\child\state.json")){$k+$f}else{$f+$k}
 `;
 export function windowsOcxArgv(args: readonly string[]): string[] {
+  const sweep = args.includes("--purge") ? String.raw`foreach($r in @($env:LOCALAPPDATA,$env:USERPROFILE)){if($r){foreach($s in @("$r\opencodex\bin","$r\.cache\opencodex\bin")){if([IO.Directory]::Exists($s)){Get-ChildItem -LiteralPath $s -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{}}}}}};` : "";
+  const run = sweep ? `try{$c=[OcxJob]::Run($x,((@($x)+$d.args|%{Quote-Native $_}) -join ' '))}catch{Fail};${sweep}exit $c` : `Invoke-Native $x @($d.args)`;
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`
-foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x)){Invoke-Native $x @($d.args)}}
+foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x)){` + run + String.raw`}}
 [Console]::Error.WriteLine('No runnable ocx.exe found; install the Windows standalone archive.');exit 127
+`);
+}
+
+export function windowsInspectRuntimeArgv(): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + OCX_CANDIDATES + String.raw`
+[Console]::Out.WriteLine('ocx-inspect:arch:'+[string]$env:PROCESSOR_ARCHITECTURE)
+foreach($x in ($c|select -Unique)){if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -ne $v){$k=if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){'ephemeral'}else{'full'};[Console]::Out.WriteLine('ocx-inspect:kind:'+$k);[Console]::Out.WriteLine('ocx-inspect:version:'+$v.Trim());exit 0}}
+[Console]::Out.WriteLine('ocx-inspect:kind:missing');exit 0
+`);
+}
+
+const WINDOWS_MANAGED_BIN = String.raw`function Resolve-PlantDir{
+$r=if($env:LOCALAPPDATA){$env:LOCALAPPDATA}else{$env:USERPROFILE};$subs=if($env:LOCALAPPDATA){@('opencodex','bin')}else{@('.cache','opencodex','bin')};$cur=$r
+foreach($s in $subs){$cur="$cur\$s";if([IO.Directory]::Exists($cur)-or[IO.File]::Exists($cur)){if((([IO.FileSystemInfo](Get-Item -LiteralPath $cur -Force)).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'reparse'}}else{[IO.Directory]::CreateDirectory($cur)|Out-Null}}
+$dst="$cur\ocx-child.exe";if([IO.File]::Exists($dst)-or[IO.Directory]::Exists($dst)){if((([IO.FileSystemInfo](Get-Item -LiteralPath $dst -Force)).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'reparse'}}
+return $cur}
+`;
+
+export function windowsPlantChildArgv(expectedBytes: number, expectedSha256: string): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: [String(expectedBytes), expectedSha256] }) + WINDOWS_MANAGED_BIN + String.raw`
+$tmp=$null;try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";$lim=[int]$d.args[0];$exp=$d.args[1]
+$tmp="$dir\.ocx-child.tmp.$PID.$([Guid]::NewGuid().ToString('N').Substring(0,8)).exe"
+$in=[Console]::OpenStandardInput();$fs=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$h=[Security.Cryptography.SHA256]::Create();$buf=New-Object byte[] 16384;$tot=0
+try{while(($n=$in.Read($buf,0,$buf.Length)) -gt 0){$tot+=$n;if($tot -gt $lim){throw 'size'};$fs.Write($buf,0,$n);[void]$h.TransformBlock($buf,0,$n,$null,0)};[void]$h.TransformFinalBlock($buf,0,0)}finally{$fs.Dispose()}
+$sha=([BitConverter]::ToString($h.Hash)).Replace('-','').ToLowerInvariant();$h.Dispose()
+if($tot -ne $lim -or $sha -ne $exp){throw 'integrity'}
+[IO.File]::Copy($tmp,$dst,$true);[IO.File]::Delete($tmp);$tmp=$null
+$rc=[OcxJob]::Run($dst,('"'+$dst+'" --version'));if($rc -ne 0){[IO.File]::Delete($dst);exit 1};exit 0
+}catch{if($tmp -and [IO.File]::Exists($tmp)){try{[IO.File]::Delete($tmp)}catch{}};[Console]::Error.WriteLine('Windows ocx-child plant failed.');exit 1}
+`);
+}
+
+export function windowsPurgePlantedChildArgv(): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){[void][OcxJob]::Run($dst,('"'+$dst+'" detach --purge'))};try{[IO.File]::Delete($dst)}catch{}};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{}}}catch{exit 1};exit 0
 `);
 }
 

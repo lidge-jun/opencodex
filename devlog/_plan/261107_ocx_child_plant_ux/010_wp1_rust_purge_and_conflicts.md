@@ -179,3 +179,19 @@ In `native/ocx-child/src/cli.rs` (`cmd_detach`):
 - `SHA256SUMS` mismatch & symlink in `child-binary-source.ts`: unit test writes tampered `SHA256SUMS` -> observes `{ ok: false, reason: "checksum_mismatch" }`; writes symlink -> refused.
 - `child_port_busy` & `child_external_provider_conflict`: Rust test binds a dummy TCP listener on `listen_port` or writes `model_provider = "custom"` -> observes exact `ocx-child-conflict:...` stderr prefix and untouched `config.toml`.
 
+## 4. `wp1` P-Phase Continuity & Architect Reflection Amendments (`01a1b2fe-fb7d-7f00-b3c9-756fbf5e0e0c`)
+
+- **Continuity from `wp0` D**: Resumed from `wp0` D conclusion ("Verified wp0 docs-only roadmap; next cycle wp1 starts foundations").
+- **Architect `01a1b2fe-fb7d-7f00-b3c9-756fbf5e0e0c` verdict**: `ALIGNED` on `W1-ARCH-01..W1-ARCH-03`.
+- **Folded refinements for `B` implementation**:
+  1. `src/link/store.ts` (`parseRecord`): validate `raw.childKind === undefined || raw.childKind === "full" || raw.childKind === "ephemeral"` and preserve `childKind` on the returned `LinkRecord` so `writeLinkStore` roundtrips it cleanly.
+  2. `native/ocx-child/src/platform.rs`: verify `fs::symlink_metadata(exe_path)` is an existing regular file (`file_type().is_file()`), and on Windows pass `OCX_PURGE_TARGET` via `.env("OCX_PURGE_TARGET", &trashed)` to `cmd.exe /d /c "ping -n 2 127.0.0.1 >nul & del /f /q \"%OCX_PURGE_TARGET%\""` with `CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | DETACHED_PROCESS`.
+  3. `src/link/child-binary-source.ts`: verify `lstatSync` non-symlink status on candidate directory, `SHA256SUMS` (`<= 256 KiB`), and binary (`<= 32 MiB`, `> 0`, POSIX `(mode & 0o022) === 0`).
+  4. `src/link/remote-plant.ts` & `src/link/remote-windows.ts`: include `remotePurgePlantedChildArgv(platform)` (invoking `detach --purge` when runnable and unlinking the managed binary after non-symlink/non-ReparsePoint checks) and `classifyChildAttachConflict(stderr)` matching `ocx-child-conflict:child_port_busy:` and `ocx-child-conflict:child_external_provider_conflict:`.
+
+## 5. `wp1` A-Phase Audit Fold-Backs (`01a1b309-5460-7c93-855b-d59ef8182224`, `GO-WITH-FIXES`)
+
+1. **`B1` (Folded — Windows `OcxJob` silent breakaway & `.old` sweep)**: Because `OcxJob` sets `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` without `JOB_OBJECT_LIMIT_BREAKAWAY_OK`, `purge_managed_executable` on Windows spawns `cmd.exe` with `CREATE_NO_WINDOW | DETACHED_PROCESS` (silent breakaway succeeds automatically; if a caller has explicit breakaway only, fallback is automatic), and both `windowsOcxArgv` (on `disconnect --purge`) and `windowsPurgePlantedChildArgv` sweep `.ocx-child.purge.*.old` in the managed bin dir after `Invoke-Native` exits.
+2. **`B2` (Folded — Managed ancestor symlink/reparse checks)**: Canonicalize `user_home` / `local_appdata` root once, then reject symlinks/reparse points on every managed subpath component (`.cache`, `.cache/opencodex`, `.cache/opencodex/bin`, `ocx-child` and `opencodex`, `opencodex/bin`, `ocx-child.exe`) in Rust `is_managed_plant_executable` as well as POSIX and Windows plant/purge scripts.
+3. **`B3` (Folded — `SHA256SUMS` fail-closed precedence)**: In `resolveChildBinarySource`, when a candidate binary exists in `env`, `sidecar`, or `cache` and fails `SHA256SUMS` (`checksum_mismatch`) or symlink/permission checks (including POSIX `(mode & 0o022) === 0` on `SHA256SUMS`), return `{ ok: false, reason: "checksum_mismatch" }` immediately without falling through to `local-release`. Also include `windowsPurgePlantedChildArgv()` in the `<= 8000` encoded-command budget test.
+

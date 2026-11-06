@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -15,8 +16,9 @@ use crate::daemon::{
 use crate::journal::{DetachError, apply_attach_or_sync, offline_detach};
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
-    FileLock, LockAcquireError, SecretBytes, format_iso8601_utc, now_epoch_ms, random_hex,
-    resolve_codex_home, resolve_opencodex_home, write_private_atomic, write_regular_atomic,
+    FileLock, LockAcquireError, PurgeExecutableOutcome, SecretBytes, format_iso8601_utc,
+    now_epoch_ms, purge_managed_executable, random_hex, resolve_codex_home,
+    resolve_opencodex_home, resolve_user_home, write_private_atomic, write_regular_atomic,
 };
 use crate::relay::{
     RelayCredentials, fetch_home_authenticated, post_child_parity_report, serve_foreground,
@@ -971,10 +973,26 @@ fn cmd_sync(args: &[String]) -> u8 {
 }
 
 fn cmd_detach(args: &[String]) -> u8 {
-    let keep_catalog = args.iter().any(|a| a == "--keep-catalog");
-    let json_mode = args.iter().any(|a| a == "--json");
+    detach_with_exe(args, None)
+}
+
+pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> u8 {
+    let mut keep_catalog = false;
+    let mut json_mode = false;
+    let mut purge = false;
+    for arg in args {
+        match arg.as_str() {
+            "--keep-catalog" => keep_catalog = true,
+            "--json" => json_mode = true,
+            "--purge" => purge = true,
+            _ => {
+                eprintln!("Usage: ocx-child detach [--keep-catalog] [--purge] [--json]");
+                return 2;
+            }
+        }
+    }
     let paths = current_paths();
-    let _lock = match FileLock::acquire_blocking(&paths.lock_file) {
+    let lock = match FileLock::acquire_blocking(&paths.lock_file) {
         Ok(l) => l,
         Err(_) => {
             eprintln!("detach failed: child lifecycle lock busy");
@@ -1002,11 +1020,40 @@ fn cmd_detach(args: &[String]) -> u8 {
     };
     let _ = fs::remove_file(&paths.key_file);
     let _ = fs::remove_file(&paths.state_file);
+    drop(lock);
+    let _ = fs::remove_file(&paths.lock_file);
+    let _ = fs::remove_dir(&paths.child_dir);
+    let _ = fs::remove_dir(&paths.opencodex_home);
+    let mut purged = false;
+    if purge {
+        let exe = match current_exe_override {
+            Some(p) => p.to_path_buf(),
+            None => match std::env::current_exe() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("detach --purge failed resolving current executable: {e}");
+                    return 1;
+                }
+            },
+        };
+        let user_home = resolve_user_home();
+        let local_appdata = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        match purge_managed_executable(&exe, &user_home, local_appdata.as_deref()) {
+            Ok(PurgeExecutableOutcome::Removed) => purged = true,
+            Ok(PurgeExecutableOutcome::SkippedUnmanagedPath) => purged = false,
+            Err(e) => {
+                eprintln!("detach --purge failed: {e}");
+                return 1;
+            }
+        }
+    }
     if json_mode {
-        println!("{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false}}");
+        println!("{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged}}}");
     } else {
         println!(
-            "Disconnected ephemeral Remote Link Child ({outcome:?}); zero background daemon running."
+            "Disconnected ephemeral Remote Link Child ({outcome:?}, purged={purged}); zero background daemon running."
         );
     }
     0
