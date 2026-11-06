@@ -13,6 +13,7 @@ import { loadConfig } from "../config";
 import { isLoopbackHostname, isWildcardHostname } from "../codex/loopback-target";
 import { normalizeBindHostname } from "./bind-host";
 import { isOcxCommandLine, readAlivePid, readProcessCommandLine, readRuntimePort, verifyPidIdentity } from "../config/process-state";
+import { createServer } from "node:net";
 import { loopbackFamilyAvailability } from "../lib/loopback-family";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -46,6 +47,35 @@ export interface HealthzIdentity {
 
 export type EndpointLiveness = "live" | "dead" | "unknown";
 
+/**
+ * Whether this process can bind `hostname:port` right now. A successful bind proves no process
+ * owns that address, which no probe of it can: connecting to this machine's own non-loopback
+ * address (a Tailscale IP, a LAN IP) with nothing listening TIMES OUT on some hosts instead of
+ * being refused, and a timeout is indistinguishable from a slow owner. The listener is closed
+ * immediately. Any bind error (EADDRINUSE, EADDRNOTAVAIL, EACCES) answers false, so an address
+ * we cannot bind stays "unknown" and startup keeps refusing.
+ */
+const BIND_PROOF_TIMEOUT_MS = 1_500;
+
+export function canBindAddress(hostname: string, port: number, timeoutMs = BIND_PROOF_TIMEOUT_MS): Promise<boolean> {
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) return Promise.resolve(false);
+  return new Promise<boolean>(resolve => {
+    const server = createServer();
+    let settled = false;
+    const finish = (bound: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { server.close(); } catch { /* never bound */ }
+      resolve(bound);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    server.once("error", () => finish(false));
+    server.once("listening", () => finish(true));
+    try { server.listen({ host: hostname, port, exclusive: true }); } catch { finish(false); }
+  });
+}
+
 export interface LivenessIo {
   fetchFn?: typeof fetch;
   readPidFn?: () => number | null;
@@ -57,6 +87,12 @@ export interface LivenessIo {
   /** Fresh command-line evidence: undefined/empty is unreadable, never confirmed foreign. */
   readCommandLineFn?: typeof readProcessCommandLine;
   loopbackAvailabilityFn?: typeof loopbackFamilyAvailability;
+  /**
+   * Test seam for the bind proof (see `canBindAddress`): whether `hostname:port` can be bound by
+   * this process right now, which proves no process owns that address. `hostname` is the raw
+   * socket address (IPv6 unbracketed) and `timeoutMs` the remaining discovery budget.
+   */
+  bindProofFn?: (hostname: string, port: number, timeoutMs: number) => Promise<boolean>;
   readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
@@ -520,12 +556,30 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   const budgetExhausted = (): boolean =>
     deadlineAt !== undefined && nowFn() >= deadlineAt;
   const expired = (): null => { observer?.endpoint("unknown"); return null; };
+  // The proof stays inside the discovery deadline: it is skipped once the budget is spent, its
+  // own timeout is capped by what remains, and a proof that finishes past the deadline is
+  // discarded, so an exhausted discovery still answers "unknown". A socket takes the raw
+  // address, never the bracketed URL spelling `probeHostname` composes for IPv6.
+  const bindProof = async (hostname: string, port: number): Promise<boolean> => {
+    const remainingMs = deadlineAt === undefined ? BIND_PROOF_TIMEOUT_MS : Math.min(BIND_PROOF_TIMEOUT_MS, deadlineAt - nowFn());
+    if (remainingMs <= 0) return false;
+    const socketHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    const bound = await (io.bindProofFn ?? canBindAddress)(socketHost, port, remainingMs);
+    return bound && !budgetExhausted();
+  };
   const probe = async (port: number, opts: { hostname?: string; expectedPid?: number }) => {
     // Missing/blank means an actual loopback bind, not a later config's bind scope.
     const bindHostname = opts.hostname?.trim() || "127.0.0.1";
     const hostname = normalizeBindHostname(opts.hostname);
     if (!observer || (!isLoopbackHostname(hostname) && !isWildcardHostname(hostname))) {
-      const identity = await proxyIdentityAtObserved(port, opts, probeIo, observer?.endpoint);
+      // Recovery only (an observer is present): a transport miss on a specific non-loopback bind
+      // address is "unknown", and a bind proof is the one thing that turns it into "dead".
+      let verdict: EndpointLiveness | undefined;
+      const identity = await proxyIdentityAtObserved(port, opts, probeIo, observer ? (r => { verdict = r; }) : undefined);
+      if (observer && !identity && verdict !== undefined) {
+        if (verdict === "unknown" && await bindProof(hostname, port)) verdict = "dead";
+        observer.endpoint(verdict);
+      }
       return identity ? { ...identity, hostname: bindHostname,
         ...(observer ? { probeHostname: probeHostname(opts.hostname) } : {}) } : null;
     }
