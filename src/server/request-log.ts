@@ -630,8 +630,12 @@ export function rehydrateRequestLogsAfterLedgerReplacement(
 export function addRequestLog(entry: RequestLogEntry) {
   // Rows keep proxy-owned error facts only; upstream error text and tokens stop here (both the
   // retained ring row and the usage.jsonl projection below read the projected entry).
+  const attemptNormalizationDropped = entry.attemptNormalizationDropped === true;
   entry = projectErrorDetail(entry);
-  entry = { ...entry, client: normalizeRecordedClient(entry.client) ?? "unknown" };
+  const client = normalizeRecordedClient(entry.client) ?? "unknown";
+  if (entry.client !== client || (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true)) {
+    entry = { ...entry, client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
+  }
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
   // `addFinalRequestLog` is not the only way in: `addRequestLog` is exported and callable

@@ -10,7 +10,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { log } from "../helpers/request-log-entry";
 
 describe("request log metadata", () => {
-  test("direct ingress retains an already normalized row", () => {
+  test.each(["unknown", "codex_cli", "claude_code"] as const)("direct ingress retains an already normalized %s row", client => {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-valid-normalization-log-"));
     process.env.OPENCODEX_HOME = home;
@@ -20,13 +20,37 @@ describe("request log metadata", () => {
         status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" as const,
         liveOnlyMetadata: "retained" };
       const attempts = [attempt];
-      const entry = log({ attempts });
+      const entry = log({ client, attempts });
       addRequestLog(entry);
       expect(getRequestLogEntries()[0]).toBe(entry);
+      expect(getRequestLogEntries()[0]!.client).toBe(client);
       expect(getRequestLogEntries()[0]!.attempts).toBe(attempts);
       expect(getRequestLogEntries()[0]!.attempts![0]).toBe(attempt);
     } finally {
       clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("new direct rows receive unknown client without changing the caller", () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-new-client-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    resetUsageReadCacheForTests();
+    try {
+      const entry = log({});
+      expect(entry).not.toHaveProperty("client");
+      addRequestLog(entry);
+      expect(entry).not.toHaveProperty("client");
+      expect(getRequestLogEntries()[0]).toMatchObject({ client: "unknown" });
+      expect(readUsageEntries()[0]).toHaveProperty("client", "unknown");
+      expect(normalizeUsageEntryForTest(log({}))).not.toHaveProperty("client");
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
