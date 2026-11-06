@@ -30,6 +30,11 @@ test("the sidebar header wraps versions rather than squeezing the badge", () => 
   expect(block(".drawer-head .brand .ver")).toContain("flex: 0 0 auto");
 });
 
+test("the drawer brand's first row shares the close button's center line", () => {
+  // 44px close button, 26px name row: (44 - 26) / 2 puts both centers on one line.
+  expect(block(".drawer-head .brand")).toContain("padding-top: calc((44px - 26px) / 2)");
+});
+
 test("long prerelease and unbroken build identifiers stay inside the header", () => {
   const badge = block(".drawer-head .brand .ver");
   expect(badge).toContain("max-width: 100%");
