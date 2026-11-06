@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { IconPlus } from "../icons";
-import { EmptyState, type NoticeTone } from "../ui";
+import type { NoticeTone } from "../ui";
+import { Panel } from "./v2-accounts/surface";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import AddCodexAccountModal from "./AddCodexAccountModal";
@@ -19,7 +20,7 @@ import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
-import { CodexAccountPoolActions, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
+import { CodexAccountPoolActions, CodexAccountPoolAddButton, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
 import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -499,7 +500,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const showDoctorCopy = !embedded;
 
   return (
-    <div>
+    <div className={`acc-v2 flex flex-col ${embedded ? "gap-3" : "gap-4"}`}>
       <CodexAccountPoolPageHead
         t={t}
         embedded={embedded}
@@ -525,8 +526,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       {banner}
 
       {/*
-        The standalone page places pause/refresh below the mode banner, next to the
-        accounts they act on. The page head retains its title and feedback region.
+        Same order as before the redesign: pause/refresh below the mode banner, the main
+        account, the native main login, then the pool under its own heading with Add.
       */}
       {!embedded && (
         <CodexAccountPoolActions
@@ -551,83 +552,94 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
       {!(loadState === "loading" && accounts.length === 0) && (
         <>
-          <CodexAccountPoolMainCard
-            t={t}
-            main={main}
-            creditsVisible={credits.visible}
-            loading={loadState === "loading"}
-            isMainActive={isMainActive}
-            accountModeState={accountModeState}
-            threshold={autoSwitchThreshold}
-            switchActionLabel={switchActionLabel}
-            onSwitch={setConfirm}
-            onUnpin={setUnpinFor}
-            onTogglePause={togglePaused}
-            pauseUpdatingId={pauseUpdatingId}
-            pauseBusy={pauseBusy}
-            onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
-            priorityUpdatingId={priorityUpdatingId}
-            onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
-            autoSwitchDisabled={accountAutoSwitchDisabled}
-            onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
-            creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
-            switchingId={switchingId}
-            pinnedId={activePinnedId}
-            onOpenReset={openResetPopup}
-            onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
-            doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
-            onManageMainHardLock={hasMainHardLockSetting ? manageMainHardLock : undefined}
-            mainReauth={mainReauth}
-          />
+          <Panel className="acc-accounts acc-accounts--main">
+            <CodexAccountPoolMainCard
+              t={t}
+              main={main}
+              creditsVisible={credits.visible}
+              loading={loadState === "loading"}
+              isMainActive={isMainActive}
+              accountModeState={accountModeState}
+              threshold={autoSwitchThreshold}
+              switchActionLabel={switchActionLabel}
+              onSwitch={setConfirm}
+              onUnpin={setUnpinFor}
+              onTogglePause={togglePaused}
+              pauseUpdatingId={pauseUpdatingId}
+              pauseBusy={pauseBusy}
+              onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
+              priorityUpdatingId={priorityUpdatingId}
+              onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
+              autoSwitchDisabled={accountAutoSwitchDisabled}
+              onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
+              creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
+              switchingId={switchingId}
+              pinnedId={activePinnedId}
+              onOpenReset={openResetPopup}
+              onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
+              doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
+              onManageMainHardLock={hasMainHardLockSetting ? manageMainHardLock : undefined}
+              mainReauth={mainReauth}
+            />
+          </Panel>
 
-          <NativeMainProfiles
-            apiBase={apiBase}
-            disabled={mainReauthActive}
-            onChanged={() => load(false)}
-          />
-
-          <div className="section-sep">
-            <span className="section-label">{t("codexAuth.accountPool")}</span>
-            <div className="sep-line" />
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAdd(true)}>
-              <IconPlus width={14} /> {t("codexAuth.add")}
-            </button>
+          <div className="acc-native-main">
+            <NativeMainProfiles
+              apiBase={apiBase}
+              disabled={mainReauthActive}
+              onChanged={() => load(false)}
+            />
           </div>
 
-          {activePoolNeedsReauth && activePoolAccount && (
-            <CodexAccountPoolReauthBanner onReauth={() => openReauth(activePoolAccount.id)} />
-          )}
+          <Panel
+            className="acc-accounts"
+            title={t("codexAuth.accountPool")}
+            meta={pool.length > 0 ? String(pool.length) : undefined}
+            actions={<CodexAccountPoolAddButton t={t} onAdd={() => setShowAdd(true)} />}
+          >
+            {activePoolNeedsReauth && activePoolAccount && (
+              <CodexAccountPoolReauthBanner onReauth={() => openReauth(activePoolAccount.id)} />
+            )}
 
-          {pool.length === 0 && <EmptyState title={t("codexAuth.noPool")} />}
+            {pool.length === 0 && (
+              <div className="acc-pool-empty">
+                <p className="acc-pool-empty__title">{t("codexAuth.noPool")}</p>
+                <p className="acc-pool-empty__hint">{t("accountsV2.emptyPoolHint")}</p>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAdd(true)}>
+                  <IconPlus width={14} /> {t("codexAuth.add")}
+                </button>
+              </div>
+            )}
 
-          <CodexAccountPoolCards
-            pool={pool}
-            creditsVisible={credits.visible}
-            loading={loadState === "loading"}
-            activeId={activeId}
-            accountModeState={accountModeState}
-            switchActionLabel={switchActionLabel}
-            threshold={autoSwitchThreshold}
-            onOpenReset={openResetPopup}
-            onSwitch={setConfirm}
-            onUnpin={setUnpinFor}
-            onTogglePause={togglePaused}
-            pauseUpdatingId={pauseUpdatingId}
-            pauseBusy={pauseBusy}
-            onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
-            priorityUpdatingId={priorityUpdatingId}
-            onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
-            autoSwitchDisabled={accountAutoSwitchDisabled}
-            onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
-            creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
-            switchingId={switchingId}
-            pinnedId={activePinnedId}
-            onReauth={openReauth}
-            onEditAlias={editAlias}
-            onRemove={remove}
-            onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
-            doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
-          />
+            <CodexAccountPoolCards
+              pool={pool}
+              creditsVisible={credits.visible}
+              loading={loadState === "loading"}
+              activeId={activeId}
+              accountModeState={accountModeState}
+              switchActionLabel={switchActionLabel}
+              threshold={autoSwitchThreshold}
+              onOpenReset={openResetPopup}
+              onSwitch={setConfirm}
+              onUnpin={setUnpinFor}
+              onTogglePause={togglePaused}
+              pauseUpdatingId={pauseUpdatingId}
+              pauseBusy={pauseBusy}
+              onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
+              priorityUpdatingId={priorityUpdatingId}
+              onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
+              autoSwitchDisabled={accountAutoSwitchDisabled}
+              onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
+              creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
+              switchingId={switchingId}
+              pinnedId={activePinnedId}
+              onReauth={openReauth}
+              onEditAlias={editAlias}
+              onRemove={remove}
+              onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
+              doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
+            />
+          </Panel>
         </>
       )}
 

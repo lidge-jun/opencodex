@@ -469,13 +469,15 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model`은 `ocx models`의 별칭입니다. 하위 명령이 없으면 설정된 제공자에 사전 등록된 모델을 나열합니다. `--provider`는 설정된 제공자 하나를 필터링하고 `--json`은 모델 메타데이터를 반환합니다. `live`는 실행 중인 카탈로그를 읽습니다. `add`, `edit`, `remove`, `list-custom`은 수동 카탈로그 항목을 관리합니다. `enable`, `disable`, `provider`는 가시성을 제어합니다. `selected`는 제공자 허용 목록을 제어합니다. `context`는 제공자 컨텍스트 한도를 제어합니다. `shadow`는 백그라운드 shadow-call 가로채기를 관리합니다.
+`ocx model`은 `ocx models`의 별칭입니다. 하위 명령이 없으면 저장된 모델과 라우터가 아는 모델 ID를 나열합니다. 레지스트리 시드, 사용자 정의 모델, 현재 CLI 프로세스의 검색 캐시가 포함됩니다. 새 CLI 프로세스의 캐시는 비어 있을 수 있으며 실행 중인 프록시 카탈로그와 다릅니다. 일부 기존 키 방식 프리셋은 접속 주소를 바꾼 뒤에도 레지스트리 시드를 유지할 수 있습니다. `--provider`는 설정된 제공자 하나를 필터링하고 `--json`은 모델 메타데이터를 반환합니다. `live`는 실행 중인 카탈로그를 읽습니다. `add`, `edit`, `remove`, `list-custom`은 수동 카탈로그 항목을 관리합니다. `enable`, `disable`, `provider`는 가시성을 제어합니다. `selected`는 제공자 허용 목록을 제어합니다. `context`는 제공자 컨텍스트 한도를 제어합니다. `shadow`는 백그라운드 shadow-call 가로채기를 관리합니다.
+
+`reasoningEfforts` 목록은 `--json`에서만 표시됩니다. `null`은 목록을 알 수 없거나 조회하지 않았다는 뜻이며, 확인하려면 OS 키체인을 열어야 하는 경우도 포함합니다. 빈 배열 `[]`은 명시적으로 비어 있는 목록이거나 `noReasoningModels` 등으로 해당 모델의 reasoning effort가 비활성화됐다는 뜻입니다. 실행 중인 프록시의 카탈로그는 `ocx models live`로 확인합니다.
 
 `add`·`remove`는 기본적으로 로컬 저장이며 `--live`를 주면 실행 중인 프록시를 바꿉니다. 로컬 `--json` 저장은 프록시가 없으면 `sync.status: "not-attempted"`, `needsSync: true`, 종료 코드 0을 반환합니다. 실제 동기화 시도가 실패하면 저장은 유지하고 0이 아닌 코드로 끝납니다. `list-custom`은 로컬 목록입니다. 발견된 모델의 표시 이름은 raw upstream ID를 받는 `display-name`으로 바꾸고, picker 순서는 public ID를 받는 `order`로 바꿉니다. [영문 절차](/reference/cli/providers-accounts/#display-names-and-picker-identities)에서 전체 목록·featured 접두부·native 순서 초기화 제약을 확인하세요.
 
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |
-| `list` (기본값) | `--provider <name>`, `--json` | 설정된 제공자에 사전 등록된 모델을 나열합니다. |
+| `list` (기본값) | `--provider <name>`, `--json` | 로컬에 저장된 모델과 라우터가 아는 모델을 나열합니다. |
 | `live` | `--provider <name>`, `--json` | 런타임에 발견된 모델을 포함해 실행 중인 카탈로그를 읽습니다. 행에는 `native`/`routed`, `custom`, `enabled`/`disabled` 표시가 붙습니다. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 사용자 정의 모델을 로컬에 등록하거나 `--live`로 실행 중인 프록시에 등록합니다. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드를 지우고, `0`은 컨텍스트 창을 지웁니다. |

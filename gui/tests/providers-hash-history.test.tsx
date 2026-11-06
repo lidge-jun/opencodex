@@ -80,8 +80,8 @@ describe("route resolution", () => {
     expect(action.replaceTo).toBe("logs/debug");
   });
 
-  test("an unknown page falls back to the dashboard", () => {
-    expect(readPageFromHash("#nonsense")).toBe("dashboard");
+  test("an unknown page falls back to Home", () => {
+    expect(readPageFromHash("#nonsense")).toBe("home");
   });
 });
 
@@ -107,14 +107,15 @@ describe("useAppRouteState (real hook)", () => {
 
     // Lazy imports: a static react-dom/client import binds to the document that existed
     // when the module graph loaded and corrupts sibling suites in the same process.
-    const [{ act }, { createRoot }, { useAppRouteState }] = await Promise.all([
+    const [{ act, useEffect }, { createRoot }, { useAppRouteState }] = await Promise.all([
       import("react"),
       import("react-dom/client"),
       import("../src/use-app-route-state"),
     ]);
     const seen: { current: ReturnType<typeof useAppRouteState> | null } = { current: null };
     function Probe() {
-      seen.current = useAppRouteState();
+      const state = useAppRouteState();
+      useEffect(() => { seen.current = state; }, [state]);
       return null;
     }
     await act(async () => {

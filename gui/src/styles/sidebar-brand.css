@@ -2,7 +2,11 @@
    readable instead of applying the compact topbar's ellipsis policy here.
    A smaller column gap fits release versions without widening the rail; longer
    versions move to another line, and very long build ids wrap within the badge. */
+/* The drawer head is top-aligned so a wrapped badge grows downward, which left the
+   26px name row 3px above the 44px close button's center. Centering the first row on
+   the button keeps logo, name, badge and close on one line. */
 .drawer-head .brand {
+  padding-top: calc((44px - 26px) / 2);
   flex-wrap: wrap;
   column-gap: var(--space-1-5);
   row-gap: var(--space-1);
