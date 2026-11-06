@@ -52,7 +52,7 @@ export function formatQuotaPercent(percent: number | undefined): string {
 }
 
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
-const HEADLINE_ORDER = ["quota.weeklyLimit", "quota.monthlyLimit", "quota.fiveHourLimit"];
+const HEADLINE_ORDER: TKey[] = ["quota.weeklyLimit", "quota.monthlyLimit", "quota.fiveHourLimit"];
 
 function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   const windows: QuotaSummaryWindow[] = quotaWindows(quota).map(window => {
@@ -94,16 +94,20 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
 /** Critical credits displace the preferred regular window only when it is not critical. */
 function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undefined {
   const measured = windows.filter(window => window.modelId === undefined && window.percent !== undefined);
+  const byLabel = new Map<TKey, QuotaSummaryWindow>();
+  for (const window of measured) {
+    if (window.labelKey !== undefined && !byLabel.has(window.labelKey)) byLabel.set(window.labelKey, window);
+  }
   let regular: QuotaSummaryWindow | undefined;
   for (const key of HEADLINE_ORDER) {
-    const hit = measured.find(window => window.labelKey === key);
+    const hit = byLabel.get(key);
     if (hit) {
       regular = hit;
       break;
     }
   }
   if (!regular) regular = measured.find(window => window.labelKey !== "quotaSummary.credits");
-  const credits = measured.find(window => window.labelKey === "quotaSummary.credits");
+  const credits = byLabel.get("quotaSummary.credits");
   if (credits && credits.severity === "critical" && regular?.severity !== "critical") return credits;
   return regular ?? measured[0];
 }
