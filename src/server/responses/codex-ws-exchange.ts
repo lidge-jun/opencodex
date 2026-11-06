@@ -539,13 +539,14 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                 throw new Error("Native steering send failed; delivery is unknown");
               }
             };
-            if (frame.type === "response.create" && beforeContinuation) {
+            if (frame.type === "response.create") {
               // Explicit tool-result continuations are physical request starts;
               // they keep provider pacing and revalidate auth AFTER the wait.
               // A typed pre-send refusal (e.g. the configured upstream body limit) is a
               // known non-delivery and keeps its own message; every other failure keeps
               // the unknown-delivery wording.
-              void beforeContinuation().then(sendControl).catch(error => failStream(
+              // Keep known refusals on this stream even when no pacing hook is installed.
+              void Promise.resolve().then(beforeContinuation).then(sendControl).catch(error => failStream(
                 error instanceof NativeSteeringError || error instanceof NativeContinuationRefusalError ? error
                   : new Error("Native steering continuation could not be dispatched; do not automatically replay queued input"),
               ));

@@ -4,10 +4,15 @@ import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, listWorkflowBudget
 import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { claimNativeContinuationSend } from "../../src/server/responses/native-continuation-send";
 import { NativeContinuationRefusalError } from "../../src/server/responses/native-continuation-refusal";
+import { NativeInjectionChannel } from "../../src/server/responses/native-injection";
+import { codexWsUpstreamFetch } from "../../src/server/responses/ws-upstream";
+import { sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
+import { workflowRefusalResponse } from "../../src/server/workflow-refusal";
+import type { ServerWebSocket } from "bun";
 import {
   installInjectionFixture, prepareInjectionSpendHome, beginInjection, injectionConfig,
   advertiseInjection, completeInjection, savedResult, continuationFrame,
-  acknowledgeInjection, waitForInjection, fallbackCalls, InjectionSocket,
+  acknowledgeInjection, waitForInjection, fallbackCalls, InjectionSocket, type Frame,
 } from "../helpers/native-injection-fixture";
 
 installInjectionFixture();
@@ -179,4 +184,31 @@ test("an independent continuation refusal does not replay stale spend details", 
   expect(refusal?.headers.has(WORKFLOW_LOCAL_REFUSAL_HEADER)).toBe(false);
   expect((await refusal!.json()).error.message).toContain("request send budget exhausted before dispatch");
   expect(reports).toBe(0); expect(closes).toBe(1);
+});
+
+test("an unpaced injection continuation preserves a known local refusal", async () => {
+  const opening = { model: "fixture", multi_agent: { enabled: true }, input: "initial" };
+  const channel = new NativeInjectionChannel(opening);
+  const refusal = workflowRefusalResponse("workflow-sends-exhausted");
+  const response = await codexWsUpstreamFetch("https://chatgpt.com/backend-api/codex/responses",
+    { method: "POST", body: JSON.stringify({ ...opening, stream: true }) }, globalThis.fetch, "1.4.4",
+    undefined, undefined, channel, undefined, undefined, undefined,
+    () => { throw new NativeContinuationRefusalError(refusal); });
+  const sent: Frame[] = [];
+  const ws = { readyState: 1, data: {}, send(text: string) { sent.push(JSON.parse(text)); return 1; } } as unknown as ServerWebSocket<WsData>;
+  const pump = sendResponseToWebSocket(ws, response, () => true, { untilEof: true });
+  await waitForInjection(() => sent.some(frame => frame.type === "response.created"));
+  const socket = InjectionSocket.all.at(-1)!;
+  const item = advertiseInjection(socket);
+  completeInjection(socket, { output: [item] });
+  await waitForInjection(() => sent.some(frame => frame.type === "response.completed"));
+  let thrown: unknown;
+  try { channel.continue({ ...opening, type: "response.create", previous_response_id: socket.root, input: [savedResult()] }); }
+  catch (error) { thrown = error; socket.close(); }
+  await pump;
+  expect(thrown).toBeUndefined();
+  const error = sent.find(frame => frame.type === "error")!;
+  expect(error.status).toBe(429);
+  expect(error.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_sends_exhausted");
+  expect(socket.frames).toHaveLength(1); expect(fallbackCalls).toBe(0);
 });
