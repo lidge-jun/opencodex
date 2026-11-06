@@ -2,10 +2,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash } from "./messages-overflow-cases";
+import { measure, flushMeasurements } from "./messages-overflow-measure";
 const diagEnabled = process.env.OCX_OVERFLOW_DIAG === "1";
 const diagStart = performance.now();
 const diag = (phase: string, fields: Record<string, string | number> = {}) => { if (diagEnabled) process.stderr.write(`OVERFLOW_DIAG ${JSON.stringify({ phase, at_ms: +(performance.now() - diagStart).toFixed(1), ...fields })}\n`); };
 diag("entry_after_static_imports");
+if (diagEnabled) Reflect.set(globalThis, "__overflowMeasure", measure);
 const [mode, scratch, output, selectedLane, offset = "0", limit] = process.argv.slice(2) as [string, string, string, string?, string?, string?];
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 const base = mode === "--generate-base";
@@ -22,14 +24,48 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
   if (source.split(needle).length !== 2) throw new Error(`Baseline observation anchor not unique: ${needle}`);
   return source.replace(needle, replacement);
 }
+function instrumentAtomic(source: string): string {
+  const first = source.indexOf("function writePrivateTempFile(");
+  const last = source.indexOf("function writePrivateTempFileWith(", first);
+  if (first < 0 || last < 0) throw new Error("Missing private write diagnostic anchors");
+  let part = source.slice(first, last);
+  const wrap = (needle: string, replacement: string) => { part = replaceOnce(part, needle, replacement); };
+  wrap('const descriptor = openSync(path, "wx", 0o600);', 'const descriptor = globalThis.__overflowMeasure("temp.open", () => openSync(path, "wx", 0o600));');
+  wrap('hardenSecretPath(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });', 'globalThis.__overflowMeasure("temp.harden", () => hardenSecretPath(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true }));');
+  wrap('writeFileSync(descriptor, content, { encoding: "utf-8" });', 'globalThis.__overflowMeasure("temp.write", () => writeFileSync(descriptor, content, { encoding: "utf-8" }));');
+  wrap('closeSync(descriptor);', 'globalThis.__overflowMeasure("temp.close", () => closeSync(descriptor));');
+  wrap('carryHardenAcrossContentWrite(path);', 'globalThis.__overflowMeasure("temp.carry", () => carryHardenAcrossContentWrite(path));');
+  source = source.slice(0, first) + part + source.slice(last);
+  const start = source.indexOf("function atomicWriteFileToTarget(");
+  const end = source.indexOf("export function atomicWriteFile(", start);
+  if (start < 0 || end < 0) throw new Error("Missing atomic diagnostic anchors");
+  part = source.slice(start, end);
+  wrap('if (recordOwnership) recordOwnedConfigPath(getConfigDir(), path);', 'if (recordOwnership) globalThis.__overflowMeasure("atomic.ownership", () => recordOwnedConfigPath(getConfigDir(), path));');
+  wrap('assertResolvedTargetAllowed(path, target);', 'globalThis.__overflowMeasure("atomic.target_guard", () => assertResolvedTargetAllowed(path, target));');
+  wrap('else effective.write(tmp, content);', 'else globalThis.__overflowMeasure("atomic.temp_write", () => effective.write(tmp, content));');
+  wrap('    effective.harden(tmp);\n    hardened = true;', '    globalThis.__overflowMeasure("atomic.harden", () => effective.harden(tmp));\n    hardened = true;');
+  wrap('} else effective.rename(tmp, target);', '} else globalThis.__overflowMeasure("atomic.rename", () => effective.rename(tmp, target));');
+  return source.slice(0, start) + part + source.slice(end);
+}
 const overlayStarted = performance.now();
 {
   const existing = base ? new Set(git("ls-tree", "-r", "--name-only", "72e80d280", "--", "src").trim().split("\n")) : new Set<string>();
   const changed = base ? git("diff", "--name-only", "72e80d280", "--", "src").trim().split("\n").filter(path => existing.has(path))
-    : ["src/server/claude-messages.ts", "src/claude/outbound.ts", "src/server/messages-native.ts", "src/protocols/encoders/messages.ts"];
+    : ["src/server/claude-messages.ts", "src/claude/outbound.ts", "src/server/messages-native.ts", "src/protocols/encoders/messages.ts", ...(diagEnabled ? ["src/config.ts", "src/config/atomic-write.ts", "src/config/persist-unlocked.ts", "src/lib/spend-ledger-owner.ts"] : [])];
   const overlays = new Map<string, string>();
   for (const path of changed) {
     let source = base ? git("show", `72e80d280:${path}`) : readFileSync(repoPath(path), "utf8");
+    if (path === "src/config/atomic-write.ts") source = instrumentAtomic(source);
+    if (path === "src/config.ts") source = replaceOnce(source,
+      'if (persistConfigUnlocked(withProvenance)) bumpGenerationForCooperatingConfigWrite();',
+      'if (globalThis.__overflowMeasure("config.persist", () => persistConfigUnlocked(withProvenance))) bumpGenerationForCooperatingConfigWrite();');
+    if (path === "src/config/persist-unlocked.ts") source = replaceOnce(source,
+      '() => atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } })',
+      '() => globalThis.__overflowMeasure("persist.atomic", () => atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } }))');
+    if (path === "src/lib/spend-ledger-owner.ts") {
+      source = replaceOnce(source, 'try { owner.database.exec("ROLLBACK"); }', 'try { globalThis.__overflowMeasure("spend.rollback", () => owner.database.exec("ROLLBACK")); }');
+      source = replaceOnce(source, 'try { owner.database.close(); }', 'try { globalThis.__overflowMeasure("spend.close", () => owner.database.close()); }');
+    }
     if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
       "const upstream = await handleResponses(internalReq, {",
       "const upstream = globalThis.__messagesReplayResponse ? globalThis.__messagesReplayResponse() : await handleResponses(internalReq, {");
@@ -91,6 +127,7 @@ function intern<T>(values: T[], value: T): number {
   if (index >= 0) return index;
   return values.push(value) - 1;
 }
+if (diagEnabled) { spawnTracker!.flush("startup"); flushMeasurements("startup"); }
 for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane === selectedLane)) for (const input of applicableMessagesOverflowFixtures(lane).slice(first, first + count)) {
   const rowStarted = performance.now();
   Reflect.set(globalThis, "__overflowDiagRow", input.id);
@@ -103,6 +140,7 @@ for (const lane of messagesOverflowLanes.filter(lane => !selectedLane || lane ==
   if (input.fault) process.stderr.write(`fixture ${lane}/${input.id}\n`);
   const result = await runMessagesOverflowCase(lane, input);
   diag("row_done", { row: input.id, elapsed_ms: +(performance.now() - rowStarted).toFixed(1) });
+  if (diagEnabled) { spawnTracker!.flush(input.id); flushMeasurements(input.id); }
   const passthrough = lane === "passthrough" || lane === "count_tokens";
   if (!passthrough && input.rawBody === undefined && !input.fault && !input.localBranch && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
   const internalDecisions: Record<string, boolean> = {};
@@ -145,6 +183,8 @@ if (base) {
   await flushWindowsSecretAclReapsBeforeRemoval(scratch);
   if (windowsSecretAclReapPendingAtOrBelow(scratch)) throw new Error("Overflow ACL child remains active");
   await spawnTracker!.drain();
+  spawnTracker!.flushAll();
+  if (diagEnabled) flushMeasurements("finalization");
   spawnTracker!.restore();
   await Bun.write(output, JSON.stringify({ schemaVersion: 8, rows, fixtureAsyncSpawnsDrained: true }) + "\n");
   diag("finalize_done", { elapsed_ms: +(performance.now() - finalizeStarted).toFixed(1), rows: rows.length });

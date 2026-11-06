@@ -113,7 +113,9 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
     } else {
       const passthrough = lane === "passthrough" || lane === "count_tokens";
       const native = lane.startsWith("native");
+      const acquireStarted = performance.now();
       release = acquireOwnedSpendHome(); clearKeyCooldowns();
+      phase("spend_acquire", acquireStarted);
       const builtin = lane === "native-fold-builtin";
       const nativeFold = lane === "native-fold" || builtin;
       const reply = () => {
@@ -169,5 +171,13 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       clientRecognizes: clientError && clientRecognizesOverflow(message),
       compactionSentence: payload?.error?.message === compactionSentence, bodySha256, bodyLength };
 
-  } finally { const teardownStarted = performance.now(); if (changedFetch) globalThis.fetch = previousFetch; Reflect.deleteProperty(globalThis, "__messagesReplayResponse"); Reflect.deleteProperty(globalThis, "__messagesCollectorStream"); Reflect.deleteProperty(globalThis, "__messagesReadFailure"); translatorBudget?.dispose(); release?.(); await upstream?.stop(true); phase("teardown", teardownStarted); }
+  } finally {
+    const teardownStarted = performance.now();
+    if (changedFetch) globalThis.fetch = previousFetch;
+    Reflect.deleteProperty(globalThis, "__messagesReplayResponse"); Reflect.deleteProperty(globalThis, "__messagesCollectorStream"); Reflect.deleteProperty(globalThis, "__messagesReadFailure");
+    translatorBudget?.dispose();
+    const releaseStarted = performance.now(); release?.(); phase("spend_release", releaseStarted);
+    const stopStarted = performance.now(); await upstream?.stop(true); phase("server_stop", stopStarted);
+    phase("teardown", teardownStarted);
+  }
 }

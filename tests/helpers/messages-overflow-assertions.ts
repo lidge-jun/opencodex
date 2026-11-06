@@ -137,9 +137,14 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
     const sliceSize = process.platform === "win32" && WINDOWS_SLOW_LANES.has(lane) ? 16 : 64;
     const slices = Array.from({ length: Math.ceil(rows.length / sliceSize) }, (_, index) => rows.slice(index * sliceSize, (index + 1) * sliceSize));
     expect(slices.flat().map(key)).toEqual(rows.map(key));
-    for (const [index, selected] of slices.entries()) {
-      const offset = index * sliceSize;
-      test(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
+    const plans = slices.map((selected, index) => ({ selected, offset: index * sliceSize, mode: "matrix" }));
+    if (process.platform === "win32" && (lane === "translated-http" || lane === "native-fold")) {
+      const offset = lane === "translated-http" ? 192 : 0;
+      for (const mode of ["quiet", "trace", "cold"]) plans.push({ selected: rows.slice(offset, offset + 16), offset, mode });
+    }
+    for (const { selected, offset, mode } of plans) {
+      const name = mode === "matrix" ? `${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}` : `${lane}: diagnostic ${mode} rows ${offset + 1}-${offset + selected.length}`;
+      test(name, async () => {
         const started = performance.now();
         const scratch = mkdtempSync(join(overflowScratchBase(), "ocx-overflow-slice-"));
         let safeToRemove = true;
@@ -147,14 +152,15 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
         try {
           mkdirSync(join(scratch, "ocx")); mkdirSync(join(scratch, "codex")); mkdirSync(join(scratch, "tmp"));
           const output = join(scratch, "head.json");
-          const diagnostic = lane === "translated-http" || lane === "native-fold";
+          const diagnostic = (lane === "translated-http" || lane === "native-fold") && mode !== "quiet";
+          if (mode === "cold") mkdirSync(join(scratch, "cache"));
           const spawnStarted = performance.now();
-          const child = Bun.spawn([process.execPath, helperPath("messages-overflow-differential.ts"), "head", scratch, output, lane, String(offset), String(sliceSize)], { cwd: repoRoot(), env: { ...process.env, OCX_OVERFLOW_DIAG: diagnostic ? "1" : "0", HOME: scratch, USERPROFILE: scratch, TEMP: join(scratch, "tmp"), TMP: join(scratch, "tmp"), TMPDIR: join(scratch, "tmp"), OPENCODEX_HOME: join(scratch, "ocx"), CODEX_HOME: join(scratch, "codex"), CODEX_SQLITE_HOME: join(scratch, "codex"), OCX_OWNER_REGISTRY_DIR: join(scratch, "ocx", "ocx-homes"), CLAUDE_CONFIG_DIR: join(scratch, "claude"), GROK_HOME: join(scratch, "grok") }, stdout: "pipe", stderr: "pipe" });
+          const child = Bun.spawn([process.execPath, helperPath("messages-overflow-differential.ts"), "head", scratch, output, lane, String(offset), String(sliceSize)], { cwd: repoRoot(), env: { ...process.env, ...(mode === "cold" ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(scratch, "cache") } : {}), OCX_OVERFLOW_DIAG: diagnostic ? "1" : "0", HOME: scratch, USERPROFILE: scratch, TEMP: join(scratch, "tmp"), TMP: join(scratch, "tmp"), TMPDIR: join(scratch, "tmp"), OPENCODEX_HOME: join(scratch, "ocx"), CODEX_HOME: join(scratch, "codex"), CODEX_SQLITE_HOME: join(scratch, "codex"), OCX_OWNER_REGISTRY_DIR: join(scratch, "ocx", "ocx-homes"), CLAUDE_CONFIG_DIR: join(scratch, "claude"), GROK_HOME: join(scratch, "grok") }, stdout: "pipe", stderr: "pipe" });
           safeToRemove = false;
           const { exit, stdout, stderr } = await collectOverflowChild(child, process.platform === "win32" ? started + 25_000 : null, 2_000, diagnostic ? line => {
-            console.info(`OVERFLOW_CHILD ${lane} ${offset} ${line}`);
-          } : undefined, diagnostic ? () => console.info(`OVERFLOW_PARENT ${lane} ${offset} spawn_to_first_output_ms=${(performance.now() - spawnStarted).toFixed(1)}`) : undefined);
-          if (diagnostic) console.info(`OVERFLOW_PARENT ${lane} ${offset} child_elapsed_ms=${(performance.now() - spawnStarted).toFixed(1)} exit=${exit}`);
+            console.info(`OVERFLOW_CHILD ${lane} ${offset} mode=${mode} ${line}`);
+          } : undefined, diagnostic ? () => console.info(`OVERFLOW_PARENT ${lane} ${offset} mode=${mode} spawn_to_first_output_ms=${(performance.now() - spawnStarted).toFixed(1)}`) : undefined);
+          if (diagnostic || mode === "quiet") console.info(`OVERFLOW_PARENT ${lane} ${offset} mode=${mode} child_elapsed_ms=${(performance.now() - spawnStarted).toFixed(1)} exit=${exit}`);
           if (exit !== 0) throw new Error(`Head slice exited ${exit}\n${stdout}\n${stderr}`);
           const result = JSON.parse(readFileSync(output, "utf8")) as { rows: Row[]; fixtureAsyncSpawnsDrained?: boolean };
           if (result.fixtureAsyncSpawnsDrained !== true) throw new Error("Head slice did not confirm fixture subprocess cleanup");
@@ -162,10 +168,14 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
           const compareStarted = performance.now();
           expect(result.rows).toHaveLength(selected.length);
           for (const [index, row] of result.rows.entries()) { expect(key(row)).toBe(key(selected[index]!)); assertRow(selected[index]!, row); }
-          if (diagnostic) console.info(`OVERFLOW_PARENT ${lane} ${offset} golden_compare_ms=${(performance.now() - compareStarted).toFixed(1)} rows=${result.rows.length}`);
+          if (diagnostic || mode === "quiet") console.info(`OVERFLOW_PARENT ${lane} ${offset} mode=${mode} golden_compare_ms=${(performance.now() - compareStarted).toFixed(1)} rows=${result.rows.length}`);
           console.info(`MESSAGES_OVERFLOW_ROWS ${lane} ${offset} ${selected.length} ${Math.round(performance.now() - started)}ms`);
         } catch (error) { failure = { error }; }
-        finally { finishOverflowScratch(scratch, safeToRemove, failure); }
+        finally {
+          const cleanupStarted = performance.now();
+          try { finishOverflowScratch(scratch, safeToRemove, failure); }
+          finally { if (lane === "translated-http" || lane === "native-fold") console.info(`OVERFLOW_PARENT ${lane} ${offset} mode=${mode} scratch_cleanup_ms=${(performance.now() - cleanupStarted).toFixed(1)} safe=${safeToRemove}`); }
+        }
       }, 30000);
     }
   }
