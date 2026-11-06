@@ -56,6 +56,8 @@ test("finds the earliest counted gift expiry, excluding daily slices and unrelat
   // A precise zero means the package is depleted; the legacy field must not resurrect it.
   expect(codeBuddyAiExpiringCredits([{ PackageCode: "gift", CapacityType: 1, CycleCapacityRemainPrecise: "0",
     CycleCapacityRemain: 250, DeductionEndTime: at }], new Set(["gift"]), now)).toBeUndefined();
+  expect(codeBuddyAiExpiringCredits([{ PackageCode: "gift", CapacityType: 1, CycleCapacityRemainPrecise: 0,
+    CycleCapacityRemain: 250, DeductionEndTime: at }], new Set(["gift"]), now)).toBeUndefined();
 });
 
 test("uses account-owned headers and bounded pagination for package expiry", async () => {
