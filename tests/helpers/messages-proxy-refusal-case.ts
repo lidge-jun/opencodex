@@ -1,22 +1,62 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { repoPath } from "./repo-root";
+const hooks = {
+  upstreamLoads: 0, upstreamHits: 0, nativeLoads: 0, nativeHits: 0, verdictLoads: 0,
+  admissions: [] as boolean[], redInputs: [] as { path: string; marker: boolean }[],
+};
+(globalThis as typeof globalThis & { __fixtureHooks: typeof hooks }).__fixtureHooks = hooks;
+const portable = (path: string) => path.replaceAll("\\", "/");
+function replaceOnce(source: string, anchor: string, replacement: string): string {
+  if (source.split(anchor).length !== 2) throw new Error("Fixture anchor missing or duplicated: " + anchor);
+  return source.replace(anchor, replacement);
+}
 function readOriginal(path: string): string {
-  const exported = process.env.MESSAGES_RED_SOURCE && join(process.env.MESSAGES_RED_SOURCE, relative(repoPath(), path));
-  return readFileSync(exported && existsSync(exported) ? exported : path, "utf8");
+  const rel = relative(repoPath(), path);
+  const exported = process.env.MESSAGES_RED_SOURCE && join(process.env.MESSAGES_RED_SOURCE, rel);
+  const red = !!exported && existsSync(exported);
+  const contents = readFileSync(red ? exported! : path, "utf8");
+  if (red) hooks.redInputs.push({ path: portable(rel), marker: contents.includes("L7_RED_SOURCE_MARKER") });
+  return contents;
 }
 if (process.env.MESSAGES_RED_SOURCE) {
-  const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !path.endsWith("server/claude-messages.ts") && !path.endsWith("claude/failure-verdict.ts"));
-  const filter = new RegExp("^(?:" + paths.map(path => repoPath(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$");
+  const instrumented = new Set(["src/server/claude-messages.ts", "src/server/messages-native.ts", "src/claude/failure-verdict.ts"]);
+  const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !instrumented.has(portable(path)));
+  const escape = (part: string) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const filter = new RegExp("^(?:" + paths.map(path => portable(repoPath(path)).split("/").map(escape).join("[\\\\/]")).join("|") + ")$");
   Bun.plugin({ name: "935199a98 red source", setup(build) {
     build.onLoad({ filter }, ({ path }) => ({ contents: readOriginal(path), loader: "ts" }));
   } });
 }
 const kind = process.argv[2]!;
+const filters = {
+  upstream: /src[\\/]server[\\/]claude-messages\.ts$/,
+  native: /src[\\/]server[\\/]messages-native\.ts$/,
+  verdict: /src[\\/]claude[\\/]failure-verdict\.ts$/,
+};
+const filterChecks = Object.fromEntries(Object.entries(filters).map(([name, filter]) => {
+  const suffix = name === "upstream" ? "src/server/claude-messages.ts" : name === "native" ? "src/server/messages-native.ts" : "src/claude/failure-verdict.ts";
+  return [name, { forward: filter.test("/fixture/" + suffix), backward: filter.test("C:\\fixture\\" + suffix.replaceAll("/", "\\")) }];
+}));
 Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
-  build.onLoad({ filter: /src\/server\/claude-messages\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("const upstream = await handleResponses(internalReq, {", "const upstream = globalThis.__localRefusalReply ?? await handleResponses(internalReq, {"), loader: "ts" }));
-  build.onLoad({ filter: /src\/server\/messages-native\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);", "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);"), loader: "ts" }));
-  build.onLoad({ filter: /src\/claude\/failure-verdict\.ts$/ }, ({ path }) => ({ contents: readOriginal(path).replace("  if (sink) (sink.delivered", "  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n  if (sink) (sink.delivered"), loader: "ts" }));
+  build.onLoad({ filter: filters.upstream }, ({ path }) => {
+    hooks.upstreamLoads++;
+    return { loader: "ts", contents: replaceOnce(readOriginal(path),
+      "const upstream = await handleResponses(internalReq, {",
+      "const upstream = globalThis.__localRefusalReply ? (globalThis.__fixtureHooks.upstreamHits++, globalThis.__localRefusalReply) : await handleResponses(internalReq, {") };
+  });
+  build.onLoad({ filter: filters.native }, ({ path }) => {
+    hooks.nativeLoads++;
+    return { loader: "ts", contents: replaceOnce(readOriginal(path),
+      "const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);",
+      "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { globalThis.__fixtureHooks.nativeHits++; throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);") };
+  });
+  build.onLoad({ filter: filters.verdict }, ({ path }) => {
+    hooks.verdictLoads++;
+    return { loader: "ts", contents: replaceOnce(readOriginal(path),
+      "  if (sink) (sink.delivered",
+      "  globalThis.__fixtureHooks.admissions.push(Boolean(sink));\n  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n  if (sink) (sink.delivered") };
+  });
 } });
 const { handleClaudeMessages, handleClaudeCountTokens } = await import("../../src/server/claude-messages");
 const { markProxyError } = await import("../../src/lib/client-error-body");
@@ -41,7 +81,7 @@ if (kind.startsWith("native-pacing")) {
   if (kind.startsWith("body-overflow")) { expectedBody = "x".repeat(314160); absent = "314159"; }
   if (kind === "body-stall") absent = "1s";
   globalThis.fetch = (async () => new Response(kind === "body-stall" ? new ReadableStream({ pull() {} }) : expectedBody, { headers: { "content-type": "application/json" } })) as typeof fetch;
-} else if (kind === "sink") {
+} else if (kind === "sink" || kind === "sink-collected") {
   produced = new Response('event: response.failed\ndata: '+JSON.stringify({ type: "response.failed", response: { error: { message: KEY, type: "server_error" } } })+'\n\n', { headers: { "content-type": "text/event-stream" } });
 } else if (kind === "sink-direct") {
   // The delivery layer chooses whether collection owns a legacy-record sink.
@@ -165,4 +205,5 @@ const direct = kind === "sink-direct" ? await (async () => {
 const chat = kind === "chat-roster" ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "fixture" }], stream: false }) }), config, logCtx) : undefined;
 const response = chat ?? direct ?? (["roster-count", "body-overflow-count"].includes(kind) ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, logCtx, kind === "scope-direct" ? { requestId: crypto.randomUUID(), start: Date.now(), admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined));
 const text = await response.text();
-console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set((globalThis as any).__observedSinks ?? [])].reduce((n: number, sink: any) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: (globalThis as any).__copilotCalls, usage: logCtx.usage }));
+const observations = globalThis as typeof globalThis & { __observedSinks?: { delivered?: unknown[] }[]; __copilotCalls?: string[] };
+console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set(observations.__observedSinks ?? [])].reduce((n, sink) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: observations.__copilotCalls, usage: logCtx.usage, hooks, filterChecks }));
