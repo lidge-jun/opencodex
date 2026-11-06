@@ -412,6 +412,8 @@ describe("retryBackoffDelayMs", () => {
     "if the input exceeds the context window, shorten it; the server is unavailable",
     "Failed to load the maximum context length configuration",
     "Does the input exceed the context window? The server is unavailable",
+    "Invalid tool name: 'prompt is too long'",
+    "Input is too long for username",
   ])("a 5xx without an actual overflow verdict remains retryable: %s", async message => {
     silenceWarn();
     const mock = mockDoFetch([Response.json({ error: { message } }, { status: 503 }), new Response("ok")]);
@@ -438,6 +440,18 @@ describe("retryBackoffDelayMs", () => {
   test("a definite overflow stays terminal when its remedy mentions configuration", async () => {
     silenceWarn();
     const first = new Response("Your input exceeds the context window; adjust your configuration.", { status: 503 });
+    const mock = mockDoFetch([first, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test.each([
+    "If input exceeds the context window, shorten it. This input exceeds the context window.",
+    "Failed to load context window configuration. Your input exceeds the context window.",
+    "Too many tokens: prompt is too long",
+  ])("a separate or explicit overflow verdict stops a resend: %s", async message => {
+    silenceWarn();
+    const first = new Response(message, { status: 503 });
     const mock = mockDoFetch([first, new Response("duplicate")]);
     expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
     expect(mock.calls).toHaveLength(1);

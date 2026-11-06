@@ -114,6 +114,7 @@ test("a direct reader exception quoting overflow wording does not gain an overfl
 
 for (const [status, message, expectedStatus, expectedCode] of [
   [500, "Your input exceeds the context window of this model", 400, "context_length_exceeded"],
+  [500, "x".repeat(450) + " Your input exceeds the context window of this model", 400, "context_length_exceeded"],
   [402, "Your input exceeds the context window of this model", 402, undefined],
   [429, "Your input exceeds the context window of this model", 429, undefined],
 ] as const) {

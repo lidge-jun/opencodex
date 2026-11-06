@@ -1339,9 +1339,10 @@ async function handleClaudeMessagesWithBudget(
             && isContextOverflowError(errorObject, message));
       } catch {
         // A plain-text gateway body carries the same verdict with no envelope to read a code from.
-        const plain = text.trim().slice(0, 400);
-        contextError = Boolean(plain) && ![401, 402, 403, 429].includes(response.status)
-          && isContextOverflowError({}, plain);
+        const inspected = text.trim().slice(0, 16_384);
+        const plain = inspected.slice(0, 400);
+        contextError = Boolean(inspected) && ![401, 402, 403, 429].includes(response.status)
+          && isContextOverflowError({}, inspected);
         if (text) message = contextError ? plain : `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
     } catch { /* keep fallback message */ }

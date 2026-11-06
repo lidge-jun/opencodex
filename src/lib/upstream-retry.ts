@@ -728,8 +728,19 @@ const CONTEXT_OVERFLOW_PEEK_BYTES = 16_384;
 const CONTEXT_OVERFLOW_PEEK_MS = 250;
 // A hypothetical, negated, or configuration-failure mention does not justify suppressing a retry.
 // Inspect the unwrapped provider message, not its JSON spelling or unrelated envelope fields.
-const NON_VERDICT_CONTEXT = /(?:\b(?:not|never|no|neither|nor|if|unless|whether)\b|n['\u2019]t\b)[^.!?\n]{0,100}\b(?:context(?:\s+(?:window|length))?|tokens?|(?:input|prompt)\s+is\s+too\s+long)\b|\b(?:context\s+(?:window|length)|token\s+limit)\b[^.!?\n]{0,40}\?/i;
+const NON_VERDICT_CONTEXT = /(?:\b(?:not|never|no|neither|nor|if|unless|whether)\b|n['\u2019]t\b)[^.!?\n]{0,100}\b(?:context(?:\s+(?:window|length))?|tokens?|(?:input|prompt)\s+is\s+too\s+long)\b|\b(?:context\s+(?:window|length)|token\s+limit|(?:input|prompt)\s+is\s+too\s+long)\b[^.!?\n]{0,40}\?/i;
 const CONTEXT_CONFIG_FAILURE = /\b(?:fail(?:ed|ure)?|unable|cannot|error)\b[^.!?\n]{0,100}\b(?:configuration|settings|documentation)\b|\b(?:configuration|settings|documentation)\b[^.!?\n]{0,100}\b(?:fail(?:ed|ure)?|unavailable|missing|error)\b/i;
+const CONTEXT_THROUGHPUT = /\bper (?:second|minute|hour|day)\b|\brate limit|\bquota\b|\btpm\b/i;
+
+function retryContextOverflowMessage(message: string): boolean {
+  if (CONTEXT_THROUGHPUT.test(message)) return false;
+  return message.split(/(?<=[.!?])\s+|[\r\n]+/).some(sentence => {
+    if (NON_VERDICT_CONTEXT.test(sentence) || CONTEXT_CONFIG_FAILURE.test(sentence)) return false;
+    const withoutGenericThrottle = sentence.replace(/too many tokens/gi, "");
+    return isDefiniteContextOverflow(503, withoutGenericThrottle)
+      || /\bprompt is too long\b/i.test(sentence);
+  });
+}
 
 /** Up to `maxBytes` of a clone of the body, or what arrived before the deadline. */
 async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number, signal?: AbortSignal): Promise<string> {
@@ -781,8 +792,7 @@ async function isContextOverflowResponse(res: Response, signal?: AbortSignal): P
   if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) return false;
   try {
     const text = await peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal);
-    return text.length > 0 && isDefiniteContextOverflow(res.status, text.replace(/too many tokens/gi, ""),
-      message => !NON_VERDICT_CONTEXT.test(message) && !CONTEXT_CONFIG_FAILURE.test(message));
+    return text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage);
   } catch {
     return false;
   }

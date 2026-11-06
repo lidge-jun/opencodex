@@ -212,8 +212,9 @@ does not resend a response whose bounded body prefix proves context overflow. It
 bytes from a clone within 250ms or until cancellation, leaving the returned body intact. Event streams
 and bodies without an observed verdict retain the normal retry; a verdict observed before a slow or
 endless body stalls still stops retry. Hypothetical, negated, question-form and configuration-failure
-mentions are checked against the unwrapped provider message and do not suppress retry; a throttle
-worded only as "too many tokens" is not a verdict.
+mentions are excluded per sentence in the unwrapped provider message, so they cannot hide a definite
+overflow in another sentence. A throttle worded only as "too many tokens" is not a verdict, while an
+explicit "prompt is too long" remains a verdict when no throughput signal is present.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. The retry and cancellation
 contracts are exercised in `tests/lib/upstream-retry.test.ts`.
@@ -382,6 +383,8 @@ to the generic codes; its remaining source and the #8128 suite stay byte-identic
 `tests/claude-integration/messages-overflow-baseline-contract.test.ts`. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
 The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. All other paths keep their baseline comparisons; the fixture data is not regenerated.
+The translated non-2xx plain-text path classifies up to 16,384 characters before selecting the bounded
+400-character display text, so an overflow visible to the retry peek is not lost to display truncation.
 The direct encoder retains original adapter fields by terminal identity independently of shared
 classification. Buffered passthrough and count_tokens preserve the upstream status and closed
 type/code. The type chosen
