@@ -188,6 +188,27 @@ describe("serialized ownership manifest (#8093)", () => {
 });
 
 describe("callers that create files after registering them (#8093)", () => {
+  test("service log rotation goes ahead unrecorded while the ownership lock is busy", withHome(async dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const { startServiceLogging, SERVICE_LOG_MAX_BYTES } = await import("../../src/service/logging");
+    const path = join(dir, "service.log");
+    writeFileSync(path, "x".repeat(SERVICE_LOG_MAX_BYTES + 1));
+    expect(manifest(dir).paths).not.toContain("service.log.1");
+    const release = holdLock(dir);
+    let stop: (() => void) | undefined;
+    try {
+      expect(() => recordOwnedConfigPath(dir, path + ".1")).toThrow(ConfigOwnershipLockError);
+      stop = startServiceLogging(path, { OCX_SERVICE: "1" }, 10);
+      expect(existsSync(path + ".1")).toBe(false);
+      const deadline = Date.now() + 3_000;
+      while (!existsSync(path + ".1") && Date.now() < deadline) await Bun.sleep(10);
+      expect(existsSync(path + ".1")).toBe(true);
+      expect(manifest(dir).paths).not.toContain("service.log.1");
+    } finally {
+      try { stop?.(); } finally { release(); }
+    }
+  }));
+
   test.skipIf(process.platform === "win32")("service log rotation goes ahead unrecorded once the ownership lock keeps failing",
     withHome(async dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
