@@ -441,8 +441,7 @@ déplacé car son AAD chiffré et l'identité du trousseau de clés du système 
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` est un alias de `ocx models`. Sans sous-commande, répertoriez les modèles implantés statiquement dans
-fournisseurs configurés. `--provider` filtre un fournisseur configuré et `--json` renvoie le modèle
+`ocx model` est un alias de `ocx models`. Sans sous-commande, liste les ID enregistrés et connus du routeur, notamment les modèles du registre, les modèles personnalisés et le cache de découverte de ce processus CLI. Le cache d’un nouveau processus peut être vide : ce n’est pas le catalogue du proxy actif. Certains anciens fournisseurs à clé conservent les modèles du registre après un changement de destination. `--provider` filtre un fournisseur configuré et `--json` renvoie le modèle
 métadonnées. `live` lit le catalogue en cours d'exécution ; `add`, `edit`, `remove` et `list-custom` gèrent le manuel
 entrées de catalogue ; `enable`, `disable` et `provider` contrôlent la visibilité ; `selected` contrôle un
 liste d'autorisation des fournisseurs ; `context` contrôle les plafonds de contexte du fournisseur ; et `shadow` gère l'arrière-plan
@@ -452,7 +451,7 @@ interception d'appel fantôme.
 
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
-| `list` (par défaut) | `--provider <name>`, `--json` | Répertoriez les modèles prédéfinis dans les fournisseurs configurés. |
+| `list` (par défaut) | `--provider <name>`, `--json` | Liste les modèles locaux enregistrés et connus du routeur. |
 | `live` | `--provider <name>`, `--json` | Lisez le catalogue en cours d'exécution, y compris les modèles découverts lors de l'exécution. Les lignes sont marquées `native`/`routed`, `custom` et `enabled`/`disabled`. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Enregistre un modèle personnalisé localement, ou sur le proxy actif avec `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Modifiez un modèle personnalisé. `-` libère un champ ; `0` efface la fenêtre contextuelle. |

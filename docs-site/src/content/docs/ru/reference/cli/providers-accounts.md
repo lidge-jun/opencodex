@@ -397,8 +397,7 @@ ocx account main recover [--rollback --yes] [--json]
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает модели, статически
-засеянные в настроенных провайдерах. `--provider` фильтрует один провайдер, а `--json` возвращает
+`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает сохранённые и известные маршрутизатору ID моделей, включая записи реестра, пользовательские модели и кэш обнаружения этого процесса CLI. Кэш нового процесса может быть пустым и не является каталогом работающего прокси. Некоторые старые пресеты с ключом сохраняют записи реестра после смены адреса. `--provider` фильтрует один провайдер, а `--json` возвращает
 метаданные моделей. `live` читает работающий каталог; `add`, `edit`, `remove` и `list-custom`
 управляют ручными записями каталога; `enable`, `disable` и `provider` управляют видимостью;
 `selected` управляет allowlist'ом провайдера; `context` — provider context cap'ами; `shadow`
@@ -408,7 +407,7 @@ ocx account main recover [--rollback --yes] [--json]
 
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
+| `list` (default) | `--provider <name>`, `--json` | Показать локально сохранённые и известные маршрутизатору модели. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Регистрирует custom-модель локально или на работающем прокси с `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |

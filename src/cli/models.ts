@@ -27,6 +27,7 @@ import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabili
 import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
 import { canInferVendorContext, vendorContextInference } from "../codex/catalog/vendor-context";
 import { terminalSafeText } from "./runtime-api";
+import { runPassiveRead } from "../lib/passive-read";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 import type { RuntimeApiDeps } from "./runtime-api";
@@ -529,7 +530,7 @@ export async function handleModels(args: string[], deps: ModelsCommandDeps = {})
     return;
   }
   if (subcommand === "list-custom") {
-    handleCustomList(rest);
+    await runPassiveRead(async () => { handleCustomList(rest); });
     return;
   }
   if (isModelsRuntimeSubcommand(subcommand)) {
@@ -538,5 +539,5 @@ export async function handleModels(args: string[], deps: ModelsCommandDeps = {})
     if (code !== null) process.exitCode = code;
     return;
   }
-  handleConfiguredModels(subcommand === "list" ? rest : args);
+  await runPassiveRead(async () => { handleConfiguredModels(subcommand === "list" ? rest : args); });
 }

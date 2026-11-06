@@ -371,7 +371,9 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` 是 `ocx models` 的别名。没有子命令时，列出已配置提供方中静态预置的模型。
+`ocx model` 是 `ocx models` 的别名。没有子命令时，列出已保存及路由器已知的模型 ID，
+包括注册表预置、自定义模型和当前 CLI 进程的发现缓存。新 CLI 进程的缓存可能为空，
+这不是运行中代理的目录。部分旧版密钥预设即使更改接入地址也可能保留注册表预置。
 `--provider` 可过滤单个已配置提供方，而 `--json` 会返回模型元数据。`live` 读取运行中
 的目录；`add`、`edit`、`remove` 和 `list-custom` 管理手动目录条目；`enable`、
 `disable` 和 `provider` 控制可见性；`selected` 控制提供方允许列表；`context` 控制提供方
@@ -381,7 +383,7 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
-| `list` (默认) | `--provider <name>`, `--json` | 列出已配置提供方中预置的模型。 |
+| `list` (默认) | `--provider <name>`, `--json` | 列出本地已保存及路由器已知的模型。 |
 | `live` | `--provider <name>`, `--json` | 读取运行中的目录，包括运行时发现的模型。各行会标记为 `native`/`routed`、`custom`，以及 `enabled`/`disabled`。 |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本地注册自定义模型，或使用 `--live` 在运行中的代理上注册。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 编辑自定义模型。`-` 会清空字段；`0` 会清空上下文窗口。 |

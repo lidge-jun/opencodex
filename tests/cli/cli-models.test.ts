@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,35 @@ describe("ocx models", () => {
   beforeAll(async () => {
     await warmModuleGraph({ graph: "cli-index/models", entry: cliPath });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test.each(["valid", "malformed", "retired-provider"])("local listings leave %s configuration untouched", kind => {
+    const { dir } = freshConfig(kind === "retired-provider" ? {
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" }, "opencode-free": {} },
+    } : undefined);
+    const configPath = join(dir, "config.json");
+    const authPath = join(dir, "auth.json");
+    mkdirSync(join(dir, "codex"), { recursive: true });
+    writeFileSync(join(dir, "no-live-sync.ts"), "");
+    writeFileSync(authPath, "{}");
+    if (kind === "malformed") writeFileSync(configPath, "{ invalid json");
+    if (process.platform !== "win32") {
+      chmodSync(dir, 0o755);
+      chmodSync(configPath, 0o644);
+      chmodSync(authPath, 0o644);
+    }
+    try {
+      const contents = readFileSync(configPath, "utf8");
+      const names = readdirSync(dir).sort();
+      const modes = [dir, configPath, authPath].map(path => statSync(path).mode & 0o777);
+      for (const args of [["models", "--json"], ["models", "list-custom", "--json"]]) {
+        const result = runCli(args, { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        expect(readFileSync(configPath, "utf8")).toBe(contents);
+        expect(readdirSync(dir).sort()).toEqual(names);
+        if (process.platform !== "win32") expect([dir, configPath, authPath].map(path => statSync(path).mode & 0o777)).toEqual(modes);
+      }
+    } finally { removeTreeWithRetry(dir); }
+  });
 
   test("lists a custom-only router-known model with its saved metadata", () => {
     const { dir } = freshConfig({
