@@ -128,6 +128,8 @@ export function createAdapterContinuations(
     | "thinkingSignatureRecovery"
    >,
 ) {
+  // A request-local symbol survives event spreads without being serialized or forgeable by a provider.
+  const continuationBodyStall = Symbol("continuation-body-stall");
   const { options, logCtx, config } = requestContext;
   const {
     oauthDispatch,
@@ -749,7 +751,10 @@ export function createAdapterContinuations(
       // source can synchronously abort the shared signal, which would otherwise report
       // this timeout as a client cancellation.
       if (error instanceof ResponseBodyInactivityError) {
-        yield { type: "error", message: "Provider continuation response body stalled before completing", status: 504 };
+        const event: AdapterEvent = { type: "error", message: error.message, status: 504,
+          errorType: "upstream_error", code: "upstream_stall_timeout" };
+        Object.defineProperty(event, continuationBodyStall, { value: true, enumerable: true });
+        yield event;
       } else if (options.abortSignal?.aborted || upstream.signal.aborted) {
         yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
       } else {
@@ -783,6 +788,7 @@ export function createAdapterContinuations(
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
     fetchGuardedEmptyCompletionRetry,
+    isContinuationBodyStall: (event: AdapterEvent): boolean => continuationBodyStall in event,
   };
 }
 
