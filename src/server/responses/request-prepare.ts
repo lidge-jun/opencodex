@@ -1461,7 +1461,8 @@ export async function prepareResponsesRequest(
   });
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
-    if (route.provider.adapter === "openai-chat"
+    const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
+    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId)) {
       if (policyScope.eligibility) throw new PolicyCandidateUnavailableError();
       return formatErrorResponse(400, "invalid_request_error",
@@ -1472,7 +1473,7 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     throw error;
   }
-  // Normalization is the last thing that can move the destination: resolving an
+  // Static normalization can move the destination: resolving an
   // OpenAI virtual model rewrites route.modelId to the wire id that will
   // actually be billed. A scope checked only before this would authorize the
   // public selector and send the wire model, so the settled route is checked

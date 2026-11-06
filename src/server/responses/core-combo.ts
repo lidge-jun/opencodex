@@ -7,6 +7,7 @@ import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
 import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
+import { isPolicyCandidateRefusal } from "./policy-request-scope";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { parseSyntheticRowId } from "../fast-row";
@@ -561,6 +562,8 @@ export async function executeComboResponses(
       const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
         route.staticPolicy.effectiveAlias, inboundWire);
       const provider = resolveWireProtocolOverride(route.providerName, modelId, route.provider, inboundWire, policy);
+      // Copilot's Auto account may settle on a different wire; the child checks that result.
+      if (route.providerName === "github-copilot" && provider.authMode !== "forward") return true;
       return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, modelId)
         : provider.adapter !== "openai-responses" || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
     } catch {
@@ -1399,6 +1402,7 @@ export async function executeComboResponses(
     // send that already ran the turn, so no later target may receive it, whatever its status says.
     const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
+      : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         codexModelRefusal: failure.codexModelRefusal,

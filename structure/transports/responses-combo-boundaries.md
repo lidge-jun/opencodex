@@ -45,6 +45,11 @@ the MCP server's ownership, even when a client function has the same name. The s
 normalization in `src/server/responses/request-prepare.ts`. An incompatible direct route returns 400
 before dispatch; an authorized policy candidate uses the [local policy refusal](policy-fallback.md)
 so another originally eligible destination can serve the unchanged choice.
+Copilot targets that negotiate Auto defer the static eligibility verdict to the child's final wire
+and model check. A locally minted policy-candidate refusal survives failure rebuilding and permits a
+hop without inferring authority from its serialized code or text. Non-replayable responses and spent
+replacement grants still stop before this local-skip branch. `tests/providers/github-copilot/github-copilot-auto-runtime.test.ts`
+and `tests/adapters/translator-budget-lifetime.test.ts` cover negotiation and refusal provenance.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native

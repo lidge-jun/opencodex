@@ -69,6 +69,8 @@ import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
+import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "./policy-request-scope";
+import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import {
   AdmissionModelDeniedError,
   admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
@@ -349,6 +351,11 @@ export async function prepareResponsesTransport(
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
     if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(error, logCtx));
+    if (error instanceof PolicyCandidateUnavailableError) {
+      if (options.comboAttempt || options.policyRequestScope?.eligibility) return policyCandidateRefusalResponse(error);
+      return formatErrorResponse(400, "invalid_request_error",
+        "This mandatory tool_choice cannot be preserved for a translated Chat destination.");
+    }
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = markProxyError(formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
       error.message), "copilot");
@@ -431,6 +438,13 @@ export async function prepareResponsesTransport(
     }
     logCtx.model = selected.modelId;
     if (logCtx.activeAttempt) logCtx.activeAttempt.model = selected.modelId;
+    const negotiatedWire = copilotAutoAdapter === undefined
+      ? resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy)
+      : { ...route.provider, adapter: copilotAutoAdapter };
+    if (negotiatedWire.adapter === "openai-chat"
+      && !chatCanPreserveMandatoryToolChoice(requestParsed._rawBody, negotiatedWire, route.modelId)) {
+      throw new PolicyCandidateUnavailableError();
+    }
   };
   /**
    * Apply a rotated account's FULL credential snapshot to the live route (#2568d).

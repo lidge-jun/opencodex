@@ -20,6 +20,10 @@ After final normalization, preparation refuses a Chat destination that cannot pr
 tool choice using `PolicyCandidateUnavailableError`. The local response identity allows traversal
 to a compatible originally eligible candidate without sending to the incompatible destination.
 Ordinary direct routes keep the client-facing 400; upstream errors do not acquire this identity.
+Non-forward Copilot routes defer this check until Auto negotiation settles the adapter and model.
+`src/server/responses/request-transport.ts` repeats the check after every negotiation, including
+credential and session renewal; a static Responses route cannot silently become incompatible Chat.
+Policy and combo children carry the local refusal identity; direct requests retain the same 400.
 
 Normal virtual-model wire mapping remains attached to its admitted selector and does not add a new
 eligible model. Policy traversal records settled physical destinations and skips a destination already
@@ -34,6 +38,8 @@ Cancellation, non-replayable responses and committed output keep the
 in-process response identity; matching upstream prose or error codes cannot authorize another attempt.
 The translator-budget and account-lease wrappers in `src/server/responses/core-lifetime.ts` carry
 that identity from their source response without deriving it from serialized error contents.
+`src/server/responses/core-combo-failure.ts` carries it when rebuilding a consumed failure, so the
+combo can skip that local candidate while copied upstream bytes remain ordinary failures.
 Formatted quota errors retain [their upstream-code provenance](responses-combo-boundaries.md#upstream-account-quota-exhaustion-failover)
 through lifecycle wrappers; a reflected quota message on a 400/422 response does not authorize a
 candidate hop merely because formatting serialized it as `insufficient_quota` or its text mentions a free-tier single-request cap.

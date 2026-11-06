@@ -103,6 +103,7 @@ test("a policy skips incompatible Chat and preserves the mandatory selector for 
   expect(response.status, await response.text()).toBe(200);
   expect(log.routeDecision?.selected.provider).toBe("chat");
   expect(sent.map(row => row.provider)).toEqual(["responses"]);
+  expect(log.provider).toBe("responses");
   expect(sent[0]!.body.tool_choice).toEqual(choice);
 });
 
@@ -116,6 +117,7 @@ test("a policy preserves required MCP ownership across translator-budget fallbac
   expect(body.status).toBe("completed");
   expect(log.routeDecision?.selected.provider).toBe("chat");
   expect(sent.map(row => row.provider)).toEqual(["responses"]);
+  expect(log.provider).toBe("responses");
   expect(sent[0]!.body.tool_choice).toEqual(mcpChoice);
   expect(sent[0]!.body.tools).toEqual([mcpTool, clientTool]);
   expect(body.output).toEqual(output);

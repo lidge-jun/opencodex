@@ -10,6 +10,7 @@ import { isNonReplayableResponse, markResponseNonReplayable } from "../../src/li
 import {
   isPolicyCandidateRefusal, PolicyCandidateUnavailableError, policyCandidateRefusalResponse,
 } from "../../src/server/responses/policy-request-scope";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import {
   markNativePassthroughSseResponse, isNativePassthroughSseResponse,
   markEagerRelaySseResponse, isEagerRelaySseResponse,
@@ -191,6 +192,15 @@ test.each([true, false])("policy refusal authority survives lifetime wrappers on
   expect((await wrapped.json()).error.code).toBe("policy_candidate_unavailable");
   expect(released).toBe(1);
   expect(budget.snapshot().currentBytes).toBe(0);
+});
+
+test.each([true, false])("combo failure rebuilding preserves only local policy refusal authority (%s)", async local => {
+  const refusal = policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+  const source = local ? refusal : new Response(await refusal.text(), { status: refusal.status, headers: refusal.headers });
+  const failure = await consumeComboFailure(source);
+  expect(failure.response.status).toBe(409);
+  expect(isPolicyCandidateRefusal(failure.response)).toBe(local);
+  await failure.response.body?.cancel();
 });
 
 for (const surface of ["responses", "chat-completions", "claude-messages"] as const) {

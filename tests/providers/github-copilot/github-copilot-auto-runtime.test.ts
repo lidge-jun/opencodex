@@ -16,8 +16,10 @@ import { createRequestExecutionBudget } from "../../../src/lib/request-execution
 import { isNonReplayableResponse } from "../../../src/lib/upstream-retry";
 import { clearComboSelectionState } from "../../../src/combos/resolve";
 import { clearComboTargetCooldowns } from "../../../src/combos/failover";
+import { closeRequestHistoryIndex } from "../../../src/routing/history/indexer";
+import { clearResponseStateForTests, flushResponseState } from "../../../src/responses/state";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 const previousFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -30,23 +32,34 @@ beforeEach(() => {
   clearGenericFailoverHealth();
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearResponseStateForTests();
   release = acquireOwnedSpendHome();
 });
-afterEach(() => {
-  release?.();
-  globalThis.fetch = previousFetch;
-  clearGenericFailoverHealth();
-  clearComboSelectionState();
-  clearComboTargetCooldowns();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  removeTreeWithRetry(home);
-});
+afterEach(async () => {
+  try {
+    await flushResponseState();
+    closeRequestHistoryIndex();
+    release?.();
+    release = undefined;
+    await removeTreeAfterBackgroundWork(home);
+  } finally {
+    release?.();
+    release = undefined;
+    globalThis.fetch = previousFetch;
+    closeRequestHistoryIndex();
+    clearResponseStateForTests();
+    clearGenericFailoverHealth();
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+  }
+}, 35_000); // Background settlement and removal each have a 15s bound, plus scheduling headroom.
 /** Build an Auto Responses request with caller-supplied history, stream mode, and a lookup tool for wire/continuation assertions. */
-function request(input: unknown, stream = true): Request {
+function request(input: unknown, stream = true, overrides: { model?: string; tool_choice?: unknown; tools?: unknown[] } = {}): Request {
   return new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "github-copilot/auto", input, stream,
-      tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: { name: { type: "string" } } } }] }) });
+      tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: { name: { type: "string" } } } }], ...overrides }) });
 }
 
 function scopedAdmission(config: OcxConfig, allowedModels: string[]) {
@@ -142,6 +155,57 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
+  test("mandatory tool choice uses the negotiated Responses wire instead of the initial Chat route", async () => {
+    const { b } = await accounts();
+    await setActiveAccount("github-copilot", b);
+    const f = fixture(), choice = { type: "computer_use" };
+    const response = await handleResponses(request("hello", false, { tool_choice: choice, tools: [choice] }), f.config, {});
+    expect(response.status, await response.text()).toBe(200);
+    expect(f.sent.some(call => call.path === "/models/session/intent")).toBe(true);
+    expect(f.sent.filter(call => call.path === "/chat/completions")).toHaveLength(0);
+    expect(f.sent.find(call => call.path === "/responses")?.body.tool_choice).toEqual(choice);
+  });
+  test("mandatory tool choice refuses a negotiated Chat wire after an initial Responses route", async () => {
+    await accounts();
+    const f = fixture(), choice = { type: "computer_use" };
+    const response = await handleResponses(request("hello", true, {
+      model: "github-copilot/gpt-5.4", tool_choice: choice, tools: [choice],
+    }), f.config, {});
+    const body = await response.text();
+    expect(response.status).toBe(400);
+    expect(body).toContain("mandatory tool_choice cannot be preserved");
+    expect(f.sent.some(call => call.path === "/models/session/intent")).toBe(true);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
+  test.each(["combo", "policy"] as const)("mandatory tool choice negotiates a %s child and hops its local refusal", async mode => {
+    await accounts();
+    const f = fixture();
+    const choice = { type: "mcp", server_label: "remote", name: "shell" };
+    const mcp = { type: "mcp", server_label: "remote", server_url: "https://mcp.example.test", require_approval: "never" };
+    const fallbackBodies: any[] = [];
+    const output = [{ id: "mcp_fixture", type: "mcp_call", status: "completed", server_label: "remote", name: "shell", arguments: "{}", output: "done" }];
+    f.config.providers.fallback = { adapter: "openai-responses", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://fallback.example.test/v1", fetch: async (_url, init) => {
+        fallbackBodies.push(JSON.parse(String(init?.body)));
+        return Response.json({ id: "resp_fallback", object: "response", status: "completed", model: "fallback-model", output });
+      } };
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets: [
+      { provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" },
+    ] } };
+    f.config.routingProfiles = { mandatoryAuto: { candidates: [
+      { provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" },
+    ] } };
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", false, {
+      model: `${mode}/mandatoryAuto`, tool_choice: choice, tools: [mcp],
+    }), f.config, log);
+    const body = await response.json();
+    expect(response.status).toBe(200); expect(body.output).toEqual(output);
+    expect(f.sent.some(call => call.path === "/models/session/intent")).toBe(true);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+    expect(fallbackBodies).toHaveLength(1); expect(fallbackBodies[0].tool_choice).toEqual(choice);
+    expect(fallbackBodies[0].tools).toEqual([mcp]); expect(log.provider).toBe(mode === "combo" ? "combo" : "fallback");
+  });
   test.each([[false, false], [true, false], [false, true], [true, true]])(
     "expired native session hands off to Chat before inference with stream=%s negotiation401=%s", async (stream, negotiation401) => {
       await accounts();
