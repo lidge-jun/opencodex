@@ -6,7 +6,7 @@ import { resolveMatchedPrice, type MatchedPrice } from "../usage/cost";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
-import { configuredContextWindow } from "../codex/catalog/provider-fetch";
+import { applyRegistryCapabilitySeedFill, configuredContextWindow } from "../codex/catalog/provider-fetch";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { readCliConfigForMutation } from "./config-mutation";
 import {
@@ -16,6 +16,11 @@ import {
 import { encodedModelIdCollides, resolveSlugSelection, routedSlug } from "../providers/slug-codec";
 import { isModelsRuntimeSubcommand } from "./models-runtime-subcommands";
 import { knownModelIdsForProvider } from "../router";
+import { enrichProviderFromRegistry, registryInputModalitiesForDestination } from "../providers/derive";
+import { getProviderRegistryEntry } from "../providers/registry";
+import { providerMatchesRegistryTransportWithStaticGuards } from "../providers/static-model-discovery";
+import { resolveModelPolicy } from "../providers/resolved-model-policy";
+import { customRowInputModalities } from "../vision/eligibility";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 import type { RuntimeApiDeps } from "./runtime-api";
@@ -56,35 +61,45 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
   for (const [provName, prov] of Object.entries(providers)) {
     if (!prov) continue;
     const seen = new Set<string>();
-    const inputModalities = prov.modelInputModalities ?? {};
+    // Model listing is read-only: derive effective registry policy on a private copy.
+    const effective = structuredClone(prov);
+    const registryMatches = providerMatchesRegistryTransportWithStaticGuards(provName, prov);
+    if (registryMatches) applyRegistryCapabilitySeedFill(provName, effective);
+    enrichProviderFromRegistry(provName, effective);
+    if (registryMatches) {
+      const policy = resolveModelPolicy({
+        providerName: provName, modelId: effective.defaultModel ?? "__catalog_capture__", provider: effective,
+        registryEntry: getProviderRegistryEntry(provName), transportMatchedRegistry: true,
+        ...(effective.authMode ? { effectiveAuth: { authMode: effective.authMode } } : {}),
+      }).provider;
+      Object.assign(effective, policy);
+    }
+    effective.inputModalities ??= registryInputModalitiesForDestination(provName, prov);
 
     /** Append one model with resolved metadata, ignoring duplicates within this provider. */
     const addModel = (model: string, isDefault: boolean) => {
       if (seen.has(model)) return;
       seen.add(model);
 
-      // Resolve exactly as the runtime does, or this command reports capabilities the
-      // proxy will not honour: `isModelTextOnly` matches noVisionModels with modelInList
-      // and reads modelInputModalities with modelRecordValue, so a `gpt-oss` entry covers
-      // `gpt-oss:120b`. A bare lookup reported that model as unclassified on every field.
-      // noVisionModels is checked first because `isModelTextOnly` returns true on that
-      // match before it ever reads modelInputModalities: a `gpt-oss` noVision entry beats
-      // an exact `gpt-oss:120b` entry that lists "image", and the proxy rejects the image.
-      const noVision = modelInList(prov.noVisionModels, model);
-      const modalities = noVision ? ["text"] : (modelRecordValue(inputModalities, model) ?? null);
+      const custom = config.customModels?.find(row => row.provider === provName && row.modelId === model);
+      const capability = Object.hasOwn(effective.modelCapabilities ?? {}, model)
+        ? effective.modelCapabilities?.[model]?.inputModalities : undefined;
+      const customModalities = customRowInputModalities(config, provName, model);
+      const modalities = capability ?? customModalities ?? (modelInList(effective.noVisionModels, model)
+        ? ["text"] : modelRecordValue(effective.modelInputModalities, model) ?? effective.inputModalities ?? null);
       // Same reason, for the ladder: `configuredReasoningEfforts` is what the catalog
       // (`provider-fetch`) and the effort cap (`effort-policy`) resolve through, and it
       // does three things this expression did not — it returns [] for a noReasoningModels
       // match, drops levels Codex does not declare, and re-adds tiers the wire map proves
       // the model emits. Restating two of its five lines here reported a ladder the proxy
       // strips, and unsanitized junk as a supported level.
-      const efforts = configuredReasoningEfforts(prov, model) ?? null;
+      const efforts = custom?.reasoningEfforts ?? configuredReasoningEfforts(effective, model, { refreshMetadata: false }) ?? null;
 
       entries.push({
         provider: provName,
         model,
         isDefault,
-        contextWindow: configuredContextWindow(prov, model) ?? null,
+        contextWindow: custom?.contextWindow ?? configuredContextWindow(effective, model) ?? null,
         inputModalities: modalities,
         reasoningEfforts: efforts,
         price: resolveMatchedPrice(provName, model),
@@ -94,9 +109,17 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
     // defaultModel first
     if (prov.defaultModel) addModel(prov.defaultModel, true);
 
-    // models array
-    if (prov.models) {
-      for (const m of prov.models) addModel(m, m === prov.defaultModel);
+    // Keep the CLI list current when this config predates a provider's registry seed.
+    // knownModelIdsForProvider is the router's own derivation: config models first, then
+    // registry seeds, hint-map keys, and live-discovered cache ids (registry-derived
+    // sources only enter when the router's registry transport guard matches), then customModels.
+    // Some legacy key presets retain registry ownership even after a destination change. Because hint-map keys
+    // are included, wire-only ids a provider's collapsed picker hides still appear here;
+    // that is router parity. A model the user pruned from `models` reappears if the
+    // registry still seeds it -- the list is a union, not the user's curation. The
+    // user's saved models remain first and are never discarded.
+    for (const m of [...(prov.models ?? []), ...knownModelIdsForProvider(provName, prov, config)]) {
+      addModel(m, m === prov.defaultModel);
     }
   }
 
@@ -388,18 +411,19 @@ function handleConfiguredModels(args: string[]): void {
   }
 
   const models = collectModels(config, providerFilter ?? undefined);
+  const note = "Local saved and router-known IDs include registry seeds, custom models and this process's discovery cache. Use ocx models live for the running catalog.";
 
   if (wantsJson) {
     console.log(JSON.stringify({
       models,
-      note: "Static config models only. Providers with liveModels=true may have additional models at runtime.",
+      note,
     }, null, 2));
     return;
   }
 
   if (models.length === 0) {
     console.log("No models found in configured providers.");
-    if (!providerFilter) console.log("Providers may discover models dynamically at runtime (liveModels).");
+    console.log(`Note: ${note}`);
     return;
   }
 
@@ -425,7 +449,7 @@ function handleConfiguredModels(args: string[]): void {
   }
 
   console.log("* = default model for provider");
-  console.log("Note: providers with liveModels may have additional models at runtime.");
+  console.log(`Note: ${note}`);
 }
 
 export async function handleModels(args: string[], deps: ModelsCommandDeps = {}): Promise<void> {

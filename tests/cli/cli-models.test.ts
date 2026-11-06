@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,17 +16,21 @@ const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
-function runCli(args: string[], env: Record<string, string> = {}) {
+function runCli(args: string[], env: Record<string, string> = {}, recordAttempts = false) {
   const fixtureHome = env.OPENCODEX_HOME;
   const preload = fixtureHome ? join(fixtureHome, "no-live-sync.ts") : undefined;
   if (preload) {
     mkdirSync(join(fixtureHome!, "codex"), { recursive: true });
     writeFileSync(preload, `
       import { mock } from "bun:test";
+      import { appendFileSync } from "node:fs";
+      const marker = ${JSON.stringify(join(fixtureHome!, "network-attempts.log"))};
+      const record = kind => { if (${recordAttempts}) appendFileSync(marker, kind + "\\n"); };
       const path = ${JSON.stringify(join(repoRoot, "src/server/proxy-liveness.ts"))};
       const original = await import(path);
-      mock.module(path, () => ({ ...original, findLiveProxy: async () => null }));
-      globalThis.fetch = () => { throw new Error("fixture network forbidden"); };
+      mock.module(path, () => ({ ...original, findLiveProxy: async () => { record("liveness"); return null; } }));
+      globalThis.fetch = () => { record("fetch"); throw new Error("fixture network forbidden"); };
+      if (process.env.OCX_TEST_PROBE_NETWORK === "1") { try { await globalThis.fetch("https://fixture.test"); } catch {} }
     `);
   }
   const result = spawnSync(process.execPath, [...(preload ? ["--preload", preload] : []), cliPath, ...args], {
@@ -71,6 +75,170 @@ describe("ocx models", () => {
   beforeAll(async () => {
     await warmModuleGraph({ graph: "cli-index/models", entry: cliPath });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test("lists a custom-only router-known model with its saved metadata", () => {
+    const { dir } = freshConfig({
+      providers: { test: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] } },
+      customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "test",
+        modelId: "custom-only", contextWindow: 90000, inputModalities: ["text", "image"], reasoningEfforts: [] }],
+    });
+    try {
+      const result = runCli(["models", "--provider", "test", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).models).toContainEqual(expect.objectContaining({
+        provider: "test", model: "custom-only", contextWindow: 90000,
+        inputModalities: ["text", "image"], reasoningEfforts: [],
+      }));
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("model capabilities and custom rows precede provider noVision hints", () => {
+    const { dir } = freshConfig({
+      providers: { test: { adapter: "openai-chat", baseUrl: "https://example.test/v1",
+        models: ["base", "custom", "cap"], contextWindow: 120000,
+        noVisionModels: ["base", "custom", "cap"], modelInputModalities: { base: ["text", "image"] },
+        modelCapabilities: { cap: { inputModalities: ["text"] } } } },
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "test", modelId: "custom",
+          contextWindow: 90000, inputModalities: ["text", "image"], reasoningEfforts: [] },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "test", modelId: "cap",
+          inputModalities: ["text", "image"] },
+      ],
+    });
+    try {
+      const configBefore = readFileSync(join(dir, "config.json"), "utf8");
+      const result = runCli(["models", "--provider", "test", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { model: string }) => row.model === "base").inputModalities).toEqual(["text"]);
+      expect(rows.find((row: { model: string }) => row.model === "custom")).toMatchObject({
+        contextWindow: 90000, inputModalities: ["text", "image"], reasoningEfforts: [],
+      });
+      expect(rows.find((row: { model: string }) => row.model === "cap").inputModalities).toEqual(["text"]);
+      expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(configBefore);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("registry noVision union survives an existing saved list", () => {
+    for (const saved of [[], ["unrelated"]]) {
+      const { dir } = freshConfig({ providers: { deepseek: { adapter: "openai-chat",
+        baseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat"], noVisionModels: saved,
+        modelInputModalities: { "deepseek-chat": ["text", "image"] } } } });
+      try {
+        const result = runCli(["models", "--provider", "deepseek", "--json"], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout).models.find((row: { model: string }) => row.model === "deepseek-chat").inputModalities)
+          .toEqual(["text"]);
+      } finally { removeTreeWithRetry(dir); }
+    }
+  });
+
+  test("custom and capability modalities override registry noVision in order", () => {
+    for (const [capability, expected] of [[undefined, ["text", "image"]], [["text"], ["text"]]] as const) {
+      const { dir } = freshConfig({ providers: { deepseek: { adapter: "openai-chat",
+        baseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat"], noVisionModels: ["unrelated"],
+        ...(capability ? { modelCapabilities: { "deepseek-chat": { inputModalities: capability } } } : {}) } },
+        customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "deepseek",
+          modelId: "deepseek-chat", inputModalities: ["text", "image"] }] });
+      try {
+        const result = runCli(["models", "--provider", "deepseek", "--json"], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout).models.find((row: { model: string }) => row.model === "deepseek-chat").inputModalities)
+          .toEqual(expected);
+      } finally { removeTreeWithRetry(dir); }
+    }
+  });
+
+  test("OpenAI API context windows honor registry caps and fill partial saved maps", () => {
+    for (const [saved, expected] of [[2000000, 1050000], [600000, 600000]] as const) {
+      const { dir } = freshConfig({ providers: { "openai-apikey": { adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1", authMode: "key", models: ["gpt-6-astra"],
+        modelContextWindows: { "gpt-6-astra": saved } } } });
+      try {
+        const result = runCli(["models", "--provider", "openai-apikey", "--json"], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        const rows = JSON.parse(result.stdout).models;
+        expect(rows.find((row: { model: string }) => row.model === "gpt-6-astra").contextWindow).toBe(expected);
+        expect(rows.find((row: { model: string }) => row.model === "gpt-6-luna").contextWindow).toBe(1050000);
+      } finally { removeTreeWithRetry(dir); }
+    }
+  });
+
+  test("listing reads a stale reasoning snapshot without attempting network or liveness", () => {
+    const { dir } = freshConfig({ providers: { test: { adapter: "openai-chat",
+      baseUrl: "https://opencode.ai/zen/go/v1", models: ["fixture-model"] } } });
+    const file = join(dir, "reasoning-metadata-cache.json");
+    const snapshot = JSON.stringify({ version: 1, fetchedAt: Date.now() - 25 * 60 * 60 * 1000,
+      source: "test", providers: { "opencode-go": { "fixture-model": {
+        reasoning: true, options: [{ type: "effort", values: ["low", "high"] }],
+      } } } });
+    writeFileSync(file, snapshot);
+    try {
+      const result = runCli(["models", "--provider", "test", "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).models[0].reasoningEfforts).toEqual(["low", "high"]);
+      expect(existsSync(join(dir, "network-attempts.log"))).toBe(false);
+      expect(readFileSync(file, "utf8")).toBe(snapshot);
+      const control = runCli(["models", "--provider", "test", "--json"],
+        { OPENCODEX_HOME: dir, OCX_TEST_PROBE_NETWORK: "1" }, true);
+      expect(control.status).toBe(0);
+      expect(readFileSync(join(dir, "network-attempts.log"), "utf8")).toContain("fetch");
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("keeps default first, deduplicates per provider and uses provider-wide modalities", () => {
+    const { dir } = freshConfig({ providers: {
+      one: { adapter: "openai-chat", baseUrl: "https://one.example/v1", defaultModel: "default-only",
+        models: ["duplicate", "duplicate"], inputModalities: ["text"] },
+      two: { adapter: "openai-chat", baseUrl: "https://two.example/v1", models: ["duplicate"] },
+    }, customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "one", modelId: "duplicate" }] });
+    try {
+      const json = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(json.status).toBe(0);
+      const parsed = JSON.parse(json.stdout);
+      expect(parsed.models.filter((row: { provider: string }) => row.provider === "one").map((row: { model: string }) => row.model))
+        .toEqual(["default-only", "duplicate"]);
+      expect(parsed.models.filter((row: { model: string }) => row.model === "duplicate")).toHaveLength(2);
+      expect(parsed.models.find((row: { provider: string }) => row.provider === "one").inputModalities).toEqual(["text"]);
+      expect(parsed.note).toContain("this process's discovery cache");
+      const human = runCli(["models"], { OPENCODEX_HOME: dir });
+      expect(human.stdout).toContain("this process's discovery cache");
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("legacy key preset router seeds and mimo-free's special guard match routing", () => {
+    const { dir } = freshConfig({ providers: {
+      deepseek: { adapter: "openai-chat", baseUrl: "https://other.example/v1", models: ["my-model"] },
+      "mimo-free": { adapter: "openai-chat", baseUrl: "https://other.example/v1", models: ["my-model"] },
+    } });
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models as Array<{ provider: string; model: string }>;
+      expect(rows.filter(row => row.provider === "deepseek").map(row => row.model)).toContain("deepseek-chat");
+      expect(rows.filter(row => row.provider === "mimo-free").map(row => row.model)).toEqual(["my-model"]);
+    } finally { removeTreeWithRetry(dir); }
+    const matching = freshConfig({ providers: { "mimo-free": { adapter: "mimo-free",
+      baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat", authMode: "key", models: ["my-model"] } } });
+    try {
+      const result = runCli(["models", "--provider", "mimo-free", "--json"], { OPENCODEX_HOME: matching.dir });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).models.map((row: { model: string }) => row.model)).toContain("mimo-auto");
+    } finally { removeTreeWithRetry(matching.dir); }
+  });
+
+  test("partial saved Kimi effort maps keep registry wire ladder values", () => {
+    const { dir } = freshConfig({ providers: { "kimi-code": { adapter: "openai-chat",
+      baseUrl: "https://api.kimi.com/coding/v1", authMode: "key", models: ["kimi-for-coding"],
+      modelReasoningEfforts: { "kimi-for-coding": ["max"] },
+      modelReasoningEffortMap: { unrelated: { high: "high" } } } } });
+    try {
+      const result = runCli(["models", "--provider", "kimi-code", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const row = JSON.parse(result.stdout).models.find((item: { model: string }) => item.model === "kimi-for-coding");
+      expect(row.reasoningEfforts).toEqual(["low", "high", "max"]);
+    } finally { removeTreeWithRetry(dir); }
+  });
 
   test("configured models expose automatic prices, overrides and unknowns without persisting defaults", () => {
     const { dir } = freshConfig({ providers: { relay: {
@@ -143,6 +311,62 @@ describe("ocx models", () => {
       const testModels = parsed.models.filter((m: { provider: string }) => m.provider === "test");
       expect(testModels.length).toBe(3);
       expect(testModels[0].isDefault).toBe(true);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  // The registry-sync merge must go through the router's guarded derivation, not a raw
+  // registry read: a provider whose transport diverges from its namesake registry entry
+  // gets nothing, a matching one gets the seed, and stale saved configs gain new seed ids
+  // while saved models stay first. cline is a registry entry with preserveCustomDestination
+  // (fixed key destination), so the transport guard actually discriminates for it.
+  test("registry seed syncs into a stale saved config when the transport matches", () => {
+    const { dir } = freshConfig({ providers: { cline: {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cline.bot/api/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      defaultModel: "anthropic/claude-sonnet-4-6",
+      // Deliberately predates the current seed: saved subset, plus one custom-only id.
+      models: ["anthropic/claude-sonnet-4-6", "custom-only-model"],
+    } } });
+    try {
+      const result = runCli(["models", "--provider", "cline", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models.map((m: { model: string; isDefault: boolean }) => m);
+      expect(rows[0]).toMatchObject({ model: "anthropic/claude-sonnet-4-6", isDefault: true });
+      expect(rows[1]).toMatchObject({ model: "custom-only-model", isDefault: false });
+      // Seed ids absent from the stale saved config still appear.
+      const ids = rows.map((m: { model: string }) => m.model);
+      expect(ids).toContain("openai/gpt-4o");
+      expect(ids).toContain("google/gemini-2.5-pro");
+      // No duplicate rows: saved ids also come back from the router union, and the
+      // per-provider seen-dedupe must collapse them.
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(rows.filter((m: { isDefault: boolean }) => m.isDefault)).toHaveLength(1);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("registry seed does NOT leak into a provider whose transport diverges from its namesake", () => {
+    const { dir } = freshConfig({ providers: { cline: {
+      adapter: "openai-chat",
+      baseUrl: "https://elsewhere.example.com/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      defaultModel: "my-model",
+      models: ["my-model"],
+    } } });
+    try {
+      // The cline registry entry carries a non-empty seed (the matching-transport test
+      // above receives it), so listing only the saved id here means the transport guard
+      // is what excluded the seed, not an empty registry.
+      const result = runCli(["models", "--provider", "cline", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.map((m: { model: string }) => m.model)).toEqual(["my-model"]);
     } finally {
       removeTreeWithRetry(dir);
     }

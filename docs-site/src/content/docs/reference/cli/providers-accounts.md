@@ -1200,8 +1200,10 @@ moved because its encrypted AAD and operating-system keyring identity are intent
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` is an alias of `ocx models`. With no subcommand, list the models statically seeded in
-configured providers. `--provider` filters one configured provider and `--json` returns model
+`ocx model` is an alias of `ocx models`. With no subcommand, list saved and router-known model IDs
+for configured providers, including registry seeds, custom models and this process's discovery
+cache. A fresh CLI process may have an empty cache; this is not the running proxy catalog. Legacy
+key presets may retain registry seeds when their configured destination changes. `--provider` filters one configured provider and `--json` returns model
 metadata. `live` reads the running catalog; `add`, `edit`, `remove`, and `list-custom` manage manual
 catalog entries; `enable`, `disable`, and `provider` control visibility; `selected` controls a
 provider allowlist; `context` controls provider context caps; and `shadow` manages background
@@ -1231,7 +1233,7 @@ from custom-model `edit`.
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | List models seeded in configured providers, with estimated input/output prices. |
+| `list` (default) | `--provider <name>`, `--json` | List local saved and router-known models, with estimated input/output prices. |
 | `live` | `--provider <name>`, `--json` | Read the running catalog, including models discovered at runtime. Rows are flagged `native`/`routed`, `custom`, and `enabled`/`disabled`. |
 | `price <provider/model>` | `--json` | Read the saved manual override and effective price, including automatic catalog defaults. |
 | `set-price <provider/model>` | `--input <rate>`, `--output <rate>`, `--cache-read <rate>`, `--cache-write <rate>`, `--auto`, `--json` | Set display prices in USD per 1M tokens. Input/output are required when setting; omitted cache rates become zero. `--auto` removes only this model's override. |
