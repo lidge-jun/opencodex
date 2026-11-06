@@ -2172,7 +2172,7 @@ export const en = {
   "modal.useOauthLogin": "← Use OAuth login",
 "nav.codexAuth": "Codex Auth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Connect",
+  "nav.connect": "Route",
   "nav.usageLogs": "Usage & Logs",
   "nav.sectionNavigation": "Section pages",
   "codexSet.tab.multiauth": "Multi-auth",

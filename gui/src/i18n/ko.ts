@@ -1632,7 +1632,7 @@ export const ko: Record<TKey, string> = {
   "nav.api": "API",
 "nav.codexAuth": "Codex 인증",
   "nav.codexSet": "Codex",
-  "nav.connect": "연결",
+  "nav.connect": "라우트",
   "nav.usageLogs": "사용량 & 로그",
   "nav.sectionNavigation": "섹션 페이지",
   "codexSet.tab.multiauth": "다중 인증",

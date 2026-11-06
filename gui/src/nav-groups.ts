@@ -2,7 +2,7 @@
  * The sidebar's rows, in order.
  *
  * A row is a navigation group, not a page. Most rows hold one page; Accounts, Usage & Logs,
- * Connect and Remote Link each hold several existing pages, reached through the section switcher
+ * Route and Remote Link each hold several existing pages, reached through the section switcher
  * App renders above the page. Grouping changes no route: every member keeps the hash it
  * always had, so bookmarks and deep links still open the same page, and the row that
  * owns that page lights up.
@@ -11,11 +11,11 @@
  * inside Usage & Logs because it leads that list.
  *
  * `embedded` pages belong to a row without being switcher members: Claude lives as a tab
- * inside the Connect page, keeps its own #claude/* hashes, and lights Connect up.
+ * inside the Route page, keeps its own #claude/* hashes, and lights Route up.
  */
 import type { Page } from "./app-routing";
 import type { TKey } from "./i18n/shared";
-import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconLink, IconList, IconMonitor, IconPower, IconServer, IconStar } from "./icons";
+import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconList, IconMonitor, IconPower, IconRoute, IconServer, IconStar } from "./icons";
 
 export type NavGroupId =
   | "home"
@@ -54,6 +54,9 @@ export interface NavGroup {
 
 export const NAV_GROUPS: readonly NavGroup[] = [
   { id: "home", tier: "daily", tkey: "shellV2.navHome", Icon: IconGrid, pages: ["home"] },
+  // Route: where each client's traffic goes (integrations, the setup checklist, Claude as a tab).
+  // It sits above Models because choosing the route comes before choosing the model.
+  { id: "connect", tier: "daily", tkey: "nav.connect", Icon: IconRoute, pages: ["integrations", "setup"], embedded: ["claude"] },
   { id: "models", tier: "daily", tkey: "nav.models", Icon: IconBoxes, pages: ["models"] },
   // Codex's account pool and every provider's quota answer the same daily question —
   // "which account is serving me and how much is left" — so they share one row.
@@ -62,8 +65,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   { id: "subagents", tier: "daily", tkey: "nav.subagents", Icon: IconBot, pages: ["subagents"] },
   { id: "usage-logs", tier: "daily", tkey: "nav.usageLogs", Icon: IconActivity, pages: ["usage", "logs", "storage"] },
   // Done once, but each still gets its own row: a setting two clicks deep behind a hub is a
-  // setting people cannot find. Claude lives as a Connect tab; the checklist sits beside it.
-  { id: "connect", tier: "setup", tkey: "nav.connect", Icon: IconLink, pages: ["integrations", "setup"], embedded: ["claude"] },
+  // setting people cannot find.
   { id: "startup", tier: "setup", tkey: "nav.startup", Icon: IconPower, pages: ["startup"] },
   { id: "remote", tier: "setup", tkey: "nav.remote", Icon: IconMonitor, pages: ["remote", "remote-workspace"] },
   // Fine-tuning keeps its surfaces visible too; the All settings hub is the searchable index

@@ -1587,7 +1587,7 @@ export const de: Record<TKey, string> = {
   "modal.loginTimeout": "Login-Zeitüberschreitung — versuche es erneut.",
 "nav.codexAuth": "Codex-Auth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Verbinden",
+  "nav.connect": "Route",
   "nav.usageLogs": "Nutzung & Protokolle",
   "nav.sectionNavigation": "Bereichsseiten",
   "codexSet.tab.multiauth": "Multi-Auth",

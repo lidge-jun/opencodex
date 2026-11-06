@@ -1605,7 +1605,7 @@ export const zh: Record<TKey, string> = {
   "nav.api": "API",
 "nav.codexAuth": "Codex 认证",
   "nav.codexSet": "Codex",
-  "nav.connect": "连接",
+  "nav.connect": "路由",
   "nav.usageLogs": "用量与日志",
   "nav.sectionNavigation": "分区页面",
   "codexSet.tab.multiauth": "多账号认证",

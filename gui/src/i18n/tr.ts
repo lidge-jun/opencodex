@@ -2158,7 +2158,7 @@ export const tr: Record<TKey, string> = {
   "modal.useOauthLogin": "← OAuth girişini kullan",
 "nav.codexAuth": "Codex Kimlik Doğrulama",
   "nav.codexSet": "Codex",
-  "nav.connect": "Bağlantı",
+  "nav.connect": "Rota",
   "nav.usageLogs": "Kullanım ve Günlükler",
   "nav.sectionNavigation": "Bölüm sayfaları",
   "codexSet.tab.multiauth": "Çoklu kimlik doğrulama",

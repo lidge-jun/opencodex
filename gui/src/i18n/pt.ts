@@ -2156,7 +2156,7 @@ export const pt: Record<TKey, string> = {
   "modal.useOauthLogin": "← Usar login OAuth",
   "nav.codexAuth": "Autenticação do Codex",
   "nav.codexSet": "Codex",
-  "nav.connect": "Conexão",
+  "nav.connect": "Rota",
   "nav.usageLogs": "Uso e logs",
   "nav.sectionNavigation": "Páginas da seção",
   "codexSet.tab.multiauth": "Multiautenticação",

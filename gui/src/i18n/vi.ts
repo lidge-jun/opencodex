@@ -2140,7 +2140,7 @@ export const vi: Record<TKey, string> = {
   "modal.adding": "Đang thêm…",
   "modal.useOauthLogin": "← Sử dụng đăng nhập OAuth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Kết nối",
+  "nav.connect": "Định tuyến",
   "nav.usageLogs": "Mức dùng & nhật ký",
   "nav.sectionNavigation": "Trang trong mục",
   "codexSet.tab.multiauth": "Đa xác thực",

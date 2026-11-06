@@ -2131,7 +2131,7 @@ export const ru: Record<TKey, string> = {
   "modal.useOauthLogin": "← Войти через OAuth",
 "nav.codexAuth": "Аутентификация Codex",
   "nav.codexSet": "Codex",
-  "nav.connect": "Подключение",
+  "nav.connect": "Маршрут",
   "nav.usageLogs": "Использование и журналы",
   "nav.sectionNavigation": "Страницы раздела",
   "codexSet.tab.multiauth": "Мультиаутентификация",

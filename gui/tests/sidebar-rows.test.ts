@@ -27,8 +27,8 @@ test("the sidebar is eleven group rows in three tiers, owning every sidebar page
   expect(NAV_TIERS.map(entry => entry.tier)).toEqual(["daily", "setup", "advanced"]);
   // The exact rows, in order. A count alone would pass if a row were swapped for another.
   expect(NAV_GROUPS.map(group => [group.id, group.tier])).toEqual([
-    ["home", "daily"], ["models", "daily"], ["accounts", "daily"], ["subagents", "daily"], ["usage-logs", "daily"],
-    ["connect", "setup"], ["startup", "setup"], ["remote", "setup"],
+    ["home", "daily"], ["connect", "daily"], ["models", "daily"], ["accounts", "daily"], ["subagents", "daily"], ["usage-logs", "daily"],
+    ["startup", "setup"], ["remote", "setup"],
     ["proxy", "advanced"], ["advisor", "advanced"], ["advanced", "advanced"],
   ]);
   expect(Object.fromEntries(NAV_GROUPS.map(group => [group.id, [...group.pages]]))).toEqual({

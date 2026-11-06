@@ -1815,7 +1815,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.useOauthLogin": "← 使用 OAuth 登入",
 "nav.codexAuth": "Codex 認證",
   "nav.codexSet": "Codex",
-  "nav.connect": "連線",
+  "nav.connect": "路由",
   "nav.usageLogs": "用量與日誌",
   "nav.sectionNavigation": "分區頁面",
   "codexSet.tab.multiauth": "多帳號認證",

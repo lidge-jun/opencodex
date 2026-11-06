@@ -2040,7 +2040,7 @@ export const ja: Record<TKey, string> = {
   "modal.useOauthLogin": "← OAuth ログインを使用",
 "nav.codexAuth": "Codex 認証",
   "nav.codexSet": "Codex",
-  "nav.connect": "接続",
+  "nav.connect": "ルート",
   "nav.usageLogs": "使用量とログ",
   "nav.sectionNavigation": "セクションのページ",
   "codexSet.tab.multiauth": "マルチ認証",
