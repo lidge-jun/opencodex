@@ -8,6 +8,8 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { startServer } from "../../src/server";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION } from "../../src/types";
+import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
 import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -102,6 +104,10 @@ function mockChatUpstreamCapturing() {
 function mockConfig(baseUrl: string, providerOverrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
     port: 0,
+    // A current config keeps these wire tests out of unrelated first-upgrade writes.
+    openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
+    subagentModelsVersion: SUBAGENT_MODELS_VERSION,
+    subagentModels: [...DEFAULT_SUBAGENT_MODELS],
     // Provider wire tests do not sync a native Codex installation.
     clientIntegrations: { codex: false },
     defaultProvider: "mock",
