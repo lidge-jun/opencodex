@@ -10,7 +10,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { log } from "../helpers/request-log-entry";
 
 describe("request log metadata", () => {
-  test.each(["unknown", "codex_cli", "claude_code"] as const)("direct ingress retains an already normalized %s row", client => {
+  test.each(["unknown", "codex_cli", "claude_code"] as const)("direct ingress retains an immutable normalized %s row", client => {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-valid-normalization-log-"));
     process.env.OPENCODEX_HOME = home;
@@ -20,7 +20,7 @@ describe("request log metadata", () => {
         status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" as const,
         liveOnlyMetadata: "retained" };
       const attempts = [attempt];
-      const entry = log({ client, attempts });
+      const entry = Object.freeze(log({ client, attempts }));
       addRequestLog(entry);
       expect(getRequestLogEntries()[0]).toBe(entry);
       expect(getRequestLogEntries()[0]!.client).toBe(client);
@@ -48,6 +48,32 @@ describe("request log metadata", () => {
       expect(getRequestLogEntries()[0]).toMatchObject({ client: "unknown" });
       expect(readUsageEntries()[0]).toHaveProperty("client", "unknown");
       expect(normalizeUsageEntryForTest(log({}))).not.toHaveProperty("client");
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  for (const shape of ["enumerable", "non-enumerable", "inherited"] as const) test(`direct ${shape} client cannot change after recording`, () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-client-isolation-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    resetUsageReadCacheForTests();
+    try {
+      const entry = log({});
+      if (shape === "inherited") Object.setPrototypeOf(entry, { client: "codex_cli" });
+      else Object.defineProperty(entry, "client", { value: "codex_cli", enumerable: shape === "enumerable", writable: true, configurable: true });
+      addRequestLog(entry);
+      Object.defineProperty(entry, "client", { value: "private-header-marker", enumerable: true, writable: true, configurable: true });
+      const live = getRequestLogEntries()[0]!;
+      expect(live.client).toBe("codex_cli");
+      expect(requestLogDto(live)).toHaveProperty("client", "codex_cli");
+      expect(readUsageEntries()[0]).toHaveProperty("client", "codex_cli");
+      expect(JSON.stringify(requestLogDto(live))).not.toContain("private-header-marker");
     } finally {
       clearRequestLogsForTests();
       resetUsageReadCacheForTests();

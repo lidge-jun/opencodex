@@ -633,7 +633,8 @@ export function addRequestLog(entry: RequestLogEntry) {
   const attemptNormalizationDropped = entry.attemptNormalizationDropped === true;
   entry = projectErrorDetail(entry);
   const client = normalizeRecordedClient(entry.client) ?? "unknown";
-  if (entry.client !== client || (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true)) {
+  const clientDescriptor = Object.getOwnPropertyDescriptor(entry, "client");
+  if (!Object.isFrozen(entry) || !clientDescriptor?.enumerable || !("value" in clientDescriptor) || entry.client !== client || (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true)) {
     entry = { ...entry, client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
   }
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
