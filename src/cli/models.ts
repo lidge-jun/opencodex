@@ -94,16 +94,18 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       const capability = Object.hasOwn(effective.modelCapabilities ?? {}, model)
         ? effective.modelCapabilities?.[model]?.inputModalities : undefined;
       const customModalities = customRowInputModalities(config, provName, model);
-      const modalities = capability ?? customModalities ?? (canonicalNativeCustom ? nativeInputModalities(model) : undefined) ?? (modelInList(effective.noVisionModels, model)
-        ? ["text"] : modelRecordValue(effective.modelInputModalities, model) ?? effective.inputModalities ?? null);
+      const modalities = capability ?? customModalities ?? (modelInList(effective.noVisionModels, model)
+        ? ["text"] : modelRecordValue(effective.modelInputModalities, model) ?? effective.inputModalities
+          ?? (canonicalNativeCustom ? nativeInputModalities(model) : null));
       // Same reason, for the ladder: `configuredReasoningEfforts` is what the catalog
       // (`provider-fetch`) and the effort cap (`effort-policy`) resolve through, and it
       // does three things this expression did not — it returns [] for a noReasoningModels
       // match, drops levels Codex does not declare, and re-adds tiers the wire map proves
       // the model emits. Restating two of its five lines here reported a ladder the proxy
       // strips, and unsanitized junk as a supported level.
-      let efforts = custom?.reasoningEfforts ?? (canonicalNativeCustom ? nativeReasoningEfforts(model) : undefined) ?? (reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false
-        ? [] : configuredReasoningEfforts(effective, model, { refreshMetadata: false }) ?? null);
+      let efforts = reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false
+        ? [] : custom?.reasoningEfforts ?? configuredReasoningEfforts(effective, model, { refreshMetadata: false })
+          ?? (canonicalNativeCustom ? nativeReasoningEfforts(model) : null);
       if (nativeMetadata && efforts && efforts.length > 0) {
         const allowed = nativeReasoningEfforts(model);
         if (allowed.length > 0) {

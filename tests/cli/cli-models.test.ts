@@ -232,6 +232,38 @@ describe("ocx models", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("canonical native custom metadata honors provider vision restrictions", () => {
+    for (const restriction of [
+      { noVisionModels: ["gpt-6-luna"] },
+      { modelInputModalities: { "gpt-6-luna": ["text"] } },
+    ]) {
+      const { dir } = freshConfig({ providers: { openai: { adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", ...restriction } },
+        customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "openai", modelId: "gpt-6-luna" }] });
+      try {
+        const result = runCli(["models", "--provider", "openai", "--json"], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout).models.find((row: { model: string }) => row.model === "gpt-6-luna").inputModalities).toEqual(["text"]);
+      } finally { removeTreeWithRetry(dir); }
+    }
+  });
+
+  test("canonical native custom metadata honors provider reasoning restrictions", () => {
+    for (const restriction of [
+      { noReasoningModels: ["gpt-6-luna"] },
+      { modelCapabilities: { "gpt-6-luna": { supportsReasoningEffort: false } } },
+    ]) {
+      const { dir } = freshConfig({ providers: { openai: { adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", ...restriction } },
+        customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "openai", modelId: "gpt-6-luna" }] });
+      try {
+        const result = runCli(["models", "--provider", "openai", "--json"], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout).models.find((row: { model: string }) => row.model === "gpt-6-luna").reasoningEfforts).toEqual([]);
+      } finally { removeTreeWithRetry(dir); }
+    }
+  });
+
   test("listing reads a stale reasoning snapshot without attempting network or liveness", () => {
     const { dir } = freshConfig({ providers: { test: { adapter: "openai-chat",
       baseUrl: "https://opencode.ai/zen/go/v1", models: ["fixture-model"] } } });
