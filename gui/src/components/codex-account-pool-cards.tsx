@@ -10,7 +10,7 @@ import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
 import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
-import AccountQuotaMeters from "./v2-accounts/account-quota-meters";
+import QuotaBars from "./QuotaBars";
 import { AccountMore, AccountRow, AccountSetting } from "./v2-accounts/account-row";
 import { InlineBanner } from "./v2-accounts/surface";
 import CodexCreditsRow from "./CodexCreditsRow";
@@ -266,7 +266,7 @@ export function CodexAccountPoolCards({
             )}
             {!showReauth && !inCooldown && (
               <div className="acc-row__meters">
-                <AccountQuotaMeters
+                <QuotaBars
                   quota={a.quota}
                   plan={a.plan}
                   threshold={a.autoSwitchThresholdOverride ?? threshold}

@@ -14,7 +14,7 @@ import { LoginHint } from "./login-url-block";
 import type { NoticeTone } from "../ui";
 import { navigateHash } from "../hash-routing";
 import { hardLockThresholds } from "../hooks/useCodexAccountPool";
-import AccountQuotaMeters from "./v2-accounts/account-quota-meters";
+import QuotaBars from "./QuotaBars";
 import { AccountMore, AccountRow, AccountSetting } from "./v2-accounts/account-row";
 import { InlineBanner } from "./v2-accounts/surface";
 import { cn } from "@/lib/utils";
@@ -309,7 +309,7 @@ export function CodexAccountPoolMainCard({
       )}
       {!showReauth && !inCooldown && (
         <div className="acc-row__meters">
-          <AccountQuotaMeters
+          <QuotaBars
             quota={main?.quota ?? null}
             plan={main?.plan}
             threshold={mainSwitchEntry.autoSwitchThresholdOverride ?? threshold}
@@ -484,7 +484,7 @@ export function CodexAccountPoolLoadStates({
             <span className="acc-skel h-4 w-16 rounded-full" />
           </div>
           <div className="acc-row__meters">
-            <AccountQuotaMeters quota={null} threshold={0} t={t} pending />
+            <QuotaBars quota={null} threshold={0} t={t} pending />
           </div>
         </div>
         <span className="sr-only">{t("pws.accountsLoading")}</span>
