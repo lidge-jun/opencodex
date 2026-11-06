@@ -135,7 +135,7 @@ test("discards old facet responses after selection and rejects mismatched facet 
   expect(radio("Codex").textContent).not.toContain("30");
 });
 
-test.each(["headers", "body"])("a stalled facet %s times out, reports unavailable, and retries", async stage => {
+test.each(["facet-headers", "facet-body", "device-headers", "device-body"])("a stalled %s times out, reports unavailable, and retries", async stage => {
   const timeout = new AbortController();
   const originalTimeout = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")!;
   let requestedDeadline = 0;
@@ -146,12 +146,20 @@ test.each(["headers", "body"])("a stalled facet %s times out, reports unavailabl
     const url = String(input); calls.push({ url, init });
     if (url.includes("source-facets")) {
       if (++scans > 1) return Promise.resolve(response(facets(url)));
-      if (stage === "headers") return new Promise<Response>(resolve => { resolveLate = resolve as (value: unknown) => void; });
-      const pending = response(facets(url));
-      pending.json = () => new Promise(resolve => { resolveLate = resolve; });
+      if (stage === "facet-headers") return new Promise<Response>(resolve => { resolveLate = resolve as (value: unknown) => void; });
+      if (stage === "facet-body") {
+        const pending = response(facets(url));
+        pending.json = () => new Promise(resolve => { resolveLate = resolve; });
+        return Promise.resolve(pending);
+      }
+      return Promise.resolve(response(facets(url)));
+    }
+    if (url.includes("/devices")) {
+      if (scans === 1 && stage === "device-headers") return new Promise<Response>(resolve => { resolveLate = resolve as (value: unknown) => void; });
+      const pending = response({ devices: [{ apiKeyId: "key-a", alias: "Laptop" }] });
+      if (scans === 1 && stage === "device-body") pending.json = () => new Promise(resolve => { resolveLate = resolve; });
       return Promise.resolve(pending);
     }
-    if (url.includes("/devices")) return Promise.resolve(response({ devices: [{ apiKeyId: "key-a", alias: "Laptop" }] }));
     return Promise.resolve(response(report(url)));
   }) as typeof fetch;
   await mount();
@@ -168,9 +176,11 @@ test.each(["headers", "body"])("a stalled facet %s times out, reports unavailabl
     expect(radio("Laptop").textContent).toContain("12");
     const stale = facets(calls.find(call => call.url.includes("source-facets"))!.url);
     stale.devices[2]!.requests = 999;
-    await act(async () => { resolveLate(stage === "headers" ? response(stale) : stale); });
+    const staleBody = stage.startsWith("facet") ? stale : { devices: [{ apiKeyId: "key-a", alias: "Stale laptop" }] };
+    await act(async () => { resolveLate(stage.endsWith("headers") ? response(staleBody) : staleBody); });
     expect(radio("Laptop").textContent).toContain("12");
     expect(radio("Laptop").textContent).not.toContain("999");
+    expect(document.body.textContent).not.toContain("Stale laptop");
   } finally {
     jest.useRealTimers();
     Object.defineProperty(AbortSignal, "timeout", originalTimeout);
