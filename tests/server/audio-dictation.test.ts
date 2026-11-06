@@ -34,8 +34,18 @@ const startEvent = { type: "session.start", config: {
   provider_mode: "streaming_sse", transcript_delivery_mode: "segment",
   vad: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
 } };
+// Matches ScribeTray src/openai_streaming.rs::start_message (UUIDs fixed for repeatability).
+const scribeStart = {
+  type: "session.start", dictation_session_id: "78d201cb-1b49-40e1-a5b5-e06a8f8489a1",
+  attempt_id: "8b3c2e4f-d501-4a66-b123-456789abcdef", config: {
+    input_audio_format: "pcm16", sample_rate_hz: 16000, num_channels: 1,
+    max_buffer_size_bytes: 4194304, max_utterance_duration_ms: 30000, session_ttl_ms: 300000,
+    provider_mode: "streaming_sse", transcript_delivery_mode: "final_only", session_asset_mode: "none",
+    vad: { type: "server_vad" },
+  }, client_capabilities: ["server_stop_requested"],
+};
 
-function createFixture(options: { failDictation?: boolean; answer?: "invalid" | "ok200" } = {}) {
+function createFixture(options: { failDictation?: boolean; finalOnClose?: boolean; answer?: "invalid" | "ok200" } = {}) {
   const creates: Headers[] = [];
   const handshakes: Array<{ url: string; headers: Headers; protocols?: string[] }> = [];
   const frames: string[] = [];
@@ -61,8 +71,9 @@ function createFixture(options: { failDictation?: boolean; answer?: "invalid" | 
           return;
         }
         if (event.type === "session.start") ws.send(JSON.stringify({ type: "session.started", sequence_no: 1, session: { session_id: "fixture", status: "active", config: { provider_mode: "streaming_sse", transcript_delivery_mode: "segment" } } }));
-        else if (event.type === "audio.append") ws.send(JSON.stringify({ type: "transcript.final", sequence_no: 2, utterance_id: "u1", revision: 1, text: "fixture transcript" }));
+        else if (event.type === "audio.append") ws.send(JSON.stringify({ type: options.finalOnClose ? "speech.started" : "transcript.final", sequence_no: 2, utterance_id: "u1", revision: 1, text: "fixture transcript" }));
         else if (event.type === "session.close") {
+          if (options.finalOnClose) ws.send(JSON.stringify({ type: "transcript.final", utterance_id: "u1", revision: 1, text: "the last synthetic words" }));
           ws.send(JSON.stringify({ type: "session.updated", sequence_no: 3, session: { session_id: "fixture", status: "closed", config: { provider_mode: "streaming_sse", transcript_delivery_mode: "segment" } } }));
           ws.close(1000);
         } else ws.send(message);
@@ -162,6 +173,53 @@ async function createCall(): Promise<string> {
 }
 
 describe("dictation protocol validation", () => {
+  test("exact ScribeTray start with and without language preserves flush/close sequencing", () => {
+    for (const language of [undefined, "it", "en-US"]) {
+      const validate = createDictationFrameValidator();
+      const accepts = (value: unknown) => validate(JSON.stringify(value));
+      expect(accepts({ type: "audio.flush" })).toBe(false);
+      expect(accepts({ type: "session.close" })).toBe(false);
+      expect(accepts({ ...scribeStart, config: { ...scribeStart.config, ...(language ? { language } : {}) } })).toBe(true);
+      expect(accepts({ type: "audio.append", audio: "AAA=" })).toBe(true);
+      expect(accepts({ type: "audio.flush" })).toBe(true);
+      // Flush is nonterminal: more audio is legal until close.
+      expect(accepts({ type: "audio.append", audio: "AgA=" })).toBe(true);
+      expect(accepts({ type: "audio.flush" })).toBe(true);
+      expect(accepts({ type: "session.close" })).toBe(true);
+      for (const type of ["audio.append", "audio.flush", "session.close", "session.start"]) expect(accepts({ type, audio: "AAA=" })).toBe(false);
+    }
+  });
+  test("optional VAD settings remain validated when present", () => {
+    for (const vad of [
+      { threshold: -0.1 }, { threshold: 1.1 }, { threshold: "0.5" }, { threshold: null },
+      { prefix_padding_ms: -1 }, { prefix_padding_ms: 1001 }, { prefix_padding_ms: 0.5 },
+      { silence_duration_ms: -1 }, { silence_duration_ms: 5001 }, { silence_duration_ms: "500" },
+      { type: "client_vad" }, { unexpected: true },
+    ]) expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, config: { ...scribeStart.config, vad: { type: "server_vad", ...vad } } }))).toBe(false);
+    for (const vad of [{ threshold: 0 }, { threshold: 1, prefix_padding_ms: 1000, silence_duration_ms: 5000 }]) {
+      expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, config: { ...scribeStart.config, vad: { type: "server_vad", ...vad } } }))).toBe(true);
+    }
+  });
+  test("compatibility additions do not admit arbitrary fields or unbounded data", () => {
+    for (const change of [
+      { dictation_session_id: "x".repeat(129) }, { attempt_id: null }, { attempt_id: "" },
+      { dictation_session_id: "bad\nvalue" }, { client_capabilities: "server_stop_requested" },
+      { client_capabilities: ["unknown"] }, { client_capabilities: ["server_stop_requested", "server_stop_requested"] },
+      { arbitrary: true },
+    ]) expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, ...change }))).toBe(false);
+    for (const change of [{ language: "" }, { language: "x".repeat(65) }, { language: 3 }, { session_asset_mode: "all" }, { arbitrary: true }, { provider_mode: ["streaming_sse"] }, { transcript_delivery_mode: ["final_only"] }]) {
+      expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, config: { ...scribeStart.config, ...change } }))).toBe(false);
+    }
+    const validate = createDictationFrameValidator();
+    expect(validate(Buffer.from(JSON.stringify(scribeStart)))).toBe(false);
+    expect(validate("{" )).toBe(false);
+    expect(validate(JSON.stringify(scribeStart))).toBe(true);
+    for (const event of [
+      { type: "audio.append", audio: "A".repeat(65536) }, { type: "audio.append", audio: "not base64!" },
+      { type: "audio.append", audio: "AA==" }, { type: "audio.append", audio: "" },
+      { type: "audio.flush", extra: true }, { type: "session.close", extra: true },
+    ]) expect(validate(JSON.stringify(event))).toBe(false);
+  });
   test("PCM frames require a valid start, canonical base64 and an open session", () => {
     const validate = createDictationFrameValidator();
     expect(validate(JSON.stringify({ type: "audio.append", audio: "AAA=" }))).toBe(false);
@@ -275,6 +333,26 @@ describe("external audio sockets", () => {
     expect(fixture.handshakes[0]!.protocols?.[0]).toBe("chatgpt-dictation");
     expect(fixture.handshakes[0]!.protocols?.[1]).toStartWith("openai-bearer.");
     expect(fixture.handshakes[0]!.protocols?.join(",")).not.toContain(KEY);
+  });
+  test("ScribeTray frames reach upstream unchanged and ordered, with finals after close", async () => {
+    fixture = createFixture({ finalOnClose: true });
+    const ws = socket("/v1/audio/transcriptions/stream", true);
+    const start = { ...scribeStart, config: { ...scribeStart.config, language: "it" } };
+    await receive(ws, start, "session.started");
+    const append = { type: "audio.append", audio: "AAA=" };
+    await receive(ws, append, "speech.started");
+    const flush = { type: "audio.flush" };
+    const close = { type: "session.close" };
+    const finals: string[] = [];
+    ws.addEventListener("message", event => {
+      const value = JSON.parse(String(event.data));
+      if (value.type === "transcript.final") finals.push(value.text);
+    });
+    const closed = receive(ws, flush, "session.updated");
+    ws.send(JSON.stringify(close));
+    await closed;
+    expect(finals).toEqual(["the last synthetic words"]);
+    expect(fixture.frames).toEqual([start, append, flush, close].map(value => JSON.stringify(value)));
   });
   test("standalone live defaults model and negotiation only for external clients", async () => {
     fixture = createFixture();

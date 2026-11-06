@@ -65,6 +65,9 @@ opts into a separate 60,000 ms finalization window after a validated `session.cl
 `src/server/index/live-sideband.ts` replaces the recording timer on that event;
 expiry and cancellation retain the existing authenticated transport cleanup and lease ownership.
 The forwarded session TTL does not shorten the recording budget; other audio transports do not opt in.
+Dictation validation also accepts ScribeTray's bounded identifiers, stop-request capability,
+language, asset mode `none`, minimal server VAD, and nonterminal `audio.flush`.
+Optional VAD values retain their numeric bounds; start/close ordering and PCM checks remain enforced.
 `src/server/audio-live.ts` projects the authenticated call's cloned session before JSON or
 multipart serialization and returns a sanitized 503 without sending on identity failure.
 Its socket resolver and `src/server/audio-dictation.ts` carry the selected auth context through
