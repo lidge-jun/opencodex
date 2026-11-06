@@ -33,6 +33,7 @@ import {
   boundedReasoningIdentity,
   collectAnthropicMessage,
   isClaudeWebSearchToolName,
+  isContextOverflowError,
   messageSnapshot,
   sanitizeWebSearchInput,
   sseFrame,
@@ -407,9 +408,10 @@ function createAnthropicMessageWriter(
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
       const deterministic = error.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
+      const overflow = isContextOverflowError(error, message);
       const original = encoderOriginalErrorEvidence(terminal);
       fail(anthropicFailedStatus(error, message), message, !deterministic,
-        deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined,
+        deterministic ? error.code as string : overflow ? "context_length_exceeded" : undefined,
         hasProxyErrorMessage(options.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), isEncoderTransportFailure(terminal) ? "transport_failed" : undefined,
         { ...(original ?? { message, type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), status: original?.status ?? anthropicFailedStatus(error, message) });
     },

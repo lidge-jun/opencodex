@@ -372,6 +372,7 @@ selecting the compaction sentence. The shared `isContextOverflowError` source an
 remain unchanged; `tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their
 source bytes. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
+The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the five affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. All other paths keep their baseline comparisons; neither the fixture data nor the shared predicate is regenerated.
 The direct encoder retains original adapter fields by terminal identity independently of shared
 classification. Buffered passthrough and count_tokens preserve the upstream status and closed
 type/code. The type chosen

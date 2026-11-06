@@ -22,6 +22,16 @@ if (golden.caseTableSha256 !== messagesOverflowCaseTableHash()) {
 export const cases = messagesOverflowLanes.flatMap(lane => applicableMessagesOverflowFixtures(lane).map(input => ({ lane, input })));
 export const key = (row: Pick<Row, "lane" | "input">) => messagesOverflowCaseId(row.lane, row.input);
 
+// Reviewed #8148 deltas against the immutable #8153 baseline. No runtime classifier
+// chooses expectations: only these five fixtures on the two direct-writer paths change.
+const DIRECT_OVERFLOW_BASELINE_RECOVERY = new Map<string, boolean>([
+  ["shared-8128-2", false],
+  ["shared-8128-3", false],
+  ["normalization-3", false],
+  ["sweep-code-api_error-phrase", true],
+  ["sweep-code-upstream_error-phrase", true],
+]);
+
 function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   const outcome = golden.outcomes[key(base)]!;
   expect(outcome).toBeDefined();
@@ -29,6 +39,27 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   const before = { status: outcome[1], clientRecognizes: outcome[2], internalDecisions: golden.decisions[outcome[3]],
     classification: outcome[4], type: golden.types[outcome[5]] ?? undefined, code: golden.codes[outcome[6]] ?? undefined,
     mediaType: golden.mediaTypes[outcome[7]], clientError: outcome[8], bodySha256: outcome[9], bodyLength: outcome[10] };
+  const correctedOverflow = DIRECT_OVERFLOW_BASELINE_RECOVERY.has(base.input.id)
+    && (base.lane === "direct-stream" || base.lane === "direct-fold");
+  const expected = correctedOverflow ? {
+    ...before,
+    status: base.lane === "direct-fold" ? 400 : 200,
+    clientRecognizes: true,
+    code: "context_length_exceeded",
+    internalDecisions: base.lane === "direct-fold"
+      ? { status: true, writer: true, "direct-collector": true }
+      : { status: true, writer: true },
+  } : before;
+  if (correctedOverflow) {
+    // Keep the original observation explicit; an unrelated baseline change is not a delta.
+    expect(before.status).toBe(base.lane === "direct-fold" ? 502 : 200);
+    expect(before.type).toBe("invalid_request_error");
+    expect(before.code).toBeUndefined();
+    expect(before.clientRecognizes).toBe(DIRECT_OVERFLOW_BASELINE_RECOVERY.get(base.input.id));
+    expect(before.internalDecisions).toEqual(base.lane === "direct-fold"
+      ? { status: true, writer: false, "direct-collector": false }
+      : { status: true, writer: false });
+  }
   expect(current.input).toEqual(base.input);
   const after = current.head;
   expect(after.text.length).toBeGreaterThan(0);
@@ -37,7 +68,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     expect(before.status).toBe(200);
     expect(base.input.eventLanes).toContain(base.lane);
   }
-  expect(after.status).toBe(fold502 ? 502 : before.status);
+  expect(after.status).toBe(fold502 ? 502 : expected.status);
   const classification = base.input.classification[base.lane];
   expect(["error", "success"]).toContain(classification);
   expect(classification).toBe(before.classification);
@@ -46,9 +77,9 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     if (!base.input.fault) expect(base.input.eventLanes).toContain(base.lane);
   }
   expect(before.clientRecognizes).toBe(base.input.recovery[base.lane]);
-  expect(after.clientRecognizes).toBe(base.input.recovery[base.lane]);
-  expect(after.clientRecognizes).toBe(before.clientRecognizes);
-  expect(after.internalDecisions).toEqual(before.internalDecisions);
+  expect(after.clientRecognizes).toBe(correctedOverflow ? true : base.input.recovery[base.lane]);
+  expect(after.clientRecognizes).toBe(expected.clientRecognizes);
+  expect(after.internalDecisions).toEqual(expected.internalDecisions);
   const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
   if (classification === "success" || base.input.fixedLocal) {
     expect(before.bodySha256).toMatch(/^[a-f0-9]{64}$/);
@@ -65,10 +96,10 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   expect(after.text).not.toContain("zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e");
   if (base.input.fixedLocal) return;
   expect(after.envelopeType).toBe("error");
-  if (before.clientError) expect(after.compactionSentence).toBe(before.clientRecognizes);
+  if (before.clientError) expect(after.compactionSentence).toBe(expected.clientRecognizes);
   expect(ANTHROPIC_ERROR_TYPES.has(after.type ?? "")).toBe(true);
   if (ANTHROPIC_ERROR_TYPES.has(before.type ?? "")) expect(after.type).toBe(before.type);
-  expect(after.code).toBe(typeof before.code === "string" && before.code !== "thread_unsupported_request" && ANTHROPIC_ERROR_CODES.has(before.code) ? before.code : undefined);
+  expect(after.code).toBe(typeof expected.code === "string" && expected.code !== "thread_unsupported_request" && ANTHROPIC_ERROR_CODES.has(expected.code) ? expected.code : undefined);
 }
 
 /** Each test owns only one 64-row child run; no shared hook computes the full matrix. */
