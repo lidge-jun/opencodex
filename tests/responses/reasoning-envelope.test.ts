@@ -127,11 +127,21 @@ describe("late reasoning signatures keep Responses item indexes unique", () => {
           // Model the index-keyed consumer used by pi-ai/DSH. Reusing an index
           // overwrites its open slot and leaves duplicate text or an unfinished call.
           const slots = new Map<number, string>();
+          const deltas = new Map<number, string>();
           const completed: string[] = [];
           for (const event of events) {
             if (event.type === "response.output_item.added") slots.set(event.output_index, event.item.id);
+            if (["response.output_text.delta", "response.function_call_arguments.delta", "response.reasoning_summary_text.delta"].includes(event.type)) {
+              expect(slots.get(event.output_index)).toBe(event.item_id);
+              deltas.set(event.output_index, (deltas.get(event.output_index) ?? "") + event.delta);
+            }
             if (event.type === "response.output_item.done") {
               expect(slots.get(event.output_index)).toBe(event.item.id);
+              if (event.item.type === "message") expect(deltas.get(event.output_index)).toBe("Selam!");
+              if (event.item.type === "function_call") expect(deltas.get(event.output_index)).toBe('{"pattern":"*.py"}');
+              if (event.item.type === "reasoning" && !hidden && !event.item.encrypted_content) {
+                expect(deltas.get(event.output_index)).toBe("A synthetic summary");
+              }
               completed.push(event.item.id);
               slots.delete(event.output_index);
             }
@@ -154,6 +164,58 @@ describe("late reasoning signatures keep Responses item indexes unique", () => {
           }
         });
       }
+    }
+  }
+});
+
+describe("pending signature terminal safety", () => {
+  const usage = { inputTokens: 1, outputTokens: 1 };
+  const endings: AdapterEvent[] = [
+    { type: "error", code: "upstream_error", message: "synthetic failure" },
+    { type: "incomplete", reason: "adapter_eof", usage },
+    { type: "done", usage, stopReason: "max_tokens" },
+    { type: "tool_call_end", incomplete: true },
+    { type: "done", usage },
+  ];
+  for (const afterOutput of [false, true]) {
+    for (const [index, ending] of endings.entries()) {
+      test(`open tool signature afterOutput=${afterOutput}, ending=${index}`, async () => {
+        async function* upstream(): AsyncGenerator<AdapterEvent> {
+          yield { type: "tool_call_start", id: "call_terminal", name: "read" };
+          yield { type: "tool_call_delta", arguments: "{}" };
+          yield { type: "thinking_signature", signature: "terminal-sig", ...(afterOutput ? { afterOutput: true } : {}) };
+          yield ending;
+        }
+        const wire = await new Response(bridgeToResponsesSSE(upstream(), "m")).text();
+        const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+        const tool = events.find(event => event.type === "response.output_item.done" && event.item.type === "function_call");
+        expect(tool.item.status).toBe(index === 4 ? "completed" : "incomplete");
+        expect(events.filter(event => event.type === "response.function_call_arguments.done")).toHaveLength(index === 4 ? 1 : 0);
+        const carrier = events.find(event => event.type === "response.output_item.done" && event.item.encrypted_content);
+        expect(decodeReasoningEnvelope(carrier.item.encrypted_content)).toEqual({ sig: "terminal-sig", ...(afterOutput ? { aft: tool.item.id } : {}) });
+      });
+    }
+  }
+  for (const ending of ["eof", "throw"] as const) {
+    for (const earlyEnd of [false, true]) {
+      test(`late tool signature survives ${ending}, earlyEnd=${earlyEnd}`, async () => {
+        async function* upstream(): AsyncGenerator<AdapterEvent> {
+          yield { type: "tool_call_start", id: "call_abnormal", name: "read" };
+          yield { type: "tool_call_delta", arguments: "{}" };
+          if (earlyEnd) yield { type: "tool_call_end" };
+          yield { type: "thinking_signature", signature: "abnormal-sig", afterOutput: true };
+          if (ending === "throw") throw new Error("synthetic failure");
+        }
+        const wire = await new Response(bridgeToResponsesSSE(upstream(), "m")).text();
+        const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+        const done = events.filter(event => event.type === "response.output_item.done");
+        expect(done.map(event => event.output_index)).toEqual([0, 1]);
+        expect(done[0].item.status).toBe(earlyEnd ? "completed" : "incomplete");
+        expect(decodeReasoningEnvelope(done[1].item.encrypted_content)).toEqual({ sig: "abnormal-sig", aft: done[0].item.id });
+        const terminal = events.find(event => event.type === `response.${ending === "throw" ? "failed" : "incomplete"}`);
+        expect(terminal.response.output).toEqual(done.map(event => event.item));
+        expect(events.filter(event => event.type === "response.completed")).toHaveLength(0);
+      });
     }
   }
 });

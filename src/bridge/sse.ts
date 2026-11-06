@@ -892,7 +892,9 @@ export function bridgeToResponsesSSE(
           // Anthropic signature_delta supplies the latest signature, not an append-only
           // fragment (anthropic-sdk-typescript MessageStream). Keep consecutive updates
           // together; the next semantic event belongs to the following block.
-          if (pendingSignature !== undefined && event.type !== "thinking_signature" && event.type !== "heartbeat") {
+          if (pendingSignature !== undefined && event.type !== "thinking_signature" && event.type !== "heartbeat"
+            && !["done", "error", "incomplete", "tool_call_end"].includes(event.type)) {
+            // Terminal/tool-end handlers decide whether an open call completed safely.
             if (currentReasoning) closeCurrentReasoning();
             else if (!pendingSignatureAfterOutput) {
               // A normal hidden thinking block owns its exact text, not the next block.
@@ -1417,6 +1419,7 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) failCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               releasePendingWebSources();
+              flushHiddenReasoningEnvelope();
               const failure = adapterFailureFromEvent(event);
               if (event.usage) options?.onUsage?.(event.usage);
               await awaitThoughtSignatureDurability();
@@ -1454,10 +1457,14 @@ export function bridgeToResponsesSSE(
         }
         if (!terminated) {
           if (!attemptTerminationCleanup(() => {
+            if (currentMsg) closeCurrentMessage();
+            if (currentReasoning) closeCurrentReasoning();
+            if (currentRawReasoning) closeCurrentRawReasoning();
             flushHiddenRawReasoning();
             if (currentToolCall) failCurrentToolCall();
             if (currentWebSearch) closeCurrentWebSearch("failed", []);
             releasePendingWebSources();
+            flushHiddenReasoningEnvelope();
           })) return;
           const failure = responseError(
             500,
@@ -1496,6 +1503,7 @@ export function bridgeToResponsesSSE(
           if (currentToolCall) failCurrentToolCall();
           if (currentWebSearch) closeCurrentWebSearch("failed", []);
           releasePendingWebSources();
+          flushHiddenReasoningEnvelope();
         })) return;
         options?.onUsage?.(undefined);
         await awaitThoughtSignatureDurability();
