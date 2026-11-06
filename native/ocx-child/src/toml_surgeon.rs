@@ -63,9 +63,14 @@ pub fn toml_escape_basic_string(value: &str) -> String {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000c}' => out.push_str("\\f"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{007f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
             c => out.push(c),
         }
     }
@@ -91,9 +96,27 @@ fn parse_toml_quoted_string(raw_val: &str) -> Option<String> {
                 match chars.next()? {
                     '\\' => out.push('\\'),
                     '"' => out.push('"'),
+                    'b' => out.push('\u{0008}'),
+                    'f' => out.push('\u{000c}'),
                     'n' => out.push('\n'),
                     'r' => out.push('\r'),
                     't' => out.push('\t'),
+                    'u' => {
+                        let mut hex = String::with_capacity(4);
+                        for _ in 0..4 {
+                            hex.push(chars.next()?);
+                        }
+                        let cp = u32::from_str_radix(&hex, 16).ok()?;
+                        out.push(char::from_u32(cp)?);
+                    }
+                    'U' => {
+                        let mut hex = String::with_capacity(8);
+                        for _ in 0..8 {
+                            hex.push(chars.next()?);
+                        }
+                        let cp = u32::from_str_radix(&hex, 16).ok()?;
+                        out.push(char::from_u32(cp)?);
+                    }
                     _ => return None,
                 }
             } else if ch == '"' {
@@ -837,10 +860,10 @@ fn strip_subagent_defaults(content_lf: &str, written: Option<&WrittenSubagentDef
             }
         }
     }
-    let remaining_body_has_keys = (ag_idx + 1..end_idx).filter(|&i| !drop[i]).any(|i| {
-        !structural[i] || (!lines[i].trim().is_empty() && !lines[i].trim().starts_with('#'))
-    });
-    if !remaining_body_has_keys {
+    let remaining_body_has_content = (ag_idx + 1..end_idx)
+        .filter(|&i| !drop[i])
+        .any(|i| !structural[i] || !lines[i].trim().is_empty());
+    if !remaining_body_has_content {
         for d in &mut drop[ag_idx..end_idx] {
             *d = true;
         }

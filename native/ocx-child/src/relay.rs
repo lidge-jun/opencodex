@@ -561,10 +561,7 @@ fn handle_local_readyz<W: Write>(
             {
                 *g = Some(gen_val.clone());
             }
-            let gen_opt = up
-                .connection_generation
-                .or_else(|| shared.last_generation.lock().ok().and_then(|g| g.clone()));
-            let link_obj = match gen_opt {
+            let link_obj = match up.connection_generation {
                 Some(g) => serde_json::json!({ "state": "available", "connectionGeneration": g }),
                 None => serde_json::json!({ "state": "available" }),
             };

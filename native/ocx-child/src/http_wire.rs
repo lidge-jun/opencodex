@@ -411,25 +411,39 @@ pub fn read_bounded_body<R: BufRead>(
         }
         BodyFraming::Chunked => {
             let mut out = Vec::new();
+            let mut meta_budget = HUB_RELAY_HEADER_MAX_BYTES;
             loop {
-                let mut size_line = String::new();
-                let n = reader.read_line(&mut size_line)?;
-                if n == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "unexpected chunk eof",
-                    ));
-                }
+                let size_line = read_crlf_line_bounded(reader, &mut meta_budget)
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "chunk metadata overflow or invalid",
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected chunk eof")
+                    })?;
                 let hex_part = size_line.trim().split(';').next().unwrap_or("").trim();
                 let chunk_len = u64::from_str_radix(hex_part, 16).map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size")
                 })?;
                 if chunk_len == 0 {
-                    // Consume trailing headers up to blank CRLF
+                    // Consume trailing headers up to blank CRLF within bounded metadata budget
                     loop {
-                        let mut trailer = String::new();
-                        let tn = reader.read_line(&mut trailer)?;
-                        if tn == 0 || trailer == "\r\n" || trailer == "\n" {
+                        let trailer = read_crlf_line_bounded(reader, &mut meta_budget)
+                            .map_err(|_| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "chunk trailer overflow or invalid",
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    "unexpected trailer eof",
+                                )
+                            })?;
+                        if trailer.is_empty() {
                             break;
                         }
                     }
@@ -509,21 +523,41 @@ pub fn stream_upstream_to_chunked_client<R: BufRead, W: Write>(
         }
         BodyFraming::Chunked => {
             let mut buf = [0u8; 16 * 1024];
+            let mut meta_budget = HUB_RELAY_HEADER_MAX_BYTES;
             loop {
-                let mut size_line = String::new();
-                let n = reader.read_line(&mut size_line)?;
-                if n == 0 {
-                    break;
-                }
+                let size_line = read_crlf_line_bounded(reader, &mut meta_budget)
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "upstream chunk metadata overflow or invalid",
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "upstream eof before terminating chunk",
+                        )
+                    })?;
                 let hex_part = size_line.trim().split(';').next().unwrap_or("").trim();
                 let mut chunk_rem = u64::from_str_radix(hex_part, 16).map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "invalid upstream chunk")
                 })?;
                 if chunk_rem == 0 {
                     loop {
-                        let mut trailer = String::new();
-                        let tn = reader.read_line(&mut trailer)?;
-                        if tn == 0 || trailer == "\r\n" || trailer == "\n" {
+                        let trailer = read_crlf_line_bounded(reader, &mut meta_budget)
+                            .map_err(|_| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "upstream trailer overflow or invalid",
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    "upstream eof in trailers",
+                                )
+                            })?;
+                        if trailer.is_empty() {
                             break;
                         }
                     }
@@ -552,6 +586,12 @@ pub fn stream_upstream_to_chunked_client<R: BufRead, W: Write>(
                 }
                 let mut crlf = [0u8; 2];
                 reader.read_exact(&mut crlf)?;
+                if &crlf != b"\r\n" {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid upstream chunk crlf",
+                    ));
+                }
             }
         }
     }

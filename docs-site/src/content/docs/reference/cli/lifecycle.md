@@ -1325,7 +1325,7 @@ starts and then once a minute; the Home keeps reports in memory only, so after a
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
 
-Lightweight `ocx-child` Child hosts speak the same `sync --expect-link <id> [--json]`, `status [--json]`, and `disconnect` / `detach` contracts: `sync` rolls over `ocx-child serve` when settings change and posts a fresh parity report, while `disconnect` / `detach` restores `~/.codex` files offline and stops `ocx-child serve` with zero background daemon left running.
+Lightweight `ocx-child` Child hosts speak the same `sync --expect-link <id> [--json]`, `status [--json]`, and `disconnect` / `detach` contracts: on an attached `ocx-child` host (which runs without a system service manager), a successful `sync` starts `ocx-child serve` if no relay is running even when settings are unchanged, rolls it over when `runtimeStartedAt < lastApplyAt`, and posts a best-effort parity report on non-stale syncs; `disconnect` / `detach` restores `~/.codex` files offline and stops `ocx-child serve` with zero background daemon left running.
 
 ## Remote Link Child attestations
 
@@ -1351,8 +1351,8 @@ empty after a Home restart. `GET /api/link/status` includes the field only when 
 
 After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
 that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
-already started after the apply is left alone, nothing is started when no client runtime is
-running, and a failed restart exits nonzero while the previous runtime keeps serving; run
+already started after the apply is left alone, on a full `ocx` Child nothing is started when no client runtime is
+running (unlike an attached `ocx-child`, which starts `ocx-child serve` when absent), and a failed restart exits nonzero while the previous runtime keeps serving; run
 `ocx sync` or `ocx restart` again to retry. Two applies on one Child never interleave: a second
 `ocx sync` while one is applying fails fast and changes nothing.
 

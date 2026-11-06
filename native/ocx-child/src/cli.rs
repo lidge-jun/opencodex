@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use crate::codex_settings::{
     HomeCodexSettings, HomeCodexSettingsDocument, HomeIdentity, codex_settings_digest,
+    parse_home_codex_settings_document,
 };
 use crate::daemon::{
     ensure_port_available_for_attach, pick_ephemeral_link_port, probe_local_healthz,
@@ -185,12 +186,8 @@ fn fetch_home_settings_doc(
     if head.status != 200 {
         return Err(format!("Home codex-settings returned HTTP {}", head.status));
     }
-    let doc: HomeCodexSettingsDocument =
-        serde_json::from_slice(&body).map_err(|e| format!("invalid codex-settings JSON: {e}"))?;
-    if !doc.validate() {
-        return Err("Home codex-settings failed schema validation".to_owned());
-    }
-    Ok(doc)
+    parse_home_codex_settings_document(&body)
+        .ok_or_else(|| "Home codex-settings failed strict schema validation".to_owned())
 }
 
 fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> u8 {
@@ -259,9 +256,25 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
-    let existing_pid = match read_child_state(&paths.state_file) {
-        StateReadOutcome::Valid(st) => st.daemon_pid,
+    let prior_state = match read_child_state(&paths.state_file) {
+        StateReadOutcome::Valid(st) => Some(*st),
         _ => None,
+    };
+    let existing_pid = if let Some(prev) = &prior_state {
+        if prev.listen_port != listen_port {
+            if let Err(e) = stop_owned_daemon(prev) {
+                eprintln!(
+                    "attach failed stopping previous relay on port {}: {e}",
+                    prev.listen_port
+                );
+                return 1;
+            }
+            None
+        } else {
+            prev.daemon_pid
+        }
+    } else {
+        None
     };
     if let Err(e) = ensure_port_available_for_attach(listen_port, existing_pid) {
         eprintln!("{e}");
@@ -853,7 +866,17 @@ fn cmd_status(args: &[String]) -> u8 {
         .map(|s| s.listen_port)
         .unwrap_or_else(default_listen_port);
     let live = probe_local_healthz(port, Duration::from_millis(500));
-    let running = live.is_some();
+    let verified_live = live.filter(|h| {
+        h.service == "opencodex"
+            && h.role.as_deref() == Some("client")
+            && h.ephemeral_child == Some(true)
+            && h.port == port
+            && state_opt
+                .as_ref()
+                .and_then(|s| s.daemon_pid)
+                .is_none_or(|expected| expected == h.pid)
+    });
+    let running = verified_live.is_some();
     let (digest, last_apply_at) = match state_opt.as_ref().and_then(|s| s.applied_settings.as_ref())
     {
         Some(rec) => (Some(rec.digest.clone()), Some(rec.applied_at_ms)),
@@ -870,7 +893,7 @@ fn cmd_status(args: &[String]) -> u8 {
         "runtimeRole": if state_opt.is_some() { "client" } else { "standalone" },
         "proxy": {
             "running": running,
-            "pid": live.as_ref().map(|h| h.pid),
+            "pid": verified_live.as_ref().map(|h| h.pid),
             "health": {
                 "ok": running,
                 "url": format!("http://127.0.0.1:{port}/healthz"),

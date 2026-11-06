@@ -8,7 +8,7 @@
 
 export interface EphemeralChildConfigProjection {
   readonly port: number;
-  readonly runtimeRole: "standalone" | "client";
+  readonly runtimeRole?: "standalone" | null | undefined;
   readonly ephemeralChild: true;
 }
 

@@ -119,6 +119,11 @@ Deterministic JSON document (`"schema": "ocx.child.conformance/1"`) containing 6
 
 ## 3. Phase Verifiers
 
-- `bun test tests/clients/ocx-child-conformance.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/lab/core-link-boundary.test.ts tests/lab/core-lab-boundary.test.ts` (exit `0`)
+- `bun test tests/clients/link-ocx-child-conformance.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/lab/core-link-boundary.test.ts tests/lab/core-lab-boundary.test.ts` (exit `0`)
 - `bun run typecheck` (exit `0`)
 - `bun run privacy:scan` (exit `0`)
+- Registers `"link-ocx-child-conformance.test.ts": "clients"` in BOTH:
+  - `scripts/test-layout/layout-clients.json`
+  - `tests/fixtures/test-layout-expected.json`
+
+## 2. Conditional-Path Activation Scenarios (`C-ACTIVATION-GROUNDING-01`)

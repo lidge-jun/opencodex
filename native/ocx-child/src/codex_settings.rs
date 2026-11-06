@@ -35,6 +35,120 @@ pub struct HomeCodexSettingsDocument {
     pub settings: HomeCodexSettings,
 }
 
+pub fn sanitize_safe_label(value: &str, max_utf16_units: usize) -> Option<String> {
+    let trimmed = value.trim();
+    let utf16_len = trimmed.encode_utf16().count();
+    if trimmed.is_empty() || utf16_len > max_utf16_units {
+        return None;
+    }
+    for ch in trimmed.chars() {
+        let cp = ch as u32;
+        if cp < 0x20
+            || cp == 0x7f
+            || (0x202a..=0x202e).contains(&cp)
+            || (0x2066..=0x2069).contains(&cp)
+        {
+            return None;
+        }
+    }
+    Some(trimmed.to_owned())
+}
+
+pub fn is_valid_reasoning_effort_token(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 32 {
+        return false;
+    }
+    if !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    bytes[1..]
+        .iter()
+        .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+fn exact_keys(obj: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> bool {
+    obj.len() == keys.len() && keys.iter().all(|k| obj.contains_key(*k))
+}
+
+/// Strict parser matching `parseHomeCodexSettingsDocument` in `src/link/codex-settings.ts`.
+pub fn parse_home_codex_settings_document(bytes: &[u8]) -> Option<HomeCodexSettingsDocument> {
+    let root: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let root_obj = root.as_object()?;
+    if !exact_keys(root_obj, &["version", "home", "settings"]) {
+        return None;
+    }
+    let version = root_obj.get("version")?.as_u64()?;
+    if version != u64::from(HOME_CODEX_SETTINGS_VERSION) {
+        return None;
+    }
+    let home_obj = root_obj.get("home")?.as_object()?;
+    if !exact_keys(home_obj, &["name", "version"]) {
+        return None;
+    }
+    let name = sanitize_safe_label(home_obj.get("name")?.as_str()?, 255)?;
+    let home_version = sanitize_safe_label(home_obj.get("version")?.as_str()?, 64)?;
+    let s_obj = root_obj.get("settings")?.as_object()?;
+    if !exact_keys(
+        s_obj,
+        &[
+            "fastMode",
+            "multiAgentMode",
+            "webSearchSidecarEnabled",
+            "subagentDefaults",
+        ],
+    ) {
+        return None;
+    }
+    let fast_mode = match s_obj.get("fastMode")? {
+        serde_json::Value::Null => None,
+        serde_json::Value::Bool(b) => Some(*b),
+        _ => return None,
+    };
+    let multi_agent_mode = match s_obj.get("multiAgentMode")? {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(m) if matches!(m.as_str(), "v1" | "default" | "v2") => {
+            Some(m.clone())
+        }
+        _ => return None,
+    };
+    let web_search_sidecar_enabled = s_obj.get("webSearchSidecarEnabled")?.as_bool()?;
+    let subagent_defaults = match s_obj.get("subagentDefaults")? {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(d_obj) => {
+            if !exact_keys(d_obj, &["model", "reasoningEffort"]) {
+                return None;
+            }
+            let model = sanitize_safe_label(d_obj.get("model")?.as_str()?, 256)?;
+            let reasoning_effort = match d_obj.get("reasoningEffort")? {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(eff) if is_valid_reasoning_effort_token(eff) => {
+                    Some(eff.clone())
+                }
+                _ => return None,
+            };
+            Some(SubagentDefaults {
+                model,
+                reasoning_effort,
+            })
+        }
+        _ => return None,
+    };
+    Some(HomeCodexSettingsDocument {
+        version: HOME_CODEX_SETTINGS_VERSION,
+        home: HomeIdentity {
+            name,
+            version: home_version,
+        },
+        settings: HomeCodexSettings {
+            fast_mode,
+            multi_agent_mode,
+            web_search_sidecar_enabled,
+            subagent_defaults,
+        },
+    })
+}
+
 impl HomeCodexSettings {
     pub fn validate(&self) -> bool {
         if let Some(mode) = &self.multi_agent_mode
@@ -43,11 +157,11 @@ impl HomeCodexSettings {
             return false;
         }
         if let Some(sub) = &self.subagent_defaults {
-            if sub.model.trim().is_empty() || sub.model.len() > 256 {
+            if sanitize_safe_label(&sub.model, 256).is_none() {
                 return false;
             }
             if let Some(eff) = &sub.reasoning_effort
-                && (eff.trim().is_empty() || eff.len() > 64)
+                && !is_valid_reasoning_effort_token(eff)
             {
                 return false;
             }
@@ -59,10 +173,8 @@ impl HomeCodexSettings {
 impl HomeCodexSettingsDocument {
     pub fn validate(&self) -> bool {
         self.version == HOME_CODEX_SETTINGS_VERSION
-            && !self.home.name.trim().is_empty()
-            && self.home.name.len() <= 255
-            && !self.home.version.trim().is_empty()
-            && self.home.version.len() <= 64
+            && sanitize_safe_label(&self.home.name, 255).is_some()
+            && sanitize_safe_label(&self.home.version, 64).is_some()
             && self.settings.validate()
     }
 }

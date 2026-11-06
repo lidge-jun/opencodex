@@ -114,10 +114,10 @@ pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
     let port = state.listen_port;
     let live_health = probe_local_healthz(port, Duration::from_millis(500));
     let verified_pid = match (state.daemon_pid, &live_health) {
-        (_, Some(h))
+        (Some(expected_pid), Some(h))
             if h.service == "opencodex"
                 && h.ephemeral_child == Some(true)
-                && (state.daemon_pid.is_none() || state.daemon_pid == Some(h.pid)) =>
+                && expected_pid == h.pid =>
         {
             Some(h.pid)
         }
@@ -159,6 +159,11 @@ pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
                 "owned ocx-child daemon (pid {pid}) did not terminate"
             ));
         }
+    }
+    if is_port_bound(port) {
+        return Err(format!(
+            "listener on 127.0.0.1:{port} remained bound; refusing unverified shutdown"
+        ));
     }
     Ok(())
 }

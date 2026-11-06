@@ -282,6 +282,24 @@ pub fn apply_attach_or_sync(
         };
 
     let (pre_cat_existed, pre_cat_b64, prev_cat_sha) = if let Some(prev) = &existing_journal {
+        if catalog_path.exists() {
+            let existing_cat = fs::read(&catalog_path)
+                .map_err(|e| format!("failed reading {}: {e}", catalog_path.display()))?;
+            let existing_cat_sha = sha256_hex(&existing_cat);
+            let matches_ours = existing_cat_sha == prev.latest_catalog_sha256
+                || Some(existing_cat_sha.as_str()) == prev.previous_catalog_sha256.as_deref()
+                || prev
+                    .pre_attach_catalog_bytes_b64
+                    .as_ref()
+                    .and_then(|b64| BASE64.decode(b64).ok())
+                    .is_some_and(|p| p == existing_cat);
+            if !matches_ours {
+                return Err(
+                    "client_catalog_ownership_changed: opencodex-catalog.json was modified externally"
+                        .to_owned(),
+                );
+            }
+        }
         (
             prev.pre_attach_catalog_existed,
             prev.pre_attach_catalog_bytes_b64.clone(),
@@ -446,20 +464,118 @@ pub fn offline_detach(
     }
 
     if cache_path.exists() {
+        let cur_cache = fs::read(&cache_path)
+            .map_err(|e| DetachError::Io(format!("failed reading models_cache.json: {e}")))?;
+        let cur_cache_sha = sha256_hex(&cur_cache);
+        let cache_untouched =
+            Some(cur_cache_sha.as_str()) == journal.latest_models_cache_sha256.as_deref();
         if journal.pre_attach_models_cache_existed {
-            if let Some(b64) = &journal.pre_attach_models_cache_bytes_b64
-                && let Ok(prior_cache) = BASE64.decode(b64)
-            {
-                let _ = write_regular_atomic(&cache_path, &prior_cache);
+            let prior_cache = journal
+                .pre_attach_models_cache_bytes_b64
+                .as_ref()
+                .ok_or_else(|| {
+                    DetachError::Conflict("missing pre-attach models_cache snapshot".to_owned())
+                })
+                .and_then(|b64| {
+                    BASE64.decode(b64).map_err(|e| {
+                        DetachError::Conflict(format!("bad models_cache snapshot: {e}"))
+                    })
+                })?;
+            if cache_untouched || cur_cache == prior_cache {
+                if cur_cache != prior_cache {
+                    write_regular_atomic(&cache_path, &prior_cache).map_err(DetachError::Io)?;
+                }
+            } else if let Some(reconciled) = reconcile_modified_models_cache(
+                &cur_cache,
+                Some(&prior_cache),
+                &paths.catalog_backup_file,
+            ) {
+                write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
             }
-        } else if let Ok(cur_cache) = fs::read(&cache_path)
-            && Some(sha256_hex(&cur_cache)) == journal.latest_models_cache_sha256
+        } else if cache_untouched {
+            match fs::remove_file(&cache_path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(DetachError::Io(format!(
+                        "failed removing models_cache.json: {e}"
+                    )));
+                }
+            }
+        } else if let Some(reconciled) =
+            reconcile_modified_models_cache(&cur_cache, None, &paths.catalog_backup_file)
         {
-            let _ = fs::remove_file(&cache_path);
+            write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
         }
     }
 
     let _ = fs::remove_file(&paths.catalog_backup_file);
     let _ = fs::remove_file(&paths.journal_file);
     Ok(outcome)
+}
+
+/// Preserves newly observed native models (`opencodex_account_observed_native`) and prior cache
+/// entries while stripping Child-injected Home catalog slugs when `models_cache.json` changed
+/// externally while attached.
+fn reconcile_modified_models_cache(
+    cur_cache_bytes: &[u8],
+    prior_cache_bytes: Option<&[u8]>,
+    last_child_catalog_path: &Path,
+) -> Option<Vec<u8>> {
+    let mut cur_val: serde_json::Value = serde_json::from_slice(cur_cache_bytes).ok()?;
+    let cur_models = cur_val.get("models")?.as_array()?.clone();
+    let child_slugs: HashSet<String> = fs::read(last_child_catalog_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| {
+            v.get("models")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            m.get("slug")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    if child_slugs.is_empty() {
+        return None;
+    }
+    let prior_slugs: HashSet<String> = prior_cache_bytes
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+        .and_then(|v| {
+            v.get("models")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            m.get("slug")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    let kept: Vec<serde_json::Value> = cur_models
+        .into_iter()
+        .filter(|entry| {
+            let slug = entry
+                .get("slug")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let is_obs = entry
+                .get("opencodex_account_observed_native")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            is_obs || prior_slugs.contains(slug) || !child_slugs.contains(slug)
+        })
+        .collect();
+    if let Some(obj) = cur_val.as_object_mut() {
+        obj.insert("models".to_owned(), serde_json::Value::Array(kept));
+    }
+    let mut out = serde_json::to_vec_pretty(&cur_val).ok()?;
+    out.push(b'\n');
+    Some(out)
 }

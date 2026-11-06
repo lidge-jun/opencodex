@@ -200,12 +200,24 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
     const tunnelPort = homeHubLinkServer.port!;
     writeLinkStore(linkStorePath(), { version: 1, listenerPort: tunnelPort, links: [] });
 
+    const privateUtils = join(scratch, "private-utils");
+    mkdirSync(privateUtils, { recursive: true });
+    for (const util of ["sh", "uname", "mktemp", "rm", "sleep", "kill", "wc", "cat", "printf", "awk", "curl"]) {
+      for (const sysDir of ["/bin", "/usr/bin"]) {
+        const p = join(sysDir, util);
+        if (existsSync(p)) {
+          symlinkSync(p, join(privateUtils, util));
+          break;
+        }
+      }
+    }
+
     const childEnv = {
       HOME: childUserHome,
       OPENCODEX_HOME: childOcxHome,
       CODEX_HOME: childCodexHome,
       OCX_CHILD_LISTEN_PORT: String(childListenPort),
-      PATH: "/usr/bin:/bin",
+      PATH: privateUtils,
     };
 
     const runShellAsync = async (argv: string[], stdin?: Uint8Array): Promise<SshRunResult> => {

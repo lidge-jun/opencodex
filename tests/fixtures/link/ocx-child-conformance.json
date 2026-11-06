@@ -784,6 +784,16 @@
       "id": "reject_negative_sequence",
       "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":-1}",
       "expectedValid": false
+    },
+    {
+      "id": "valid_integral_decimal_and_exponent",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000.0,\"runtimeStartedAt\":1.760000005e12,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":3.0}",
+      "expectedValid": true
+    },
+    {
+      "id": "reject_fractional_sequence",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":3.5}",
+      "expectedValid": false
     }
   ],
   "journalRoundtripCases": [
@@ -926,7 +936,7 @@
       "expectedAttachOk": true,
       "expectedDetachOutcome": "refuse_conflict",
       "expectedFinalToml": "approval_policy = \"on-request\"\nopenai_base_url = \"http://127.0.0.1:10100/v1\n",
-      "expectedFinalCatalog": null
+      "expectedFinalCatalog": "{\"models\":[{\"slug\":\"home-m1\"}]}\n"
     },
     {
       "id": "tampered_catalog_refused",

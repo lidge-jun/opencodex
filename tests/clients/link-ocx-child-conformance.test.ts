@@ -1,8 +1,10 @@
 // Holds INV-LINK-CHILD-01 from structure/overview.md; shared TypeScript/Rust golden conformance suite for native/ocx-child.
 import { createHash, createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { userInfo } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { fixturePath } from "../helpers/repo-root";
+import { fixturePath, repoPath } from "../helpers/repo-root";
 import { linkRouteAllowed } from "../../src/link/routes";
 import { linkManagementRouteAllowed } from "../../src/link/management-routes";
 import { isDetachedEphemeralChildConfig, isEphemeralChildHealth } from "../../src/link/ephemeral-child";
@@ -12,7 +14,8 @@ import { parseLinkChildParityReport } from "../../src/link/child-parity";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { isAllowedRequestOrigin } from "../../src/server/auth-cors";
 import { validateHubRelayRequestHeaders } from "../../src/client/hub-relay";
-import { forwardLinkRequestHeaders } from "../../src/client/link-relay";
+import { handleLinkIngress } from "../../src/client/link-ingress";
+import { forwardLinkRequestHeaders, HOME_INITIATED_LINK_TUNNEL } from "../../src/client/link-relay";
 import {
   applyEol,
   dominantEol,
@@ -366,7 +369,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
           attachOk: true,
           detachOutcome: "refuse_conflict",
           finalToml: currentToml,
-          finalCatalog: row.preAttachCatalog,
+          finalCatalog: currentCatalog,
         };
       }
     }
@@ -411,16 +414,28 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
   });
 
   test("routeCases match linkRouteAllowed, linkManagementRouteAllowed, Upgrade, and Host/Origin anti-rebinding", () => {
+    const injectedToken = "ocx_data_" + "2".repeat(40);
     for (const row of suite.routeCases) {
       const actual = classifyChildIngressCase(row);
       expect(actual, row.id).toEqual({
         action: row.expectedAction,
         authHeader: row.expectedAuthHeader,
       });
+      if (row.expectedAction === "relay_data" || row.expectedAction === "relay_management") {
+        const forwarded = forwardLinkRequestHeaders(new Headers(), injectedToken, row.path);
+        if (row.expectedAuthHeader === "x-opencodex-api-key") {
+          expect(forwarded.get("x-opencodex-api-key"), row.id).toBe(injectedToken);
+          expect(forwarded.get("authorization"), row.id).toBeNull();
+        } else {
+          expect(forwarded.get("authorization"), row.id).toBe(`Bearer ${injectedToken}`);
+          expect(forwarded.get("x-opencodex-api-key"), row.id).toBeNull();
+        }
+      }
     }
   });
 
-  test("framingCases match link header smuggling validation and CALLER_CREDENTIAL_HEADERS stripping", () => {
+  test("framingCases match link header smuggling validation, handleLinkIngress chunked forwarding, and CALLER_CREDENTIAL_HEADERS stripping", async () => {
+    const injectedToken = "ocx_data_" + "1".repeat(40);
     for (const row of suite.framingCases) {
       const hasCrLf = row.rawHeaders.some(([k, v]) => !k || /[\r\n]/.test(k) || /[\r\n]/.test(v));
       if (hasCrLf) {
@@ -447,9 +462,31 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
       expect(row.expectedOutcome, row.id).toBe("allow");
       const source = new Headers();
       for (const [k, v] of row.rawHeaders) source.append(k, v);
-      const forwarded = forwardLinkRequestHeaders(source, "ocx_data_" + "1".repeat(40), "/v1/responses");
+      const forwarded = forwardLinkRequestHeaders(source, injectedToken, "/v1/responses");
+      expect(forwarded.get("authorization"), row.id).toBe(`Bearer ${injectedToken}`);
       forwarded.delete("authorization");
       expect([...forwarded.keys()].sort(), row.id).toEqual(row.expectedSurvivedHeaders);
+      const usageForwarded = forwardLinkRequestHeaders(source, injectedToken, "/v1/usage");
+      expect(usageForwarded.get("x-opencodex-api-key"), row.id).toBe(injectedToken);
+      if (row.id === "allow_lone_transfer_encoding_chunked") {
+        let observedBody = "";
+        const url = new URL("http://127.0.0.1:10100/v1/responses");
+        const req = new Request(url, { method: "POST", headers: source, body: "{\"ok\":1}" });
+        const resp = await handleLinkIngress(req, url, {
+          tunnelPort: 22222,
+          policy: { hostname: "127.0.0.1" },
+          linkKey: () => injectedToken,
+          relay: {
+            tunnel: HOME_INITIATED_LINK_TUNNEL,
+            fetchImpl: (async (_u, init) => {
+              observedBody = await new Response(init?.body as BodyInit).text();
+              return Response.json({ relayed: true });
+            }) as typeof fetch,
+          },
+        });
+        expect(resp?.status).toBe(200);
+        expect(observedBody).toBe("{\"ok\":1}");
+      }
     }
   });
 
@@ -500,6 +537,8 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
 
   test("ephemeral-child config and health predicates enforce detached vs attached invariants", () => {
     expect(isDetachedEphemeralChildConfig({ port: 10100, runtimeRole: "standalone", ephemeralChild: true })).toBe(true);
+    expect(isDetachedEphemeralChildConfig({ port: 10100, runtimeRole: null, ephemeralChild: true })).toBe(true);
+    expect(isDetachedEphemeralChildConfig({ port: 10100, ephemeralChild: true })).toBe(true);
     expect(isDetachedEphemeralChildConfig({ port: 10100, runtimeRole: "client", ephemeralChild: true })).toBe(false);
     expect(isDetachedEphemeralChildConfig({ port: 10100, runtimeRole: "standalone" })).toBe(false);
     expect(isDetachedEphemeralChildConfig({ port: 80, runtimeRole: "standalone", ephemeralChild: true })).toBe(false);
@@ -521,4 +560,25 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
       startedAt: "2026-11-07T00:00:00.000Z",
     }, 10100)).toBe(false);
   });
+
+  test("Rust conformance runner passes against the identical shared fixture when cargo is installed", () => {
+    const exeSuffix = process.platform === "win32" ? ".exe" : "";
+    const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
+    const cargo = Bun.which("cargo") ?? join(realHome, ".cargo", "bin", `cargo${exeSuffix}`);
+    if (!existsSync(cargo)) return;
+    const run = Bun.spawnSync(
+      [cargo, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"],
+      {
+        env: {
+          ...process.env,
+          RUSTUP_HOME: process.env.RUSTUP_HOME || join(realHome, ".rustup"),
+          CARGO_HOME: process.env.CARGO_HOME || join(realHome, ".cargo"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 90_000,
+      },
+    );
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+  }, 90_000);
 });

@@ -53,6 +53,22 @@ impl LinkChildParityReport {
     }
 }
 
+fn json_safe_nonneg_int(val: &serde_json::Value) -> Option<u64> {
+    const MAX_SAFE: u64 = 9_007_199_254_740_991;
+    if let Some(u) = val.as_u64() {
+        return (u <= MAX_SAFE).then_some(u);
+    }
+    if let Some(f) = val.as_f64()
+        && f.is_finite()
+        && f >= 0.0
+        && f <= (MAX_SAFE as f64)
+        && f.fract() == 0.0
+    {
+        return Some(f as u64);
+    }
+    None
+}
+
 /// Strict exact-key parser matching `parseLinkChildParityReport` in `src/link/child-parity.ts`.
 pub fn parse_link_child_parity_report(raw_json: &str) -> Option<LinkChildParityReport> {
     if raw_json.len() > LINK_CHILD_PARITY_MAX_BYTES {
@@ -63,17 +79,24 @@ pub fn parse_link_child_parity_report(raw_json: &str) -> Option<LinkChildParityR
     if obj.len() != 5 {
         return None;
     }
-    for req_key in [
-        "linkId",
-        "lastApplyAt",
-        "runtimeStartedAt",
-        "appliedCodexSettingsDigest",
-        "sequence",
-    ] {
-        if !obj.contains_key(req_key) {
-            return None;
-        }
-    }
-    let parsed: LinkChildParityReport = serde_json::from_value(val).ok()?;
+    let link_id = obj.get("linkId")?.as_str()?.to_owned();
+    let last_apply_at = match obj.get("lastApplyAt")? {
+        serde_json::Value::Null => None,
+        other => Some(json_safe_nonneg_int(other)?),
+    };
+    let runtime_started_at = json_safe_nonneg_int(obj.get("runtimeStartedAt")?)?;
+    let applied_codex_settings_digest = match obj.get("appliedCodexSettingsDigest")? {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.clone()),
+        _ => return None,
+    };
+    let sequence = json_safe_nonneg_int(obj.get("sequence")?)?;
+    let parsed = LinkChildParityReport {
+        link_id,
+        last_apply_at,
+        runtime_started_at,
+        applied_codex_settings_digest,
+        sequence,
+    };
     parsed.validate().then_some(parsed)
 }

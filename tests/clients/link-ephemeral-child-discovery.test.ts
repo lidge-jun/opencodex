@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import { describe, expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -14,12 +15,34 @@ function writeExecScript(path: string, body: string): void {
   chmodSync(path, 0o755);
 }
 
+function createPrivateShellPath(root: string): string {
+  const utilDir = join(root, "private-utils");
+  mkdirSync(utilDir, { recursive: true });
+  for (const util of ["sh", "uname", "mktemp", "rm", "sleep", "kill", "wc", "cat", "printf", "awk"]) {
+    for (const sysDir of ["/bin", "/usr/bin"]) {
+      const candidate = join(sysDir, util);
+      if (existsSync(candidate)) {
+        symlinkSync(candidate, join(utilDir, util));
+        break;
+      }
+    }
+  }
+  return utilDir;
+}
+
 function sandboxRemoteScript(script: string, root: string): string {
   return script
     .replaceAll("/Applications/OpenCodex.app/Contents/MacOS/ocx", join(root, "Apps/OpenCodex.app/Contents/MacOS/ocx"))
     .replaceAll("/usr/bin/ocx", join(root, "sys-usr/bin/ocx"))
     .replaceAll("/opt/homebrew/bin", join(root, "sys-homebrew/bin"))
     .replaceAll("/usr/local/bin", join(root, "sys-local/bin"));
+}
+
+function inflateWindowsScript(encoded: string): string {
+  const outer = Buffer.from(encoded, "base64").toString("utf16le");
+  const match = /\$ocxPacked='([^']+)'/.exec(outer);
+  if (!match) return outer;
+  return inflateRawSync(Buffer.from(Array.from(match[1]!, ch => ch.charCodeAt(0) - 256))).toString("utf8");
 }
 
 describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {
@@ -30,18 +53,26 @@ describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {
     expect(classifyVersionProbe(`opencodex ${match![1]!}`)).toBeNull();
   });
 
-  test("Windows remoteOcxArgv and windowsPinnedSyncArgv stay below POWERSHELL_ENCODED_MAX and preserve OcxJob containment", () => {
+  test("Windows remoteOcxArgv and windowsPinnedSyncArgv stay below POWERSHELL_ENCODED_MAX, preserve OcxJob, and order ocx.exe vs ocx-child.exe by state.json", () => {
     const execArgv = windowsOcxArgv(["connect", "--link", "--key-stdin", "--tunnel-port", "22222", "--link-id", "lnk_0123456789abcdef"]);
     const syncArgv = windowsPinnedSyncArgv("lnk_0123456789abcdef");
     expect(execArgv[5]!.length).toBeLessThan(POWERSHELL_ENCODED_MAX);
     expect(syncArgv[5]!.length).toBeLessThan(POWERSHELL_ENCODED_MAX);
     const decodedExec = Buffer.from(execArgv[5]!, "base64").toString("utf16le");
     expect(windowsScriptHelperSource(decodedExec)).toContain("CreateJobObjectW");
+    for (const inflated of [inflateWindowsScript(execArgv[5]!), inflateWindowsScript(syncArgv[5]!)]) {
+      const ocxIdx = inflated.indexOf("Get-Command ocx.exe");
+      const childIdx = inflated.indexOf("Get-Command ocx-child.exe");
+      expect(ocxIdx).toBeGreaterThan(0);
+      expect(childIdx).toBeGreaterThan(ocxIdx);
+      expect(inflated).toContain("[IO.File]::Exists(\"$h\\child\\state.json\")){$k+$f}else{$f+$k}");
+    }
   });
 
-  test.skipIf(process.platform === "win32")("POSIX remoteOcxArgv prefers runnable full ocx and falls back to ocx-child when full ocx is absent or broken", () => {
+  test.skipIf(process.platform === "win32")("POSIX remoteOcxArgv prefers full ocx when detached, prefers ocx-child when child/state.json exists, and falls back to ocx-child", () => {
     const scratch = mkdtempSync(join(tmpdir(), "ocx-child-disc-"));
     try {
+      const utilDir = createPrivateShellPath(scratch);
       const home = join(scratch, "home");
       const pathBin = join(scratch, "path-bin");
       mkdirSync(home, { recursive: true });
@@ -58,16 +89,28 @@ describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {
       const argv = remoteOcxArgv(["config", "show", "--json"], "posix");
       argv[2] = sandboxRemoteScript(argv[2]!, scratch);
       const both = Bun.spawnSync([...argv], {
-        env: { HOME: home, PATH: `/usr/bin:/bin:${pathBin}` },
+        env: { HOME: home, PATH: `${utilDir}:${pathBin}` },
         stdout: "pipe",
         stderr: "pipe",
       });
       expect(both.exitCode).toBe(0);
       expect(both.stdout.toString().trim()).toBe("selected:full-ocx:config show --json");
 
+      // Active ocx-child enrollment (`~/.opencodex/child/state.json` present) prefers ocx-child even when full ocx is present!
+      mkdirSync(join(home, ".opencodex", "child"), { recursive: true });
+      writeFileSync(join(home, ".opencodex", "child", "state.json"), "{}");
+      const attachedPrefersChild = Bun.spawnSync([...argv], {
+        env: { HOME: home, PATH: `${utilDir}:${pathBin}` },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(attachedPrefersChild.exitCode).toBe(0);
+      expect(attachedPrefersChild.stdout.toString().trim()).toBe("selected:ocx-child:config show --json");
+
+      // Remove state.json and break full ocx -> falls back to ocx-child
       writeExecScript(join(home, ".local", "bin", "ocx"), "exit 1");
       const fallbackCache = Bun.spawnSync([...argv], {
-        env: { HOME: home, PATH: `/usr/bin:/bin:${pathBin}` },
+        env: { HOME: home, OPENCODEX_HOME: join(scratch, "empty-ocx"), PATH: `${utilDir}:${pathBin}` },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -83,7 +126,7 @@ describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {
       const syncCmd = remotePinnedSyncArgv("lnk_0123456789abcdef", "posix");
       syncCmd[2] = sandboxRemoteScript(syncCmd[2]!, scratch);
       const syncRun = Bun.spawnSync([...syncCmd], {
-        env: { HOME: home2, PATH: `${pathBin}:/usr/bin:/bin` },
+        env: { HOME: home2, PATH: `${pathBin}:${utilDir}` },
         stdout: "pipe",
         stderr: "pipe",
       });
