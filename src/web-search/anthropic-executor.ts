@@ -202,9 +202,9 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
           processCompleteFrames();
         }
         const trailingCommentsOnly = buffer.split("\n").every(line => !line.trim() || line.startsWith(":"));
-        // A complete terminal at the cap needs bounded EOF proof; an oversized chunk or partial
-        // trailing frame is an error. Never await upstream teardown.
-        if (!sawMessageStop || value.byteLength > remaining || !trailingCommentsOnly) {
+        // A complete terminal or stop-reason delta at the cap needs bounded EOF proof; an
+        // oversized chunk or partial trailing frame is an error. Never await upstream teardown.
+        if ((!sawMessageStop && !cleanEof) || value.byteLength > remaining || !trailingCommentsOnly) {
           failure ??= "anthropic sidecar response exceeded the byte limit";
         } else if (!failure && !sawToolResultError
           && (stopReason === undefined || stopReason === "end_turn" || stopReason === "stop_sequence")

@@ -316,6 +316,32 @@ describe("Anthropic sidecar byte boundaries", () => {
     expect(out.error).toBe("anthropic sidecar produced an incomplete answer");
   });
 
+  test("accepts a complete successful stop-reason delta and clean EOF at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("does not accept a successful stop-reason delta when EOF is not clean at the cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(prefix + filler + terminal));
+        controller.enqueue(new TextEncoder().encode('data: {"type":"error"}\n\n'));
+        controller.close();
+      },
+    });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
   test("does not hide over-cap bytes after a complete terminal in the same chunk", async () => {
     const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
     const terminal = 'data: {"type":"message_stop"}\n\n';
