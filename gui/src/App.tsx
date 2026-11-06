@@ -38,6 +38,7 @@ import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
 import { confirmAction } from "./action-dialogs";
 import { hostOs, isDesktopShell, isExternalLink, openDesktopCliPage, openDesktopUpdatePage } from "./lib/desktop-shell";
+import { proxyHealthOnline } from "./lib/proxy-health";
 import { zoomManagedOn } from "./lib/desktop-zoom";
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { useDesktopZoom } from "./use-desktop-zoom";
@@ -329,8 +330,8 @@ export default function App() {
   // The sidebar status follows the health check: a failed or refused /healthz is "Offline",
   // never a default "Online". Before the first answer it stays Online, as the page itself
   // loaded from this proxy.
-  const proxyOnline = !(healthPoll.data === null || (healthPoll.data === undefined && healthPoll.error != null));
-  const uptime = healthPoll.data?.uptime ?? null;
+  const proxyOnline = proxyHealthOnline(healthPoll.data, healthPoll.error);
+  const uptime = proxyOnline ? healthPoll.data?.uptime ?? null : null;
   // The sidebar row is narrow, so it shows the time alone; the status word is its tooltip.
   const uptimeLabel = uptime === null ? undefined : t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) });
 
