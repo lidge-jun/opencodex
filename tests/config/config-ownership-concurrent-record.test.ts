@@ -111,8 +111,7 @@ describe("serialized ownership manifest (#8093)", () => {
     expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
   }), 60_000);
 
-  test("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
-    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
     withHome(async dir => {
       // This process records (and caches) paths, as a long-running proxy would.
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -189,7 +188,7 @@ describe("serialized ownership manifest (#8093)", () => {
 });
 
 describe("callers that create files after registering them (#8093)", () => {
-  test("service log rotation goes ahead unrecorded once the ownership lock keeps failing", { skip: process.platform === "win32" },
+  test.skipIf(process.platform === "win32")("service log rotation goes ahead unrecorded once the ownership lock keeps failing",
     withHome(async dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       // A second link to the lock file is refused on every attempt: a lock fault that persists.
@@ -274,8 +273,7 @@ describe("manifest limits and uninstall leftovers (#8093)", () => {
 });
 
 describe("upgraded homes near the manifest byte limit (#8093)", () => {
-  test("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
-    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
     withHome(dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       // An older version could fill the manifest up to the limit with no tombstone reserve.
@@ -498,7 +496,7 @@ describe("paths recorded after the uninstall snapshot (#8093)", () => {
     expect(existsSync(join(dir, "fresh-between"))).toBe(false);
   }), 60_000);
 
-  test("a finishing uninstall leaves a lock file another installation created in place", { skip: process.platform === "win32" },
+  test.skipIf(process.platform === "win32")("a finishing uninstall leaves a lock file another installation created in place",
     withHome(async dir => {
       const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -682,7 +680,7 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
   }));
 
-  test("a finishing uninstall unlinks its lock file before releasing it", { skip: process.platform === "win32" }, withHome(dir => {
+  test.skipIf(process.platform === "win32")("a finishing uninstall unlinks its lock file before releasing it", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     // A process that takes the old file after release must see the path change and retry, so the
     // path is gone while this run still holds the lock.
@@ -756,7 +754,7 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
   }));
 
-  test("a listed symlink whose target is gone is removed", { skip: process.platform === "win32" }, withHome(dir => {
+  test.skipIf(process.platform === "win32")("a listed symlink whose target is gone is removed", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "linked"))).toBe(true);
     symlinkSync(join(dirname(dir), "missing-target"), join(dir, "linked"));
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
