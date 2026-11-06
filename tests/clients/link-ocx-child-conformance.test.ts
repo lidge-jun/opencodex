@@ -263,7 +263,7 @@ function stripSurgicalTableFeatures(
     }
     body.push(line);
   }
-  if (body.every(line => line.structural && (line.text.trim() === "" || line.text.trim().startsWith("#")))) {
+  if (body.every(line => line.structural && line.text.trim() === "")) {
     return collapseStructuralBlankLines(sourceText([...lines.slice(0, featIdx), ...lines.slice(endIdx)]));
   }
   return sourceText([...lines.slice(0, featIdx + 1), ...body, ...lines.slice(endIdx)]);

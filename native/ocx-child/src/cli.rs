@@ -190,7 +190,7 @@ fn fetch_home_settings_doc(
         .ok_or_else(|| "Home codex-settings failed strict schema validation".to_owned())
 }
 
-struct AttachRollbackSnapshot {
+pub struct AttachRollbackSnapshot {
     prior_state: Option<ChildStateV1>,
     prior_was_serving: bool,
     journal: Option<Vec<u8>>,
@@ -203,64 +203,123 @@ struct AttachRollbackSnapshot {
 }
 
 impl AttachRollbackSnapshot {
-    fn capture(paths: &ChildPaths, prior_state: Option<ChildStateV1>) -> Self {
-        let prior_was_serving = prior_state.as_ref().is_some_and(|st| {
-            probe_local_healthz(st.listen_port, Duration::from_millis(300)).is_some()
-        });
-        Self {
-            prior_state,
-            prior_was_serving,
-            journal: fs::read(&paths.journal_file).ok(),
-            config: fs::read(paths.codex_config_path()).ok(),
-            catalog: fs::read(paths.codex_catalog_path()).ok(),
-            catalog_backup: fs::read(&paths.catalog_backup_file).ok(),
-            models_cache: fs::read(paths.codex_models_cache_path()).ok(),
-            key: fs::read(&paths.key_file).ok().map(SecretBytes::new),
-            state_bytes: fs::read(&paths.state_file).ok(),
+    fn read_optional(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
+        match fs::read(path) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("attach failed reading {}: {e}", path.display())),
         }
     }
 
-    fn restore_path(path: &std::path::Path, bytes: Option<&[u8]>, private: bool) {
+    pub fn capture(paths: &ChildPaths, prior_state: Option<ChildStateV1>) -> Result<Self, String> {
+        let prior_was_serving = prior_state.as_ref().is_some_and(|st| {
+            probe_local_healthz(st.listen_port, Duration::from_millis(300)).is_some()
+        });
+        Ok(Self {
+            prior_state,
+            prior_was_serving,
+            journal: Self::read_optional(&paths.journal_file)?,
+            config: Self::read_optional(&paths.codex_config_path())?,
+            catalog: Self::read_optional(&paths.codex_catalog_path())?,
+            catalog_backup: Self::read_optional(&paths.catalog_backup_file)?,
+            models_cache: Self::read_optional(&paths.codex_models_cache_path())?,
+            key: Self::read_optional(&paths.key_file)?.map(SecretBytes::new),
+            state_bytes: Self::read_optional(&paths.state_file)?,
+        })
+    }
+
+    fn restore_path(
+        path: &std::path::Path,
+        bytes: Option<&[u8]>,
+        private: bool,
+        errors: &mut Vec<String>,
+    ) {
         match bytes {
             Some(b) => {
-                let _ = if private {
+                let res = if private {
                     write_private_atomic(path, b)
                 } else {
                     write_regular_atomic(path, b)
                 };
+                if let Err(e) = res {
+                    errors.push(format!("restore {}: {e}", path.display()));
+                }
             }
-            None => {
-                let _ = fs::remove_file(path);
-            }
+            None => match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => errors.push(format!("remove {}: {e}", path.display())),
+            },
         }
     }
 
-    fn restore(&self, paths: &ChildPaths) {
-        Self::restore_path(&paths.journal_file, self.journal.as_deref(), true);
-        Self::restore_path(&paths.codex_config_path(), self.config.as_deref(), false);
-        Self::restore_path(&paths.codex_catalog_path(), self.catalog.as_deref(), false);
+    pub fn restore(&self, paths: &ChildPaths) -> Result<(), String> {
+        let mut errors = Vec::new();
+        Self::restore_path(
+            &paths.journal_file,
+            self.journal.as_deref(),
+            true,
+            &mut errors,
+        );
+        Self::restore_path(
+            &paths.codex_config_path(),
+            self.config.as_deref(),
+            false,
+            &mut errors,
+        );
+        Self::restore_path(
+            &paths.codex_catalog_path(),
+            self.catalog.as_deref(),
+            false,
+            &mut errors,
+        );
         Self::restore_path(
             &paths.catalog_backup_file,
             self.catalog_backup.as_deref(),
             true,
+            &mut errors,
         );
         Self::restore_path(
             &paths.codex_models_cache_path(),
             self.models_cache.as_deref(),
             false,
+            &mut errors,
         );
         Self::restore_path(
             &paths.key_file,
             self.key.as_ref().map(SecretBytes::as_slice),
             true,
+            &mut errors,
         );
-        Self::restore_path(&paths.state_file, self.state_bytes.as_deref(), true);
+        Self::restore_path(
+            &paths.state_file,
+            self.state_bytes.as_deref(),
+            true,
+            &mut errors,
+        );
         if let Some(mut prev) = self.prior_state.clone()
             && self.prior_was_serving
             && probe_local_healthz(prev.listen_port, Duration::from_millis(250)).is_none()
-            && start_or_rollover_daemon(paths, &mut prev, None).is_ok()
         {
-            let _ = write_child_state(&paths.state_file, &prev);
+            match start_or_rollover_daemon(paths, &mut prev, None) {
+                Ok(_) => {
+                    if let Err(e) = write_child_state(&paths.state_file, &prev) {
+                        errors.push(format!("restore daemon state: {e}"));
+                    }
+                }
+                Err(e) => errors.push(format!("restart prior daemon: {e}")),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("attach rollback incomplete: {}", errors.join("; ")))
+        }
+    }
+
+    fn restore_and_report(&self, paths: &ChildPaths) {
+        if let Err(rb_err) = self.restore(paths) {
+            eprintln!("{rb_err}");
         }
     }
 }
@@ -408,7 +467,13 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
-    let rollback = AttachRollbackSnapshot::capture(&paths, prior_state.clone());
+    let rollback = match AttachRollbackSnapshot::capture(&paths, prior_state.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
 
     let journal = match apply_attach_or_sync(
         &paths,
@@ -420,14 +485,14 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
     ) {
         Ok(j) => j,
         Err(e) => {
-            rollback.restore(&paths);
+            rollback.restore_and_report(&paths);
             eprintln!("{e}");
             return 1;
         }
     };
 
     if let Err(e) = write_link_key(&paths.key_file, raw_key_str) {
-        rollback.restore(&paths);
+        rollback.restore_and_report(&paths);
         eprintln!("{e}");
         return 1;
     }
@@ -438,7 +503,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
     let shutdown_secret = match random_hex(24) {
         Ok(s) => s,
         Err(e) => {
-            rollback.restore(&paths);
+            rollback.restore_and_report(&paths);
             eprintln!("{e}");
             return 1;
         }
@@ -447,7 +512,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         && prev.listen_port != listen_port
         && let Err(e) = stop_owned_daemon(prev)
     {
-        rollback.restore(&paths);
+        rollback.restore_and_report(&paths);
         eprintln!(
             "attach failed stopping previous relay on port {}: {e}",
             prev.listen_port
@@ -479,7 +544,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }),
     };
     if let Err(e) = write_child_state(&paths.state_file, &state) {
-        rollback.restore(&paths);
+        rollback.restore_and_report(&paths);
         eprintln!("{e}");
         return 1;
     }
@@ -499,7 +564,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
                 let _ = post_child_parity_report(tunnel_port, &creds, &report);
             }
             Err(e) => {
-                rollback.restore(&paths);
+                rollback.restore_and_report(&paths);
                 eprintln!("{e}");
                 return 1;
             }

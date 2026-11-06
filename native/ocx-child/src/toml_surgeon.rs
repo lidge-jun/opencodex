@@ -935,9 +935,9 @@ fn strip_features_ledger(
             }
         }
     }
-    let remaining_has_keys = (feat_idx + 1..end_idx).filter(|&i| !drop[i]).any(|i| {
-        !structural[i] || (!lines[i].trim().is_empty() && !lines[i].trim().starts_with('#'))
-    });
+    let remaining_has_keys = (feat_idx + 1..end_idx)
+        .filter(|&i| !drop[i])
+        .any(|i| !structural[i] || !lines[i].trim().is_empty());
     if !remaining_has_keys {
         for d in &mut drop[feat_idx..end_idx] {
             *d = true;

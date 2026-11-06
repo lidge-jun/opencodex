@@ -7,7 +7,7 @@ import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { classifySyncResult, classifyVersionProbe } from "../../src/cli/sync-fanout";
 import { remoteOcxArgv, remotePinnedSyncArgv } from "../../src/link/ssh-argv";
-import { POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv, windowsScriptHelperSource } from "../../src/link/remote-windows";
+import { powershellArgv, POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv, windowsScriptHelperSource } from "../../src/link/remote-windows";
 
 function writeExecScript(path: string, body: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -141,4 +141,42 @@ describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {
       removeTreeWithRetry(scratch);
     }
   });
+
+  test.skipIf(process.platform !== "win32")("Windows execution selects ocx-child.exe when HOME/.opencodex/child/state.json exists and ocx.exe when state.json is only under USERPROFILE", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "ocx-child-win-disc-"));
+    try {
+      const userProfile = join(scratch, "user-profile");
+      const altHome = join(scratch, "alt-home");
+      mkdirSync(join(userProfile, ".local", "bin"), { recursive: true });
+      mkdirSync(join(userProfile, ".cache", "opencodex", "bin"), { recursive: true });
+      mkdirSync(altHome, { recursive: true });
+      const compileExe = async (outPath: string, tag: string) => {
+        const cs = `using System; class P { static int Main(string[] a) { if (a.Length > 0 && a[0] == "--version") { Console.WriteLine("opencodex 2.98.0"); return 0; } Console.WriteLine("${tag}:" + String.Join("|", a)); return 0; } }`;
+        const p = Bun.spawn(powershellArgv(`Add-Type -TypeDefinition '${cs.replaceAll("'", "''")}' -OutputAssembly '${outPath.replaceAll("'", "''")}' -OutputType ConsoleApplication`), { stdout: "pipe", stderr: "pipe" });
+        expect(await p.exited).toBe(0);
+      };
+      await compileExe(join(userProfile, ".local", "bin", "ocx.exe"), "full-ocx");
+      await compileExe(join(userProfile, ".cache", "opencodex", "bin", "ocx-child.exe"), "ocx-child");
+      const psPath = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0");
+      const runCmd = async (argv: string[]) => {
+        const env: Record<string, string | undefined> = { ...process.env, HOME: altHome, USERPROFILE: userProfile, LOCALAPPDATA: userProfile, ProgramFiles: userProfile, PATH: psPath };
+        delete env.OPENCODEX_HOME;
+        const proc = Bun.spawn(argv, { env, stdout: "pipe", stderr: "pipe" });
+        const [code, out] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+        return { code, out: out.replaceAll("\r\n", "\n").trim() };
+      };
+      // 1. State exists only under USERPROFILE -> HOME wins, so detached precedence picks full ocx.exe
+      mkdirSync(join(userProfile, ".opencodex", "child"), { recursive: true });
+      writeFileSync(join(userProfile, ".opencodex", "child", "state.json"), "{}");
+      expect(await runCmd(windowsOcxArgv(["status"]))).toEqual({ code: 0, out: "full-ocx:status" });
+      expect((await runCmd(windowsPinnedSyncArgv("lnk_0123456789abcdef"))).out).toContain("full-ocx:sync|--expect-link|lnk_0123456789abcdef|--json");
+      // 2. State exists under HOME -> active ocx-child enrollment wins
+      mkdirSync(join(altHome, ".opencodex", "child"), { recursive: true });
+      writeFileSync(join(altHome, ".opencodex", "child", "state.json"), "{}");
+      expect(await runCmd(windowsOcxArgv(["status"]))).toEqual({ code: 0, out: "ocx-child:status" });
+      expect((await runCmd(windowsPinnedSyncArgv("lnk_0123456789abcdef"))).out).toContain("ocx-child:sync|--expect-link|lnk_0123456789abcdef|--json");
+    } finally {
+      removeTreeWithRetry(scratch);
+    }
+  }, 30000);
 });

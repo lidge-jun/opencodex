@@ -1074,6 +1074,28 @@
       "expectedDetachOutcome": "surgical_restore",
       "expectedFinalToml": "openai_base_url = \"https://custom.gateway.example/v1\"\n[agents]\n# keep\n",
       "expectedFinalCatalog": null
+    },
+    {
+      "id": "preserve_comment_only_features_table_on_surgical_detach",
+      "preAttachToml": "[features]\n# keep\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": true,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "replace_root_base_url",
+        "newBaseUrl": "https://custom.gateway.example/v1"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "openai_base_url = \"https://custom.gateway.example/v1\"\n[features]\n# keep\n",
+      "expectedFinalCatalog": null
     }
   ]
 }

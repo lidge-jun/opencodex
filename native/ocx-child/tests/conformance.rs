@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use ocx_child::cli::AttachRollbackSnapshot;
 use ocx_child::codex_settings::{
     HomeCodexSettings, codex_settings_digest, codex_settings_digest_payload,
     parse_home_codex_settings_document,
@@ -766,4 +767,21 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     assert_eq!(models[0]["context_window"], 1);
     assert_eq!(models[1]["slug"], "ext-native");
     assert_eq!(models[1]["context_window"], 9);
+
+    // 5. AttachRollbackSnapshot::capture rejects non-NotFound read failure & restore reports incomplete rollback
+    let snap_ok = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    let _ = fs::remove_file(paths.codex_config_path());
+    fs::create_dir_all(paths.codex_config_path()).unwrap();
+    let cap_err = AttachRollbackSnapshot::capture(&paths, None)
+        .err()
+        .expect("directory config.toml must fail capture");
+    assert!(
+        cap_err.contains("attach failed reading"),
+        "err was: {cap_err}"
+    );
+    let rb_err = snap_ok.restore(&paths).unwrap_err();
+    assert!(
+        rb_err.contains("attach rollback incomplete"),
+        "err was: {rb_err}"
+    );
 }

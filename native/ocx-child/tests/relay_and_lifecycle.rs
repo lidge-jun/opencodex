@@ -527,9 +527,7 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     // Failed reattach on a different port (occupied OR unreachable Home) must keep the previous relay alive!
     let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
     let occupied_port = occupied.local_addr().unwrap().port();
-    let cred_json =
-        "{\"apiKeyId\":\"link:e2e\",\"key\":\"ocx_sk_0123456789abcdef0123456789abcdef\"}";
-    let (rc_occ, _, _) = run_bin(
+    let (rc_occ, _, err_occ) = run_bin(
         &ocx_home,
         &codex_home,
         occupied_port,
@@ -545,8 +543,12 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
         Some(cred_json.as_bytes()),
     );
     assert_ne!(rc_occ, 0);
+    assert!(
+        err_occ.contains(&occupied_port.to_string()),
+        "stderr was: {err_occ}"
+    );
     drop(occupied);
-    let (rc_unreach, _, _) = run_bin(
+    let (rc_unreach, _, err_unreach) = run_bin(
         &ocx_home,
         &codex_home,
         occupied_port,
@@ -562,6 +564,10 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
         Some(cred_json.as_bytes()),
     );
     assert_ne!(rc_unreach, 0);
+    assert!(
+        err_unreach.contains("unreachable"),
+        "stderr was: {err_unreach}"
+    );
     let cfg_now = fs::read_to_string(codex_home.join("config.toml")).unwrap();
     let stripped_1798: String = cfg_now
         .lines()
