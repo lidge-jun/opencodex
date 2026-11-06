@@ -88,6 +88,7 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       Object.assign(effective, policy);
     }
     effective.inputModalities ??= registryInputModalitiesForDestination(provName, prov);
+    const routerKnown = new Set(knownModelIdsForProvider(provName, prov));
 
     /** Append one model with resolved metadata, ignoring duplicates within this provider. */
     const addModel = (model: string, isDefault: boolean) => {
@@ -100,12 +101,19 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
         ? { ...prov, authMode: "forward" as const } : prov;
       const canonicalNativeCustom = nativeMetadata && provName === OPENAI_CODEX_PROVIDER_ID
         && isCanonicalOpenAiForwardProvider(canonicalProvider);
+      const canInfer = canInferVendorContext(provName, effective);
+      const modelListEmpty = (effective.models?.length ?? 0) === 0;
+      const seededDefault = effective.defaultModel === model && modelListEmpty
+        && (effective.liveModels === false || (effective.adapter === "google" && effective.googleMode === "vertex"));
+      const hintEligible = !custom || canInfer || routerKnown.has(model) || (effective.models ?? []).includes(model)
+        || (effective.retainModels ?? []).includes(model) || seededDefault;
+      const azureMetadata = hintEligible ? azureVendorModelMetadata(effective.baseUrl, model, getConfigDir()) : undefined;
       const capability = Object.hasOwn(effective.modelCapabilities ?? {}, model)
         ? effective.modelCapabilities?.[model]?.inputModalities : undefined;
       const customModalities = customRowInputModalities(config, provName, model);
       const modalities = capability ?? customModalities ?? (modelInList(effective.noVisionModels, model)
         ? ["text"] : modelRecordValue(effective.modelInputModalities, model) ?? effective.inputModalities
-          ?? (canonicalNativeCustom ? nativeInputModalities(model) : null));
+          ?? azureMetadata?.input ?? (canonicalNativeCustom ? nativeInputModalities(model) : null));
       // Same reason, for the ladder: `configuredReasoningEfforts` is what the catalog
       // (`provider-fetch`) and the effort cap (`effort-policy`) resolve through, and it
       // does three things this expression did not — it returns [] for a noReasoningModels
@@ -131,15 +139,9 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
         }) : undefined;
       const cap = providerContextCap(config, provName);
       const explicitContext = nativeCustomContext ?? custom?.contextWindow;
-      const canInfer = canInferVendorContext(provName, effective);
-      const modelListEmpty = (effective.models?.length ?? 0) === 0;
-      const seededDefault = effective.defaultModel === model && modelListEmpty
-        && (effective.liveModels === false || (effective.adapter === "google" && effective.googleMode === "vertex"));
-      const hintEligible = !custom || canInfer || (effective.models ?? []).includes(model)
-        || (effective.retainModels ?? []).includes(model) || seededDefault;
       const configuredContext = hintEligible ? configuredContextWindow(effective, model) : undefined;
-      const azureWindow = explicitContext === undefined && configuredContext === undefined && hintEligible
-        ? azureVendorModelMetadata(effective.baseUrl, model, getConfigDir())?.contextWindow : undefined;
+      const azureWindow = explicitContext === undefined && configuredContext === undefined
+        ? azureMetadata?.contextWindow : undefined;
       const azureContext = Number.isSafeInteger(azureWindow) && azureWindow! > 0 ? azureWindow : undefined;
       const inferredContext = explicitContext === undefined && configuredContext === undefined && azureContext === undefined && canInfer
         ? vendorContextInference(model)?.contextWindow : undefined;

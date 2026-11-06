@@ -331,6 +331,34 @@ describe("ocx models", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("custom rows inherit context for guarded registry-known IDs", () => {
+    const { dir } = freshConfig({
+      providers: { xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", models: ["grok-4.7"] } },
+      providerContextCaps: { xai: 350000 },
+      customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "xai", modelId: "grok-4.6" }],
+    });
+    try {
+      const result = runCli(["models", "--provider", "xai", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).models.find((row: { model: string }) => row.model === "grok-4.6").contextWindow).toBe(350000);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("listing uses offline Azure modalities beneath explicit restrictions", () => {
+    const { dir } = freshConfig({ providers: {
+      azureopen: { adapter: "openai-chat", baseUrl: "https://resource.openai.azure.com/openai", models: ["gpt-4o"] },
+      azurerestricted: { adapter: "openai-chat", baseUrl: "https://resource.openai.azure.com/openai", models: ["gpt-4o"], noVisionModels: ["gpt-4o"] },
+    } });
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "azureopen" && row.model === "gpt-4o").inputModalities).toEqual(["text", "image"]);
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "azurerestricted" && row.model === "gpt-4o").inputModalities).toEqual(["text"]);
+      expect(existsSync(join(dir, "network-attempts.log"))).toBe(false);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("human listing renders identifiers safely while JSON preserves their values", () => {
     const modelId = `custom${String.fromCharCode(27)}a${String.fromCharCode(0x9d)}b${String.fromCharCode(0x2028)}c`;
     const { dir } = freshConfig({ providers: { relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] } },
