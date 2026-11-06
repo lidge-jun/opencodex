@@ -70,6 +70,23 @@ afterEach(() => {
 });
 
 describe("attribution reaches usage.jsonl", () => {
+  test("records only the classified inbound client on the request row", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-opencodex-api-key": "ocx_data_attributionone",
+          originator: "codex_cli_rs", "user-agent": "private-client-marker" },
+        body: JSON.stringify({ model: "test/gpt-test", messages: [{ role: "user", content: "hello" }] }),
+      });
+      expect(usageRows().at(-1)?.client).toBe("codex_cli");
+      expect(readFileSync(usageLogPath(), "utf8")).not.toContain("private-client-marker");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("traffic before, during, and after rotation stays in one apiKeyId bucket", async () => {
     saveConfig(remoteConfig());
     const server = startServer(0);
@@ -268,7 +285,7 @@ describe("attribution reaches usage.jsonl", () => {
       const before = usageRows().length;
       const settled = await new Promise<boolean>(resolve => {
         const socket = new WebSocket(target, {
-          headers: { "X-OpenCodex-API-Key": "ocx_data_attributiontwo" },
+          headers: { "X-OpenCodex-API-Key": "ocx_data_attributiontwo", originator: "Codex Desktop" },
         } as unknown as string[]);
         const done = (v: boolean) => { clearTimeout(timer); try { socket.close(); } catch { /* gone */ } resolve(v); };
         socket.addEventListener("open", () => {
@@ -286,6 +303,7 @@ describe("attribution reaches usage.jsonl", () => {
       const added = rows.at(-1)!;
       expect(added.apiKeyId).toBe("key-two");
       expect(added.inboundProtocol).toBe("responses");
+      expect(added.client).toBe("codex_desktop");
     } finally {
       await server.stop(true);
     }

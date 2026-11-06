@@ -129,6 +129,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`gui-and-management-api.md`](gui-and-management-api.md) | Dashboard serving, authentication boundaries, /api/* ownership, and startup safety. |
 | [`provider-completion-diagnostic.md`](provider-completion-diagnostic.md) | Explicit single-model completion test: consent, applicability gate, send-time authority fingerprint, bounded streaming and metadata comparison. |
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
+| [`usage-client-attribution.md`](usage-client-attribution.md) | Privacy-bounded client labels carried from request ingress into usage records. |
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
 | [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
 | [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
@@ -422,6 +423,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/images.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
+| `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
@@ -447,6 +449,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/ollama-native-paths.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/ollama-route-policy.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/request-log-failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/request-log.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
@@ -513,6 +516,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/update/restart-ownership.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/update/supervised-recovery.mjs` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`companion.md`](companion.md) |
+| `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |

@@ -977,6 +977,17 @@
       ]
     },
     {
+      "path": "usage-client-attribution.md",
+      "tier": 5,
+      "title": "Usage Client Attribution",
+      "scope": "Privacy-bounded client labels carried from request ingress into usage records.",
+      "documents": [
+        "src/usage/client.ts",
+        "src/server/request-log.ts",
+        "src/server/index/"
+      ]
+    },
+    {
       "path": "quota-pool.md",
       "tier": 5,
       "title": "Quota Pool Producer",
