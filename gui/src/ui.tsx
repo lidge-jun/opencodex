@@ -428,6 +428,59 @@ export function Select({
   );
 }
 
+/** A positioned Select surface for grouped, searchable choices with their own semantics. */
+function SelectPopup({ open, onOpenChange, trigger, label, children, initialFocusRef, width = 354, maxHeight = 520, className, onKeyDown }: {
+  open: boolean; onOpenChange: (open: boolean) => void; trigger: ReactNode; label: string; children: ReactNode;
+  initialFocusRef?: React.RefObject<HTMLElement | null>; width?: number; maxHeight?: number; className?: string;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [inDialog, setInDialog] = useState(false);
+  const [position, setPosition] = useState<CSSProperties>({});
+  const id = useId();
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      if (!triggerRef.current) return;
+      setPosition(computeSelectMenuStyle(triggerRef.current.getBoundingClientRect(), { menuWidth: width, menuHeight: maxHeight, maxMenuHeight: maxHeight }));
+    };
+    update();
+    initialFocusRef?.current?.focus();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => { window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
+  }, [open, width, maxHeight, initialFocusRef]);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: Event) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !popupRef.current?.contains(target)) onOpenChange(false);
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("focusin", outside);
+    return () => { document.removeEventListener("mousedown", outside); document.removeEventListener("focusin", outside); };
+  }, [open, onOpenChange]);
+  const popup = open ? <div ref={popupRef} id={id} role="dialog" aria-label={label}
+    className={cn("select-dropdown select-dropdown-portal", className)}
+    style={inDialog ? { position: "absolute", top: "calc(100% + 4px)", left: 0, width: `min(${width}px, calc(100vw - 16px))`, maxHeight } : { ...position, width: `min(${width}px, calc(100vw - 16px))`, zIndex: "var(--z-popover)" }}
+    onKeyDown={event => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onOpenChange(false); triggerRef.current?.focus(); return; }
+      onKeyDown?.(event);
+    }}>
+    {children}
+  </div> : null;
+  return <div className="custom-select" style={{ position: "relative", display: "inline-block" }}>
+    <button ref={triggerRef} type="button" className="select-trigger" aria-haspopup="dialog" aria-expanded={open}
+      aria-controls={open ? id : undefined} onClick={() => { setInDialog(Boolean(triggerRef.current?.closest("dialog"))); onOpenChange(!open); }}>
+      {trigger}<IconChevron style={{ flexShrink: 0, width: 12, height: 12, color: "var(--muted)" }} />
+    </button>
+    {inDialog ? popup : popup && createPortal(popup, document.body)}
+  </div>;
+}
+
+Select.Popup = SelectPopup;
+
 export function EmptyState({ icon, title, children, className, style }: { icon?: ReactNode; title: ReactNode; children?: ReactNode; className?: string; style?: CSSProperties }) {
   return (
     <div className={className ? `empty ${className}` : "empty"} style={style}>

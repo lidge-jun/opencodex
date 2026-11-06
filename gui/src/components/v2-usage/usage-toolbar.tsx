@@ -6,7 +6,7 @@ import { IconChevron } from "../../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import type { UsageRangeError, UsageTimeWindow } from "../../usage-time-range";
-import type { Range, UsageSurface } from "./usage-model";
+import type { Range } from "./usage-model";
 
 /*
  * The report's controls on one toolbar row: where the traffic came from, which window, and the
@@ -18,48 +18,16 @@ import type { Range, UsageSurface } from "./usage-model";
 const SEGMENT_BUTTON = "h-[calc(var(--ocx-control-h)-4px)] gap-1.5 px-2.5 text-[13px]";
 
 export function UsageFilters({
-  surface,
   range,
-  onSurface,
   onRange,
   t,
 }: {
-  surface: UsageSurface;
   range: Range | null;
-  onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
   t: TFn;
 }) {
   return (
     <>
-      <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-        {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
-          const label = t(`logs.filter.surface.${choice}`);
-          return (
-            <button
-              key={choice}
-              type="button"
-              className={cn(`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`, SEGMENT_BUTTON)}
-              aria-label={label}
-              aria-pressed={surface === choice}
-              onClick={() => onSurface(choice)}
-            >
-              {choice === "codex" && (
-                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "grok" && (
-                <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
-              )}
-              <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
-                {label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
       <div className="usage-segmented" role="group" aria-label={t("usageV2.rangeLabel")}>
         {(["all", "30d", "7d"] as Range[]).map(choice => {
           const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);

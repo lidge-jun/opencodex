@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import type { SourceFilter } from "./usage-source";
 import type { Locale, TFn } from "../../i18n/shared";
 import { formatTokens } from "../../format-tokens";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
@@ -99,6 +100,8 @@ export interface UsageProvider {
 }
 
 export interface UsageResponse extends UsageReadMetadata {
+  sourceFilter?: SourceFilter;
+  legacyUnclassifiedRequests?: number;
   range: Range;
   surface: UsageSurface;
   since: number | null;

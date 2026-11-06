@@ -2,6 +2,25 @@ import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dial
 import { createBoundedFetch, withFetchDeadline } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
+/** A successful management mutation may change the source-facet inventory. */
+export const USAGE_SOURCE_INVENTORY_CHANGED = "opencodex:usage-source-inventory-changed";
+
+function sourceInventoryMutation(path: string | null, method: string): boolean {
+  if (!path) return false;
+  if (path === "/api/keys") return ["POST", "PATCH", "DELETE"].includes(method);
+  if (path === "/api/keys/rotate") return method === "POST" || method === "DELETE";
+  if (path === "/api/keys/rotate/commit") return method === "POST";
+  if (["/api/link/apply", "/api/link/issue", "/api/link/join"].includes(path)) return method === "POST";
+  if (/^\/api\/link\/[^/]+$/.test(path)) return method === "DELETE";
+  return /^\/api\/link\/[^/]+\/reconnect$/.test(path) && method === "POST";
+}
+
+export function sourceInventoryEventMatches(event: Event, apiBase: string): boolean {
+  const detail = (event as CustomEvent<{ apiBase?: string }>).detail;
+  try { return typeof detail?.apiBase === "string" && new URL(detail.apiBase || "/", window.location.href).href.replace(/\/+$/, "") === new URL(apiBase || "/", window.location.href).href.replace(/\/+$/, ""); }
+  catch { return false; }
+}
+
 /**
  * Fired after an unauthorized request cannot recover a session. The shell synchronizes
  * its existing readiness state; cancelled callers and newer valid sessions emit no notice.
@@ -524,20 +543,33 @@ export function installApiAuthFetch(): void {
     const generation = state.generation;
     const token = state.session.token;
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    let mutation = false;
+    try {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      mutation = classified.plane === "shared" && sourceInventoryMutation(relativeTargetPath(state.target, url), method);
+    } catch { /* A malformed URL cannot name an inventory mutation. */ }
+    const mutationBase = state.target.baseUrl;
+    const finish = (result: Response) => {
+      if (mutation && result.ok) {
+        try { window.dispatchEvent(new window.CustomEvent(USAGE_SOURCE_INVENTORY_CHANGED, { detail: { apiBase: mutationBase } })); }
+        catch { /* A notification failure must not turn a successful mutation into an error. */ }
+      }
+      return result;
+    };
     // Pairing exchanges must not carry the old shared-plane credential. The relay's
     // separate machine-session headers are still attached by sessionHeaders().
     const pairingExchange = classified.bootstrap && method === "POST";
     const [firstInput, firstInit] = withAuth(classified.plane, input, init, pairingExchange ? null : undefined);
     const response = await originalFetch(firstInput, firstInit);
-    if (classified.bootstrap || response.status !== 401) return response;
+    if (classified.bootstrap || response.status !== 401) return finish(response);
     if (runtimes.get(classified.plane) !== state || state.logoutBarrier) return response;
     const refreshed = state.session.token;
     if (refreshed && (refreshed !== token || state.generation !== generation)) {
       const revision = sessionSnapshot(state);
       const [retryInput, retryInit] = withAuth(classified.plane, input, init);
       const retry = await originalFetch(retryInput, retryInit);
-      if (!isCurrentRevision(classified.plane, revision)) return retry;
-      if (retry.status !== 401) return retry;
+      if (!isCurrentRevision(classified.plane, revision)) return finish(retry);
+      if (retry.status !== 401) return finish(retry);
       clearSessionIfCurrent(classified.plane, refreshed);
     } else {
       if (state.generation !== generation && !state.resolutionInFlight) return response;
@@ -556,7 +588,7 @@ export function installApiAuthFetch(): void {
       clearSessionIfCurrent(classified.plane, next.token);
       if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
     }
-    return retry;
+    return finish(retry);
   };
 }
 

@@ -36,9 +36,12 @@ beforeEach(() => {
   // The page also has a held memory cache: each test gets a distinct report identity.
   apiBase = `http://usage-custom-${++sequence}`;
   requests = [];
-  globalThis.fetch = ((input: RequestInfo | URL) => new Promise<Response>(resolve => {
-    requests.push({ url: String(input), resolve });
-  })) as typeof fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/usage/source-facets")) return Promise.resolve(new Response(null, { status: 503 }));
+    if (url.includes("/api/usage/devices")) return Promise.resolve(Response.json({ devices: [] }));
+    return new Promise<Response>(resolve => { requests.push({ url, resolve }); });
+  }) as typeof fetch;
 });
 
 afterEach(async () => {
@@ -61,7 +64,7 @@ async function mount(connected = false) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(container);
-    root.render(<LanguageProvider><Usage apiBase={apiBase} connected={connected} apiKeyId={connected ? "machine/key + one" : undefined} /></LanguageProvider>);
+    root.render(<LanguageProvider><Usage apiBase={apiBase} connected={connected} topology={connected ? "hub" : "home"} apiKeyId={connected ? "machine/key + one" : undefined} /></LanguageProvider>);
   });
   expect(requests).toHaveLength(previousRequests + 1);
 }
@@ -71,6 +74,8 @@ function report(gate: RequestGate, marker: string, date = "2020-09-15") {
   const custom = query.has("since");
   return {
     range: query.get("range"), surface: query.get("surface"),
+    sourceFilter: { client: query.get("client"), device: query.get("device") === "key" ? { kind: "key", id: query.get("apiKeyId") } : { kind: query.get("device") } },
+    legacyUnclassifiedRequests: 0,
     since: custom ? Number(query.get("since")) : null,
     ...(custom ? { customWindow: true, until: Number(query.get("until")) } : {}),
     generatedAt: Date.now(),
@@ -328,7 +333,7 @@ test("America/Santiago midnight DST retains final-day activity and tooltip", asy
 
 test("Apply submits inclusive bounds once; Clear restores the held preset without custom cache entries", async () => {
   await mount();
-  expect(requests[0].url).toBe(`${apiBase}/api/usage?range=30d&surface=all`);
+  expect(requests[0].url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all`);
   await respond(0, "preset-report-marker");
   const held = sessionEntries();
   expect(held).toHaveLength(1);
@@ -337,7 +342,7 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   expect(container.textContent).toContain("preset-report-marker");
   await apply();
   expect(requests).toHaveLength(2);
-  expect(requests[1].url).toBe(`${apiBase}/api/usage?range=30d&surface=all&${boundsQuery}`);
+  expect(requests[1].url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all&${boundsQuery}`);
   for (const name of ["Available history", "30d", "7d"]) expect(preset(name).getAttribute("aria-pressed")).toBe("false");
   expect(container.textContent).not.toContain("preset-report-marker");
   expect(container.textContent).toContain("Loading usage data");
@@ -365,7 +370,7 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   expect(preset("30d").getAttribute("aria-pressed")).toBe("true");
   expect(container.textContent).toContain("preset-report-marker");
   expect(container.textContent).not.toContain("custom-report-marker");
-  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?range=30d&surface=all`);
+  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all`);
   await act(async () => { root!.unmount(); });
   root = undefined;
   container.remove();
@@ -378,7 +383,7 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   expect(container.textContent).not.toContain("custom-report-marker");
   expect(container.textContent).not.toContain("preset-report-marker");
   expect(container.textContent).toContain("Loading usage data");
-  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?range=30d&surface=all&${boundsQuery}`);
+  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all&${boundsQuery}`);
 });
 
 test("missing, partial, invalid and reversed drafts make no request or applied-state change", async () => {
@@ -421,11 +426,11 @@ test("new bounds never show a held report or a superseded request that settles l
   // Change only until, then only since: each bound independently owns a new request.
   await enter("2020-09-15T10:20", "2020-09-15T10:22");
   await apply();
-  expect(requests[2].url).toBe(`${apiBase}/api/usage?range=30d&surface=all&since=${since}&until=${until + 60_000}`);
+  expect(requests[2].url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all&since=${since}&until=${until + 60_000}`);
   expect(container.textContent).not.toContain("first-custom-marker");
   await enter("2020-09-15T10:21", "2020-09-15T10:22");
   await apply();
-  expect(requests[3].url).toBe(`${apiBase}/api/usage?range=30d&surface=all&since=${since + 60_000}&until=${until + 60_000}`);
+  expect(requests[3].url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all&since=${since + 60_000}&until=${until + 60_000}`);
   await respond(2, "late-superseded-marker");
   expect(container.textContent).not.toContain("late-superseded-marker");
   expect(container.textContent).not.toContain("preset-stale-marker");
@@ -438,22 +443,23 @@ test("new bounds never show a held report or a superseded request that settles l
 test("Apply preserves machine key, surface and hub scope; choosing a preset clears custom", async () => {
   await mount(true);
   await respond(0, "machine-report");
-  await click(preset("Grok"));
+  await click(container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!);
+  await click([...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(button => button.textContent?.includes("Grok"))!);
   await respond(1, "machine-grok-report");
   await enter("2020-09-15T10:20", "2020-09-15T10:21");
   await apply();
-  expect(requests[2].url).toBe(`${apiBase}/api/usage?range=30d&surface=grok&apiKeyId=machine%2Fkey+%2B+one&${boundsQuery}`);
+  expect(requests[2].url).toBe(`${apiBase}/api/usage?client=grok&device=key&apiKeyId=machine%2Fkey+%2B+one&range=30d&surface=all&${boundsQuery}`);
   await respond(2, "machine-custom-report");
   const hub = [...container.querySelectorAll<HTMLButtonElement>(".usage-scope-control button")].find(button => button.textContent === "Hub-wide")!;
   await click(hub);
-  expect(requests[3].url).toBe(`${apiBase}/api/usage?range=30d&surface=grok&${boundsQuery}`);
+  expect(requests[3].url).toBe(`${apiBase}/api/usage?client=grok&device=all&range=30d&surface=all&${boundsQuery}`);
   await respond(3, "hub-custom-report");
   await enter("2020-09-15T10:20", "2020-09-15T10:22");
   await apply();
-  expect(requests[4].url).toBe(`${apiBase}/api/usage?range=30d&surface=grok&since=${since}&until=${until + 60_000}`);
+  expect(requests[4].url).toBe(`${apiBase}/api/usage?client=grok&device=all&range=30d&surface=all&since=${since}&until=${until + 60_000}`);
   await respond(4, "hub-new-custom-report");
   await click(preset("7d"));
-  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?range=7d&surface=grok`);
+  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?client=grok&device=all&range=7d&surface=all`);
   expect(interval()).toBeUndefined();
   expect(startInput().value).toBe("");
   expect(endInput().value).toBe("");
@@ -478,7 +484,7 @@ test("each preset clears custom, including the retained preset; 7d never replace
   }
   await enter("2020-09-15T10:20", "2020-09-15T10:21");
   await apply();
-  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?range=7d&surface=all&${boundsQuery}`);
+  expect(requests.at(-1)!.url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=7d&surface=all&${boundsQuery}`);
   await respond(requests.length - 1, "custom-from-7d-marker");
   expect(container.querySelector(".daybars")).toBeNull();
   expect(container.querySelectorAll(".heatmap-grid .heatmap-cell")).toHaveLength(7);
@@ -506,7 +512,7 @@ test("the range panel is closed until asked for, and collapsing it keeps the app
 
   await enter("2020-09-15T10:20", "2020-09-15T10:21");
   await apply();
-  expect(requests[1].url).toBe(`${apiBase}/api/usage?range=30d&surface=all&${boundsQuery}`);
+  expect(requests[1].url).toBe(`${apiBase}/api/usage?client=codex&device=all&range=30d&surface=all&${boundsQuery}`);
   await respond(1, "custom-report-marker");
   const applied = interval();
   expect(applied).toContain("both inclusive");

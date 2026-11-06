@@ -1,20 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ChartHistogramIcon } from "@hugeicons/core-free-icons";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
-import { readUsageResponseJson, UsageReadFailedError } from "../usage-summary-resource";
+import { UsageReadFailedError } from "../usage-summary-resource";
 import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
-import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { Notice } from "../ui";
 import { IconAlert } from "../icons";
-import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { sectionAnchorId } from "../section-anchors";
 import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
 import { Button } from "@/components/ui-v2/button";
 import {
   buildHeatmap, lastDays,
-  type Range, type UsageDay, type UsageModel, type UsageProvider, type UsageResponse, type UsageSurface,
+  type Range, type UsageDay, type UsageModel, type UsageProvider, type UsageResponse,
 } from "../components/v2-usage/usage-model";
 import { UsageSummaryCards } from "../components/v2-usage/usage-metrics";
 import { UsageHeatmapPanel } from "../components/v2-usage/usage-activity";
@@ -25,7 +23,10 @@ import {
 import UsageCompanionView from "./usage-companion-view";
 import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
-class UsageWindowMismatchError extends Error {}
+import { useUsageReport, UsageWindowMismatchError } from "../components/v2-usage/use-usage-report";
+import { UsageSourcePicker } from "../components/v2-usage/usage-source-picker";
+import type { SourceClient, SourceDevice, SourceFilter } from "../components/v2-usage/usage-source";
+import type { UsageTopology } from "../api-targets";
 
 /** Empty report: say so plainly, and when a filter is narrowing it, say that too. */
 function UsageEmpty({ filtered, t }: { filtered: boolean; t: TFn }) {
@@ -108,27 +109,9 @@ function UsageWorkspaceBody({
   );
 }
 
-/** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
-const usageMemoryCache = new Map<string, UsageResponse>();
-
 type UsageScope = "machine" | "hub";
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, connected: boolean, scope: UsageScope, apiKeyId?: string): string {
-  return `ocx.usage.v2:${apiBase}:${connected ? "connected" : "standalone"}:${scope}:${apiKeyId ?? ""}:${range}:${surface}`;
-}
-
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, connected: boolean, scope: UsageScope, apiKeyId?: string): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
-  return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
-}
-
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, connected: boolean, scope: UsageScope, apiKeyId: string | undefined, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
-  usageMemoryCache.set(key, value);
-  writeSessionListCache(key, value);
-}
-
-export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBase: string; connected?: boolean; apiKeyId?: string }) {
+export default function Usage({ apiBase, connected = false, apiKeyId, topology = connected ? "unknown" : "home" }: { apiBase: string; connected?: boolean; apiKeyId?: string; topology?: UsageTopology }) {
   const { t, locale } = useI18n();
   const [tab, setTab] = useState(readUsageTab);
   useEffect(() => {
@@ -137,7 +120,8 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   const [range, setRange] = useState<Range>("30d");
-  const [surface, setSurface] = useState<UsageSurface>("all");
+  const [client, setClient] = useState<SourceClient>("codex");
+  const [device, setDevice] = useState<SourceDevice>({ kind: "all" });
   const [scope, setScope] = useState<UsageScope>("machine");
   const [modelQuery, setModelQuery] = useState("");
   const [draftWindow, setDraftWindow] = useState({ since: "", until: "" });
@@ -166,37 +150,12 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
     setCustomWindow(result.window);
   };
 
-  const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const query = new URLSearchParams({ range, surface });
-    if (connected && scope === "machine" && apiKeyId) query.set("apiKeyId", apiKeyId);
-    if (since !== undefined && until !== undefined) {
-      query.set("since", String(since));
-      query.set("until", String(until));
-    }
-    const response = await fetch(`${apiBase}/api/usage?${query}`, { signal });
-    const next = await readUsageResponseJson<UsageResponse>(response);
-    // HTTP 200 alone does not prove an older daemon honored the custom bounds.
-    if (since !== undefined && (next?.customWindow !== true || next.since !== since || next.until !== until)) {
-      throw new UsageWindowMismatchError();
-    }
-    if (since === undefined) writeHeldUsage(apiBase, range, surface, connected, scope, apiKeyId, next);
-    return next;
-  }, [apiBase, apiKeyId, connected, range, scope, surface, since, until]);
-
-  const presetKey = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
-  const resourceKey = customWindow ? JSON.stringify([presetKey, since, until]) : presetKey;
-  // Arbitrary custom windows belong only to the subscription-scoped resource store.
-  const cached = customWindow ? null : readHeldUsage(apiBase, range, surface, connected, scope, apiKeyId);
-  // Range and surface identify different reports, so the key changes with both. That prevents
-  // a force-loading dependency revalidation from ever showing a previous report as this one.
-  const resource = useDataSurface<UsageResponse>(
-    resourceKey,
-    [apiBase, apiKeyId, connected, range, scope, surface, since, until],
-    loadUsage,
-    { isEmpty: () => false, initialData: cached ?? undefined },
-  );
+  const restricted = connected && (scope === "machine" || topology === "link" || topology === "unknown");
+  const effectiveDevice: SourceDevice | null = restricted ? (apiKeyId?.trim() && apiKeyId === apiKeyId.trim() ? { kind: "key", id: apiKeyId } : null) : device;
+  const filter: SourceFilter | null = effectiveDevice ? { client, device: effectiveDevice } : null;
+  const resource = useUsageReport(apiBase, range, filter, since, until);
   const { state } = resource;
-  const data = state.data ?? cached ?? null;
+  const data = resource.data ?? null;
 
   // The chart, the sparklines and the active-day count all read one series. Presets get a
   // stable zero-filled axis; a custom interval is exactly the civil dates the proxy returned.
@@ -253,7 +212,9 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
       */}
       <section className="usage-range flex flex-col gap-3">
         <UsageToolbarRow>
-          <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />
+          <UsageSourcePicker apiBase={apiBase} filter={filter} onClient={setClient} onDevice={setDevice}
+            deviceLocked={restricted} facetsAllowed={topology === "home" || topology === "hub"} homeScope={connected} t={t} locale={locale} />
+          <UsageFilters range={customWindow ? null : range} onRange={selectRange} t={t} />
           <UsageRangeToggle
             open={rangeOpen}
             active={customWindow !== null}
@@ -265,7 +226,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             }}
             t={t}
           />
-          {connected && <div className="ml-auto"><UsageScopeControl scope={scope} onScope={setScope} t={t} /></div>}
+          {connected && topology === "hub" && <div className="ml-auto"><UsageScopeControl scope={scope} onScope={next => { setScope(next); setDevice({ kind: "all" }); }} t={t} /></div>}
           {customWindow && <UsageAppliedWindow window={customWindow} locale={locale} t={t} />}
         </UsageToolbarRow>
         {rangeOpen && (
@@ -304,6 +265,8 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             </Notice>
           )}
           <UsageIncompleteNotice data={data} />
+          {(client === "grok" || client === "aside" || client === "other") && <p className="text-fg-muted text-[13px]" role="status">{t("usageV2.clientUnverified")}</p>}
+          {client === "codex" && typeof data?.legacyUnclassifiedRequests === "number" && <p className="text-fg-muted text-[13px]" role="status">{t("usageV2.legacy", { count: data.legacyUnclassifiedRequests })}</p>}
           {data?.historyTruncated && (
             // Naming the loaded window is the point: without it, `30d` and "Available history"
             // look identical on a busy installation even though both may cover far less than
@@ -332,7 +295,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
-            filtered={surface !== "all" || range !== "all" || customWindow !== null}
+            filtered={client !== "all" || effectiveDevice?.kind !== "all" || range !== "all" || customWindow !== null}
             locale={locale}
             t={t}
           />

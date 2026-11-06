@@ -96,13 +96,20 @@ describe("two-plane API targets", () => {
       link: { linkId: `lnk_${"a".repeat(16)}`, home: "home-box", readOnly: true },
     });
     expect(linked.shared).toMatchObject({ baseUrl: "/api/machine/hub-relay", serverOrigin: machine, transport: "relay" });
+    expect(linked.usageTopology).toBe("link");
     expect(linked.link).toEqual({ linkId: `lnk_${"a".repeat(16)}`, home: "home-box" });
     const malformed = targetsFromMachineStatus("", {
       ...status("relay"),
       link: { linkId: "not-a-link", home: "x", readOnly: true },
     });
     expect(malformed.link).toBeUndefined();
-    expect(targetsFromMachineStatus("", status("relay")).link).toBeUndefined();
+    expect(malformed.usageTopology).toBe("unknown");
+    const hubRelay = targetsFromMachineStatus("", status("relay"));
+    expect(hubRelay.link).toBeUndefined();
+    expect(hubRelay.usageTopology).toBe("hub");
+    expect(targetsFromMachineStatus("", { ...status("relay"), sharedServerOrigin: machine }).usageTopology).toBe("unknown");
+    expect(targetsFromMachineStatus("", status("direct")).usageTopology).toBe("hub");
+    expect(standaloneApiTargets("").usageTopology).toBe("home");
   });
 
   test("rejects a non-string catalog fetch timestamp", async () => {
