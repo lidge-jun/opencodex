@@ -53,10 +53,10 @@ afterEach(async () => {
   win.close();
   for (const name of names) { const descriptor = old.get(name); if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); }
 });
-async function mount(props: { connected?: boolean; apiKeyId?: string; topology?: "home" | "hub" | "link" | "unknown" } = {}) {
+async function mount(props: { connected?: boolean; apiKeyId?: string; topology?: "home" | "hub" | "link" | "unknown" } = {}, apiBase = `http://picker-${++serial}`) {
   host = document.createElement("div"); document.body.append(host);
   const { createRoot } = await import("react-dom/client");
-  await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Usage apiBase={`http://picker-${++serial}`} {...props} /></LanguageProvider>); });
+  await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Usage apiBase={apiBase} {...props} /></LanguageProvider>); });
 }
 async function click(button: HTMLButtonElement) { await act(async () => button.click()); }
 function trigger() { return host.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!; }
@@ -431,7 +431,7 @@ test.each([401, 403])("a %s report response revokes previously shown usage and s
   expect(host.textContent).toContain("Could not load usage data");
 });
 
-test.each([401, 403])("a %s facet denial clears active report, counts, and inventory immediately", async status => {
+test.each([401])("a %s facet denial clears active report, counts, and inventory immediately", async status => {
   installSharedSession(`ocx_session_facet_${status}`);
   let rejectFacets = false;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -476,6 +476,10 @@ test("an unrelated policy 403 does not revoke Usage, but a Usage 403 does", asyn
   installApiAuthFetch();
   await win.fetch("http://localhost/api/link/candidates");
   expect(usageSessionSnapshot().blocked).toBe(false);
+  await win.fetch("http://localhost/api/usage/source-facets?client=codex&device=all");
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  await win.fetch("http://localhost/api/usage/devices");
+  expect(usageSessionSnapshot().blocked).toBe(false);
   await win.fetch("http://localhost/api/usage?client=codex&device=all");
   expect(usageSessionSnapshot().blocked).toBe(true);
 });
@@ -490,4 +494,209 @@ test("a stale 403 cannot revoke a replacement shared session", async () => {
   release!(new Response(null, { status: 403 }));
   expect((await old).status).toBe(403);
   expect(usageSessionSnapshot().blocked).toBe(false);
+});
+
+test("fractional token quantities render while request counters remain integral", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const data = report(String(input));
+    data.summary = { ...data.summary, requests: 1, measuredRequests: 1, reportedRequests: 1, inputTokens: 1.25, outputTokens: 2.5, cachedInputTokens: 0.5, reasoningOutputTokens: 0.25, totalTokens: 3.75, coverageRatio: 1 };
+    return response({ ...data, days: [{ date: "2026-11-01", requests: 1, measuredRequests: 1, reportedRequests: 1, totalTokens: 3.75, models: [{ model: "fraction", provider: "openai", requests: 1, totalTokens: 3.75 }] }], models: [{ provider: "openai", model: "fraction", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, inputTokens: 1.25, outputTokens: 2.5, totalTokens: 3.75, cachedInputTokens: 0.5, cacheReadInputTokens: 0.5, cacheCreationInputTokens: 0.25, cacheObservedInputTokens: 1.25, shareRatio: 1 }], providers: [{ provider: "openai", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 3.75, shareRatio: 1 }] });
+  }) as typeof fetch;
+  await mount();
+  expect(host.textContent).toContain("fraction");
+  expect(host.textContent).not.toContain("Could not load usage data");
+});
+
+test.each([
+  { usageIncomplete: "true" }, { usageIncomplete: null }, { usageIncompleteReason: "oversized_rows" },
+  { usageIncomplete: false, usageIncompleteReason: "oversized_rows" }, { usageIncomplete: true, usageIncompleteReason: "unknown" },
+  { usageIncomplete: true, usageIncompleteReason: null },
+])("rejects malformed incomplete metadata: %o", async metadata => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => response({ ...report(String(input)), ...metadata })) as typeof fetch;
+  await mount();
+  expect(host.textContent).toContain("Could not load usage data");
+  expect(host.textContent).not.toContain("2 older requests");
+});
+
+test("shows an unavailable configured-key count while preserving valid choices", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return response({ ...facets(url), unavailableConfiguredKeys: 1 });
+    if (url.includes("/devices")) return response({ devices: [{ apiKeyId: "key-a", alias: "Laptop" }, { apiKeyId: " valid-but-unselectable ", alias: "Hidden" }] });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(radio("Laptop")).toBeTruthy();
+  expect(document.body.textContent).toContain("Configured keys unavailable for selection: 1");
+  expect(document.body.textContent).not.toContain("valid-but-unselectable");
+  expect(document.body.textContent).not.toContain("Hidden");
+  expect(radio("Codex").textContent).toContain("30");
+});
+
+test.each([-1, 1.5, "1", null, 1025, Number.MAX_SAFE_INTEGER + 1])("rejects invalid unavailable key count: %o", async unavailableConfiguredKeys => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return response({ ...facets(url), unavailableConfiguredKeys });
+    if (url.includes("/devices")) return response({ devices: [] });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+  expect(radio("Codex").textContent).not.toContain("30");
+});
+
+test.each(["app", "device", "legacy"])("rejects missing facet count: %s", async missing => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) {
+      const body: Record<string, unknown> = facets(url);
+      if (missing === "app") { const appCounts = { ...counts } as Record<string, number>; delete appCounts.codex; body.apps = appCounts; }
+      if (missing === "device") body.devices = facets(url).devices.map((row, index) => index ? row : { device: row.device });
+      if (missing === "legacy") delete body.legacyUnclassifiedRequests;
+      return response(body);
+    }
+    if (url.includes("/devices")) return response({ devices: [] });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+});
+
+test("raw admin facet 403 preserves the report and its Retry action", async () => {
+  const meta = document.createElement("meta"); meta.name = "opencodex-management-auth-required"; meta.content = "1"; document.head.append(meta);
+  resetApiAuthFetchForTests(async verify => (await verify("raw-admin")) === "accepted" ? "raw-admin" : null);
+  configureApiTargets(standaloneApiTargets(""));
+  let failReport = false;
+  const raw = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (url.pathname === "/opencodex-session") return new Response(null, { status: 403 });
+    if (token !== "raw-admin") return new Response(null, { status: 401 });
+    if (url.pathname === "/api/combos") return response({});
+    if (url.pathname === "/api/usage/source-facets" || url.pathname === "/api/usage/devices") return new Response(null, { status: 403 });
+    if (url.pathname === "/api/usage") return failReport ? new Response(null, { status: 500 }) : response({ ...report(url.href), range: url.searchParams.get("range") });
+    return new Response(null, { status: 404 });
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  expect((await fetch("http://localhost/api/combos")).status).toBe(200);
+  await mount({}, "http://localhost");
+  expect(host.textContent).toContain("2 older requests");
+  await click(trigger());
+  expect(document.body.textContent).toContain("Counts unavailable or incomplete");
+  expect(host.textContent).toContain("2 older requests");
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  failReport = true;
+  const seven = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.getAttribute("aria-label") === "7d")!;
+  await click(seven);
+  const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Retry")!;
+  expect(retry).toBeTruthy();
+  failReport = false; await click(retry);
+  expect(host.textContent).toContain("2 older requests");
+});
+
+test("Usage 401 hides old data while renewing the session and then recovers", async () => {
+  installSharedSession("ocx_session_expired");
+  let expired = false;
+  const usageTokens: (string | null)[] = [];
+  let releaseBootstrap: (() => void) | undefined;
+  const raw = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (url.pathname === "/opencodex-session") {
+      await new Promise<void>(resolve => { releaseBootstrap = resolve; });
+      return new Response('<meta name="opencodex-session-token" content="ocx_session_renewed"><meta name="opencodex-session-csrf" content="csrf"><meta name="opencodex-session-origin" content="http://localhost"><meta name="opencodex-session-server-origin" content="http://localhost">');
+    }
+    if (url.pathname === "/api/usage/source-facets") return response(facets(url.href));
+    if (url.pathname === "/api/usage/devices") return response({ devices: [] });
+    if (url.pathname === "/api/usage") {
+      usageTokens.push(token);
+      if (expired && token !== "ocx_session_renewed") return new Response(null, { status: 401 });
+      return response({ ...report(url.href), range: url.searchParams.get("range") });
+    }
+    return new Response(null, { status: 404 });
+  };
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
+  await mount({}, "http://localhost");
+  expect(host.textContent).toContain("2 older requests");
+  await click(trigger()); expired = true;
+  await click(radio("Grok"));
+  expect(host.textContent).not.toContain("2 older requests");
+  expect(releaseBootstrap).toBeDefined();
+  await act(async () => { releaseBootstrap!(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  expect(usageTokens).toContain("ocx_session_renewed");
+  expect(host.textContent).toContain("No usage recorded yet");
+  expect(host.textContent).not.toContain("Could not load usage data");
+});
+
+test("an already-aborted Usage 401 cannot revoke or recover the current session", async () => {
+  installSharedSession("ocx_session_active");
+  let release: ((response: Response) => void) | undefined;
+  let requests = 0;
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: () => { requests++; return new Promise<Response>(resolve => { release = resolve; }); } });
+  installApiAuthFetch();
+  const controller = new AbortController();
+  const old = win.fetch("http://localhost/api/usage?client=codex&device=all", { signal: controller.signal });
+  controller.abort(); release!(new Response(null, { status: 401 }));
+  expect((await old).status).toBe(401);
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  expect(requests).toBe(1);
+});
+
+test.each(["requests", "attemptCount", "cacheObservedRequests"])("rejects a fractional request count: %s", async field => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const body = report(String(input));
+    return response({ ...body, summary: { ...body.summary, [field]: 0.5 } });
+  }) as typeof fetch;
+  await mount();
+  expect(host.textContent).toContain("Could not load usage data");
+});
+
+test("accepts finite token totals beyond the safe-integer range", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const body = report(String(input));
+    return response({ ...body, summary: { ...body.summary, totalTokens: 1e18 } });
+  }) as typeof fetch;
+  await mount();
+  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).not.toContain("Could not load usage data");
+});
+
+test("an aborted prior facet 401 cannot revoke the selected source's session", async () => {
+  let release: ((response: Response) => void) | undefined;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets") && url.includes("client=codex")) return new Promise<Response>(resolve => { release = resolve; });
+    if (url.includes("source-facets")) return Promise.resolve(response(facets(url)));
+    if (url.includes("/devices")) return Promise.resolve(response({ devices: [] }));
+    return Promise.resolve(response({ ...report(url), range: new URL(url).searchParams.get("range") }));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  await click(radio("Grok"));
+  expect(radio("Grok").textContent).toContain("3");
+  await act(async () => release!(new Response(null, { status: 401 })));
+  expect(usageSessionSnapshot().blocked).toBe(false);
+  expect(radio("Grok").textContent).toContain("3");
+});
+
+test("an incomplete report without a reason still displays its warning", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => response({ ...report(String(input)), usageIncomplete: true })) as typeof fetch;
+  await mount();
+  expect(host.textContent).toContain("Some usage records could not be included");
+  expect(host.textContent).toContain("2 older requests");
+});
+
+test.each([undefined, 0])("an absent or zero unavailable-key count keeps valid facets", async unavailableConfiguredKeys => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("source-facets")) return response({ ...facets(url), ...(unavailableConfiguredKeys === undefined ? {} : { unavailableConfiguredKeys }) });
+    if (url.includes("/devices")) return response({ devices: [{ apiKeyId: "key-a", alias: "Laptop" }] });
+    return response(report(url));
+  }) as typeof fetch;
+  await mount(); await click(trigger());
+  expect(radio("Laptop")).toBeTruthy();
+  expect(radio("Codex").textContent).toContain("30");
+  expect(document.body.textContent).not.toContain("Configured keys unavailable for selection");
 });

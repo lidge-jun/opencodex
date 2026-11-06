@@ -10,7 +10,7 @@ import { denyUsageSession, usageSessionSnapshot, USAGE_SESSION_CHANGED, USAGE_SO
 import { matchesFacetWindow, matchesSource, noStore, sourceQuery, SOURCE_CLIENTS, type SourceClient, type SourceDevice, type SourceFilter } from "./usage-source";
 
 type Facets = { sourceFilter: unknown; window: { since: number; until: number; timeZone: string }; apps: Record<SourceClient, number>;
-  devices: { device: SourceDevice; requests: number }[]; legacyUnclassifiedRequests: number; usageIncomplete: boolean };
+  devices: { device: SourceDevice; requests: number }[]; legacyUnclassifiedRequests: number; usageIncomplete: boolean; unavailableConfiguredKeys?: number };
 type Inventory = { apiKeyId: string; alias: string | null }[];
 const clientNames: Record<SourceClient, string> = { all: "", codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude Desktop", grok: "Grok", opencode: "OpenCode", aside: "Aside", other: "", unknown: "" };
 const sameDevice = (a: SourceDevice, b: SourceDevice) => a.kind === b.kind && (a.kind !== "key" || (b.kind === "key" && a.id === b.id));
@@ -19,6 +19,7 @@ function validFacets(value: Facets, filter: SourceFilter): boolean {
   if (!value || !matchesSource(value.sourceFilter, filter) || !value.window || !Number.isFinite(value.window.since)
     || !matchesFacetWindow(value.window) || typeof value.usageIncomplete !== "boolean" || !value.apps
     || !SOURCE_CLIENTS.every(client => validCount(value.apps[client])) || !validCount(value.legacyUnclassifiedRequests)
+    || (value.unavailableConfiguredKeys !== undefined && (!validCount(value.unavailableConfiguredKeys) || value.unavailableConfiguredKeys > 1024))
     || !Array.isArray(value.devices)) return false;
   if (value.devices.length > 1027) return false;
   const seen = new Set<string>(); const keyIds = new Set<string>(); let total = 0;
@@ -77,11 +78,12 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
     const load = async () => {
       const id = ++sequence;
       controller?.abort(); controller = new AbortController();
+      const currentController = controller;
       setResult({ key: resultKey });
       try {
         const get = async (url: string) => {
-          const response = await fetch(url, { signal: controller!.signal, cache: "no-store" });
-          if (response.status === 401 || response.status === 403) denyUsageSession(session.generation);
+          const response = await fetch(url, { signal: currentController.signal, cache: "no-store" });
+          if (response.status === 401 && !currentController.signal.aborted && id === sequence) denyUsageSession(session.generation);
           if (!response.ok || !noStore(response)) throw new Error("usage source unavailable");
           return response;
         };
@@ -97,14 +99,15 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
         if (inventory.length > 1024) throw new Error("inventory too large");
         const ids = new Set<string>(); let size = 0;
         for (const item of inventory) {
-          if (!item || typeof item.apiKeyId !== "string" || !item.apiKeyId || item.apiKeyId !== item.apiKeyId.trim() || item.apiKeyId.length > 256
+          if (!item || typeof item.apiKeyId !== "string" || !item.apiKeyId || item.apiKeyId.length > 256
             || (size += item.apiKeyId.length) > 65536 || ids.has(item.apiKeyId) || (item.alias !== null && (typeof item.alias !== "string" || !item.alias.trim() || item.alias.length > 255))) throw new Error("invalid inventory");
           ids.add(item.apiKeyId);
         }
+        const selectableInventory = inventory.filter(item => item.apiKeyId === item.apiKeyId.trim());
         if (!disposed && id === sequence && usageSessionSnapshot().generation === session.generation) {
-          setKnownInventory({ identity, items: inventory });
+          setKnownInventory({ identity, items: selectableInventory });
           setRoster({ identity, devices: facets.devices.map(row => row.device) });
-          setResult({ key: resultKey, facets, inventory });
+          setResult({ key: resultKey, facets, inventory: selectableInventory });
         }
       } catch {
         if (!disposed && id === sequence) setResult({ key: resultKey, failed: true });
@@ -187,6 +190,7 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
       <p className="mb-0 mt-3 border-t border-line pt-3 text-fg-muted">{deviceLocked ? t("usageV2.locked") : t("usageV2.noKeyHelp")}</p>
       {!deviceLocked && <p className="mb-0 text-fg-muted">{t("usageV2.unconfiguredHelp")}</p>}
       <p className="mb-0 text-fg-muted">{t("usageV2.classificationHelp")}</p>
+      {!!data.facets?.unavailableConfiguredKeys && <p role="status" className="mb-0 text-fg-muted">{t("usageV2.unavailableKeys", { count: data.facets.unavailableConfiguredKeys.toLocaleString(locale) })}</p>}
       {(data.failed || data.facets?.usageIncomplete || !facetsAllowed) && <p role="status" className="mb-0 text-fg-muted">{t("usageV2.countsUnavailable")}</p>}
     </Select.Popup>;
 }

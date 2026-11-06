@@ -577,11 +577,13 @@ export function installApiAuthFetch(): void {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     let mutation = false;
     let usageRequest = false;
+    let usageReport = false;
     try {
       const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
       const path = relativeTargetPath(state.target, url);
       mutation = classified.plane === "shared" && sourceInventoryMutation(path, method);
-      usageRequest = path === "/api/usage" || path === "/api/usage/devices" || path === "/api/usage/source-facets";
+      usageReport = path === "/api/usage";
+      usageRequest = usageReport || path === "/api/usage/devices" || path === "/api/usage/source-facets";
     } catch { /* A malformed URL cannot name an inventory mutation. */ }
     const mutationBase = state.target.baseUrl;
     const finish = (result: Response) => {
@@ -595,9 +597,12 @@ export function installApiAuthFetch(): void {
     // separate machine-session headers are still attached by sessionHeaders().
     const pairingExchange = classified.bootstrap && method === "POST";
     const [firstInput, firstInit] = withAuth(classified.plane, input, init, pairingExchange ? null : undefined);
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const response = await originalFetch(firstInput, firstInit);
+    if (callerSignal?.aborted && (response.status === 401 || response.status === 403)) return response;
+    const recoverUsage = usageRequest && !callerSignal?.aborted;
     if (!classified.bootstrap && classified.plane === "shared" && state.generation === generation
-      && (response.status === 401 || (response.status === 403 && usageRequest))) denyUsageSession(usageGeneration);
+      && (response.status === 401 || (response.status === 403 && usageReport))) denyUsageSession(usageGeneration);
     if (classified.bootstrap || response.status !== 401) return finish(response);
     if (runtimes.get(classified.plane) !== state || state.logoutBarrier) return response;
     const refreshed = state.session.token;
@@ -612,8 +617,11 @@ export function installApiAuthFetch(): void {
       if (state.generation !== generation && !state.resolutionInFlight) return response;
       clearSessionIfCurrent(classified.plane, token);
     }
-    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    const next = await resolveTokenAfter401(classified.plane, token, callerSignal ?? undefined);
+    // Usage invalidation unsubscribes its loader and aborts its signal. Once an actual 401
+    // arrived, let the existing single-flight recovery finish independently; a request
+    // already cancelled before the 401 must not start recovery.
+    const recoverySignal = recoverUsage ? undefined : callerSignal ?? undefined;
+    const next = await resolveTokenAfter401(classified.plane, token, recoverySignal);
     if (!next || !isCurrentRevision(classified.plane, next) || callerSignal?.aborted) return response;
     if (!next.token) {
       if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
