@@ -20,7 +20,7 @@ Per explicit user directive (`"너 상속 으로 해서"`), all PABCD subagents 
 | Work Phase | Status | Summary |
 |---|---|---|
 | `wp0` | Completed | Docs-first roadmap (`000_roadmap.md`, `001_audit_and_status.md`, `010..040` decade PRDs) audited and locked with zero production edits |
-| `wp1` | Pending | Shared golden conformance fixture (`ocx-child-conformance.json`), `src/link/ephemeral-child.ts`, and `ocx-child-conformance.test.ts` |
+| `wp1` | Completed | Shared golden conformance fixture (`ocx-child-conformance.json`), `src/link/ephemeral-child.ts`, and `tests/clients/link-ocx-child-conformance.test.ts` (65 pass, 0 fail; typecheck clean) |
 | `wp2` | Pending | Standalone Rust crate `native/ocx-child` (HTTP/1.1+SSE relay, HMAC v2, OCX-6 parity, `#1798` offline journal) |
 | `wp3` | Pending | Home discovery, detached enrollment preflight, `package.json` scripts, and compiled-binary E2E lifecycle tests |
 | `wp4` | Pending | `structure/` + `docs-site/` sync, full gate matrix, branch push, and unmerged PR targeting `dev` |

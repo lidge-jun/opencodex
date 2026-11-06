@@ -172,5 +172,6 @@
   "hermes-profile-routes.test.ts": "clients",
   "cli-sync-expect-link.test.ts": "cli",
   "link-connection-generation.test.ts": "clients",
-  "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
+  "ci-pr-hygiene-approvals.test.ts": "ci-workflows",
+  "link-ocx-child-conformance.test.ts": "clients"
 }

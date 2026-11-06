@@ -2,7 +2,7 @@
 
 - **Phase ID**: `wp4` (depends on `wp3`; satisfies `c-5`)
 - **Header dependencies**:
-  - References implemented paths `native/ocx-child/Cargo.toml`, `native/ocx-child/src/lib.rs`, `src/link/ephemeral-child.ts`, `src/link/ssh-argv.ts`, `src/link/remote-windows.ts`, `src/server/management/link-enrollment.ts`, `tests/fixtures/link/ocx-child-conformance.json`, `tests/clients/ocx-child-conformance.test.ts`, and `tests/clients/ocx-child-e2e.test.ts`.
+  - References implemented paths `native/ocx-child/Cargo.toml`, `native/ocx-child/src/lib.rs`, `src/link/ephemeral-child.ts`, `src/link/ssh-argv.ts`, `src/link/remote-windows.ts`, `src/server/management/link-enrollment.ts`, `tests/fixtures/link/ocx-child-conformance.json`, `tests/clients/link-ocx-child-conformance.test.ts`, and `tests/clients/link-ocx-child-e2e.test.ts`.
 - **Scope**:
   - **IN**: `structure/manifest.json` (MODIFY), `structure/remote-link.md` (MODIFY), `structure/overview.md` (MODIFY), `structure/INDEX.md` (REGENERATE via `bun run structure:index`), `docs-site/src/content/docs/guides/remote-link.md` (MODIFY), `docs-site/src/content/docs/reference/cli/lifecycle.md` (MODIFY), `devlog/_plan/261107_ocx_child_ephemeral_link/STATUS.md` (NEW/UPDATE), git push + GitHub PR targeting `dev` (unmerged).
   - **OUT**: Merging the PR (`authority.merge = false`), force-pushing, manual `lane=all` CI dispatch.
@@ -12,8 +12,8 @@
 ### 1.1 MODIFY `structure/manifest.json`, `structure/remote-link.md`, `structure/overview.md`, & Regenerate `structure/INDEX.md`
 
 - In `structure/manifest.json` (`remote-link.md` entry): add `"native/ocx-child/"` and `"src/server/management/link-enrollment.ts"` to `documents`.
-- In `structure/remote-link.md` (185/600 lines): add present-tense contract section `## Ephemeral Rust Child (ocx-child)` naming `native/ocx-child/Cargo.toml`, `native/ocx-child/src/lib.rs`, `src/link/ephemeral-child.ts`, `src/server/management/link-enrollment.ts`, `tests/fixtures/link/ocx-child-conformance.json`, `tests/clients/ocx-child-conformance.test.ts`, and `tests/clients/ocx-child-e2e.test.ts` (all staged in git before running `bun run structure:check`).
-- In `structure/overview.md` (319/600 lines): register bound invariant `INV-LINK-CHILD-01` with `Enforced by \`tests/clients/ocx-child-conformance.test.ts\`` and include `// INV-LINK-CHILD-01` in `tests/clients/ocx-child-conformance.test.ts`.
+- In `structure/remote-link.md` (185/600 lines): add present-tense contract section `## Ephemeral Rust Child (ocx-child)` naming `native/ocx-child/Cargo.toml`, `native/ocx-child/src/lib.rs`, `src/link/ephemeral-child.ts`, `src/server/management/link-enrollment.ts`, `tests/fixtures/link/ocx-child-conformance.json`, `tests/clients/link-ocx-child-conformance.test.ts`, and `tests/clients/link-ocx-child-e2e.test.ts` (all staged in git before running `bun run structure:check`).
+- In `structure/overview.md` (319/600 lines): register bound invariant `INV-LINK-CHILD-01` with `Enforced by \`tests/clients/link-ocx-child-conformance.test.ts\`` and include `// INV-LINK-CHILD-01` in `tests/clients/link-ocx-child-conformance.test.ts`.
 - Run `bun run structure:index` and verify `bun run structure:check` exits `0`.
 
 ### 1.2 MODIFY `docs-site/src/content/docs/guides/remote-link.md` & `reference/cli/lifecycle.md`
