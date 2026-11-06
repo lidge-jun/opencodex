@@ -41,6 +41,18 @@ export function systemToInstructions(system: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The `instructions` prefix ending at the caller's last cache-marked system block, when blocks
+ * follow it. Claude Code ends its system with a per-turn env block; joining everything into one
+ * Anthropic system block moved the breakpoint onto those changing bytes, so system and every
+ * later breakpoint missed on each turn. The Anthropic adapter splits its system here instead.
+ */
+export function systemCachePrefix(system: unknown): string | undefined {
+  if (!Array.isArray(system)) return undefined;
+  const last = system.findLastIndex(block => isRec(block) && block.cache_control != null);
+  return last >= 0 && last < system.length - 1 ? systemToInstructions(system.slice(0, last + 1)) : undefined;
+}
+
 export function toolsToResponses(tools: unknown): Rec[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   // The shared hosted-search lane cannot enforce these constraints on every destination or
