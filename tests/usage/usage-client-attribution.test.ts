@@ -6,6 +6,7 @@ import { classifyUsageClient, normalizeRecordedClient } from "../../src/usage/cl
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { createUsageSummaryAccumulator } from "../../src/usage/summary";
 import { parseUsageSource } from "../../src/usage/source-filter";
+import { createSourceFacetAccumulator } from "../../src/usage/source-facets";
 import { addFinalRequestLog, addRequestLog, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage, type RequestLogEntry } from "../../src/server/request-log";
 import { log } from "../helpers/request-log-entry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -170,5 +171,49 @@ describe("usage client attribution", () => {
       "client=codex&device=all&failures=1", "client=codex&device=all&jev=1"]) {
       expect(parseUsageSource(new URLSearchParams(query))).toEqual({ kind: "invalid" });
     }
+  });
+
+  test("unconfigured keys use an immutable full configured-key snapshot", () => {
+    const now = Date.now();
+    const configuredApiKeyIds = ["active", "ordinary"];
+    const accumulator = createUsageSummaryAccumulator({ filter: {
+      sourceFilter: { client: "all", device: { kind: "unconfigured" } }, configuredApiKeyIds,
+    } });
+    configuredApiKeyIds.push("former");
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 1, usageStatus: "unreported" as const };
+    accumulator.add({ ...base, requestId: "former", admissionKind: "configured", apiKeyId: "former" });
+    accumulator.add({ ...base, requestId: "active", admissionKind: "configured", apiKeyId: "active" });
+    accumulator.add({ ...base, requestId: "ordinary", admissionKind: "configured", apiKeyId: "ordinary" });
+    accumulator.add({ ...base, requestId: "legacy", apiKeyId: "legacy" });
+    accumulator.add({ ...base, requestId: "local", admissionKind: "loopback" });
+    expect(accumulator.summarize("30d", now).summary.requests).toBe(1);
+    expect(accumulator.clone().summarize("30d", now).summary.requests).toBe(1);
+    expect(parseUsageSource(new URLSearchParams("client=all&device=unconfigured"))).toEqual({
+      kind: "filtered", filter: { client: "all", device: { kind: "unconfigured" } },
+    });
+  });
+
+  test("source facets count matching rows in both dimensions without retaining arbitrary key IDs", () => {
+    const now = Date.now();
+    const filter = { client: "codex" as const, device: { kind: "all" as const } };
+    const facets = createSourceFacetAccumulator(filter, ["active"], { since: now - 1000, until: now });
+    const base = { timestamp: now - 1, provider: "openai", model: "test", status: 200,
+      durationMs: 1, usageStatus: "unreported" as const };
+    facets.add({ ...base, requestId: "legacy" });
+    facets.add({ ...base, requestId: "active", client: "codex_cli", admissionKind: "configured", apiKeyId: "active" });
+    facets.add({ ...base, requestId: "former", client: "codex_desktop", admissionKind: "configured", apiKeyId: "former" });
+    facets.add({ ...base, requestId: "claude", client: "claude_code", admissionKind: "configured", apiKeyId: "active" });
+    facets.add({ ...base, requestId: "future", timestamp: now + 1, client: "codex_cli" });
+    const result = facets.snapshot();
+    expect(result.apps.all).toBe(4);
+    expect(result.apps.codex).toBe(3);
+    expect(result.apps.claude_code).toBe(1);
+    expect(result.devices).toEqual([
+      { device: { kind: "all" }, requests: 3 }, { device: { kind: "no-key" }, requests: 1 },
+      { device: { kind: "key", id: "active" }, requests: 1 }, { device: { kind: "unconfigured" }, requests: 1 },
+    ]);
+    expect(result.legacyUnclassifiedRequests).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("former");
   });
 });

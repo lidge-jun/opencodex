@@ -220,6 +220,8 @@ export interface UsageSummaryFilterInput {
   model?: string | null;
   apiKeyId?: string | null;
   sourceFilter?: UsageSourceFilter;
+  /** Internal snapshot, never a client-supplied list or part of the response echo. */
+  configuredApiKeyIds?: readonly string[];
 }
 
 /**
@@ -794,6 +796,8 @@ interface NormalizedUsageFilter {
   model: string | null;
   apiKeyId: string | null;
   sourceFilter?: UsageSourceFilter;
+  configuredApiKeyIds?: readonly string[];
+  configuredApiKeyIdSet?: ReadonlySet<string>;
 }
 
 export interface UsageSummaryAccumulator {
@@ -1070,7 +1074,7 @@ function projectedEntryForFilter(
   filter: NormalizedUsageFilter,
 ): { entry: PersistedUsageEntry; comboOverlap: boolean } | null {
   if (filter.apiKeyId !== null && entry.apiKeyId !== filter.apiKeyId) return null;
-  if (filter.sourceFilter && !matchesUsageSource(entry, filter.sourceFilter)) return null;
+  if (filter.sourceFilter && !matchesUsageSource(entry, filter.sourceFilter, filter.configuredApiKeyIdSet)) return null;
   if (!entry.attempts?.length) {
     const identity = usageModelIdentity(entry.provider, entry.model, entry.resolvedModel);
     return filterMatchesAttribution(filter, entry.provider, identity.model)
@@ -1307,9 +1311,15 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     const apiKeyId = normalizeExactFilterValue(options?.filter?.apiKeyId);
     const inputSource = options?.filter?.sourceFilter;
     const sourceFilter = inputSource ? { client: inputSource.client, device: { ...inputSource.device } } : undefined;
+    const configuredApiKeyIds = options?.filter?.configuredApiKeyIds
+      ? [...options.filter.configuredApiKeyIds] : undefined;
+    if (sourceFilter?.device.kind === "unconfigured" && !configuredApiKeyIds) {
+      throw new Error("configured key snapshot required");
+    }
     this.filter = provider === null && model === null && apiKeyId === null && !sourceFilter
       ? null
-      : { provider, model, apiKeyId, ...(sourceFilter ? { sourceFilter } : {}) };
+      : { provider, model, apiKeyId, ...(sourceFilter ? { sourceFilter } : {}),
+        ...(configuredApiKeyIds ? { configuredApiKeyIds, configuredApiKeyIdSet: new Set(configuredApiKeyIds) } : {}) };
     this.mode = options?.mode ?? "exact";
     this.window = options?.window ? Object.freeze({ ...options.window }) : undefined;
     this.requestIds = this.mode === "exact" ? new Map() : null;
@@ -1824,7 +1834,8 @@ export function projectUsageSummary<T extends UsageSummary>(
   const apiKeyId = normalizeExactFilterValue(filter.apiKeyId);
   if (provider === null && model === null && apiKeyId === null && !filter.sourceFilter) return summary;
   const accumulator = createUsageSummaryAccumulator({
-    filter: { provider, model, apiKeyId, ...(filter.sourceFilter ? { sourceFilter: filter.sourceFilter } : {}) },
+    filter: { provider, model, apiKeyId, ...(filter.sourceFilter ? { sourceFilter: filter.sourceFilter } : {}),
+      ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: filter.configuredApiKeyIds } : {}) },
     ...(summary.customWindow && summary.since !== null && summary.until !== undefined
       ? { window: { since: summary.since, until: summary.until } } : {}),
   });

@@ -186,6 +186,34 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     return jsonResponse(setDebugSettings(partial));
   }
 
+  if (url.pathname === "/api/usage/source-facets" && req.method === "GET") {
+    const { auth, readStoreFor } = await import("./link-route-state");
+    const denied = auth(ctx, "dashboard");
+    if (denied) return denied;
+    if (config.runtimeRole === "client") return jsonResponse({ error: "source facets unavailable on a child" }, 403);
+    const parsed = parseUsageSource(url.searchParams);
+    if (parsed.kind !== "filtered" || [...url.searchParams.keys()].some(key => !["client", "device", "apiKeyId"].includes(key))) {
+      return Response.json({ error: "invalid usage source filter" }, { status: 400, headers: { "cache-control": "no-store" } });
+    }
+    try {
+      const ids = [...new Set((config.apiKeys ?? []).map(key => key.id))].sort();
+      if (parsed.filter.device.kind === "key" && !ids.includes(parsed.filter.device.id)) {
+        return Response.json({ error: "unknown key" }, { status: 400, headers: { "cache-control": "no-store" } });
+      }
+      const links = JSON.stringify(readStoreFor(ctx).links.map(({ apiKeyId, alias }) => [apiKeyId, alias]).sort());
+      const { getUsageSourceFacets } = await import("./usage-source-facets");
+      const facets = await getUsageSourceFacets(parsed.filter, ids);
+      const revoked = auth(ctx, "dashboard");
+      if (revoked) return revoked;
+      const currentIds = [...new Set((config.apiKeys ?? []).map(key => key.id))].sort();
+      const currentLinks = JSON.stringify(readStoreFor(ctx).links.map(({ apiKeyId, alias }) => [apiKeyId, alias]).sort());
+      if (JSON.stringify(ids) !== JSON.stringify(currentIds) || links !== currentLinks) throw new Error("inventory changed");
+      return Response.json(facets, { headers: { "cache-control": "no-store" } });
+    } catch {
+      return Response.json({ error: "usage_facets_unavailable" }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "1" } });
+    }
+  }
+
   if (url.pathname === "/api/usage/devices" && req.method === "GET") {
     const { auth, readStoreFor } = await import("./link-route-state");
     const denied = auth(ctx, "dashboard");
@@ -207,6 +235,13 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   if (url.pathname === "/api/usage" && req.method === "GET") {
     const source = parseUsageSource(url.searchParams);
     if (source.kind === "invalid") return jsonResponse({ error: "invalid usage source filter" }, 400);
+    const unconfigured = source.kind === "filtered" && source.filter.device.kind === "unconfigured";
+    const sessionGuard = unconfigured ? (await import("./link-route-state")).auth : null;
+    if (sessionGuard) {
+      const denied = sessionGuard(ctx, "dashboard");
+      if (denied) return denied;
+    }
+    const configuredIds = unconfigured ? [...new Set((config.apiKeys ?? []).map(key => key.id))].sort() : undefined;
     if (url.searchParams.get("jev") === "1") {
       const range = parseRange(url.searchParams.get("range"));
       const rawComboId = url.searchParams.get("comboId");
@@ -266,6 +301,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       model: url.searchParams.get("model"),
       apiKeyId: url.searchParams.get("apiKeyId"),
       ...(source.kind === "filtered" ? { sourceFilter: source.filter } : {}),
+      ...(configuredIds ? { configuredApiKeyIds: configuredIds } : {}),
     };
     const filterRequested = source.kind === "filtered" || window !== undefined || [filter.provider, filter.model, filter.apiKeyId]
       .some(value => typeof value === "string" && value.trim() !== "");
@@ -294,8 +330,16 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       if (cached && !filterRequested) discardUsageSummaryCacheEntry(cacheKey);
       if (filterRequested) {
         const filteredAggregate = await getFilteredUsageAggregate(filter, window);
+        if (sessionGuard) {
+          const denied = sessionGuard(ctx, "dashboard");
+          if (denied) return denied;
+          const currentIds = [...new Set((config.apiKeys ?? []).map(key => key.id))].sort();
+          if (JSON.stringify(currentIds) !== JSON.stringify(configuredIds)) {
+            return Response.json({ error: "usage_inventory_changed" }, { status: 503, headers: { "cache-control": "no-store" } });
+          }
+        }
         const accumulator = filteredAggregate.accumulator;
-        return jsonResponse({
+        const body = {
           ...accumulator.summarize(range, now, surface),
           ...(filteredAggregate.usageIncomplete ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const } : {}),
           historyTruncated: false,
@@ -304,7 +348,8 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           entriesDropped: 0,
           snapshotWindowStart: accumulator.snapshotWindow.start,
           snapshotWindowEnd: accumulator.snapshotWindow.end,
-        });
+        };
+        return unconfigured ? Response.json(body, { headers: { "cache-control": "no-store" } }) : jsonResponse(body);
       }
 
       const configuredApiKeyIds = (config.apiKeys ?? []).map(key => key.id);

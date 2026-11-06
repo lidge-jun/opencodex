@@ -4,7 +4,7 @@ export const USAGE_SOURCE_CLIENTS = [
   "all", "codex", "claude_code", "claude_desktop", "grok", "opencode", "aside", "other", "unknown",
 ] as const;
 export type UsageSourceClient = (typeof USAGE_SOURCE_CLIENTS)[number];
-export type UsageDeviceFilter = { kind: "all" | "no-key" } | { kind: "key"; id: string };
+export type UsageDeviceFilter = { kind: "all" | "no-key" | "unconfigured" } | { kind: "key"; id: string };
 export interface UsageSourceFilter { client: UsageSourceClient; device: UsageDeviceFilter }
 
 /** Old rows in the historic Codex surface are disclosed as unclassified, never as a subtype. */
@@ -12,10 +12,12 @@ export function isLegacyCodexUsage(entry: PersistedUsageEntry): boolean {
   return entry.client === undefined && entry.surface === undefined;
 }
 
-export function matchesUsageSource(entry: PersistedUsageEntry, filter: UsageSourceFilter): boolean {
+export function matchesUsageSource(entry: PersistedUsageEntry, filter: UsageSourceFilter, configuredIds?: ReadonlySet<string>): boolean {
   const device = filter.device;
   if (device.kind === "no-key" && entry.apiKeyId !== undefined) return false;
   if (device.kind === "key" && entry.apiKeyId !== device.id) return false;
+  if (device.kind === "unconfigured" && (!configuredIds || entry.admissionKind !== "configured"
+    || !entry.apiKeyId || configuredIds.has(entry.apiKeyId))) return false;
   if (filter.client === "all") return true;
   if (filter.client === "codex") {
     return isLegacyCodexUsage(entry) || entry.client === "codex_cli"
@@ -45,6 +47,6 @@ export function parseUsageSource(params: URLSearchParams): ParsedUsageSource {
     if (!id || id !== id.trim()) return { kind: "invalid" };
     return { kind: "filtered", filter: { client: client as UsageSourceClient, device: { kind: "key", id } } };
   }
-  if ((device !== "all" && device !== "no-key") || params.has("apiKeyId")) return { kind: "invalid" };
+  if ((device !== "all" && device !== "no-key" && device !== "unconfigured") || params.has("apiKeyId")) return { kind: "invalid" };
   return { kind: "filtered", filter: { client: client as UsageSourceClient, device: { kind: device } } };
 }

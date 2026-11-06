@@ -22,6 +22,7 @@ import {
 import type { OcxConfig } from "../../src/types/config";
 import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
 import * as usageLedgerScannerModule from "../../src/usage/ledger-scanner";
+import { getUsageSourceFacets, SourceFacetsBusyError } from "../../src/server/management/usage-source-facets";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
@@ -80,6 +81,44 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("facet scans share identical work and reject excess distinct concurrent scans", async () => {
+    const original = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let scans = 0;
+    const spy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      scans += 1;
+      await gate;
+      return original(options);
+    });
+    const source = (client: "all" | "codex" | "claude_code" | "grok" | "aside") => ({ client, device: { kind: "all" as const } });
+    try {
+      const flights = [getUsageSourceFacets(source("all"), []), getUsageSourceFacets(source("all"), []),
+        getUsageSourceFacets(source("codex"), []), getUsageSourceFacets(source("claude_code"), []),
+        getUsageSourceFacets(source("grok"), [])];
+      await expect(getUsageSourceFacets(source("aside"), [])).rejects.toBeInstanceOf(SourceFacetsBusyError);
+      expect(scans).toBe(4);
+      release();
+      await Promise.all(flights);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  test("unconfigured-key aggregates change identity when configured keys change", async () => {
+    const row = { ...entry("former"), apiKeyId: "former", admissionKind: "configured" };
+    writeFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify(row)}\n`);
+    const sourceFilter = { client: "all" as const, device: { kind: "unconfigured" as const } };
+    const absent = await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: [] });
+    expect(requests(absent)).toBe(1);
+    const reused = await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: ["former"] });
+    expect(requests(reused)).toBe(0);
+    appendFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify({ ...row, requestId: "second" })}\n`);
+    expect(requests(await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: [] }))).toBe(2);
+    expect(requests(await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: ["former"] }))).toBe(0);
+  });
+
   test("client and device filters retain separate caches across incremental appends", async () => {
     const path = join(testDir, "usage.jsonl");
     const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId?: string) => ({

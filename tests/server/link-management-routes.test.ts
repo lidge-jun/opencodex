@@ -1,5 +1,5 @@
 import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ import { createLinkSupervisor, type LinkSupervisor } from "../../src/link/superv
 import type { SshRunner, SshChild, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { trustedLoopbackForIngress, type ServerIngress } from "../../src/server/index/serve-options";
+import * as usageLedgerScanner from "../../src/usage/ledger-scanner";
 
 let temp = "";
 
@@ -170,6 +171,74 @@ afterEach(() => {
 });
 
 describe("link management routes", () => {
+  test.each(["revoked", "inventory"] as const)("a facet scan fails closed when %s changes mid-read", async change => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-facet-revocation-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    const h = harness();
+    let paired = true;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const scanning = new Promise<void>(resolve => { started = resolve; });
+    const original = usageLedgerScanner.scanUsageLedgerCooperatively;
+    const spy = spyOn(usageLedgerScanner, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      started();
+      await gate;
+      return original(options);
+    });
+    try {
+      const url = new URL("http://127.0.0.1/api/usage/source-facets?client=all&device=all");
+      const pending = handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1", "content-type": "application/json" } }), url, h.config, h.deps, "gui-session",
+        { isPaired: () => paired, isCurrent: () => paired, revokeCurrent: () => true },
+        { trustedLoopback: true, guiSessionIssuance: "pairing" });
+      const outcome = await Promise.race([scanning.then(() => "scanning"), pending.then(response => `early:${response?.status}`)]);
+      expect(outcome).toBe("scanning");
+      if (change === "revoked") paired = false;
+      else h.config.apiKeys = [{ id: "new-key", name: "new", key: "fixture", createdAt: "2026-01-01T00:00:00Z" }];
+      release();
+      expect((await pending)?.status).toBe(change === "revoked" ? 403 : 503);
+    } finally {
+      release();
+      spy.mockRestore();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
+  });
+
+  test("usage source facets require a session and return bounded filtered counts", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-facets-route-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    const h = harness();
+    h.config.apiKeys = [{ id: "active", name: "active", key: "fixture-key", createdAt: "2026-01-01T00:00:00Z" }];
+    const row = { timestamp: Date.now(), provider: "openai", model: "test", status: 200, durationMs: 1, usageStatus: "unreported", client: "codex_cli", admissionKind: "configured" };
+    writeFileSync(join(temp, "usage.jsonl"), [
+      { ...row, requestId: "fixture", apiKeyId: "active" },
+      { ...row, requestId: "former", apiKeyId: "former" },
+    ].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const path = "/api/usage/source-facets?client=codex&device=key&apiKeyId=active";
+    try {
+      expect((await call(path, "GET", undefined, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(403);
+      expect((await call(path, "GET", undefined, h.deps, "gui-session", true, "tailscale-identity", true, h.config))?.status).toBe(403);
+      const response = await call(path, "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config);
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("cache-control")).toBe("no-store");
+      const body = await response!.json() as { apps: Record<string, number>; sourceFilter: unknown };
+      expect(body.apps.codex).toBe(1);
+      expect(body.sourceFilter).toEqual({ client: "codex", device: { kind: "key", id: "active" } });
+      const group = await call("/api/usage?client=codex&device=unconfigured", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config);
+      expect(group?.status).toBe(200);
+      expect(group?.headers.get("cache-control")).toBe("no-store");
+      expect((await group!.json() as { summary: { requests: number } }).summary.requests).toBe(1);
+      expect((await call(`${path}&client=all`, "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(400);
+      expect((await call("/api/usage/source-facets?client=codex&device=key&apiKeyId=foreign", "GET", undefined, h.deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(400);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
+  });
+
   test("usage device inventory requires a dashboard session and exposes no key material", async () => {
     const h = harness();
     const record = { id: "lnk_0123456789abcdef", alias: "fixture-device", direction: "client-initiated" as const,

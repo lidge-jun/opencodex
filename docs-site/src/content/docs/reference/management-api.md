@@ -333,6 +333,7 @@ timing method unknown)** and a visible explanation of the timing method when a r
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
 | `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; 500 `{ "error": "read_failed" }` if storage cannot be read |
 | `GET /api/usage/devices` | List current Remote Link key IDs and aliases for an authorized dashboard session | 403 without the required dashboard session; 503 if the link store cannot be read |
+| `GET /api/usage/source-facets` | Count recent app and device choices for an authorized dashboard session | 400 for invalid filters; 403 without the required session; 503 if the scan or inventory is unavailable |
 | `GET /api/usage?jev=1` | Project persisted JEV decisions and their physical target sends. Optional `comboId` selects one Combo; `range` accepts `7d`, `30d`, or `all` (default `30d`). | 400 invalid `comboId`; 500 `{ "error": "read_failed" }` if the ledger cannot be read |
 | `GET /api/usage/timeline` | Bucketed usage by model/account; accepts `hours`, `bucketMinutes`, `metric`, `aggregation`, `grouping`, comma-separated `models` and repeated `hiddenProvider` filters | 400 invalid query or limits |
 | `GET /api/metrics` | Return process-local Prometheus text metrics for requests and cached Kiro quota. Kiro accounts use bounded opaque digest labels; raw account and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
@@ -427,7 +428,7 @@ records identify usage; provider quota percentages remain separate upstream obse
 
 For app and device attribution, `GET /api/usage` accepts both `client` and `device` together.
 `client` is `all`, `codex`, `claude_code`, `claude_desktop`, `grok`, `opencode`, `aside`,
-`other`, or `unknown`. `device` is `all`, `no-key`, or `key`; `key` requires exactly one
+`other`, or `unknown`. `device` is `all`, `no-key`, `key`, or `unconfigured`; `key` requires exactly one
 case-sensitive `apiKeyId`. These filters require `surface=all` or an omitted surface and cannot
 be combined with the JEV or failure projections. Invalid or repeated source options return 400.
 The response echoes the applied `sourceFilter` and `legacyUnclassifiedRequests` so consumers can
@@ -435,6 +436,13 @@ verify the filter was applied. Earlier records with no app field remain explicit
 the Codex selection includes legacy Codex-surface records in that count without assigning them a
 specific app. `no-key` includes requests without a configured key, including older and
 environment-admitted records; it does not prove a request came from a particular physical device.
+`unconfigured` requires a dashboard session and selects configured-admission rows whose key ID is
+absent from the current configured-key list. It describes current configuration, not proof that a
+key was deleted or which device used it; older rows without admission metadata are not included.
+The dashboard-session-only `/api/usage/source-facets` accepts the same `client` and `device`
+parameters and provides counts for a captured 30-day window, the filter echo and incomplete-read
+status. App counts respect the chosen device; device counts respect the chosen app. Individual key
+counts are limited to configured keys. This endpoint and `unconfigured` reports use `no-store`.
 Client labels are best-effort classifications of inbound headers, not authentication, and raw
 headers are not stored as client attribution. The `/v1/usage` data-key endpoint accepts `client`
 and echoes its authenticated-key scope without exposing the key ID. A Remote Link management relay
