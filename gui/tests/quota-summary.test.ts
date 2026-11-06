@@ -129,4 +129,70 @@ describe("quota summary", () => {
     expect(rows[1]!.windows.some(window => window.labelKey === "quotaSummary.credits")).toBe(false);
     expect(rows[2]!.windows.some(window => window.labelKey === "quotaSummary.credits")).toBe(false);
   });
+
+  test("WorkBuddy balances become display-only credit summaries, including a zero total", () => {
+    const balance = { total: 100, used: 70, remaining: 20, frozen: 10, groups: [], expiring: { amount: 5, at: now + 60_000 } };
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "workbuddy-ai", updatedAt: now, quota: { workbuddyCredits: balance } },
+      { provider: "zero", updatedAt: now, quota: { workbuddyCredits: { ...balance, total: 0, used: 0, remaining: 0 } } },
+      { provider: "stale-workbuddy", updatedAt: now - 60 * 60_000, quota: { workbuddyCredits: balance } },
+      { provider: "invalid", updatedAt: now, quota: { workbuddyCredits: { ...balance, remaining: NaN } } },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => row.provider)).toEqual(["workbuddy-ai", "zero"]);
+    expect(rows[0]!.headline.percent).toBe(70);
+    expect(rows[0]!.severity).toBe("warn");
+    expect(rows[0]!.headline.resetAt).toBeUndefined();
+    expect(rows[0]!.workbuddyCredits).toEqual(balance);
+    expect(rows[1]!.headline.percent).toBeUndefined();
+    expect(rows[1]!.workbuddyCredits?.remaining).toBe(0);
+    expect(rows[1]!.severity).toBe("normal");
+  });
+
+  test("critical WorkBuddy usage overrides a noncritical weekly window even after noncritical USD credits", () => {
+    const balance = { total: 100, used: 120, remaining: 0, frozen: 2, groups: [] };
+    const row = buildQuotaSummary({ workbuddy: { updatedAt: now, quota: {
+      weeklyPercent: 12, creditsUsd: { used: 5, limit: 10, remaining: 5, percent: 50 }, workbuddyCredits: balance,
+    } } }, name)[0]!;
+    expect(row.headline.percent).toBe(100);
+    expect(row.windows.map(window => window.percent)).toEqual([12, 50, 100]);
+    expect(row.windows[2]!.severity).toBe("critical");
+    expect(new Set(row.windows.map(window => window.id)).size).toBe(row.windows.length);
+  });
+
+  test("credit priority preserves critical recurring windows and uses the first critical credit otherwise", () => {
+    const workbuddyCredits = { total: 100, used: 95, remaining: 5, frozen: 0, groups: [] };
+    const creditsUsd = { used: 90, limit: 100, remaining: 10, percent: 90 };
+    const rows = buildQuotaSummary({
+      bothCredits: { updatedAt: now, quota: { weeklyPercent: 12, creditsUsd, workbuddyCredits } },
+      criticalWeekly: { updatedAt: now, quota: { weeklyPercent: 91, creditsUsd, workbuddyCredits } },
+      criticalUsd: { updatedAt: now, quota: { weeklyPercent: 12, creditsUsd, workbuddyCredits: { ...workbuddyCredits, used: 20 } } },
+    }, name);
+    expect(rows.map(row => [row.provider, row.headline.percent, row.severity])).toEqual([
+      ["bothCredits", 90, "critical"], ["criticalWeekly", 91, "critical"], ["criticalUsd", 90, "critical"],
+    ]);
+  });
+
+  test("WorkBuddy ids cannot be impersonated and an unmeasured balance does not displace a measured window", () => {
+    const workbuddyCredits = { total: 0, used: 0, remaining: 7, frozen: 0, groups: [], expiring: { amount: 2, at: now + 60_000 } };
+    const row = buildQuotaSummary({ workbuddy: { updatedAt: now, quota: {
+      weeklyPercent: 12, weeklyResetAt: now + 3_600_000, workbuddyCredits,
+      customWindows: [{ label: "workbuddy-credits", percent: 95 }, { label: "workbuddy-credits#1", percent: 96 }],
+    } } }, name)[0]!;
+    expect([row.headline.labelKey, row.headline.percent, row.headline.resetAt]).toEqual(["quota.weeklyLimit", 12, now + 3_600_000]);
+    const balanceWindow = row.windows.find(window => window.labelKey === "quotaSummary.credits")!;
+    expect([balanceWindow.percent, balanceWindow.resetAt]).toEqual([undefined, undefined]);
+    expect(row.workbuddyCredits?.expiring).toEqual(workbuddyCredits.expiring);
+    expect(new Set(row.windows.map(window => window.id)).size).toBe(row.windows.length);
+  });
+
+  test("WorkBuddy usage drives the same severity boundaries without counting reserved credits as used", () => {
+    for (const [used, severity] of [[0, "normal"], [69.9, "normal"], [70, "warn"], [89.9, "warn"], [90, "critical"], [100, "critical"]] as const) {
+      const row = buildQuotaSummary({ workbuddy: { updatedAt: now, quota: { workbuddyCredits: {
+        total: 100, used, remaining: 0, frozen: 25, groups: [],
+      } } } }, name)[0]!;
+      expect(row.headline.percent).toBe(used);
+      expect(row.severity).toBe(severity);
+    }
+  });
 });

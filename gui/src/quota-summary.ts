@@ -6,6 +6,7 @@
  * reported window simply has no row.
  */
 import type { AccountQuota } from "./codex-quota-utils";
+import type { WorkBuddyCreditBalance } from "../../src/providers/workbuddy-credit-balance";
 import type { TKey } from "./i18n/en";
 import { quotaWindows, resetTimestamp } from "./pages/tray-data";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
@@ -32,6 +33,7 @@ export interface QuotaSummaryRow {
   label: string;
   headline: QuotaSummaryWindow;
   windows: QuotaSummaryWindow[];
+  workbuddyCredits?: WorkBuddyCreditBalance;
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
@@ -54,7 +56,7 @@ export function formatQuotaPercent(percent: number | undefined): string {
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
 const HEADLINE_ORDER: TKey[] = ["quota.weeklyLimit", "quota.monthlyLimit", "quota.fiveHourLimit"];
 
-/** Build reported quota windows with distinct IDs, including measured prepaid credits. */
+/** Build reported quota and credit windows with distinct IDs for display. */
 function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   const windows: QuotaSummaryWindow[] = quotaWindows(quota).map(window => {
     const percent = finite(window.percent) ? window.percent : undefined;
@@ -79,6 +81,16 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       percent: credits.percent,
       ...(expiresMs !== null ? { resetAt: expiresMs } : {}),
       severity: quotaSeverity(credits.percent),
+    });
+  }
+  const workbuddy = quota.workbuddyCredits;
+  if (workbuddy) {
+    const percent = workbuddy.total > 0 ? Math.min(100, workbuddy.used / workbuddy.total * 100) : undefined;
+    windows.push({
+      id: "workbuddy-credits",
+      labelKey: "quotaSummary.credits",
+      ...(percent !== undefined ? { percent } : {}),
+      severity: quotaSeverity(percent),
     });
   }
   // Credits are appended after provider windows, whose labels can equal any fixed id.
@@ -108,13 +120,13 @@ function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undef
     }
   }
   if (!regular) regular = measured.find(window => window.labelKey !== "quotaSummary.credits");
-  const credits = byLabel.get("quotaSummary.credits");
-  if (credits && credits.severity === "critical" && regular?.severity !== "critical") return credits;
+  const criticalCredits = measured.find(window => window.labelKey === "quotaSummary.credits" && window.severity === "critical");
+  if (criticalCredits && regular?.severity !== "critical") return criticalCredits;
   return regular ?? measured[0];
 }
 
 /**
- * Build one summary row per provider that reported at least one measured window.
+ * Build one summary row per provider with a measured window or a WorkBuddy balance.
  * `reports` is the map produced by `freshQuotaReportsFromResponse`, so stale probes are
  * already dropped and response order is preserved.
  */
@@ -127,13 +139,14 @@ export function buildQuotaSummary(
     const quota = accountQuotaFromReport(report);
     if (!quota) continue;
     const windows = summaryWindows(quota);
-    const headline = pickHeadline(windows);
+    const headline = pickHeadline(windows) ?? (quota.workbuddyCredits ? windows[windows.length - 1] : undefined);
     if (!headline) continue;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
       headline,
       windows,
+      ...(quota.workbuddyCredits ? { workbuddyCredits: quota.workbuddyCredits } : {}),
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
       severity: headline.severity,

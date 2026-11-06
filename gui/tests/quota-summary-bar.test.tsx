@@ -30,21 +30,21 @@ afterEach(() => {
 });
 
 const now = Date.now();
-const t = ((key: string) => key) as unknown as TFn;
+const t = ((key: string, values?: Record<string, unknown>) => `${key}${values ? ` ${Object.values(values).join(" ")}` : ""}`) as unknown as TFn;
 const rows = buildQuotaSummary(freshQuotaReportsFromResponse([
   { provider: "openai", label: "OpenAI (Codex login)", updatedAt: now, quota: { weeklyPercent: 69, updatedAt: now } },
   { provider: "xai", label: "xAI Grok", updatedAt: now, quota: { weeklyPercent: 74, updatedAt: now } },
   { provider: "kimi", label: "Kimi", updatedAt: now, quota: { weeklyPercent: 31, updatedAt: now } },
 ], now), provider => provider);
 
-async function mount() {
+async function mount(mountRows = rows) {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
   let root!: Root;
   await act(async () => {
     root = createRoot(container);
-    root.render(<QuotaSummaryChips rows={rows} t={t} locale="en" />);
+    root.render(<QuotaSummaryChips rows={mountRows} t={t} locale="en" />);
   });
   const list = container.querySelector("ul")!;
   return {
@@ -56,6 +56,66 @@ async function mount() {
     unmount: () => act(async () => { root.unmount(); }),
   };
 }
+
+test("WorkBuddy zero-total details are accessible without inventing a percentage or a reset", async () => {
+  const workbuddyRows = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: { workbuddyCredits: {
+      total: 0, used: 0, remaining: 7, frozen: 3, groups: [], expiring: { amount: 2, at: now + 60_000 },
+    } } },
+  ], now), provider => provider);
+  const view = await mount(workbuddyRows);
+  const chip = view.chip("WorkBuddy AI");
+  expect(chip.textContent).toContain("7");
+  expect(chip.textContent).not.toContain("%");
+  Object.defineProperty(chip, "matches", { configurable: true, value: () => true });
+  await act(async () => { chip.focus(); });
+  const table = view.container.querySelector(".quota-summary-table")!;
+  expect(chip.getAttribute("aria-describedby")).toBe(table.id);
+  expect(table.textContent).toContain("quota.creditsBalance");
+  expect(table.textContent).toContain("quota.workbuddy.frozen");
+  expect(table.textContent).toContain("quota.workbuddy.expiring");
+  expect(table.textContent).not.toContain("0%");
+  await view.unmount();
+});
+
+test("WorkBuddy detail shows used, available, reserved, and partial expiry alongside a measured window", async () => {
+  const workbuddyRows = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: { workbuddyCredits: {
+      total: 100, used: 90, remaining: 7, frozen: 3, groups: [], expiring: { amount: 2, at: now + 60_000 },
+    } } },
+  ], now), provider => provider);
+  const view = await mount(workbuddyRows);
+  const chip = view.chip("WorkBuddy AI");
+  expect(chip.textContent).toContain("90%");
+  expect(chip.textContent).toContain("quotaSummary.critical");
+  Object.defineProperty(chip, "matches", { configurable: true, value: () => true });
+  await act(async () => { chip.focus(); });
+  const table = view.container.querySelector(".quota-summary-table")!;
+  expect(table.textContent).toContain("quota.workbuddy.usage 90 100");
+  expect(table.textContent).toContain("quota.workbuddy.amount 7");
+  expect(table.textContent).toContain("quota.workbuddy.amount 3");
+  expect(table.textContent).toContain("quota.workbuddy.expiring 2");
+  expect(table.querySelector(".quota-summary-row-reset")?.textContent).toBe("-");
+  await view.unmount();
+});
+
+test("critical WorkBuddy credits remain visible when weekly and USD usage are noncritical", async () => {
+  const combinedRows = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: {
+      weeklyPercent: 12, creditsUsd: { used: 5, limit: 10, remaining: 5, percent: 50 },
+      workbuddyCredits: { total: 100, used: 100, remaining: 0, frozen: 0, groups: [] },
+    } },
+  ], now), provider => provider);
+  const view = await mount(combinedRows);
+  const chip = view.chip("WorkBuddy AI");
+  expect(chip.textContent).toContain("100%");
+  expect(chip.textContent).toContain("quotaSummary.critical");
+  Object.defineProperty(chip, "matches", { configurable: true, value: () => true });
+  await act(async () => { chip.focus(); });
+  const percentages = Array.from(view.container.querySelectorAll(".quota-summary-row-pct"), cell => cell.textContent);
+  expect(percentages).toEqual(["12%", "50%", "100%"]);
+  await view.unmount();
+});
 
 async function click(element: Element) {
   await act(async () => {

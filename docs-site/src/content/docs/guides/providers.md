@@ -1377,6 +1377,9 @@ WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits
 balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
 account's billing summary; an unavailable read is not a zero balance. These credits are
 informational and do not disable free models when paid credits run out.
+The dashboard's quota summary also shows the used percentage when the total is positive,
+or the available balance when it is zero. Its details show reserved credits and any partial
+expiry separately; that expiry is not a reset of the whole balance.
 
 This uses an unofficial subscription protocol based on
 [Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).

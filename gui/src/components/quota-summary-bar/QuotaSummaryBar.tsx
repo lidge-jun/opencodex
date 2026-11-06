@@ -183,6 +183,8 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
 
   const { headline } = row;
   const warning = severityText(row.severity, t);
+  const number = (value: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+  const balance = row.workbuddyCredits;
   return (
     <li
       ref={rootRef}
@@ -209,7 +211,9 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         onClick={onClick}
       >
         <span className="quota-summary-name">{row.label}</span>
-        <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>
+        <span className="quota-summary-pct">{headline.percent === undefined && balance
+          ? t("quota.workbuddy.amount", { amount: number(balance.remaining) })
+          : formatQuotaPercent(headline.percent)}</span>
         {row.provider === "meta-muse" && headline.resetAt !== undefined && (
           <span className="quota-summary-name" title={formatResetFuture(headline.resetAt, t, locale)}>
             {formatMuseResetCountdown(headline.resetAt, clock)}
@@ -236,6 +240,15 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
                   </td>
                 </tr>
               ))}
+              {balance && <>
+                <tr><th scope="row">{t("quota.creditsBalance")}</th><td colSpan={2}>{t("quota.workbuddy.amount", { amount: number(balance.remaining) })}</td></tr>
+                <tr><th scope="row">{t("quota.workbuddy.usage", { used: number(balance.used), total: number(balance.total) })}</th><td colSpan={2} /></tr>
+                {balance.frozen > 0 && <tr><th scope="row">{t("quota.workbuddy.frozen")}</th><td colSpan={2}>{t("quota.workbuddy.amount", { amount: number(balance.frozen) })}</td></tr>}
+                {balance.expiring && <tr><th scope="row">{t("quota.workbuddy.expiring", {
+                  amount: number(balance.expiring.amount),
+                  date: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(balance.expiring.at),
+                })}</th><td colSpan={2} /></tr>}
+              </>}
             </tbody>
           </table>
           <div className="quota-summary-popover-foot">
