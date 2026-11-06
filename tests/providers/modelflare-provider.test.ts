@@ -40,10 +40,10 @@ describe("Modelflare provider", () => {
     expect(KEY_LOGIN_PROVIDERS.modelflare?.defaultModel).toBe("glm-5.3-flash");
   });
 
-  test("seeds only the verified chat models and leaves the 503-only DeepSeek V4.1 Flash out", () => {
+  test("seeds verified chat models plus preemptive Terra and leaves the 503-only DeepSeek V4.1 Flash out", () => {
     const seeded = config().providers.modelflare!;
     expect(seeded).toMatchObject({ adapter: "openai-chat", baseUrl, defaultModel: "glm-5.3-flash" });
-    expect(entry().models).toEqual([...VERIFIED_MODELS]);
+    expect(entry().models).toEqual([...VERIFIED_MODELS.slice(0, 3), "gpt-6.1-terra", ...VERIFIED_MODELS.slice(3)]);
     expect(entry().models).not.toContain("deepseek-v4.1-flash");
     expect(seeded.liveModels).not.toBe(true);
   });

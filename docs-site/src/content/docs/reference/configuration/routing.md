@@ -401,6 +401,29 @@ CLI: `ocx logs history`, `ocx logs get <request-id>`,
 `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 `ocx logs index-status`, `ocx route policy list | show | dry-run | evaluate`.
 
+### Index validation and recovery
+
+An existing history index is checked in a read-only worker when first opened.
+History queries wait for that initial check without blocking the proxy's serving
+thread. Synchronous routing reads report busy during validation, so routing
+profiles apply their `unknownEvidence.health` policy. A successful small inline
+rebuild is usable immediately; a worker rebuild is checked before publication.
+
+After a successful check or rebuild, the next read at least five minutes later
+starts one background integrity check. Reads from the verified index continue
+during that check. Normal refreshes retain schema, source-identity and offset
+validation without a full synchronous scan, and an idle index starts no timer.
+Temporary check failures, such as a busy database or unavailable worker, leave
+the index intact and retry on a subsequent read after a 30-second backoff.
+An index that has not completed initial validation remains unavailable meanwhile.
+
+Detected corruption triggers automatic reconstruction from `usage.jsonl`, with
+one retry for an affected asynchronous history or analytics read. Closing or
+rebuilding the index discards old check results and waits for the scanner to
+release the file before replacing it. Validation and recovery never rewrite the
+canonical ledger. The initial check still takes time proportional to index size;
+later background checks run only when the index is used.
+
 ## Migration
 
 `routingProfiles` is optional and additive: existing config files load

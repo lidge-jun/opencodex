@@ -37,6 +37,7 @@ const WORKER_ENTRIES: Record<string, string> = {
   "policy-worker": join(repoRoot, "src", "storage", "policy-worker.ts"),
   "restore-worker": join(repoRoot, "src", "storage", "restore-worker.ts"),
   "history-worker": join(repoRoot, "src", "codex", "history-worker.ts"),
+  "cli-update-worker": join(repoRoot, "src", "codex", "cli-update-worker.ts"),
   "request-history-rebuild-worker": join(repoRoot, "src", "routing", "history", "rebuild-worker.ts"),
   "windows-native-principal-worker": join(repoRoot, "src", "lib", "windows-native-principal-worker.ts"),
 };

@@ -182,6 +182,15 @@ what those sends may cost, and it is the only bound here that survives a restart
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`
 and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the same tracker before its independent physical-send ladder and charges it immediately before each dispatch, so that fast path cannot bypass root, identity or provider-pool ceilings.
 
+The tracker settles with `logCtx.usage`, and so does the row. A combo copies its child's log
+context into that one only when the child commits, while the bridge binds the adapter usage later,
+at the terminal frame. `executeComboResponses` therefore passes each child `onBridgeUsageBound`
+(`core-options.ts`), which `bindKeyUsageFromBridge` calls after it binds. After the child commits,
+the combo sets `usageFromBridge` and `usage` on its own context; a binding that came earlier waits
+for the commit, and a child that fails or never commits forwards nothing. Without that, the row
+and the settlement would read the usage back off the bridged Responses wire, which carries no
+`providerCredits` and derives its input count from the context checkpoint.
+
 Unconfigured requests preserve the legacy counter observer: reservations increment the send
 counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
 the seed and physical-start protocol below across Responses, native Messages and native Chat.
@@ -359,12 +368,24 @@ identically with and without configured ceilings: observe-only still appends, se
 Two servers in one process and one directory share a reference-counted lease; that process cannot
 hold two directories at once. Sequential ownership is allowed and concurrent ownership is not:
 releasing the final reference discards the singleton, so a later directory replays its own
-journal instead of inheriting figures. A ledger records the ownership it was built under and
+journal instead of inheriting figures.
+Final-release hooks run before that discard while existing storage tokens remain valid; each hook
+is isolated from errors in the others. Acquiring another lease or minting storage during these
+hooks is refused. Releasing a non-final reference or releasing the same lease twice runs no hooks.
+Acquired hooks run once per new ownership generation, after the owner is recorded and before
+`acquireSpendLedgerOwner` returns; a hook error does not block acquisition, and a nested lease on an
+existing owner does not run them again. The durable Codex pool affinity store uses one to open and
+prune at startup ([Durable Codex Pool Affinity](../providers/codex-pool-affinity.md)).
+The ledger records the ownership it was built under and
 proves that exact identity on every accounting read and change, so a handle kept across a release
 and a reacquire of the same directory is refused rather than resuming over writes another owner
 may have made. File-backed journal and salt writers are owner-bound at construction, and a
 directory entry that is a link -- including one whose target does not exist -- is refused instead
-of followed. A separate process may use a separate directory. SQLite crash release permits the
+of followed. The owner database `spend-ledger-owner.sqlite` and its SQLite sidecars pass the same
+`src/lib/private-sqlite-path.ts` check before the file is created and before SQLite opens it: a link, any
+Windows reparse point, a directory or a hard link there fails acquisition with
+`SPEND_LEDGER_OWNER_UNAVAILABLE` without creating what it names. On Windows ARM64, whose Bun build
+cannot run the native attribute query, only the links and junctions `lstat` reports are refused. A separate process may use a separate directory. SQLite crash release permits the
 next owner without stale-PID or TTL reclamation.
 
 Every file check admits a ledger file only when it is a regular file, not a link, with exactly

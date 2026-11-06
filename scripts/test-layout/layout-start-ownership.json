@@ -1,0 +1,8 @@
+{
+  "cli-start-owner-absence.test.ts": "cli",
+  "cli-start-owner-evidence.test.ts": "cli",
+  "proxy-liveness-owner-evidence.test.ts": "server",
+  "proxy-liveness-recovery.test.ts": "server",
+  "proxy-liveness-bind-scope.test.ts": "server",
+  "system-restart-ownership.test.ts": "server"
+}

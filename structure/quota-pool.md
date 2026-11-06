@@ -28,19 +28,61 @@ every caller, and reads only caches other paths filled:
   claim. Each account's window `source` is `header` when its newest quota-history sample came from
   response headers and `measured` otherwise (`latestCodexQuotaObservationSource`, a read that never
   prunes or clears history).
-- Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They become
-  the provider's `pooled` windows; an aggregated Codex pool report is `estimated`, an in-band
-  observed report is `header`, any other report is `measured`.
 - Per-account OAuth quota (Anthropic instances, Kiro, Antigravity, xAI, Cursor, Kimi, Command Code,
   Devin, DSH, Meta): the last-good per-account cache. A current `QuotaFailureCode` becomes
   `failure`.
 - Claude CLI: `peekClaudeUsageObservation` in `src/adapters/claude-cli/usage-admission.ts`, which
   reads the admission snapshot from memory or its file without resolving the sign-in. A parsed CLI
   limit refusal is a `custom` window `refusal` with `exhausted: true` and source `estimated`.
+- Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They are the
+  `pooled` windows only where account rows do not serve the configured provider: a provider with
+  no account rows (an API-key provider's credits, for example) or a per-account provider configured
+  with an API key (see [Pooled windows](#pooled-windows)). An in-band observed report is `header`,
+  any other report is `measured`.
 
 `tests/server/quota-pool-relay.test.ts` reads the route on the Home, over the link relay and over
-the hub relay against a pool account with an expired token, and fails on any fetch, process spawn or
-file write inside the read and on any change to the Home's files.
+the hub relay against a pool account with an expired token and an empty provider-report cache. It
+fails on any fetch, process spawn or file write inside the read, on any change to the Home's files,
+and unless the Codex `pooled` windows are still computed from the account rows.
+
+## Pooled windows
+
+A provider whose requests are served by account rows (the Codex pool, Claude CLI, and a
+per-account OAuth provider configured with `authMode: "oauth"`) gets its `pooled` windows from
+those rows in `src/quota-pool/pooled.ts`, a pure function over the mapped account windows. The
+pool therefore does not depend on an active `/api/provider-quotas` read or the reset poller having
+warmed the report cache, and a held report never stands in for the rows it was computed from. A
+per-account provider configured with an API key still lists any stored OAuth rows, but its pool is
+the key's held report, the same split the quota dispatcher makes.
+
+Per window id, over the accounts automatic routing may pick, the pooled `usedPercent` is
+Σ(weight × usedPercent) / Σ(weight). Codex weights are the plan calibration in
+`src/providers/codex-capacity.ts` (`codexCapacityWeight`), the same configured-weight estimate
+`aggregateCodexPoolCapacity` gives the dashboard. Per-account OAuth providers have no calibrated
+plan table, so each routable account counts once. Excluded from the pool: paused and reauth
+accounts, and Codex accounts with a `selectionExcludedReason` (plan-excluded, or a duplicate of the
+main login). A reading older than `CODEX_CAPACITY_MAX_QUOTA_AGE_MS` (30 minutes), a window whose
+reset has passed, and a window an account has no reading for never contribute, so unknown is never
+averaged in as 0%; when nothing contributes, the window is absent. Credits windows pool by percent
+only (`used` and `limit` are not summed).
+
+Every pooled window is `estimated`. Its `observedAt` is the oldest contributing observation, its
+`resetsAt` the earliest contributing reset, and `windowSeconds` and `unit` appear only when every
+contributor agrees. Its `exhausted` speaks for that window alone: true when every eligible account
+has that window exhausted.
+
+Whether the pool can run at all is a separate `custom` window, present only while it cannot:
+`availability` ("Pool availability") when every eligible account holds an unscoped exhausted
+window, and `availability:<scope>` (with that `scopeModel`) when every eligible account is blocked
+for one model scope, by the scoped window or an unscoped one, and neither `availability` nor the
+scoped window itself already says so. It carries `exhausted: true` and no percentage; its
+`resetsAt` is the earliest moment some account recovers (an account recovers when the last of its
+blocking windows resets; omitted when no recovery time is known) and its `observedAt` the oldest
+blocking observation. So two accounts blocked on different windows, or a Claude CLI refusal with no
+usage reading, make the pool unavailable until the first block lifts, without stamping that timing
+on the percentage windows. An eligible account with no fresh evidence is not known to be blocked and
+keeps the pool open, because routing would still try it. GOAT's placement reads `exhausted: true`
+as 100% used. Priority tiers, pins, affinity and credits policy are not reflected in the estimate.
 
 ## Window mapping
 
@@ -49,9 +91,10 @@ Kinds come from the fields the existing parsers stored (`parseUpstreamQuotaHeade
 `custom` beyond) and carries `windowSeconds` only when upstream stated it; provider `fiveHour*` is
 `burst_5h`; weekly and monthly map by name; Kiro plan credits and USD credits are `credits` windows
 with `unit`. A window an upstream proved to be model-scoped (`scope: "model"`) carries
-`scopeModel` and never makes the whole account `exhausted`; an exact-model diagnostic row without
-that proof is dropped, because unscoped it would gate every model. `rejected` evidence becomes
-`exhausted: true`.
+`scopeModel: "family:<name>"` (lowercase, `family:opus`), the form GOAT's placement matches against
+every versioned model of that Claude family, and never makes the whole account `exhausted`; an
+exact-model diagnostic row without that proof is dropped, because unscoped it would gate every
+model. `rejected` evidence becomes `exhausted: true`.
 
 Absent is unknown: a window with no reading is omitted, never reported as 0%, and a window whose
 reset has passed is omitted too. Optional fields are left out instead of set to `null`. Account

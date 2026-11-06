@@ -62,6 +62,16 @@ when a maintainer steps down.
   the ruleset does not check ancestry (see the note under the change log).
 - Pull requests require successful required CI checks before merge. Contributor pull requests
   normally require approval from at least one maintainer other than the author.
+- **Batched merges.** A pull request's own CI is the fast lane by default: `gates` plus
+  `test changed` (the tests Bun's import graph reaches from the diff), not the four full
+  Ubuntu shards. The shards still run on a pull request that carries the `ci:full` label at
+  push time or touches the CI/test harness, fixtures, toolchain or dependency set
+  (`scripts/ci/select-test-lane.sh`). Add `ci:full` before pushing when a change reaches shared
+  contracts in ways an import graph cannot see (subprocesses, files read as data, generated
+  output). Merge green pull requests one at a time; after roughly every five merges, run
+  `gh workflow run ci.yml --ref dev` (the default `lane=all`). If that run is red, stop merging,
+  fix `dev` from the batch it covers, and resume once it is green. Always run it before a
+  promotion to `main`.
 - A current maintainer with GitHub `maintain` or `admin` access may explicitly integrate a pull
   request into `dev` without another maintainer's approval, including their own pull request.
   Record that choice and the exact-head verification in the pull-request description or comment.

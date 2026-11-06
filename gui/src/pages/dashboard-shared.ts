@@ -8,7 +8,7 @@ import {
 import { readJsonOrThrow } from "../fetch-json";
 import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
-import { shadowSourceModelList } from "./shadow-call-source";
+import { shadowSourceModelList, type ShadowCallSourceOption } from "./shadow-call-source";
 import type { AnthropicInstanceId, AnthropicPoolOptions } from "./claude-manual-env";
 
 export type DashboardSection = "overview" | "providers" | "models";
@@ -137,7 +137,13 @@ export interface SidecarPatch {
     timeoutMs?: number;
   };
 }
-export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
+export interface ShadowCallData {
+  enabled: boolean;
+  model: string;
+  sourceModels?: string[];
+  /** Runtime-owned source inventory; older runtimes omit it. */
+  sourceModelOptions?: ShadowCallSourceOption[];
+}
 export type UsageSummary30d = import("../usage-summary-resource").UsageReadMetadata & { summary: { requests: number; totalTokens: number; coverageRatio: number } };
 export type UpdateChannel = "latest" | "preview";
 export type Installer = "bun" | "mise" | "npm" | "pnpm" | "source";

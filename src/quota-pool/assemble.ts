@@ -9,12 +9,15 @@
  *
  * - Codex pool accounts: the passive `listCodexAuthAccountsSnapshot` (stored `StoredAccountQuota`
  *   per account plus the cached main-account reading);
- * - provider-level reports: `heldProviderQuotaReports`, the reports the Home last published
- *   (for the Codex pool provider this is OpenCodex's own pool aggregate, reported as `pooled`);
  * - per-account OAuth quota (Anthropic instances, Kiro, Antigravity, xAI, Cursor, Kimi, Command
  *   Code, Devin, DSH, Meta): the last-good per-account cache;
  * - Claude CLI: the usage-admission snapshot (5-hour, weekly and family windows, plus a parsed
- *   CLI limit refusal).
+ *   CLI limit refusal);
+ * - provider-level reports: `heldProviderQuotaReports`, the reports the Home last published, used
+ *   as `pooled` only for a provider without account rows.
+ *
+ * A provider with account rows gets its `pooled` windows from those rows (`pooled.ts`), so the
+ * pool does not depend on an active quota read having warmed the report cache.
  *
  * An unknown window is omitted, never emitted as 0%. A window whose reset has passed is unknown
  * again and is omitted too. Optional fields are left out instead of set to null.
@@ -51,6 +54,8 @@ import {
   type QuotaPoolWindow,
 } from "./contract";
 import { quotaPoolAccountRef, readQuotaPoolIdentity, type QuotaPoolIdentity } from "./identity";
+import { pooledWindows, type PooledAccountInput } from "./pooled";
+import { codexCapacityWeight } from "../providers/codex-capacity";
 
 const VERSION = packageVersion("0.0.0");
 const SHORT_BURST_MAX_SECONDS = 6 * 3600;
@@ -152,7 +157,8 @@ function customWindow(window: ProviderQuotaWindow, source: QuotaPoolSource, upda
     kind: "custom",
     label: window.label,
     ...(percent(window.percent) !== undefined ? { usedPercent: percent(window.percent) } : {}),
-    ...(scoped ? { scopeModel: window.label } : {}),
+    // GOAT's placement reads `family:<name>` as every versioned model in that Claude family.
+    ...(scoped ? { scopeModel: `family:${window.label.toLowerCase()}` } : {}),
     ...(window.rejected === true ? { exhausted: true } : {}),
     resetMs: resetMs(window.resetAt),
   }, passive ? "header" : source, passive ? window.passiveObservedAt! : updatedAt, now);
@@ -215,7 +221,13 @@ function reportSource(report: ProviderQuotaReport): QuotaPoolSource {
   return report.observed === true ? "header" : "measured";
 }
 
-function codexAccounts(identity: QuotaPoolIdentity, accounts: Awaited<ReturnType<typeof listCodexAuthAccountsSnapshot>>["accounts"], now: number): QuotaPoolAccount[] {
+/** An account row with its input to the provider's pooled windows. */
+interface TrackedAccount {
+  account: QuotaPoolAccount;
+  pool: PooledAccountInput;
+}
+
+function codexAccounts(identity: QuotaPoolIdentity, accounts: Awaited<ReturnType<typeof listCodexAuthAccountsSnapshot>>["accounts"], now: number): TrackedAccount[] {
   const provider = OPENAI_CODEX_PROVIDER_ID;
   return accounts.map(dto => {
     const source: QuotaPoolSource = latestCodexQuotaObservationSource(dto.id) === "response-header" ? "header" : "measured";
@@ -230,11 +242,17 @@ function codexAccounts(identity: QuotaPoolIdentity, accounts: Awaited<ReturnType
     };
     if (typeof dto.logLabel === "string" && ACCOUNT_LOG_LABEL_RE.test(dto.logLabel)) account.label = dto.logLabel;
     if (typeof dto.plan === "string" && dto.plan.trim()) account.plan = dto.plan.trim();
-    return account;
+    // A plan-excluded account and a duplicate of the main login are outside automatic routing.
+    const eligible = !dto.paused && dto.needsReauth !== true && dto.selectionExcludedReason === undefined;
+    return { account, pool: { eligible, weight: codexCapacityWeight(dto.plan), windows } };
   });
 }
 
-function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: number): QuotaPoolAccount[] {
+/**
+ * Per-account OAuth providers have no calibrated plan-to-capacity table (the Codex weights describe
+ * Codex plans only), so each routable account counts once.
+ */
+function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: number): TrackedAccount[] {
   const set = getAccountSet(provider);
   if (!set) return [];
   return set.accounts.map(row => {
@@ -250,11 +268,11 @@ function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: numbe
     };
     const failure = entry?.quotaFailure && entry.quotaFailureIsCurrent?.() === true ? parseQuotaFailureCode(entry.quotaFailure) : undefined;
     if (failure) account.failure = failure;
-    return account;
+    return { account, pool: { eligible: row.paused !== true && row.needsReauth !== true, weight: 1, windows } };
   });
 }
 
-function claudeCliAccounts(identity: QuotaPoolIdentity, provider: string, deps: QuotaPoolDeps, now: number): QuotaPoolAccount[] {
+function claudeCliAccounts(identity: QuotaPoolIdentity, provider: string, deps: QuotaPoolDeps, now: number): TrackedAccount[] {
   const observation = peekClaudeUsageObservation(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {});
   if (!observation) return [];
   const windows = observation.quota ? providerQuotaWindows(observation.quota, "measured", now) : [];
@@ -264,10 +282,13 @@ function claudeCliAccounts(identity: QuotaPoolIdentity, provider: string, deps: 
     if (refusal) windows.push(refusal);
   }
   return [{
-    provider,
-    accountRef: quotaPoolAccountRef(identity, provider, `claude-cli:${observation.identity}`),
-    state: accountState({ reauth: false, paused: false, windows }),
-    windows,
+    account: {
+      provider,
+      accountRef: quotaPoolAccountRef(identity, provider, `claude-cli:${observation.identity}`),
+      state: accountState({ reauth: false, paused: false, windows }),
+      windows,
+    },
+    pool: { eligible: true, weight: 1, windows },
   }];
 }
 
@@ -288,25 +309,34 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
   const providers: QuotaPoolProvider[] = [];
   for (const name of names) {
     const provider = config.providers[name]!;
-    let accounts: QuotaPoolAccount[] = [];
+    let rows: TrackedAccount[] = [];
     let tracked = false;
+    // Whether requests to this provider are served by those account rows. A per-account provider
+    // configured with an API key keeps any stored OAuth rows on display, but its quota is the
+    // key's report, as the quota dispatcher reads it.
+    let poolFromRows = true;
     if (codexPool && name === OPENAI_CODEX_PROVIDER_ID) {
       tracked = true;
-      accounts = codexAccounts(identity, codex, now);
+      rows = codexAccounts(identity, codex, now);
     } else if (provider.adapter === "claude-cli") {
       tracked = true;
-      accounts = claudeCliAccounts(identity, name, deps, now);
+      rows = claudeCliAccounts(identity, name, deps, now);
     } else if (supportsPerAccountQuota(name) || hasPassiveAccountQuota(name)) {
       tracked = true;
-      accounts = oauthAccounts(identity, name, now);
+      rows = oauthAccounts(identity, name, now);
+      poolFromRows = provider.authMode === "oauth";
     }
     const report = reports.get(name);
-    const pooledWindows = report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
     if (!tracked && !report) continue;
-    const pooled: QuotaPoolProvider["pooled"] = { windows: pooledWindows };
-    const next = nextResetAt(pooledWindows);
+    // Account rows are the evidence a held report was computed from, at least as new and with
+    // their own observation times; the report stands in only where there are no rows.
+    const windows = poolFromRows && rows.length > 0
+      ? pooledWindows(rows.map(row => row.pool), now)
+      : report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
+    const pooled: QuotaPoolProvider["pooled"] = { windows };
+    const next = nextResetAt(windows);
     if (next) pooled.nextResetAt = next;
-    providers.push({ provider: name, accounts, pooled });
+    providers.push({ provider: name, accounts: rows.map(row => row.account), pooled });
   }
   return {
     schema: QUOTA_POOL_SCHEMA,

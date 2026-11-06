@@ -5,6 +5,8 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 
 **連線** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十八個客戶端以這種方式運作，每個都有一個開關：
 
+在 Windows 上，要求絕對路徑的覆寫值必須包含磁碟機代號（`C:\Users\me\client`）或 UNC 共用（`\\server\share\client`）。`\Users\me\client` 和 `/client/config` 依賴目前的磁碟機，因此會被拒絕。明確支援 `~` 的選擇器仍以有效家目錄展開；Gentle Shell 不展開 `~`。
+
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 下次直接啟動 | `OPENCODEX_OPENCODE_API_KEY` |
@@ -234,3 +236,19 @@ ocx integration client enable --client kilo
 ## Factory Droid
 
 Factory Droid 使用 `~/.factory/settings.json`（Windows 上為 `%USERPROFILE%\.factory\settings.json`）。使用 `ocx integration client enable --client droid` 明確啟用，然後在 `/model` 中選擇自訂模型。受管理的項目不含金鑰，且僅支援迴環連線。停用會移除受管理的項目；Undo 會還原儲存的原始位元組。如果舊版 `config.json` 含有 OpenCodex 項目，或 `settings.local.json` 覆寫了 `customModels`，請先解決衝突再啟用。請參閱 [Factory BYOK 文件](https://docs.factory.ai/model-independence/byok)。
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

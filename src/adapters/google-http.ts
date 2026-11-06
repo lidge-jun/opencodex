@@ -4,15 +4,17 @@ import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { debugProviderDiagnosticLazy } from "../lib/debug";
-import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { extractGoogleRetryAfterSeconds, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
 import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { markAntigravityModelNotFound } from "./antigravity-refusal";
 import {
   abortError,
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
+  RETRY_AFTER_CEILING_MS,
   retryBackoffDelayMs,
   sleepWithAbort,
   SendBudgetExhaustedError,
@@ -30,19 +32,27 @@ export interface GoogleRetryOptions {
   toolSchemaPolicy?: GoogleToolSchemaPolicy;
 }
 
-async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
-  if (label === "Antigravity" && res.status === 403) {
-    const body = await readBoundedResponseBody(res, {
-      maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
-      inactivityTimeoutMs: 2000, signal,
-    });
+async function normalizeFinalGoogleError(label: string, res: Response, request: AdapterRequest, signal?: AbortSignal): Promise<Response> {
+  if (label === "Antigravity" && (res.status === 403 || res.status === 404)) {
+    let payloadText = "";
+    try {
+      const body = await readBoundedResponseBody(res, {
+        maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
+        inactivityTimeoutMs: 2000, signal,
+      });
+      if (body.displaySafe && !body.truncated && !body.timedOut && !body.oversized) payloadText = body.text;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+    }
     const headers = new Headers(res.headers);
     headers.delete("content-encoding");
     headers.delete("content-length");
-    return inheritAccountAutoPauseResponse(res, new Response(safeGoogleHttpErrorMessage(label, res.status,
-      body.displaySafe && !body.truncated ? body.text : ""), {
+    const normalized = inheritAccountAutoPauseResponse(res, new Response(safeGoogleHttpErrorMessage(label, res.status,
+      payloadText), {
       status: res.status, statusText: res.statusText, headers,
     }));
+    if (!signal?.aborted) markAntigravityModelNotFound(normalized, request.body, payloadText);
+    return normalized;
   }
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
@@ -109,7 +119,7 @@ export async function fetchGoogleWithRetry(
               changedSendAllowed,
             }));
             if (!changedSendAllowed) {
-              return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+              return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
             }
           }
           compatibilityReplayUsed = true;
@@ -121,7 +131,7 @@ export async function fetchGoogleWithRetry(
         }
       }
       if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
-        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
       }
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
       // it won't recover for hours and burns retries). Peek the body to tell them apart.
@@ -129,19 +139,34 @@ export async function fetchGoogleWithRetry(
         const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
         if (isQuotaExhaustedBody(peek)) {
-          return ctx.returnRawErrors ? res : normalizeUpstreamHttpErrorResponse(res, {
+          if (ctx.returnRawErrors) return res;
+          const normalized = await normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
           });
+          if (!normalized.headers.has("retry-after")) {
+            const retryAfter = extractGoogleRetryAfterSeconds(peek);
+            if (retryAfter) normalized.headers.set("retry-after", retryAfter);
+          }
+          return normalized;
         }
       }
-      pendingResponse = res;
-      recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
-      retryDelayMs = retryBackoffDelayMs(attempt, {
+      // Retry-After names the earliest send Google will serve (#7802). The local maximum bounds
+      // only our own backoff; it must not shorten the provider's instruction into a send it
+      // already said it would refuse. An instruction past the shared wait deadline ends with
+      // this upstream answer, Retry-After intact, exactly as fetchWithTransientRetry does.
+      const delayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
         headers: res.headers,
+        retryAfterIsLowerBound: true,
       });
+      if (delayMs > RETRY_AFTER_CEILING_MS) {
+        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
+      }
+      pendingResponse = res;
+      recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
+      retryDelayMs = delayMs;
     } catch (err) {
       if (ctx.abortSignal?.aborted) throw err;
       if (err instanceof SendBudgetExhaustedError) {
@@ -151,7 +176,7 @@ export async function fetchGoogleWithRetry(
           // upstream answer — but it used to leave the log indistinguishable from a request
           // where no retry was ever eligible (#5044).
           ctx.onRecoveryWithheld?.({ reason: "retry-send-budget" });
-          return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, ctx.abortSignal);
+          return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, activeRequest, ctx.abortSignal);
         }
         throw err;
       }

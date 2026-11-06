@@ -15,6 +15,7 @@ mock.module("../../src/oauth", () => ({
 }));
 
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
+import { CLAUDE_CLI_USER_AGENT } from "../../src/providers/claude-cli-identity";
 import { parseRequest } from "../../src/responses/parser";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -207,7 +208,7 @@ describe("Anthropic vision executor", () => {
     expect(captured?.headers.get("x-app")).toBe("cli");
     expect(captured?.headers.get("x-claude-code-session-id")).toBeTruthy();
     expect(captured?.headers.get("x-client-request-id")).toBeTruthy();
-    expect(captured?.headers.get("user-agent")).toBe("@anthropic-ai/sdk/0.74.0");
+    expect(captured?.headers.get("user-agent")).toBe(CLAUDE_CLI_USER_AGENT);
 
     expect(captured?.body.model).toBe("claude-sonnet-5");
     expect(captured?.body.max_tokens).toBe(1024);

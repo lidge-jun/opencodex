@@ -38,11 +38,13 @@ export class CursorH2SessionPool {
   request(
     url: string,
     headers: http2.OutgoingHttpHeaders,
+    credentialScope?: string,
   ): http2.ClientHttp2Stream {
     if (this.closed) throw new Error("Cursor H2 session pool is closed");
     this.armShutdownHook?.();
     const origin = new URL(url).origin;
-    const entry = this.usableEntry(origin) ?? this.createEntry(origin);
+    const poolKey = credentialScope ? `${origin}\0${credentialScope}` : origin;
+    const entry = this.usableEntry(poolKey) ?? this.createEntry(origin, poolKey);
     try {
       const stream = entry.session.request(headers);
       entry.streams.add(stream);
@@ -74,33 +76,33 @@ export class CursorH2SessionPool {
 
   get size(): number { return this.entries.size; }
 
-  private usableEntry(origin: string): PoolEntry | undefined {
-    const entry = this.entries.get(origin);
+  private usableEntry(poolKey: string): PoolEntry | undefined {
+    const entry = this.entries.get(poolKey);
     if (!entry) return undefined;
     if (entry.usable && !entry.session.closed && !entry.session.destroyed) return entry;
     this.drain(entry, false);
     return undefined;
   }
 
-  private createEntry(origin: string): PoolEntry {
+  private createEntry(origin: string, poolKey = origin): PoolEntry {
     const session = http2.connect(origin);
     const entry: PoolEntry = {
       session,
       streams: new Set(),
       usable: true,
     };
-    this.entries.set(origin, entry);
+    this.entries.set(poolKey, entry);
     session.once("goaway", () => { this.drain(entry, true); });
     session.on("error", () => { this.drain(entry, false); });
     session.once("close", () => {
       // Identity check: a stale close event from an old session must not evict
       // a healthy replacement entry that was created after drain() removed the old one.
-      if (this.entries.get(origin) === entry) this.entries.delete(origin);
+      if (this.entries.get(poolKey) === entry) this.entries.delete(poolKey);
     });
     // Enforce bound: evict oldest when over capacity.
     while (this.entries.size > this.maxSessions) {
       const oldest = this.entries.keys().next().value;
-      if (!oldest || oldest === origin) break;
+      if (!oldest || oldest === poolKey) break;
       const old = this.entries.get(oldest);
       if (old) this.drain(old, true);
     }

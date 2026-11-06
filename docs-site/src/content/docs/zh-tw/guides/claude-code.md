@@ -14,9 +14,9 @@ Code 可以使用每一個已路由的供應商——包括 OAuth 登入、帳�
 
 **實驗性、opt-in** 的 Claude 帳號池（`anthropicAccountPool.enabled`）會在這些 OAuth 帳號之間加入
 sticky session affinity 與依用量的新工作階段選擇。它**不**控制 429 容錯移轉：只要儲存了兩個以上可用帳號，被限流的請求無論此開關開或關都會切換到另一個帳號，且無法關閉。僅對**新**工作階段，`anthropicAccountPool.strategy`
-會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時，依
-`anthropicAccountPool.quotaWindow` 所設定的視窗挑選已知用量最低者（`five-hour` 為預設，亦可選
-`weekly` 或 `max-utilization`）；
+會在合格帳號之間選擇：`quota`（預設）保留現用帳號，直到 `anthropicAccountPool.quotaWindow` 所設定視窗的用量
+（`five-hour` 為預設，亦可選 `weekly` 或 `max-utilization`）達到 `autoSwitchThreshold`
+（預設 80），然後轉到用量最低的帳號，並優先選擇低於自身閾值的帳號；
 `round-robin` 平均分散（`stickyLimit`，預設 `1`）；`fill-first` 一直使用作用中帳號直到冷卻、重新認證
 或達到閾值，然後前進。它**預設關閉**，仍屬實驗性功能。
 
@@ -28,9 +28,9 @@ Anthropic 未認可自動帳號池；同一組織的帳號可能共用配額（�
 
 啟用時的營運契約：
 
-- 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff）、清除其 affinity，
-  並可能在同一個請求內輪換到另一個合格帳號（有上限）。
-- Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
+- 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff），
+  並可能在同一個請求內輪換到另一個合格帳號（有上限）。只有共享配額拒絕會清除 affinity；暫時限流會保留綁定。
+- Affinity 可在相同設定目錄及提供者實例中跨 proxy 重啟保留（閒置 24 小時，最多 2,000 筆）。快照只存工作階段摘要及登入識別圍欄，不存原始工作階段金鑰或 token。沒有持久登入識別的舊帳號在再次登入前僅保留程序內綁定；一般 token 更新保留綁定，重新登入、移除、暫停、需要重新驗證或執行期間手動選擇帳號則使其失效。暫時限流的替代帳號不會覆寫原綁定。
 - Token 更新失敗保留既有 `needsReauth` 規則。明確的訂閱或帳號計費 403 可在輸出前切換帳號，冷卻遵循 `Retry-After` 或預設十分鐘；一般權限拒絕不切換。詳見[帳號復原](/guides/claude-code/)。
 - 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
 - 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
@@ -166,6 +166,8 @@ Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。�
 儀表板的 **連線 → Claude Desktop** 也有相同的切換開關。選取 Picker 設定檔後，請完全結束並重新開啟 Claude Desktop。
 
 Picker 模式屬於第一方模式，因此[第一方帳號風險](#第一方自行選擇)同樣適用。
+
+在上游首次回應之前，Picker 上傳若連續 60 秒沒有進展就會關閉。逾時會中斷上傳，不會回傳成功回應；HTTP/2 僅重設受影響的串流。上游背壓導致傳輸暫停時，閒置計時也會暫停；上傳完成或上游首次回應後，計時器會被移除。此閒置保護機制不會額外限制上傳總時長，現有執行階段與通訊協定限制仍然適用。回應串流不受此計時器限制。
 
 ## Claude Desktop 設定檔
 
@@ -396,9 +398,7 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 可以在 Claude 頁面調整壓縮值。**警告：**如果將其提高到超過模型的實際視窗，該模型將無法正常
 工作——聊天會在觸發摘要之前報錯。
 
-正規化上下文超限錯誤時，只使用提供方錯誤訊息的前 65,536 個 UTF-16 程式碼單元。
-後面的診斷資訊或 token 數可能被捨棄，且不會新增截斷標記。
-詳細限制和 token 數處理條件請參閱[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
+Messages 錯誤回應正規化使用固定文案，不保留提供方原文或 token 數量。辨識到上下文超限時傳回 `prompt is too long: The request exceeds the model's context window.`。串流中第一個欄位為 error 事件的區塊最多保留 1 MiB；超過後傳回不含壓縮觸發短語的固定錯誤。範圍和兩項例外請見[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的壓縮值在啟動槽位標記上始終優先（代理會使用**你的**
 值來判斷哪些模型可以安全標記）。探索列表忽略該匯出值並保持固定下限。手動編輯設定時填入的無效值會回退到 829,800。
@@ -554,7 +554,7 @@ Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先
 | Assistant `tool_use` | `function_call`（`input` → JSON 字串化的 `arguments`） |
 | 使用者 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 字首） |
 | 重放 `thinking` / `redacted_thinking` | `reasoning` 項目；簽名與遮蔽載荷保存在有界 `ocxr1` 信封中 |
-| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） |
+| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） 帶有 `allowed_domains`、`blocked_domains` 或 `user_location` 的託管搜尋會從轉換後的 Responses/Chat 路由中移除；強制呼叫已移除的搜尋會回傳 400。有效的 `defer_loading` 函式定義仍可作為一般函式呼叫。參見[轉換限制](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)。 |
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定名稱 function→`{type:"function",name}`，hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -586,7 +586,7 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **錯誤分類：**400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
-其他 5xx 為 `api_error`。`Retry-After` 會保留。
+其他 5xx 為 `api_error`。`Retry-After` 以整數秒傳送（HTTP 日期會換算為剩餘秒數），上限為 8 天。
 
 ## 提示快取與 token 用量
 

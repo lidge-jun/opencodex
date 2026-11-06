@@ -14,6 +14,7 @@ import {
 } from "../../src/providers/derive";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { PROVIDER_REGISTRY, type ProviderRegistryEntry } from "../../src/providers/registry";
+import { DIGITALOCEAN_CHAT_COMPLETION_MODELS } from "../../src/providers/registry/model-seeds";
 import { routedSlug } from "../../src/providers/slug-codec";
 import { routeModel } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -107,11 +108,9 @@ describe("DigitalOcean and Scaleway providers", () => {
       },
     });
     const digitaloceanModels = discoveryAllowlist(registryEntry("digitalocean"));
-    // 29 since #5584 seeded openai-gpt-6-sol/-luna. An earlier seeding commit added
-    // glm-5.3-flash to both the DigitalOcean and Scaleway lists and moved neither length
-    // assertion; Scaleway's happened to still match, so only this one went red - and it
-    // stayed red on dev, which is how a broken shard reached the branch that noticed it.
-    expect(digitaloceanModels).toHaveLength(29);
+    // Derive membership from the canonical seed so model additions cannot stale a count.
+    expect(digitaloceanModels).toEqual([...DIGITALOCEAN_CHAT_COMPLETION_MODELS]);
+    expect(digitaloceanModels).toContain("openai-gpt-6.1-terra");
     expect(digitaloceanModels).toContain("glm-5.3-flash");
     expect(digitaloceanModels).toContain("openai-gpt-5.6-sol");
     expect(digitaloceanModels).toContain("meta-llama/Meta-Llama-3.1-8B-Instruct");

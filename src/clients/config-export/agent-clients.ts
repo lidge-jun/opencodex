@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
-import { ClientPathError } from "../client-path";
+import { absoluteClientPath } from "../client-path";
 import { parseSegment } from "../../integrations/merge";
 import type { ExportContext, ExportClientId, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
@@ -13,10 +13,7 @@ export function agentHomeDir(client: "qoder-cn" | "workbuddy" | "workbuddy-ai", 
   // Both WorkBuddy editions use the same native override; the default roots stay separate.
   const override = env[key]?.trim() || (client === "qoder-cn" ? undefined : env.CODEBUDDY_CONFIG_DIR?.trim());
   if (!override) return join(home, `.${client}`);
-  if (override === "~") return home;
-  if (override.startsWith("~/") || override.startsWith("~\\")) return join(home, override.slice(2));
-  if (!isAbsolute(override)) throw new ClientPathError(`${key} must be an absolute path or start with ~.`);
-  return override;
+  return absoluteClientPath(override, home, key);
 }
 
 export function agentConfigPath(client: "qoder-cn" | "workbuddy" | "workbuddy-ai", env: OpencodeLaunchEnv = process.env, home = homedir()): string {

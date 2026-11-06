@@ -1,9 +1,9 @@
 ---
 title: 快速开始
-description: 配置你的第一个 provider，并在三条命令内让 OpenAI Codex 通过 opencodex 路由。
+description: 安装 opencodex，添加第一个提供商，再连接你正在使用的编程工具：Codex、Claude Code、Claude Desktop、Grok Build 或其他受支持的工具。
 ---
 
-本指南将带你从全新安装，一路走到用一个非 OpenAI 模型运行 Codex。
+本指南将带你从全新安装，一路走到在你正在使用的编程工具中发出第一次请求。第 1、2 步对所有工具都相同；第 3 步按工具分成几个简短的分支。[客户端支持](/zh-cn/reference/client-support/)页面列出了每个工具及其接入方式。
 
 ## 独立二进制文件（无需 npm）
 
@@ -53,9 +53,13 @@ ocx status
 ocx gui       # open the dashboard on the live port
 ```
 
-## 3. 使用 Codex
+## 3. 连接你的工具
 
-Codex 现在会透明地通过 opencodex 通信：
+选择你所用工具对应的分支。可以同时连接多个工具，它们共用同一组提供商和模型。
+
+### Codex
+
+如果你在第 1 步中接受了 Codex 提示，Codex 现在会透明地通过 opencodex 通信。如果你拒绝了该提示，或因为已有配置而跳过了设置，请在运行 Codex 之前打开仪表盘 **Connect** 页面上的 Codex 开关；[Codex 集成](/zh-cn/guides/codex-integration/)说明了它会修改什么以及如何恢复。
 
 ```bash
 codex "Refactor this function for readability"
@@ -67,6 +71,42 @@ codex "Refactor this function for readability"
 codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
+
+### Claude Code
+
+先安装 `claude` CLI，然后运行：
+
+```bash
+ocx claude
+```
+
+`ocx claude` 会在代理未运行时启动它，并以指向 opencodex 的环境启动 Claude Code。额外参数会原样传递。层级默认值、其他启动器以及如何退出，请参见 [Claude Code](/zh-cn/guides/claude-code/)。
+
+### Claude Desktop
+
+```bash
+ocx claude desktop
+```
+
+全新安装时会为整个应用设置网关配置；已经使用 first-party 模式的安装会保持原模式，可运行 `ocx claude desktop apply --gateway` 明确切换。first-party 模式会让 Desktop 继续使用 claude.ai，只路由其 Code 标签页，详见 [Claude Code](/zh-cn/guides/claude-code/) 中的 Claude Desktop 模式一节。
+
+切换模式后，请完全退出并重新打开 Claude Desktop。
+
+### Grok Build
+
+在本地监听下，当 `~/.grok` 存在时，`ocx start` 会把可见模型注册到 `~/.grok/config.toml`。在 Grok Build 中选择一个 `ocx-*` 模型即可。远程配置和托管区块见 [Grok Build](/zh-cn/guides/grok-build/)。
+
+添加提供商或模型后，运行 `ocx ensure` 或重启代理，Grok Build 才能看到它们。
+
+### 其他工具
+
+有托管集成的工具（OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code 等）可在仪表盘的 **Connect** 页面连接，或使用：
+
+```bash
+ocx integration client enable --client <id>
+```
+
+各工具的配置文件以及何时生效，见 [集成](/zh-cn/guides/integrations/)。其他支持自定义端点的工具，可以使用 OpenAI 兼容的 base URL `http://localhost:10100/v1`，或 Anthropic 的 base URL `http://localhost:10100`。
 
 ## 选择 sub-agent 模型（可选）
 

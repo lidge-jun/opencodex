@@ -106,7 +106,7 @@ describe("the builder applies the allowlist", () => {
 });
 
 describe('observed native client feature betas', () => {
-  const nativeBetas = ['advisor-tool-2026-03-01', 'per-turn-control-2026-07-01', 'redact-thinking-2026-02-12', 'inline-tools-2026-09-15', 'thinking-display-updates-2026-08-18', 'prompt-caching-scope-2026-01-05', 'mid-conversation-system-2026-04-07'];
+  const nativeBetas = ['advisor-tool-2026-03-01', 'per-turn-control-2026-07-01', 'redact-thinking-2026-02-12', 'inline-tools-2026-09-15', 'thinking-display-updates-2026-08-18', 'prompt-caching-scope-2026-01-05', 'mid-conversation-system-2026-04-07', 'thinking-token-count-2026-05-13', 'mid-conversation-tool-changes-2026-07-01', 'advanced-tool-use-2025-11-20', 'effort-2025-11-24', 'extended-cache-ttl-2025-04-11'];
   test('keeps required schemas only for an observed first-party native client', () => {
     expect(allowlistAnthropicBetas(nativeBetas.join(','), 'first-party', { observedNativeClient: true })).toMatchObject({betas:nativeBetas, dropped:false});
     expect(allowlistAnthropicBetas(nativeBetas.join(','), 'first-party')).toMatchObject({betas:[], dropped:true});

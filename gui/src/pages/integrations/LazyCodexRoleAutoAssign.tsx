@@ -2,6 +2,7 @@ import { useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
+import type { SavedRole } from "./LazyCodexRoleHistory";
 import { EFFORT_LABEL, TIER_LABEL, type SizingEffortIntent, type SizingTier } from "./sizing-labels";
 
 export interface RoleProposal {
@@ -36,7 +37,7 @@ export default function LazyCodexRoleAutoAssign({
 }: {
   apiBase: string;
   busy: boolean;
-  apply: (role: string, model: string, effort: string | undefined) => Promise<boolean>;
+  apply: (role: string, model: string, effort: string | undefined, batch?: string) => Promise<SavedRole | null>;
 }) {
   const t = useT();
   const [running, setRunning] = useState(false);
@@ -70,20 +71,31 @@ export default function LazyCodexRoleAutoAssign({
   const applicable = (result?.proposals ?? []).filter(p =>
     p.status === "proposed" && p.proposedModel && !applied[p.role] && !alreadySet(p));
 
-  const applyOne = async (proposal: RoleProposal): Promise<boolean> => {
-    const ok = await apply(proposal.role, proposal.proposedModel!, proposal.proposedEffort ?? undefined);
-    if (ok) setApplied(current => ({ ...current, [proposal.role]: true }));
-    return ok;
+  const applyOne = async (proposal: RoleProposal, batch?: string): Promise<SavedRole | null> => {
+    const saved = await apply(proposal.role, proposal.proposedModel!, proposal.proposedEffort ?? undefined, batch);
+    if (saved) setApplied(current => ({ ...current, [proposal.role]: true }));
+    return saved;
   };
 
   const applyAll = async () => {
     setApplying(true);
-    let count = 0;
-    const total = applicable.length;
-    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
-    for (const proposal of applicable) if (await applyOne(proposal)) count += 1;
-    setSummary(t("integrations.lazycodexRoles.auto.appliedCount", { count: String(count), total: String(total) }));
-    setApplying(false);
+    try {
+      let count = 0;
+      const total = applicable.length;
+      // One batch, so the role history restores the whole Apply all at once: the first recorded write
+      // starts it and the server names it, and every later write joins it.
+      let batch: string | undefined;
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
+      for (const proposal of applicable) {
+        const saved = await applyOne(proposal, batch);
+        if (!saved) continue;
+        batch ??= saved.batch;
+        count += 1;
+      }
+      setSummary(t("integrations.lazycodexRoles.auto.appliedCount", { count: String(count), total: String(total) }));
+    } finally {
+      setApplying(false);
+    }
   };
 
   const locked = running || applying || busy;

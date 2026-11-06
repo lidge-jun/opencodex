@@ -515,6 +515,32 @@ describe("combo stream preflight", () => {
     expect(await result.response.text()).toBe(expected);
   });
 
+  for (const contentType of ["text/event-stream", "Text/Event-Stream; charset=UTF-8", "TEXT/EVENT-STREAM ; charset=utf-8"]) {
+    test(`recognizes an exact SSE media type (${contentType})`, async () => {
+      const source = sse({ type: "error", message: "upstream failed" });
+      source.headers.set("content-type", contentType);
+      const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(502);
+      expect((await result.response.json()).error.message).toBe("upstream failed");
+    });
+  }
+
+  for (const contentType of ["application/json; profile=\"text/event-stream\"", "text/event-stream-invalid", "application/text/event-stream"]) {
+    for (const allowMissingContentType of [false, true]) {
+      test(`leaves non-SSE media types unread (${contentType}, missing fallback ${allowMissingContentType})`, async () => {
+        const body = JSON.stringify({ output: [{ type: "message", content: "complete JSON response" }] });
+        const source = new Response(body, { headers: { "content-type": contentType } });
+        const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, { allowMissingContentType });
+        expect(result.kind).toBe("accepted");
+        expect(result.response).toBe(source);
+        expect(source.bodyUsed).toBe(false);
+        expect(source.headers.get("content-type")).toBe(contentType);
+        expect(await result.response.text()).toBe(body);
+      });
+    }
+  }
+
   test("default missing content-type is refused, and allowMissingContentType accepts only an absent type", async () => {
     const payloads = [
       { type: "response.created", response: { id: "r1", status: "in_progress" } },

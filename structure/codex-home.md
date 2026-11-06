@@ -7,7 +7,7 @@ Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-
 A lock in the Codex credential store is governed by [descriptor identity and age](catalog.md#accounts-namespaces-and-pool-rotation), so the mere presence of its filename is neither acquisition nor release authority. Failed path-identity probes leave the lock for stale recovery and preserve the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
 
 CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
-
+Launcher credentials require a parsed managed provider transport matching the installation's loopback target or persisted local client connection; provider names and injection comments are not destination authority. Default profiles, project layers and destination-changing arguments suppress automatic token loading.
 The read-only CLI update plan follows the [isolated environment and process-observation contract](codex-cli-update.md).
 
 ## Orca source-owned account import
@@ -57,7 +57,7 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 ```
 
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
-the resolved `CODEX_HOME`.
+the resolved `CODEX_HOME`. For credential delivery, `src/cli/codex-launch-auth.ts` excludes an ancestor `.codex/config.toml` only when its realpath matches the home config and its lexical alias, ancestors and intermediate link targets pass ownership/ACL inspection. A protected symlinked user `.codex` qualifies; distinct files, replaceable aliases and failed inspections withhold the token as a project layer. Namespace ownership follows the [launcher contract](cli-management.md#head-and-help-navigation).
 
 Log Guard reclaim in `src/codex/log-guard/maintenance.ts` refuses a non-regular or redirected
 database path. It compares canonical path and full-width filesystem device and file identity
@@ -119,8 +119,8 @@ restore a different home. A recorded spelling that still resolves to the same ph
 a junction or symlink alias — counts as the same home for the ownership check, the recorded SQLite
 home, and the unattended ownership preflight. Access or transient I/O errors are unknown rather
 than foreign in preflight; distinct spellings with missing/non-directory paths remain mismatches.
-Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`.
-An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
+Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`. `ocx doctor` reads native-main admission from the running proxy's authenticated `GET /api/native-main-profiles/admission`, not from the separately launched doctor's process-local startup gate. That route returns only `admissionStatus` and `admissionBlockReason` from the startup gate; it constructs no profile manager and runs no staging sweep, which is why it, and not `/api/native-main-profiles/doctor`, is on the local read-capability allowlist. Any non-200 answer (including 404 from an older proxy) and an unavailable live read are reported as unavailable. The admin-authenticated profile doctor still attaches the same admission fields to its own body and errors.
+An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly. Generated launchd, systemd, Task Scheduler and WinSW definitions pin the resolved `CODEX_HOME` and `OPENCODEX_HOME`, including their defaults. Launchd and systemd repeat both shell-quoted values after login-profile initialization; the Task Scheduler wrapper writes the absolute values without runtime profile-variable indirection. WinSW uses the same canonical default-home resolver as install state, including when `~/.codex` is a junction. Repair an older registration after upgrading to refresh those values.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 
@@ -142,7 +142,7 @@ to SQLite ownership; the tolerant root-string helper used by injection and catal
 
 > Decision record: [ADR-0007](decisions/ADR-0007-codex-home.md)
 
-Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
+Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance. Native profile switches transact only auth state; they do not write or journal `installation_id`. [Pool wire identity](providers/codex-installation-identity.md) lives in the OpenCodex home.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.opencodex-native-main-profiles` directory. The unchanged
 `.opencodex-native-profile.lock.sqlite` beside that directory serializes every process sharing the
@@ -196,7 +196,7 @@ prior sibling runtime and `OPENCODEX_HOME`. Connected-client recycle issues it b
 the listener or removing that runtime record. `handleStart` consumes the record before any probe;
 a forged port env or replay grants no sibling status. A valid replacement stays a sibling while
 the owner is down, and its journal recovery remains skipped.
-Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`
+Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`codex`/`opencode`/`minimax`
 auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
 through `withoutSiblingMarker`.
 
@@ -297,7 +297,7 @@ restore still fails closed when a recorded logical entry has no surviving file.
 
 OpenCodex config writers share `config.toml.ocx-write.lock`: feature scalar and CLI-toggle
 batches, injection, journal replay, removal, and restore/compensation read and write while
-holding it. Injection and coordinated restore take config before SQLite N; prompt writes
+holding it. Parent stop adds [connection validation under C](runtime.md#remote-hub-hardening-ownership). Injection and coordinated restore take config before SQLite N; prompt writes
 take prompt-store before config. Nested writers receive an explicit live handle for the
 same canonical config destination; implicit nesting refuses fast. Symlink aliases contend
 on the real destination's lock. Acquisition revalidates the canonical path and captures the inode after the lock is held, admitting a preceding writer's completed atomic replacement while refusing a canonical retarget before entering the section. Each publication revalidates canonical identity and inode immediately before rename,
@@ -549,7 +549,7 @@ The [probe contract](codex-prompts.md#prompt-text-probe) governs prompt capture 
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` rejects provider-history changes with `history_paginated_requires_native_writer` when a target begins with an ordinal-bearing record, later contains a paginated record after a legacy start (#4311), or declares `history_mode=paginated`. The first line alone is not sufficient: a rollout that started unnumbered and was later migrated is also refused. Apply, manifest-backed restore, and explicit legacy recovery preflight all selected targets before changing database rows or manifests. The append boundary checks again. Codex owns ordinal allocation and the live projection cursor; reading the last ordinal and appending N+1 is not safe concurrent coordination. Legacy unnumbered rollouts retain their existing behavior. History Worker targets resolve the canonical manifest first and an existing pre-normalization Windows filename second, so passing an explicit target cannot bypass upgrade recovery. This guard prevents the observed stable-format corruption; it does not implement native-writer integration.
+`src/codex/history-provider.ts` rejects provider-history changes with `history_paginated_requires_native_writer` when a target begins with an ordinal-bearing record, later contains a paginated record after a legacy start (#4311), or declares `history_mode=paginated`. The first line alone is not sufficient: a rollout that started unnumbered and was later migrated is also refused. Apply, manifest-backed restore, and explicit legacy recovery preflight all selected targets before changing database rows or manifests. The append boundary checks again. Codex owns ordinal allocation and the live projection cursor; reading the last ordinal and appending N+1 is not safe concurrent coordination. Legacy unnumbered rollouts retain their existing behavior. History Worker targets resolve the canonical manifest first and an existing pre-normalization Windows filename second, so passing an explicit target cannot bypass upgrade recovery. This guard prevents the observed stable-format corruption; it does not implement native-writer integration. Stop history writes also follow the [lifecycle ownership boundary](runtime.md), including H/C serialization for the Worker and synchronous exit.
 
 Injection preflights affected history using the normalized config candidate before writing config/profile/journal, then checks again after the complete artifact write. Native restore also rechecks after successful journal restoration or fallback removal, while exact config/profile/journal preimages and any coordinated remove transaction remain available for compensation.
 

@@ -91,7 +91,7 @@ describe("an edit to the setup action alone", () => {
 // Keep runtime and test-runner role selection distinct even when package.json pins both to 1.4.4.
 // Check the active setup at each test command, so a later role switch cannot evade the guard.
 const runsBunTests = (step: Step): boolean =>
-  /\bbun\s+test\b|\bbun\s+run\s+test(?::changed)?(?:\s|$)|\bbun\s+(?:run\s+)?scripts\/test\.ts\b|scripts\/ci\/run-bun-test-batches\.sh/.test(
+  /\bbun\s+test\b|\bbun\s+run\s+test(?::changed)?(?:\s|$)|\bbun\s+(?:run\s+)?scripts\/test\.ts\b|scripts\/ci\/run-(?:bun|changed)-tests?(?:-batches)?\.sh/.test(
     (step.run ?? "").split("\n").filter(line => !line.trimStart().startsWith("#")).join("\n"),
   );
 const workflowJobs = new Map(readdirSync(repoPath(".github", "workflows"))

@@ -3,6 +3,8 @@ title: Sélecteur de modèles de Codex App
 description: Comment les modèles opencodex apparaissent dans Codex App, Codex CLI et Codex TUI par l'intermédiaire du catalogue Codex partagé.
 ---
 
+Par défaut : `false`. Avec `"omitDisabledNativeModels": true` dans `config.json`, puis `ocx sync`, les lignes natives désactivées sont omises du catalogue, du cache et de la découverte HTTP au format Codex. Le modèle d’héritage natif validé avant omission conserve les métadonnées des lignes routées. Les requêtes directes gardent leur routage habituel. Les descriptions de masquage ci-dessous concernent le comportement par défaut.
+
 opencodex ne modifie pas Codex App. Il écrit la même configuration et le même catalogue de modèles Codex
 que ceux utilisés par Codex CLI et TUI. Le serveur d'application lit cet état partagé, mais certaines versions
 de Codex Desktop appliquent dans le moteur de rendu une seconde liste d'autorisation distante et peuvent
@@ -138,11 +140,12 @@ approximation fondée sur un ancien modèle d'entrée.
 
 | Route | Identifiants du sélecteur et métadonnées du catalogue |
 | --- | --- |
-| Connexion Codex (lignes qualifiées par compte désactivées) | Identifiants natifs non qualifiés comme `gpt-5.6-sol`, `gpt-5.6-terra` et `gpt-5.6-luna` ; Pool ou Direct est choisi avec `codexAccountMode`. Les lignes GPT-5.6 utilisent une fenêtre de catalogue de 372 000 jetons. |
+| Connexion Codex (lignes qualifiées par compte désactivées) | Identifiants natifs non qualifiés comme `gpt-5.6-sol`, `gpt-5.6-terra` et `gpt-5.6-luna` ; Pool ou Direct est choisi avec `codexAccountMode`. Les lignes GPT-5.6 utilisent une fenêtre de catalogue de 372 000 jetons. `gpt-6.1-terra` : contexte par défaut 500,000 / étendu 872,000. |
 | Connexion Codex (lignes qualifiées par compte activées avec des sélecteurs admissibles) | Une ligne `<selector>/<native-openai-model>` par sélecteur admissible et modèle natif pris en charge ; chaque ligne utilise exclusivement le compte associé, et les lignes natives non qualifiées sont masquées dans le sélecteur. Les métadonnées natives et les fenêtres de contexte sont préservées. |
 | Connexion Codex (ligne Daybreak transférée explicitement) | `openai/gpt-daybreak-blue-latest` uniquement lorsque l'entrée `customModels` exacte est configurée sur le fournisseur canonique `openai`. Elle conserve l'identifiant Daybreak transmis et utilise l'instantané de capacités Sol épinglé (contexte de 372 000 jetons ; compactage automatique à 334 800 jetons). |
-| OpenAI (clé API) | Exactement dix lignes avec espace de noms : `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, les trois identifiants virtuels `*-pro` et les deux alias Daybreak (contexte de 1 050 000 jetons ; entrée maximale de 922 000 jetons pour les dix) |
+| OpenAI (clé API) | Les modèles avec espace de noms comprennent `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, les identifiants virtuels `*-pro` et les alias Daybreak (contexte de 1,050,000 ; entrée maximale de 922,000). `openai-apikey/gpt-6.1-terra` ajoute un contexte de 1,050,000 et une sortie maximale de 128,000. |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1 050 000) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` (1,050,000) |
 | Cursor | Le repli statique comprend `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` et `cursor/gpt-5.6-luna` (1 000 000), ainsi que des lignes ordinaires/rapides pour Grok 4.5, 4.6 et 4.7 (500 000) ; 4.6 et 4.7 ajoutent `xhigh`, et la découverte dynamique propre au compte détermine quelles lignes restent visibles. |
 | xAI | La découverte dynamique fait autorité. Le catalogue de secours comprend `xai/grok-4.6` et `xai/grok-4.7` et utilise `xai/grok-4.5` par défaut ; les trois ont une fenêtre de 500 000 jetons. Grok 4.6 et 4.7 proposent `low` / `medium` / `high` / `xhigh` (valeur amont par défaut : `high`), tandis que Grok 4.5 s’arrête à `high`. |
 

@@ -1,6 +1,6 @@
 import { beginApiSessionHandoff, fetchApiSessionValidation, hasApiSession } from "./api";
 import type { ApiTarget } from "./api-targets";
-import { withFetchDeadline } from "./bounded-fetch";
+import { discardResponseBody, withFetchDeadline } from "./bounded-fetch";
 import { parseRemoteLinkStatus } from "./remote-link-api";
 
 const PAIRING_CODE = /^ocx_pair_[A-Za-z0-9_-]{43}$/;
@@ -39,7 +39,7 @@ async function readResponsePrefix(response: Response, limit = CHALLENGE_PREFIX_L
       if (chunk.byteLength < value.byteLength) break;
     }
   } finally {
-    try { await reader.cancel(); } catch { /* best effort */ }
+    try { void reader.cancel().catch(() => {}); } catch { /* best effort */ }
   }
   const buffer = new Uint8Array(size);
   let offset = 0;
@@ -54,7 +54,7 @@ async function isHtmlChallenge(response: Response): Promise<boolean> {
 }
 
 /**
- * Exchange a pairing code for a shared-plane session.
+ * Exchange a pairing code for a session on the selected target's plane.
  *
  * Separate module from the form that calls it so neither file mixes a component export with
  * a plain one. That mix is what `react-refresh/only-export-components` flags, and the two
@@ -79,7 +79,7 @@ export async function submitConnectPairing(
   // unauthenticated and the relay refused it.
   const send = fetchImpl ?? ((input, init) => window.fetch(input, init));
   // Capture authority before either response headers or body can yield to another login.
-  const handoff = beginApiSessionHandoff("shared");
+  const handoff = beginApiSessionHandoff(target.id);
   return withFetchDeadline(pairingDeadlineMs, signal, async deadline => {
     let response: Response;
     try {
@@ -94,7 +94,7 @@ export async function submitConnectPairing(
     }
     if (!response.ok) {
       if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
-      try { await response.body?.cancel(); } catch { /* best effort */ }
+      discardResponseBody(response);
       if (response.status === 401) throw new PairingError("refused");
       if (response.status === 403) throw new PairingError("origin-denied");
       throw new PairingError("request-failed");
@@ -135,7 +135,7 @@ export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typ
     deadline.throwIfAborted();
     if (!response.ok) {
       if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
-      try { await response.body?.cancel(); } catch { /* best effort */ }
+      discardResponseBody(response);
       if (response.status === 401) throw new PairingError("remote-link-unauthorized");
       if (response.status === 403) throw new PairingError("remote-link-forbidden");
       throw new PairingError("request-failed");

@@ -52,11 +52,6 @@ const KNOWN_UNFORWARDED_BETAS: readonly string[] = [
   "claude-code-20250219",
   "oauth-2025-04-20",
   "fast-mode-2026-02-01",
-  "thinking-token-count-2026-05-13",
-  "mid-conversation-tool-changes-2026-07-01",
-  "advanced-tool-use-2025-11-20",
-  "effort-2025-11-24",
-  "extended-cache-ttl-2025-04-11",
   "context-1m-2025-08-07",
   "tool-search-tool-2025-10-19",
   "files-api-2025-04-14",
@@ -83,6 +78,11 @@ const NATIVE_CLIENT_BETAS: readonly string[] = [
   "thinking-display-updates-2026-08-18",
   "prompt-caching-scope-2026-01-05",
   "mid-conversation-system-2026-04-07",
+  "thinking-token-count-2026-05-13",
+  "mid-conversation-tool-changes-2026-07-01",
+  "advanced-tool-use-2025-11-20",
+  "effort-2025-11-24",
+  "extended-cache-ttl-2025-04-11",
   ...ANTHROPIC_BETA_BODY_PAIRS.filter(pair => pair.nativeClientOnly).map(pair => pair.beta),
 ];
 const NATIVE_CLIENT_ALLOWLIST = new Map(NATIVE_CLIENT_BETAS.map(beta => [beta.toLowerCase(), beta]));

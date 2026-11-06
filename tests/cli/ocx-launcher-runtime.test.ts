@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -50,18 +49,6 @@ type WindowsProcessIdentity = {
   creationDate: string;
 };
 
-function freePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => (port ? resolvePort(port) : reject(new Error("no port"))));
-    });
-  });
-}
-
 async function healthAt(port: number): Promise<Health | null> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
@@ -82,15 +69,18 @@ async function healthAt(port: number): Promise<Health | null> {
 }
 
 async function waitForHealth(
-  port: number,
+  runtimeRecord: string,
   deadlineMs: number,
   launcher: ChildProcess,
 ): Promise<Health | null> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     if (launcher.exitCode !== null) return null;
-    const health = await healthAt(port);
-    if (health) return health;
+    try {
+      const record = JSON.parse(readFileSync(runtimeRecord, "utf8")) as { port: number; pid: number };
+      const health = await healthAt(record.port);
+      if (health?.pid === record.pid) return health;
+    } catch { /* runtime publication has not finished */ }
     await Bun.sleep(200);
   }
   return null;
@@ -208,18 +198,23 @@ async function effectiveRuntime(override: string): Promise<string> {
   let hasPrimaryError = false;
   let primaryError: unknown;
   try {
-    port = await freePort();
-    launcher = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
+    const env = isolatedLauncherEnv(root, override);
+    // CLI --port requires a positive pin; configured zero requests allocation.
+    writeFileSync(join(root, "opencodex", "config.json"), JSON.stringify({
+      port: 0, providers: {}, defaultProvider: "openai",
+    }));
+    launcher = spawn("node", [BIN_OCX, "start"], {
       stdio: "ignore",
       windowsHide: true,
-      env: isolatedLauncherEnv(root, override),
+      env,
     });
     if (!launcher.pid) throw new Error("Node launcher has no process id");
     launcherPid = launcher.pid;
     ownedLauncher = captureWindowsProcessIdentity(launcherPid);
 
-    const health = await waitForHealth(port, PROXY_HEALTH_TIMEOUT_MS, launcher);
+    const health = await waitForHealth(join(root, "opencodex", "runtime-port.json"), PROXY_HEALTH_TIMEOUT_MS, launcher);
     if (!health) throw new Error("proxy did not become healthy");
+    port = health.port;
     const identity = windowsProcessIdentity(health.pid);
     if (!identity || identity.parentPid !== launcher.pid) {
       throw new Error("health PID is not the spawned Node launcher's direct Bun child");

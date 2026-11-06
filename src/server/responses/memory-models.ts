@@ -4,8 +4,9 @@
  * Codex writes memories in two background phases, and both ask the provider for a bare native
  * model: Phase 1 ("extract") summarizes one finished thread per call and asks for
  * `gpt-5.6-luna` at effort `low`; Phase 2 ("consolidation") is one agent run that merges those
- * summaries into the files under `$CODEX_HOME/memories` and asks for `gpt-5.6-terra` at effort
- * `medium`. Without a configured target each keeps its existing route; Phase 1 additionally looks like the app's
+ * summaries into the files under `$CODEX_HOME/memories` and asks for a Terra model at effort
+ * `medium` (`gpt-5.6-terra` on current clients, with `gpt-6.1-terra` available as clients move).
+ * Without a configured target each keeps its existing route; Phase 1 additionally looks like the app's
  * title/commit helper traffic, because the app uses the same model id for those.
  *
  * A phase is therefore recognized from Codex's own turn metadata, never inferred from the model

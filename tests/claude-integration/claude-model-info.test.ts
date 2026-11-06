@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildAnthropicModelInfos, nativeEffectiveLadder } from "../../src/claude/model-info";
+import { buildAnthropicModelInfos, configuredRoutedDisplayName, nativeEffectiveLadder } from "../../src/claude/model-info";
 import { gatherRoutedModels, nativeEffortClamp } from "../../src/codex/catalog";
 import { MIMO_THINKING_CAPABILITIES } from "../../src/providers/mimo-thinking";
+import { cursorFastCapableBases, cursorFastIdFor } from "../../src/adapters/cursor/catalog";
+import type { OcxConfig } from "../../src/types";
 
 describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => {
   test.each(["anthropic", "anthropic-apikey"])("%s registry image inputs reach Claude discovery aliases", async (provider) => {
@@ -338,5 +340,70 @@ describe("Claude Code picker description (replaces the generic \"From gateway\" 
   test("Desktop 3P rows stay unchanged (no description field)", () => {
     const infos = buildAnthropicModelInfos(["gpt-5.5"], [{ provider: "xai", id: "grok-4.7" }], undefined, "desktop3p");
     for (const info of infos) expect("description" in info).toBe(false);
+  });
+});
+
+describe("routed rows honour providers.<p>.modelDisplayNames", () => {
+  // A second subscription pool lists the same model ids as the client's own login; the
+  // operator label is what tells the picker rows apart without spelling the raw id.
+  const labels: Record<string, string> = { "claude-sonnet-5-5": "Sonnet 5.5" };
+  const routedDisplayName = (model: { provider: string; id: string }) =>
+    model.provider === "anthropic2" ? labels[model.id] : undefined;
+
+  test("a labelled row and its 1M and Fast siblings use the label; ids are unchanged", () => {
+    const routed = [
+      { provider: "anthropic2", id: "claude-sonnet-5-5", contextWindow: 1_000_000 },
+      { provider: "anthropic2", id: "claude-haiku-5-5", contextWindow: 200_000 },
+    ];
+    const plain = buildAnthropicModelInfos([], routed, undefined, "readable", undefined, undefined, false, () => true);
+    const named = buildAnthropicModelInfos([], routed, undefined, "readable", undefined, undefined, false, () => true,
+      undefined, routedDisplayName);
+    expect(named.map(i => i.id)).toEqual(plain.map(i => i.id));
+    expect(named.map(i => i.description)).toEqual(plain.map(i => i.description));
+    expect(named.map(i => i.display_name)).toEqual([
+      "Sonnet 5.5 (anthropic2)",
+      "Sonnet 5.5 (anthropic2) · 1M",
+      "Sonnet 5.5 (anthropic2) · Fast",
+      "claude-haiku-5-5 (anthropic2)",
+      "claude-haiku-5-5 (anthropic2) · Fast",
+    ]);
+  });
+
+  test("native rows never consult the resolver", () => {
+    const infos = buildAnthropicModelInfos(["gpt-5.5"], [], undefined, "readable", undefined, undefined, false,
+      undefined, undefined, () => "Renamed");
+    expect(infos[0]!.display_name).toBe("gpt-5.5 (native)");
+  });
+
+  test("a fastMode-rewritten Cursor row keeps its listed id rather than the base label", () => {
+    const base = [...cursorFastCapableBases()][0]!;
+    const fastId = cursorFastIdFor(base)!;
+    const [info] = buildAnthropicModelInfos([], [{ provider: "cursor", id: base }], undefined, "readable",
+      undefined, undefined, true, undefined, undefined, () => "Cursor Base");
+    expect(info!.display_name).toBe(`${fastId} (cursor)`);
+  });
+
+  test("labels gathered from provider config reach the row; unlabelled rows keep the raw id", async () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "anthropic2",
+      providers: {
+        anthropic2: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "key",
+          apiKey: "k",
+          liveModels: false,
+          models: ["claude-sonnet-5-5", "claude-haiku-5-5"],
+          modelDisplayNames: { "claude-sonnet-5-5": "Sonnet 5.5" },
+        },
+      },
+    } as unknown as OcxConfig;
+    const routed = (await gatherRoutedModels(config)).filter(model => model.provider === "anthropic2");
+    const infos = buildAnthropicModelInfos([], routed, undefined, "readable", undefined, undefined, false, undefined,
+      undefined, configuredRoutedDisplayName(config));
+    const byId = new Map(infos.map(info => [info.id, info.display_name]));
+    expect(byId.get("ocx-claude-anthropic2--claude-sonnet-5-5")).toBe("Sonnet 5.5 (anthropic2)");
+    expect(byId.get("ocx-claude-anthropic2--claude-haiku-5-5")).toBe("claude-haiku-5-5 (anthropic2)");
   });
 });

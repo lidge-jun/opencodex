@@ -42,7 +42,7 @@ describe("desktop startup surface", () => {
     expect(begun).toBeGreaterThan(shown);
   });
 
-  test("setup resolves nothing, registers nothing and starts nothing", () => {
+  test("setup does not resolve, register startup integration or spawn the proxy itself", () => {
     const setup = lib.slice(
       lib.indexOf(".setup(|app|"),
       lib.indexOf(".build(tauri::generate_context!())"),
@@ -60,6 +60,72 @@ describe("desktop startup surface", () => {
     ]) {
       expect(setup).not.toContain(call);
     }
+  });
+
+  test("native recovery evidence precedes the first startup run and takes its home from resolved CLI output", () => {
+    const publish = lib.indexOf("recovery::register(app.handle())");
+    expect(publish).toBeGreaterThan(lib.indexOf("window::show(&window)"));
+    expect(publish).toBeLessThan(lib.indexOf("startup::begin(app.handle())"));
+    expect(lib.indexOf("app.manage(exit::ExitCoordinator::new())")).toBeLessThan(publish);
+    const bind = startup.indexOf("crate::recovery::bind_home(app, &target.home)");
+    expect(bind).toBeGreaterThan(startup.indexOf("home: answer.home()"));
+    expect(bind).toBeLessThan(startup.indexOf("match spawn_runtime(app, endpoint, &watch)"));
+    const producer = code(repoPath(`${SRC}/recovery.rs`));
+    expect(producer).toContain("exit.supervision()");
+    expect(producer).toMatch(/s\.wanted\s*&&\s*!s\.reason_set/);
+    expect(producer).toContain("observed_activity.recovering(state.is_some_and(");
+    expect(lib).toContain("mod recovery_activity;");
+  });
+
+  test("recovery credit follows accepted startup reports and actual supervisor reservations", () => {
+    const begin = startup.slice(startup.indexOf("pub fn begin_with("), startup.indexOf("fn settle(app:"));
+    const active = begin.indexOf("crate::recovery::begin_run(app, generation, mode == Mode::Recover)");
+    expect(active).toBeGreaterThan(begin.indexOf("generation.fetch_add("));
+    expect(active).toBeLessThan(begin.indexOf("tauri::async_runtime::spawn("));
+    const expiry = begin.slice(begin.indexOf("if let Expiry::Fired(progress)"));
+    expect(expiry.indexOf("crate::recovery::failed(&guard, generation)")).toBeGreaterThan(-1);
+    expect(expiry.indexOf("crate::recovery::failed(&guard, generation)")).toBeLessThan(expiry.indexOf("guard.emit("));
+    expect(begin).toContain("supervisor::run_finished(&app, generation, mode, ended, detail.as_deref())");
+    const settled = startup.slice(startup.indexOf("fn settle(app:"), startup.indexOf("async fn run("));
+    expect(settled).toMatch(/if let Some\(progress\) = startup\.settle\([^]*?recovery::failed\(app, generation\)[^]*?app\.emit/);
+
+    const emit = startup.slice(startup.indexOf("fn emit(app:"));
+    const accepted = emit.indexOf("if !startup.publish(");
+    const ready = emit.indexOf("crate::recovery::ready(");
+    expect(accepted).toBeGreaterThan(-1);
+    expect(ready).toBeGreaterThan(accepted);
+    expect(emit.slice(ready, emit.indexOf("let _ = app.emit("))).toContain("state.owns_runtime()");
+    expect(emit).toMatch(/Phase::Failed\.id\(\)[^]*?recovery::failed\(app, generation\)/);
+
+    const supervisor = code(repoPath(`${SRC}/supervisor.rs`));
+    const schedule = supervisor.slice(supervisor.indexOf("fn schedule("), supervisor.indexOf("pub fn run_finished("));
+    const reservation = schedule.indexOf("let reservation = crate::recovery::reserve(app)");
+    expect(reservation).toBeGreaterThan(schedule.indexOf("if state.pending"));
+    expect(reservation).toBeLessThan(schedule.indexOf("tauri::async_runtime::spawn("));
+    expect(schedule.indexOf("let _reservation = reservation")).toBeGreaterThan(-1);
+    expect(schedule.indexOf("let _reservation = reservation")).toBeLessThan(schedule.indexOf("sleep(delay).await"));
+    expect(schedule).toContain("defer_recovery(&app, &supervisor)");
+    const finished = supervisor.slice(supervisor.indexOf("pub fn run_finished("), supervisor.indexOf("async fn probe("));
+    expect(finished).toContain("recovery::finish_run(app, generation, true)");
+    expect(finished.lastIndexOf("recovery::finish_run(app, generation, false)")).toBeGreaterThan(finished.indexOf("schedule(app, delay)"));
+  });
+
+  test("a duplicate recovery scheduler cannot observe pending without its reservation", () => {
+    const supervisor = code(repoPath(`${SRC}/supervisor.rs`));
+    const schedule = supervisor.slice(supervisor.indexOf("fn schedule("), supervisor.indexOf("pub fn run_finished("));
+    const admission = schedule.match(/let reservation = \{\s*let mut state = supervisor\.state\(\);([^]*?)\n {4}\};/);
+    expect(admission).not.toBeNull();
+    const locked = admission![1]!;
+    const reserve = locked.indexOf("let reservation = crate::recovery::reserve(app)");
+    const pending = locked.indexOf("state.pending = true");
+    expect(locked).toMatch(/if state\.pending \{\s*return;\s*\}/);
+    expect(reserve).toBeGreaterThan(locked.indexOf("if state.pending"));
+    expect(pending).toBeGreaterThan(reserve);
+    expect(locked).not.toContain("drop(state)");
+    expect(locked).toMatch(/reservation\s*$/);
+    expect(schedule.slice(schedule.indexOf("tauri::async_runtime::spawn("))).toMatch(
+      /async move \{\s*let _reservation = reservation;\s*sleep\(delay\)\.await/,
+    );
   });
 
   test("resolving and registering are states that own their work", () => {

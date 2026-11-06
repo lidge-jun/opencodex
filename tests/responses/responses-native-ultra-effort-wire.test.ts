@@ -25,7 +25,7 @@ import { applyCompactionRoutingOverride } from "../../src/server/responses/compa
  */
 
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("native ultra effort wire test");
-const MODELS = ["gpt-6-astra", "gpt-6.1-sol"];
+const MODELS = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra"];
 
 describe("native ultra effort reaches the ChatGPT backend as max", () => {
   let testDir = "";
@@ -128,7 +128,7 @@ describe("native ultra effort reaches the ChatGPT backend as max", () => {
     });
     expect(control.status).toBe(200);
     await control.text();
-    expect(efforts).toEqual(["max", "max", "max"]);
+    expect(efforts).toEqual([...MODELS.map(() => "max"), "max"]);
   }, SERVER_BUDGET_MS);
 
   test("/v1/chat/completions folds reasoning_effort ultra to max", async () => {

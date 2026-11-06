@@ -103,7 +103,7 @@ test("probe argv uses accept-new only with its temporary known_hosts file", () =
   expectCommonTrustOptions(argv, "accept-new", knownHostsFile);
   expect(argv).toContain("ClearAllForwardings=yes");
   expect(argv.slice(-3, -1)).toEqual(["--", "gamma.example.test"]);
-  expect(argv[argv.length - 1]).toBe("true");
+  expect(argv[argv.length - 1]).toBe("echo ocx-link-probe");
 });
 
 test("aliases and forwarding ports are validated before building argv", () => {

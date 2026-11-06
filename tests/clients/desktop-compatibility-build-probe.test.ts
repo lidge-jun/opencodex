@@ -1,20 +1,30 @@
-import { expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { createInstalledBuildProbe, DESKTOP_COMPATIBILITY_ASSESSED_VERSION, DESKTOP_PACKAGE_PROOF_SCRIPT, DESKTOP_PACKAGE_PATH_GUARD_SCRIPT } from "../../src/codex/desktop-compatibility/installed-build";
 import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, parse } from "node:path";
 import { spawnTestChild } from "../helpers/spawn-test-child";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/codex/desktop-compatibility/installed-build";
 import { desktopPackageObservation } from "../helpers/desktop-package-observation";
 
 const installed = desktopPackageObservation;
 
-test.skipIf(process.platform !== "win32")("owned ancestor junctions and persistent retargets fail before proof publication", async () => {
+/**
+ * One run of the ancestry probe: a fixture on the volume root, the real PowerShell guard, and the
+ * assertions. The warm-up below replays this exact call, so the warmed path is the measured path.
+ *
+ * Each step writes a phase marker to stderr as it finishes. PowerShell only flushes the JSON verdict
+ * when it exits, so a child killed at the deadline used to leave empty stdout and stderr (#7854);
+ * the markers survive the kill and name the last step that completed.
+ */
+async function probeOwnedAncestry(deadlineMs: number): Promise<void> {
   // Ordinary volume-root fixture: never use a registered package or the installed application.
   const root = mkdtempSync(join(parse(process.cwd()).root, "ocx-package-ancestry-"));
   const first = join(root, "first"), second = join(root, "second"), alias = join(root, "alias");
   let terminal = true;
   const quote = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+  const phase = (name: string) => `[Console]::Error.WriteLine('phase:${name}')`;
   try {
     for (const directory of [first, second]) {
       mkdirSync(join(directory, "package", "app"), { recursive: true });
@@ -22,24 +32,24 @@ test.skipIf(process.platform !== "win32")("owned ancestor junctions and persiste
       writeFileSync(join(directory, "package", "AppxManifest.xml"), "fixture, not Appx");
     }
     symlinkSync(first, alias, "junction");
-    const script = ["$ErrorActionPreference='Stop'", DESKTOP_PACKAGE_PATH_GUARD_SCRIPT,
+    const script = [phase("started"), "$ErrorActionPreference='Stop'", DESKTOP_PACKAGE_PATH_GUARD_SCRIPT, phase("guard-defined"),
       `$alias=${quote(alias)}; $first=${quote(first)}; $second=${quote(second)}`,
       "$leaf=Join-Path $alias 'package\\app\\ChatGPT.exe'",
       // Leaf attributes alone cannot reveal the ancestor junction.
       "if((Get-Item -LiteralPath $leaf).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Fixture leaf is not ordinary'}",
       "function Refuses-BeforeRead([string]$File){$refused=$false; try{$null=Assert-DesktopPackagePath $File}catch{$refused=$true}; if(-not $refused){throw 'Guard admitted redirected ancestry'}; return $refused}",
-      "$initial=Refuses-BeforeRead $leaf",
+      "$initial=Refuses-BeforeRead $leaf", phase("initial-refused"),
       "[IO.Directory]::Delete($alias); $null=New-Item -ItemType Junction -Path $alias -Target $second",
-      "$retarget=Refuses-BeforeRead $leaf",
-      "$ordinary=Join-Path $first 'package\\app\\ChatGPT.exe'; $before=Assert-DesktopPackagePath $ordinary",
+      "$retarget=Refuses-BeforeRead $leaf", phase("retarget-refused"),
+      "$ordinary=Join-Path $first 'package\\app\\ChatGPT.exe'; $before=Assert-DesktopPackagePath $ordinary", phase("ordinary-admitted"),
       "$null=Move-Item -LiteralPath $first -Destination ($first+'-saved'); $null=New-Item -ItemType Junction -Path $first -Target $second",
       // The same revalidation used before publishing production proof must reject this change.
-      "$publication=Refuses-BeforeRead $ordinary",
+      "$publication=Refuses-BeforeRead $ordinary", phase("publication-refused"),
       "[pscustomobject]@{initial=$initial;retarget=$retarget;publication=$publication;ordinary=($before.Length -gt 0)}|ConvertTo-Json -Compress",
     ].join("; ");
     terminal = false;
     const result = await spawnTestChild([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command", script],
-      { cwd: root, deadlineMs: 10_000 });
+      { cwd: root, deadlineMs });
     terminal = result.reaped && result.pipesClosed;
     expect(result).toMatchObject({ exitCode: 0, timedOut: false, reaped: true, pipesClosed: true });
     expect(JSON.parse(result.stdout)).toEqual({ initial: true, retarget: true, publication: true, ordinary: true });
@@ -54,7 +64,22 @@ test.skipIf(process.platform !== "win32")("owned ancestor junctions and persiste
       rmSync(root, { recursive: true });
     }
   }
-}, 20_000);
+}
+
+describe.skipIf(process.platform !== "win32")("Windows package ancestry guard", () => {
+  // The first PowerShell child in a shard pays the cold .NET and PowerShell load. Measured on a busy
+  // Windows host, the script body finished in under 0.7s with 24 copies running at once while the
+  // process around it took 2-8s to start and exit, so the 10s bound below was measuring process
+  // lifecycle under load rather than the guard (#7854). Paying that once here, through the same
+  // probe, leaves the unchanged bound measuring a warm run.
+  beforeAll(async () => {
+    await warmColdSpawn("powershell/desktop-package-ancestry-guard", deadlineMs => probeOwnedAncestry(deadlineMs));
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test("owned ancestor junctions and persistent retargets fail before proof publication", async () => {
+    await probeOwnedAncestry(10_000);
+  }, 20_000);
+});
 
 test("manifest and canonical executable facts are required without admitting another version", async () => {
   const good = installed();

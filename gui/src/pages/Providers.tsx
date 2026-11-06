@@ -409,7 +409,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     apiBase, config,
     notify,
     fetchConfig, fetchProviderQuotas, onSaved: added => {
-      if (added.length) modelsNotice.open(added, true);
+      if (added.length) {
+        if (added.length === 1) setWorkspaceSelected(current => current ?? added[0]!);
+        modelsNotice.open(added, true);
+      }
       setModelsRefreshToken(n => n + 1);
     },
     t: t as unknown as Parameters<typeof useJsonConfigEditor>[0]["t"],
@@ -629,6 +632,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         }}
         jsonSaving={jsonSaving}
         modelsRefreshToken={modelsRefreshToken}
+        fetchDiscovery
         onModelsSettled={modelsNotice.modelsSettled}
         activeAccountNeedsReauth={activeAccountNeedsReauth}
         quotaRefreshEpoch={quotaRefresh.epoch}
@@ -652,6 +656,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             modelRevision={data.modelRevision}
             modelRowsReady={data.modelRowsReady}
             onOpenModels={() => navigateHash("models")}
+            onOpenConnect={() => navigateHash("integrations")}
             onCreateJevAuto={canCreateJevAutoFrom(item)
               ? () => navigateHash(jevAutoCreateHash(item.name))
               : undefined}
@@ -730,6 +735,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           setAdding(false);
           setAddIntent(null);
           clearStatus();
+          setWorkspaceSelected(current => current ?? name);
           modelsNotice.open(name, !config.providers[name]);
           fetchConfig();
           fetchOauth();
@@ -745,7 +751,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCodexAdded={(completion) => {
           setCodexLoginOpen(false);
           notifyCodexCompletion(completion);
-          if (!completion.validationPending) modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
+          if (!completion.validationPending) {
+            setWorkspaceSelected(current => current ?? "openai");
+            modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
+          }
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

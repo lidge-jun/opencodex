@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   ClientPathError,
   EXPORT_CLIENTS,
@@ -137,9 +138,9 @@ describe("MiniMax Code client config", () => {
 
   test("resolves the public data-dir overrides in MCode precedence order", () => {
     expect(mcodeHomeDir({}, "/home/u")).toBe(join("/home/u", ".minimax"));
-    expect(mcodeConfigPath({ MAVIS_DATA_DIR: "/legacy" }, "/home/u")).toBe(join("/legacy", "config.yaml"));
-    expect(mcodeConfigPath({ MINIMAX_DATA_DIR: "/current", MAVIS_DATA_DIR: "/legacy" }, "/home/u"))
-      .toBe(join("/current", "config.yaml"));
+    expect(mcodeConfigPath({ MAVIS_DATA_DIR: join(tmpdir(), "legacy") }, "/home/u")).toBe(join(join(tmpdir(), "legacy"), "config.yaml"));
+    expect(mcodeConfigPath({ MINIMAX_DATA_DIR: join(tmpdir(), "current"), MAVIS_DATA_DIR: join(tmpdir(), "legacy") }, "/home/u"))
+      .toBe(join(join(tmpdir(), "current"), "config.yaml"));
     expect(() => mcodeConfigPath({ MINIMAX_DATA_DIR: "relative" }, "/home/u")).toThrow(ClientPathError);
   });
 
@@ -152,45 +153,48 @@ describe("MiniMax Code client config", () => {
 
 describe("MiniMax CLI wrapper", () => {
   test("keeps the bridge's upstream hop direct when the parent has a proxy", async () => {
-    const reservation = createServer();
-    const proxyPort = await new Promise<number>((resolve, reject) => {
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", () => {
-        const address = reservation.address();
-        if (!address || typeof address === "string") reject(new Error("proxy port reservation failed"));
-        else resolve(address.port);
-      });
-    });
-    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
-
-    const child = Bun.spawn([process.execPath, fixturePath("minimax-bridge-direct.ts")], {
-      env: {
-        ...process.env,
-        HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
-        HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-        ALL_PROXY: `http://127.0.0.1:${proxyPort}`,
-        http_proxy: `http://127.0.0.1:${proxyPort}`,
-        https_proxy: `http://127.0.0.1:${proxyPort}`,
-        all_proxy: `http://127.0.0.1:${proxyPort}`,
-        NO_PROXY: "",
-        no_proxy: "",
-        TEST_PROXY_PORT: String(proxyPort),
+    let proxyRequests = 0;
+    const attackerProxy = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        proxyRequests += 1;
+        return Response.json({ source: "proxy" });
       },
-      stdout: "pipe",
-      stderr: "pipe",
     });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-    expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout.trim())).toEqual({
-      responseStatus: 200,
-      responseText: JSON.stringify({ source: "upstream" }),
-      proxyRequests: 0,
-      upstreamBody: JSON.stringify({ prompt: "private bridge payload" }),
-    });
+    const proxyPort = attackerProxy.port;
+    try {
+      // This is the actual canary, held for the child's entire lifetime.
+      const child = Bun.spawn([process.execPath, fixturePath("minimax-bridge-direct.ts")], {
+        env: {
+          ...process.env,
+          HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+          HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+          ALL_PROXY: `http://127.0.0.1:${proxyPort}`,
+          http_proxy: `http://127.0.0.1:${proxyPort}`,
+          https_proxy: `http://127.0.0.1:${proxyPort}`,
+          all_proxy: `http://127.0.0.1:${proxyPort}`,
+          NO_PROXY: "",
+          no_proxy: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        responseStatus: 200,
+        responseText: JSON.stringify({ source: "upstream" }),
+        upstreamBody: JSON.stringify({ prompt: "private bridge payload" }),
+      });
+      expect(proxyRequests).toBe(0);
+    } finally {
+      await attackerProxy.stop(true);
+    }
   });
 
   test("passes through only standalone help and officially supported version invocations", () => {
@@ -438,13 +442,11 @@ describe("MiniMax CLI wrapper", () => {
   });
 
   test("returns 502 when the selected OpenCodex proxy address is unavailable", async () => {
-    const reservation = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch: () => Response.json({ reserved: true }),
-    });
-    const deadPort = reservation.port;
-    await reservation.stop(true);
+    // Own the endpoint throughout: a peer that closes TCP without an HTTP response
+    // is unavailable to the bridge even when another test is binding nearby ports.
+    const reservation = createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => reservation.listen(0, "127.0.0.1", resolve));
+    const deadPort = (reservation.address() as { port: number }).port;
     const bridge = startMmxTextBridge({ hostname: "127.0.0.1", port: deadPort });
     try {
       const response = await fetch(`${bridge.baseUrl}/anthropic/v1/messages`, {
@@ -459,6 +461,7 @@ describe("MiniMax CLI wrapper", () => {
       });
     } finally {
       await bridge.stop();
+      await new Promise<void>(resolve => reservation.close(() => resolve()));
     }
   });
 

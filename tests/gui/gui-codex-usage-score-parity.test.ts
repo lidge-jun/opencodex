@@ -39,6 +39,20 @@ function expectSame(quota: AccountQuota, plan?: string | null): void {
 }
 
 describe("account-switch warning agrees with routing (#5045)", () => {
+  test("known long window ignores only valid elapsed short resets (#7896)", () => {
+    const future = NOW + 3_600_000;
+    const past = NOW - 1_000;
+    for (const [shortResetAt, expected] of [
+      [future, 100], [future / 1000, 100], [past, 20], [past / 1000, 20],
+      [NOW, 20], [undefined, 100], [0, 100], [-1, 100], [NaN, 100], [Infinity, 100],
+    ] as const) {
+      const quota: AccountQuota = { weeklyPercent: 20, shortPercent: 100, shortResetAt, updatedAt: NOW };
+      expect(guiScore(quota, null, NOW)).toBe(expected);
+      expect(routerScore(asRouterQuota(quota), null, NOW)).toBe(expected);
+      expect(guiScore({ weeklyPercent: 20, fiveHourPercent: 100, fiveHourResetAt: shortResetAt, updatedAt: NOW }, null, NOW)).toBe(expected);
+    }
+  });
+
   test("a terminal burst window reads the same in seconds and in milliseconds", () => {
     // Both units reach storage. Read as milliseconds, a seconds-form instant lands in 1970 and
     // every future reset looks elapsed — a check that passes its own test and does nothing.

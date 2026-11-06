@@ -19,7 +19,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const BASE_URL = "https://api.tokenlab.sh/v1";
 const RESPONSES_MODELS = [
-  "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
+  "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
   "deepseek-v4.1-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.3",
 ] as const;
 const CLAUDE_MODELS = [

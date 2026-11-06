@@ -15,7 +15,8 @@ import { describe, expect, test } from "bun:test";
  * qualification (#1691).
  */
 const NO_CODEX_PATH = "/usr/bin:/bin";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import {
@@ -51,6 +52,16 @@ import {
 
 function tempConfigDir(): string {
   return mkdtempSync(join(tmpdir(), "ocx-runtime-"));
+}
+
+function withBundledClampFixture(run: (command: string, calls: unknown[][]) => void): void {
+  const root = realpathSync(tempConfigDir());
+  const command = join(root, process.platform === "win32" ? "codex.exe" : "codex"), calls: unknown[][] = [];
+  try {
+    writeFileSync(command, "fixture only; execution must stay injected", { mode: 0o700 });
+    run(command, calls);
+    expect(calls).toEqual([[command, ["debug", "models", "--bundled"]]]);
+  } finally { removeTreeWithRetry(root); }
 }
 
 function persistedRuntimeBytes(
@@ -1033,25 +1044,27 @@ describe("resolveCodexRuntime", () => {
       ],
       default_reasoning_level: "xhigh",
     }];
-    clampCatalogModelsToCodexSupport(models, {
-      commandCandidates: () => ["stub"],
-      execFileSync: () => JSON.stringify({
-        models: [{
-          slug: "gpt-5.5",
-          base_instructions: "x",
-          supported_reasoning_levels: [
-            { effort: "low", description: "low" },
-            { effort: "medium", description: "medium" },
-            { effort: "high", description: "high" },
-          ],
-          default_reasoning_level: "medium",
-        }],
-      }),
-      onEffortClamp: (diagnostic) => diagnostics.push(diagnostic),
+    withBundledClampFixture((command, calls) => {
+      clampCatalogModelsToCodexSupport(models, {
+        commandCandidates: () => [command],
+        execFileSync: (file, args) => { calls.push([file, args]); return JSON.stringify({
+          models: [{
+            slug: "gpt-5.5",
+            base_instructions: "x",
+            supported_reasoning_levels: [
+              { effort: "low", description: "low" },
+              { effort: "medium", description: "medium" },
+              { effort: "high", description: "high" },
+            ],
+            default_reasoning_level: "medium",
+          }],
+        }); },
+        onEffortClamp: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      expect(models[0]!.default_reasoning_level).toBe("high");
+      expect(diagnostics[0]?.removedEfforts).toContain("xhigh");
+      expect(diagnostics[0]?.affectedModels).toEqual(["openrouter/example"]);
     });
-    expect(models[0]!.default_reasoning_level).toBe("high");
-    expect(diagnostics[0]?.removedEfforts).toContain("xhigh");
-    expect(diagnostics[0]?.affectedModels).toEqual(["openrouter/example"]);
   });
 
   // An exempt default only survives when the surviving ladder advertises it; an orphaned ultra
@@ -1069,24 +1082,26 @@ describe("resolveCodexRuntime", () => {
       ],
       default_reasoning_level: "ultra",
     }];
-    clampCatalogModelsToCodexSupport(models, {
-      commandCandidates: () => ["stub"],
-      execFileSync: () => JSON.stringify({
-        models: [{
-          slug: "gpt-5.5",
-          base_instructions: "x",
-          supported_reasoning_levels: [
-            { effort: "low", description: "low" },
-            { effort: "medium", description: "medium" },
-            { effort: "high", description: "high" },
-          ],
-          default_reasoning_level: "medium",
-        }],
-      }),
-      onEffortClamp: (diagnostic) => diagnostics.push(diagnostic),
+    withBundledClampFixture((command, calls) => {
+      clampCatalogModelsToCodexSupport(models, {
+        commandCandidates: () => [command],
+        execFileSync: (file, args) => { calls.push([file, args]); return JSON.stringify({
+          models: [{
+            slug: "gpt-5.5",
+            base_instructions: "x",
+            supported_reasoning_levels: [
+              { effort: "low", description: "low" },
+              { effort: "medium", description: "medium" },
+              { effort: "high", description: "high" },
+            ],
+            default_reasoning_level: "medium",
+          }],
+        }); },
+        onEffortClamp: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      expect(models[0]!.default_reasoning_level).toBe("high");
+      expect(diagnostics).toEqual([]);
     });
-    expect(models[0]!.default_reasoning_level).toBe("high");
-    expect(diagnostics).toEqual([]);
   });
 });
 

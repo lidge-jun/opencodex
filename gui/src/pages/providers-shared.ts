@@ -13,9 +13,11 @@ export interface ProvidersConfig {
     reasoningWireFormat?: "gateway-object";
     preserveResponsesReasoningContent?: boolean;
     authMode?: string;
+    anthropicOAuthInstance?: "anthropic2";
     keyOptional?: boolean;
     disabled?: boolean;
     initialModelSelection?: { status: "pending" | "ready" | "all-off"; modelCount?: number };
+    discovery?: import("../models-groups").ProviderDiscoverySummary;
     note?: string;
     codexAccountMode?: "direct" | "pool";
     xaiResponsesOptInState?: boolean | "mixed";

@@ -304,6 +304,8 @@ describe("Claude Code tier-slot picker labels (#6926)", () => {
   test("only aliases are labelled, legacy spellings included", () => {
     expect(claudeTierDisplayName("claude-ocx-native--gpt-6.1-sol")).toBe("gpt-6.1-sol (native)");
     expect(claudeTierDisplayName(" ocx-claude-native--gpt-6.1-sol[1M] ")).toBe("gpt-6.1-sol (native) · 1M");
+    expect(claudeTierDisplayName("claude-ocx-native--gpt-6.1-terra")).toBe("gpt-6.1-terra (native)");
+    expect(claudeTierDisplayName(" ocx-claude-native--gpt-6.1-terra[1M] ")).toBe("gpt-6.1-terra (native) · 1M");
     for (const notAlias of ["claude-opus-5-5[1m]", "cursor/gpt-5.6-luna", "gpt-5.6-sol", "opus", "", "ocx-claude-native--"]) {
       expect(claudeTierDisplayName(notAlias)).toBeUndefined();
     }

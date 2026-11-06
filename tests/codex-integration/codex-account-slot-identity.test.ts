@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flushConfigDirHardening } from "../../src/config/paths";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { codexAccountUnusableReason } from "../../src/codex/account-usability";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
@@ -13,7 +14,7 @@ import { clearAccountQuota } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import type { OcxConfig } from "../../src/types";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 /**
  * Security proof for the slot identity fields on the account-list API: `slotId`, `slotKind`
@@ -94,14 +95,21 @@ beforeEach(() => {
   resetRuntime();
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
   resetRuntime();
-  for (const [name, value] of Object.entries(saved)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-  removeTreeWithRetry(home);
+  await drainAndRemoveFixtureRoots({
+    roots: [{ path: home }],
+    restoreEnvironment: () => {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    },
+  }, {
+    // The tracked flight belongs to the nested config directory, not its fixture root.
+    settleConfigFlights: () => flushConfigDirHardening(join(home, "ocx")),
+  });
 });
 
 describe("Codex account slot identity metadata", () => {

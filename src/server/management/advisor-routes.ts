@@ -12,6 +12,9 @@ import { activateAdvisor } from "../../lib/advisor-activation";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBodyOr } from "./body";
 import type { ManagementContext } from "./context";
+import { getConfigDir, withConfigDirHardeningSettled } from "../../config/paths";
+import { readConfigDiagnostics } from "../../config/diagnostics";
+import { adoptPersistedAdvisor, armDetachedConfigBaseline } from "../../config/live-reconcile";
 import {
   ADVISOR_CONTEXT_SHARING_CONSENT_VERSION,
   ADVISOR_EFFORTS,
@@ -184,19 +187,33 @@ async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
   // `deps.` first: route tests with an in-memory fixture must never write the real config.
   const persist = ctx.deps.saveConfigPreservingClaudeCode
     ?? (await import("../../config")).saveConfigPreservingClaudeCode;
-  const snapshot = isRec(config.advisor) ? { ...config.advisor } : undefined;
-  applyPatchInMemory(config, parsed.patch);
+  let published = false;
   try {
-    persist(config);
+    return await withConfigDirHardeningSettled(getConfigDir(), () => {
+      const disk = ctx.deps.saveConfigPreservingClaudeCode ? undefined : readConfigDiagnostics();
+      if (disk?.source === "fallback" || disk?.error) throw new Error("config_unavailable");
+      const candidate = disk?.source === "file" ? disk.config : config;
+      // This fresh authority owns no live socket. Arm the same object passed to the
+      // saver so even new disk-only fields reconcile against its admitted read.
+      if (candidate !== config) armDetachedConfigBaseline(candidate);
+      const snapshot = isRec(config.advisor) ? { ...config.advisor } : undefined;
+      applyPatchInMemory(candidate, parsed.patch);
+      try { persist(candidate); }
+      catch (error) {
+        // Keep the rollback in the same synchronous phase as the live edit and save.
+        if (snapshot === undefined) delete config.advisor;
+        else config.advisor = snapshot as ManagementContext["config"]["advisor"];
+        throw error;
+      }
+      published = true;
+      adoptPersistedAdvisor(config, candidate.advisor);
+      activateAdvisor(config);
+      return jsonResponse(advisorInfo(config), 200, req, config);
+    });
   } catch (error) {
-    // Undo in memory too: a live config that serves a state the file does not hold would
-    // mislead every GET until the next restart.
-    if (snapshot === undefined) delete config.advisor;
-    else config.advisor = snapshot as ManagementContext["config"]["advisor"];
+    if (published) throw error;
     return isConfigLockContention(error)
       ? jsonResponse({ error: { code: "config_busy", message: "Another process is saving the configuration. Try again in a moment." } }, 409, req, config)
       : jsonResponse({ error: { code: "write_failed", message: "The configuration could not be saved." } }, 500, req, config);
   }
-  activateAdvisor(config);
-  return jsonResponse(advisorInfo(config), 200, req, config);
 }

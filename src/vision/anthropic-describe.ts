@@ -10,6 +10,7 @@ import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-
 import { publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { getAnthropicSidecarAccessToken } from "../oauth/anthropic-routing";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
+import { CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import type { DescribeOutcome, VisionSettings } from "./describe";
 
 const ANTHROPIC_VISION_MAX_TOKENS = 1024;
@@ -179,7 +180,7 @@ export async function describeImageAnthropic(
     "Content-Type": "application/json",
     "anthropic-version": "2023-06-01",
     "Accept": "text/event-stream",
-    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+    "User-Agent": CLAUDE_CLI_USER_AGENT,
     "Authorization": `Bearer ${token}`,
     "anthropic-beta": ANTHROPIC_OAUTH_BETA,
     ...CLAUDE_CODE_HEADERS,

@@ -11,6 +11,20 @@ import {
 } from "../../src/lib/redact";
 
 describe("redactSecretString", () => {
+  test("ASCII folding preserves every byte and original offset, including literal escape syntax (#7846)", () => {
+    const ascii = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)).join("");
+    for (const decode of [true, false]) {
+      for (const value of ["", ascii, "Priority GPT-5.5 /helper", "author%69zation", "author\\u0069zation", "author&#105;zation", "x&ii;-api-key", "%invalid&plain\\text"]) {
+        // A dropped non-ASCII prefix forces the general folding path. Its output and offsets
+        // must match the ASCII path after accounting for that prefix, for either decode mode.
+        const general = foldForMatching(`\u200b${value}`, decode);
+        expect(foldForMatching(value, decode)).toEqual({
+          folded: general.folded, map: general.map.map(offset => offset - 1),
+        });
+      }
+    }
+  });
+
   test("masks bearer, api, access, refresh, and profile values", () => {
     const input = [
       "Authorization: Bearer access-token-value-123456",

@@ -30,6 +30,7 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
+import { CLAUDE_CLI_SDK_PACKAGE_VERSION, CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
@@ -121,6 +122,8 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
+  /** The last system block is the caller's uncached per-turn tail; mark the block before it. */
+  uncachedSystemTail?: boolean;
 };
 
 /** Place explicit cache_control breakpoints on the built Anthropic body. */
@@ -157,7 +160,8 @@ function applyPromptCaching(
   // 2. system
   const system = body.system as Array<Record<string, unknown>> | undefined;
   if (system && system.length > 0) {
-    applyCacheControlToLast(system, cc);
+    const i = system.length - (options.uncachedSystemTail && system.length > 1 ? 2 : 1);
+    system[i] = { ...system[i], cache_control: cc };
     used++;
   }
   if (used >= explicitLimit || !messages) return;
@@ -556,7 +560,7 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
     "Content-Type": "application/json",
     "anthropic-version": ANTHROPIC_API_VERSION,
     "Accept": stream ? "text/event-stream" : "application/json",
-    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+    "User-Agent": `@anthropic-ai/sdk/${CLAUDE_CLI_SDK_PACKAGE_VERSION}`,
   };
 }
 
@@ -567,18 +571,30 @@ export function applyAnthropicKeyAuth(headers: Record<string, string>, provider:
   else headers["x-api-key"] = provider.apiKey;
 }
 
+export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {
+  return parsed._codexOwnThreadId?.trim()
+    || parsed._clientThreadId?.trim()
+    || (parsed.options.promptCacheKey?.trim() || undefined)
+    || incoming?.headers?.get("x-claude-code-session-id")?.trim()
+    || incoming?.headers?.get("session_id")?.trim()
+    || incoming?.headers?.get("session-id")?.trim()
+    || incoming?.headers?.get("thread-id")?.trim()
+    || undefined;
+}
+
 /**
  * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
  * Code client fingerprint. Shared by the adapter and the managed native lane.
  */
-export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string, sessionKey?: string | null): void {
   headers["Authorization"] = `Bearer ${accessToken}`;
   headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  headers["User-Agent"] = CLAUDE_CLI_USER_AGENT;
   // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
   // header set is a non-first-party signature. (cch billing-header signing is intentionally
   // out of scope — brittle and version-coupled.)
   Object.assign(headers, CLAUDE_CODE_HEADERS);
-  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken, sessionKey);
   headers["x-client-request-id"] = crypto.randomUUID();
 }
 
@@ -746,7 +762,7 @@ function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
-): { system: string | undefined; messages: unknown[] } {
+): { system: string[]; messages: unknown[] } {
   // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
   // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
   const pendingReplay = new Map(serverReplay);
@@ -774,9 +790,14 @@ function messagesToAnthropicFormat(
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
-  const system = systemParts.length
-    ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
-    : undefined;
+  // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
+  const prefix = parsed._anthropicSystemCachePrefix
+    ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
+  const head = prefix && systemParts[0] ? identifyRoutedModel(systemParts[0], parsed.modelId) : systemParts[0];
+  const texts = prefix && head?.startsWith(`${prefix}\n\n`)
+    ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
+    : [systemParts.join("\n\n")];
+  const system = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -1065,10 +1086,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [{ type: "text", text: system }] : []),
+          ...system.map(text => ({ type: "text", text })),
         ];
-      } else if (system) {
-        body.system = [{ type: "text", text: system }];
+      } else if (system.length > 0) {
+        body.system = system.map(text => ({ type: "text", text }));
       }
       if (tools) body.tools = tools;
       if (parsed.options.temperature !== undefined) body.temperature = parsed.options.temperature;
@@ -1084,7 +1105,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
         // model both defaults to thinking and accepts being told not to.
       const family = claudeFamilyVersion(parsed.modelId);
-      progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
+      const nativeOpus55 = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
+      const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
+      // Codex sends "auto" by default, so only an explicit concise/detailed request opts out of updates (#7728).
+      const summaryRequested = summary === "concise" || summary === "detailed";
       const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
       const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
       const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
@@ -1119,7 +1143,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // default 8192-token request can spend everything on thought and return empty text.
           // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
-          // during a long think (#5824). Opus 5.5 uses the documented updates discriminator;
+          // during a long think (#5824). Native Opus 5.5 selects its display below;
           // other models request summarized thinking unless the caller hides it.
           body.thinking = parsed.options.hideThinkingSummary
             ? { type: "adaptive" }
@@ -1168,7 +1192,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (progressUpdates && !reasoningControlsUnsupported && thinkingEnabled !== false) body.thinking = { type: "adaptive", display: "updates" };
+      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
+        body.thinking = { type: "adaptive", display: summaryRequested ? "summarized" : "updates" };
+      }
+      // One discriminator governs the display beta and response classification, including reuse.
+      progressUpdates = (body.thinking as { display?: string } | undefined)?.display === "updates";
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
@@ -1243,7 +1271,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
       const headers = anthropicBaseRequestHeaders(parsed.stream);
-      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);
@@ -1257,6 +1285,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       applyPromptCaching(body, cc, {
         maxExplicitBreakpoints: explicitLimit,
         skipLastUser: !!automaticPromptCaching,
+        uncachedSystemTail: system.length > 1,
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);

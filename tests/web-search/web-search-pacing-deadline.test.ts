@@ -145,6 +145,21 @@ async function waitUntilQueued(configured = provider) {
 }
 
 describe("web-search pacing and response-header deadline", () => {
+  test.each([0, -1])("disabled header budget %s survives pacing admission and retains cancellation", async connectTimeoutMs => {
+    let sends = 0;
+    const executor = fetcher(async () => { sends++; return new Response("ok"); });
+    await expectSuccess(run(executor, { connectTimeoutMs }));
+    expect(sends).toBe(1);
+    const held = await waitForProviderRequestSlot(NAME, provider, MODEL);
+    const caller = new AbortController();
+    const pending = run(executor, { connectTimeoutMs, abortSignal: caller.signal });
+    await waitUntilQueued();
+    caller.abort(new DOMException("client left", "AbortError"));
+    expect((await settle(pending)).value.status).toBe(499);
+    expect(sends).toBe(1);
+    held.release();
+  });
+
   for (const adapterSend of [false, true]) {
     test(`${adapterSend ? "adapter fetchResponse" : "ordinary fetch"} excludes a queue wait longer than its header deadline`, async () => {
       const held = await waitForProviderRequestSlot(NAME, provider, MODEL);

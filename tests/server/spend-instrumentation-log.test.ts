@@ -11,6 +11,7 @@ import {
   finishRequestAttempt,
   noteAffinityMove,
   noteAttemptSend,
+  noteCodexSelectionAffinity,
   noteNoAccountAffinityReason,
   recordNoAccountAffinityFailure,
   requestLogEntryFromPersistedUsage,
@@ -199,5 +200,33 @@ describe("no-account failures explain themselves", () => {
     expect(logCtx.affinity).toBeUndefined();
     expect(logCtx.errorCode).toBeUndefined();
     clearNoAccountAffinityReasonsForTests();
+  });
+});
+
+describe("Pool selections report their affinity decision on the request log (#7799)", () => {
+  const decision = { move: "rebound", reason: "quota_refusal" } as const;
+  const base = { accountId: "acct", writerGeneration: 0, accessToken: "token", chatgptAccountId: "chatgpt" };
+
+  test("a main-pool selection reports the same decision fields as a stored-pool selection", () => {
+    const mainPool: RequestLogContext = { provider: "openai", model: "gpt-5.6-sol" };
+    noteCodexSelectionAffinity(mainPool, { kind: "main-pool", ...base, affinityDecision: decision });
+    expect(mainPool.affinity).toBe("rebound");
+    expect(mainPool.affinityReason).toBe("quota_refusal");
+
+    const pool: RequestLogContext = { provider: "openai", model: "gpt-5.6-sol" };
+    noteCodexSelectionAffinity(pool, { kind: "pool", ...base, generation: 1, affinityDecision: decision });
+    expect({ affinity: pool.affinity, affinityReason: pool.affinityReason })
+      .toEqual({ affinity: mainPool.affinity, affinityReason: mainPool.affinityReason });
+  });
+
+  test("a selection without a decision, or a request-owned main context, leaves the fields unset", () => {
+    const noDecision: RequestLogContext = { provider: "openai", model: "gpt-5.6-sol" };
+    noteCodexSelectionAffinity(noDecision, { kind: "main-pool", ...base });
+    expect(noDecision.affinity).toBeUndefined();
+    expect(noDecision.affinityReason).toBeUndefined();
+
+    const requestOwned: RequestLogContext = { provider: "openai", model: "gpt-5.6-sol" };
+    noteCodexSelectionAffinity(requestOwned, { kind: "main", accountId: null });
+    expect(requestOwned.affinity).toBeUndefined();
   });
 });

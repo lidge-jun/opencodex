@@ -253,10 +253,11 @@ export async function* decodeEventStream(source: ReadableStream<Uint8Array>): As
 		// an in-flight `reader.read()` pending when this generator's `finally` runs. Releasing the lock
 		// does NOT settle that orphaned read — Bun then surfaces it as an off-path
 		// `unhandledRejection: TypeError: null is not an object` that no caller try/catch can intercept.
-		// Cancel first (settles the pending read + closes the body), then release. On a clean `done`
+		// Initiate cancellation before releasing; a hung transport cancellation must not block return.
+		// Observe its rejection without waiting for physical cleanup. On a clean `done`
 		// finish the read is already settled, so cancel() is a harmless no-op.
 		try {
-			await reader.cancel();
+			void reader.cancel().catch(() => { /* best-effort transport cleanup */ });
 		} catch {
 			/* body already errored/closed — nothing to cancel */
 		}

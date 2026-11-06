@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 import { isClaudeWebSearchToolName } from "./outbound";
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 
@@ -40,14 +41,32 @@ export function systemToInstructions(system: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The `instructions` prefix ending at the caller's last cache-marked system block, when blocks
+ * follow it. Claude Code ends its system with a per-turn env block; joining everything into one
+ * Anthropic system block moved the breakpoint onto those changing bytes, so system and every
+ * later breakpoint missed on each turn. The Anthropic adapter splits its system here instead.
+ */
+export function systemCachePrefix(system: unknown): string | undefined {
+  if (!Array.isArray(system)) return undefined;
+  const last = system.findLastIndex(block => isRec(block) && block.cache_control != null);
+  return last >= 0 && last < system.length - 1 ? systemToInstructions(system.slice(0, last + 1)) : undefined;
+}
+
 export function toolsToResponses(tools: unknown): Rec[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  // The shared hosted-search lane cannot enforce these constraints on every destination or
+  // sidecar backend. Omit search rather than broaden it; a duplicate declaration cannot opt out.
+  // Typed originals still travel separately to an Anthropic destination.
+  const restrictedSearch = tools.some(raw => isRec(raw) && typeof raw.type === "string"
+    && raw.type.startsWith("web_search")
+    && ["allowed_domains", "blocked_domains", "user_location"].some(key => Object.hasOwn(raw, key)));
   const out: Rec[] = [];
   for (const raw of tools) {
     if (!isRec(raw)) continue;
     const type = typeof raw.type === "string" ? raw.type : "";
     if (type.startsWith("web_search")) {
-      out.push({ type: "web_search" }); // hosted sidecar path
+      if (!restrictedSearch) out.push({ type: "web_search" }); // hosted sidecar path
       continue;
     }
     if (typeof raw.name === "string" && raw.name.length > 0 && isRec(raw.input_schema)) {
@@ -162,11 +181,15 @@ export function toolChoiceToResponses(choice: unknown, body: Rec): void {
     case "any": body.tool_choice = "required"; break;
     case "tool":
       if (typeof choice.name !== "string" || choice.name.length === 0) {
-        throw new AnthropicRequestError("tool_choice.tool requires a name");
+        throw markProxyError(new AnthropicRequestError("tool_choice.tool requires a name"));
       }
       // Anthropic represents hosted WebSearch as a named tool choice, while
       // Responses requires the choice type to match the hosted declaration.
       // Preserve forced-tool intent rather than weakening it to `auto`.
+      if (isClaudeWebSearchToolName(choice.name)
+        && (!Array.isArray(body.tools) || !body.tools.some(tool => isRec(tool) && tool.type === "web_search"))) {
+        throw markProxyError(new AnthropicRequestError("Restricted web search cannot be forced on a translated route without an available search declaration"));
+      }
       body.tool_choice = isClaudeWebSearchToolName(choice.name)
         ? { type: "web_search" }
         : { type: "function", name: choice.name };

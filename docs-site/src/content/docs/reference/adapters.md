@@ -23,6 +23,13 @@ adapter own retries/timeouts, while `runTurn` supports transports that cannot be
 HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
+## Shared tool argument repair
+
+The bridge repairs integral floats in integer fields and safe bare integers in string-only
+fields against the tool's schema. Unsafe integers, overflowing numbers and unrepaired non-integral
+decimals retain their exact tokens while safe siblings are still repaired. Nested arrays and duplicate keys retain every
+unsafe token, so repairing a timeout cannot silently change an unrelated identifier.
+
 ## External task input on translated Responses routes
 
 Codex task coordination can deliver input as `function_call_output` with nonblank
@@ -230,6 +237,9 @@ WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handl
 `config.proxy` or a SOCKS5 `ALL_PROXY` uses the built-in tunnel when `NO_PROXY` does not exempt
 the target. Scheme-specific HTTP(S) proxy variables retain their separate native handling;
 non-SOCKS `ALL_PROXY` is not a native HTTP fetch route.
+Internal model decisions, compaction responses, combo failover, and native Responses delivery accept valid event-stream media
+types regardless of casing or parameters, including `Text/Event-Stream; charset=UTF-8`. Other explicit
+media types retain their original format even when a parameter mentions `text/event-stream`. Native delivery also identifies JSON by its exact media type; a JSON name inside a parameter does not select the JSON decoder. Its existing missing-header SSE fallback and plaintext V2 event validation still apply.
 
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are
@@ -249,6 +259,28 @@ part with its exact whitespace and newlines. Other destinations retain string-va
 blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
+
+Meta Responses also receives Codex's current `additional_tools` declarations in the public
+`tools` array. The catalog is captured before history normalization: replayed declarations
+and historical tool-search discoveries cannot activate tools for the new turn. Current
+namespace, custom-tool and long-name aliases retain the existing normalization and response
+restoration. Current declarations keep their parameter schemas when search results repeat a tool.
+Historical custom calls retain their existing function-call representation without granting
+those old tools current authority. Nested function definitions become public declarations.
+Malformed or unrepresentable namespace catalogs return HTTP 400 before inference, including
+requests with string or omitted input, rather than being partially promoted.
+
+For Meta Responses at the exact `api.meta.ai` host, OpenCodex omits the unsupported
+`output.encrypted_content` include requested by Codex Desktop. Meta otherwise rejects the
+request before inference. `reasoning.encrypted_content` and other include entries remain
+intact, so stateless reasoning replay is preserved. The same exact-entry normalization
+applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
+(`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
+
+These request-shape fixes do not change account entitlements. Meta limits Muse Code
+subscription credentials to the Muse Code client; other clients require a separately
+billed Meta API key. A subscription key can therefore return HTTP 403 through OpenCodex
+even when the request shape is valid. See [Meta's subscription rules](https://dev.meta.ai/docs/muse-code/subscriptions).
 
 For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
 in the request, including when cached-only search is removed. Valid forced function selections
@@ -348,7 +380,9 @@ MiMo model Command Code serves.
 - **Adaptive thinking display:** adaptive-thinking models (Opus 4.7+, Sonnet 5, Fable) are asked
   for `thinking.display: "summarized"`, so a long think reaches Chat and Responses clients as
   reasoning deltas instead of minutes of heartbeats. A request that hides the reasoning summary
-  (`reasoning.summary: "none"`) keeps the provider default.
+  (`reasoning.summary: "none"`) keeps the provider default. Native Opus 5.5 on `api.anthropic.com`
+  defaults to `display: "updates"`; explicit `reasoning.summary: "concise"` or `"detailed"`
+  selects `"summarized"` without the updates beta. See [Opus 5.5 progress updates](/guides/providers/#claude-opus-55-progress-updates).
 - **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
   with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
   existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.
@@ -398,6 +432,8 @@ MiMo model Command Code serves.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- Antigravity's Gemini 4 Argon requests include the selected thinking tier when thought summaries
+  are enabled, allowing its thought summaries to appear in supported clients.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending
@@ -473,11 +509,50 @@ MiMo model Command Code serves.
   solely because the client permits parallel calls.
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
-  they are ignored rather than rejected. Structured output (`text.format` of type `json_schema`
-  or `json_object`) is still refused: the Kiro wire cannot constrain the response shape, and a
-  caller expecting JSON would otherwise receive prose.
+  they are ignored rather than rejected.
+- Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
+  Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
+  adapter advertises a private output tool whose input schema is the requested schema and returns
+  that tool's input as the response text. A plain-text reply that is already the requested JSON is
+  accepted as is. Any other reply, including an empty one, gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
+  with an `invalid_kiro_structured_output` error. Prose is not returned as the structured answer;
+  commentary preceding a real client tool call can still stream with that call.
+  Without `strict: true` the check covers JSON syntax, the root type and the root's required
+  properties. With `strict: true` the whole value is checked exactly against the schema, and a
+  strict schema outside this subset is refused before the request is sent:
+  - `type`, `properties`, `required`, `additionalProperties`, single-schema `items`, `enum`,
+    `const` and `anyOf`. A `const` or `enum` value that contains a number is refused: the proxy
+    receives the request already parsed, so a number such as `1.0000000000000001` arrives as `1`
+    and an exact match could accept a value the caller excluded.
+  - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root, with `~0` and
+    `~1` as the only JSON Pointer escapes. References such
+    as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
+    reach a property or item are refused, and so is a `$ref` with an assertion keyword beside it
+    (drafts disagree on whether such siblings apply), a `$id` below the root, and `$anchor`.
+  - `minLength`, `maxLength`, `minItems` and `maxItems` as non-negative integers.
+  - `minimum`, `maximum`, `exclusiveMinimum` and `exclusiveMaximum` as safe integers or decimals
+    with at most 15 significant digits. The model's numbers are compared exactly as written. This is
+    a heuristic for the bound itself: a bound written with more digits than a double holds can still
+    arrive rounded, so a value within about one unit in the last place of the bound may be judged on
+    the wrong side.
+  - `multipleOf`, `pattern` and `patternProperties` are refused in strict mode. Without
+    `strict: true` they are accepted and left to the light checks above.
+
+  Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
+  levels deep), including `const`/`enum` comparisons and every pass over `required` lists, object
+  entries, long strings and long numbers. A strict format without a JSON object schema is refused,
+  and so is a `type` list that repeats a type. An answer that needs more counts as not
+  matching the format. A strict schema with more than 10,000 nodes, or more than 10,000 values in
+  its `const`/`enum` literals, is refused. Error messages name the failed check only, never a
+  property name or path from the answer or the schema.
+  A Messages `output_config.format` schema always gets the `strict: true` checks, even when it
+  has optional properties and is therefore forwarded to OpenAI-compatible destinations without
+  `strict`: Anthropic promises an answer that conforms to the schema. A Messages schema outside
+  this subset is refused before the request is sent.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
+  Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a
+  stalled cleanup promise cannot hold the decoder open after the consumer stops reading.
 - Uses the configured `baseUrl` verbatim when it is custom. A canonical
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
   shape is eligible for one budgeted fallback to `q.{region}.amazonaws.com` after an endpoint,
@@ -567,6 +642,8 @@ retry cannot recurse: an empty or reasoning-only retry is returned as retryable 
 real client tool call keeps the turn open. A completion-tool answer is always emitted as
 `final_answer`, even when it exactly repeats prior commentary, because phase correctness is more
 important than cosmetic de-duplication. Tool-free requests retain normal text completion behavior.
+
+The continuation's instruction tells the model that its ordinary text has not reached the user, and asks it to call `codex_kiro_final_answer` with the complete final answer if the task is complete, submitting its previous reply unchanged when that reply already was the answer. A model that answered a trivial request in plain text therefore keeps its answer, instead of being told to continue a task it had already finished.
 
 ### Reasoning effort
 
@@ -787,6 +864,11 @@ appended to the id instead.
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
 **Auth:** `key` via the `api-key` header (not Bearer).
+
+Azure requests omit the unsupported output.encrypted_content entry from include,
+while retaining reasoning.encrypted_content and all other entries. This also applies
+to openai-responses configurations targeting a resource under .openai.azure.com.
+When no entries remain, include is omitted.
 
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL

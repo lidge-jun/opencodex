@@ -34,8 +34,10 @@ const prefix = locale ? `${base}${locale}/` : base;
 const fr = {
 	'Install': 'Installer',
 	'Start the proxy': 'Démarrer le proxy',
-	'Inject a provider into Codex': 'Ajouter un fournisseur à Codex',
+	'Add a provider and connect Codex': 'Ajouter un fournisseur et connecter Codex',
+	'In another terminal: launch Claude Code through ocx': 'Dans un autre terminal : lancer Claude Code via ocx',
 	'Codex now routes through ocx': 'Codex passe maintenant par ocx',
+	'See supported tools': 'Voir les outils pris en charge',
 	'Getting Started': 'Démarrage',
 	'Installation': 'Installation',
 	'Quickstart': 'Démarrage rapide',
@@ -61,16 +63,16 @@ const fr = {
 	'Project': 'Projet',
 	'Contributing': 'Contribuer',
 	'Run ': 'Exécutez ',
-	' on any LLM.': ' sur n’importe quel LLM.',
-	'opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.': 'opencodex est un proxy local qui fournit Codex et Claude Code sur un même port. Il traduit chaque format de protocole vers n’importe quel fournisseur, dans les deux sens, avec la diffusion en continu, les appels d’outils, le raisonnement et les images. Aucune modification des clients.',
+	' on the models you choose.': ' sur les modèles de votre choix.',
+	'opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.': 'opencodex est une passerelle locale unique pour vos outils de code IA et vos modèles. Il sert Codex, Claude Code, Claude Desktop et Grok Build sur un même port et connecte d’autres outils via des configurations gérées, en traduisant chaque format de protocole vers le fournisseur de votre choix, avec la diffusion en continu, les appels d’outils, le raisonnement et les images lorsque le modèle les prend en charge. Aucune modification des clients.',
 	'Get Started': 'Commencer',
 	'Supported providers': 'Fournisseurs pris en charge',
 	'40+ providers': 'Plus de 40 fournisseurs',
 	'The opencodex dashboard — live proxy status, routed providers, and available models': 'Le tableau de bord opencodex : état du proxy en direct, fournisseurs routés et modèles disponibles',
-	'Install. Start. Codex, rerouted.': 'Installez. Démarrez. Codex est redirigé.',
+	'Install. Start. Connect your tool.': 'Installez. Démarrez. Connectez votre outil.',
 	'Install.': 'Installez.',
 	'Start.': 'Démarrez.',
-	'Codex, rerouted.': 'Codex est redirigé.',
+	'Connect your tool.': 'Connectez votre outil.',
 	'Full quickstart': 'Démarrage rapide complet',
 	'Watch Codex run on a routed model.': 'Regardez Codex exécuter une tâche sur un modèle routé.',
 	'Codex App running a task on a routed non-OpenAI model': 'Codex App exécutant une tâche sur un modèle routé autre qu’OpenAI',
@@ -164,12 +166,14 @@ const providers: { label: string; path?: string }[] = [
 
 const quickstartMini = [
 	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
+	{ cmd: 'ocx init', note: t('Add a provider and connect Codex', '프로바이더 추가 후 Codex 연결', '添加提供商并连接 Codex', 'Добавьте провайдера и подключите Codex', 'プロバイダーを追加して Codex を接続', '新增供應商並連接 Codex', 'Sağlayıcı ekleyip Codex’i bağlayın') },
 	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
+	{ cmd: 'ocx claude', note: t('In another terminal: launch Claude Code through ocx', '다른 터미널에서: ocx를 거쳐 Claude Code 실행', '在另一个终端中：通过 ocx 启动 Claude Code', 'В другом терминале: запуск Claude Code через ocx', '別のターミナルで: ocx 経由で Claude Code を起動', '在另一個終端機中：透過 ocx 啟動 Claude Code', 'Başka bir terminalde: Claude Code’u ocx üzerinden başlatın') },
 ];
 
 const quickstart = [
 	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
-	{ cmd: 'ocx init', note: t('Inject a provider into Codex', 'Codex에 프로바이더 주입', '向 Codex 注入 provider', 'Внедрение провайдера в Codex', 'プロバイダーを Codex に注入', '向 Codex 注入供應商', "Codex'e bir sağlayıcı ekleyin") },
+	{ cmd: 'ocx init', note: t('Add a provider and connect Codex', '프로바이더 추가 후 Codex 연결', '添加提供商并连接 Codex', 'Добавьте провайдера и подключите Codex', 'プロバイダーを追加して Codex を接続', '新增供應商並連接 Codex', 'Sağlayıcı ekleyip Codex’i bağlayın') },
 	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
 	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', 'Codex가 ocx를 경유', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex は ocx 経由に', 'Codex 現在經由 ocx 路由', 'Codex artık ocx üzerinden yönlendirilir') },
 ];
@@ -261,10 +265,10 @@ const docsMap = [
 						<span class="lp-drum-face lp-drum-claude">Claude</span>
 					</span>
 					<span class="lp-drum-static" aria-hidden="true">Codex<span class="lp-drum-dot"> · </span>Claude</span>
-				</span>{t(' on any LLM.', '를 어떤 LLM 위에서든.', ' 跑在任意 LLM 上。', ' на любой LLM.', ' を任意の LLM 上で。', ' 跑在任意 LLM 上。', ' dilediğiniz LLM ile çalıştırın.')}
+				</span>{t(' on the models you choose.', '를 원하는 모델로.', ' 跑在你选择的模型上。', ' на выбранных вами моделях.', ' を好きなモデルで。', ' 跑在你選擇的模型上。', ' seçtiğiniz modellerle çalıştırın.')}
 			</h1>
 			<p class="lp-sub">
-				{t('opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'opencodex는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'opencodex — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'opencodex は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機代理，用同一個連接埠同時服務 Codex 與 Claude Code —— 將各自的線路格式雙向翻譯為任意供應商，支援流式、工具呼叫、推理與圖像。無需修補用戶端。', 'opencodex, Codex ve Claude Code’u tek bir port üzerinden sunan yerel bir proxy’dir — her bir hat formatını dilediğiniz sağlayıcıya dönüştürür; akış (streaming), araç çağrıları (tool calls), akıl yürütme (reasoning) ve görseller her iki yönde de sorunsuz iletilir. İstemci tarafında sıfır yama.')}
+				{t('opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.', 'opencodex는 AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨이입니다. 포트 하나로 Codex, Claude Code, Claude Desktop, Grok Build를 서빙하고 관리형 설정으로 더 많은 도구를 연결하며, 각 wire 포맷을 원하는 프로바이더로 변환합니다. 모델이 지원하면 스트리밍·tool call·reasoning·이미지도 그대로 통과합니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地网关，连接你的 AI 编程工具与模型。它用同一个端口服务 Codex、Claude Code、Claude Desktop 和 Grok Build，并通过托管配置连接更多工具，把各自的线路格式翻译为你选择的提供商；在模型支持时，流式、工具调用、推理与图像都会保留。无需修补客户端。', 'opencodex — единый локальный шлюз для ваших ИИ-инструментов для кода и моделей. Он обслуживает Codex, Claude Code, Claude Desktop и Grok Build через один порт и подключает другие инструменты через управляемые конфигурации, транслируя каждый wire-формат для выбранного провайдера; стриминг, вызовы инструментов, рассуждения и изображения проходят, если их поддерживает модель. Никаких патчей на стороне клиента.', 'opencodex は、AI コーディングツールとモデルをつなぐ 1 つのローカルゲートウェイです。1 つのポートで Codex、Claude Code、Claude Desktop、Grok Build を提供し、管理された設定でほかのツールも接続します。各 wire フォーマットを選んだプロバイダーへ変換し、モデルが対応していればストリーミング・ツール呼び出し・推論・画像もそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機閘道，連接你的 AI 程式開發工具與模型。它用同一個連接埠服務 Codex、Claude Code、Claude Desktop 和 Grok Build，並透過代管設定連接更多工具，把各自的線路格式翻譯為你選擇的供應商；在模型支援時，串流、工具呼叫、推理與圖像都會保留。無需修補用戶端。', 'opencodex, yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçididir. Codex, Claude Code, Claude Desktop ve Grok Build’i tek bir port üzerinden sunar, diğer araçları yönetilen yapılandırmalarla bağlar ve her hat formatını seçtiğiniz sağlayıcıya dönüştürür; model destekliyorsa akış, araç çağrıları, akıl yürütme ve görseller korunur. İstemci tarafında sıfır yama.')}
 			</p>
 			<div class="lp-cta">
 				<a class="lp-btn-primary" id="lp-hero-download" href="#download"
@@ -356,10 +360,10 @@ const docsMap = [
 	<!-- quickstart sheet scene -->
 	<section class="lp-scene lp-scene-quick">
 	<div class="lp-scene-inner lp-quick">
-		<div class="lp-kinetic" aria-label={t('Install. Start. Codex, rerouted.', '설치. 시작. Codex는 그대로.', '安装。启动。Codex 即刻改道。', 'Установите. Запустите. Codex — по новому маршруту.', 'インストール。起動。Codex を経路変更。', '安裝。啟動。Codex 即刻改道。', 'Kurun. Başlatın. Codex, anında yönlendirildi.')}>
+		<div class="lp-kinetic" aria-label={t('Install. Start. Connect your tool.', '설치. 시작. 도구 연결.', '安装。启动。连接你的工具。', 'Установите. Запустите. Подключите свой инструмент.', 'インストール。起動。ツールを接続。', '安裝。啟動。連接你的工具。', 'Kurun. Başlatın. Aracınızı bağlayın.')}>
 			<p class="lp-kline">{t('Install.', '설치.', '安装。', 'Установите.', 'インストール。', '安裝。', 'Kurun.')}</p>
 			<p class="lp-kline">{t('Start.', '시작.', '启动。', 'Запустите.', '起動。', '啟動。', 'Başlatın.')}</p>
-			<p class="lp-kline lp-kline-accent">{t('Codex, rerouted.', 'Codex는 그대로.', 'Codex 即刻改道。', 'Codex — по новому маршруту.', 'Codex を経路変更。', 'Codex 即刻改道。', 'Codex, anında yönlendirildi.')}</p>
+			<p class="lp-kline lp-kline-accent">{t('Connect your tool.', '도구 연결.', '连接你的工具。', 'Подключите свой инструмент.', 'ツールを接続。', '連接你的工具。', 'Aracınızı bağlayın.')}</p>
 		</div>
 		<div class="lp-quick-side">
 			<div class="lp-terminal">
@@ -367,6 +371,7 @@ const docsMap = [
 				<pre>{quickstartMini.map((line) => (<code><span class="lp-prompt">$ </span>{line.cmd}<span class="lp-note">  # {line.note}</span>{'\n'}</code>))}</pre>
 			</div>
 			<a class="lp-inline-link" href={`${prefix}getting-started/quickstart/`}>{t('Full quickstart', '전체 퀵스타트', '完整快速开始', 'Полный быстрый старт', '完全なクイックスタート', '完整快速入門', 'Tam hızlı başlangıç')} →</a>
+			<a class="lp-inline-link" href={`${prefix}reference/client-support/`}>{t('See supported tools', '지원 도구 보기', '查看支持的工具', 'Поддерживаемые инструменты', '対応ツールを見る', '查看支援的工具', 'Desteklenen araçları görün')} →</a>
 		</div>
 	</div>
 	</section>

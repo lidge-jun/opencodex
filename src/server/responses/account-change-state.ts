@@ -10,7 +10,9 @@
  * The issuer association lives next to thread affinity in `src/codex/routing.ts`.
  */
 
+import { conversationStateAccountId } from "../../codex/request-owned-affinity";
 import type { CodexAuthContext } from "../../codex/auth-context";
+import { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, peekConversationStateStoredIssuerAccount } from "../../codex/routing/thread-affinity";
 import {
   peekConversationStateIssuer,
   rememberConversationStateIssuer,
@@ -199,6 +201,13 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
     delete record.conversation;
     changed = true;
   }
+  if (record.client_metadata && typeof record.client_metadata === "object" && !Array.isArray(record.client_metadata)) {
+    const cm = record.client_metadata as Record<string, unknown>;
+    if ("x-codex-turn-state" in cm) {
+      delete cm["x-codex-turn-state"];
+      changed = true;
+    }
+  }
   // Encrypted reasoning and compaction ciphertext are deliberately NOT touched here. #2247
   // already strips them when a pooled thread moves accounts, and in a specific shape: the
   // reasoning item keeps its readable summary with an emptied content array, and the compaction
@@ -209,14 +218,20 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
   return changed;
 }
 
+/** Preserve a Pool context's absent key instead of borrowing the raw request key. */
+export function compactAlternateAffinityKey(authCtx: CodexAuthContext, rawKey: () => string | undefined): string | undefined {
+  return authCtx.kind === "main" ? (authCtx.affinityKey ?? authCtx.conversationStateKey ?? rawKey()) : authCtx.affinityKey ?? authCtx.conversationStateKey;
+}
+
 export function conversationStateBindingFromAuth(
   authCtx: CodexAuthContext,
   fallbackAffinityKey?: string | null,
 ): { accountId: string; bindingKey: string } | null {
-  if (authCtx.kind !== "pool" && authCtx.kind !== "main-pool") return null;
-  const bindingKey = authCtx.affinityKey ?? fallbackAffinityKey ?? undefined;
-  if (!bindingKey || !authCtx.accountId) return null;
-  return { accountId: authCtx.accountId, bindingKey };
+  const accountId = conversationStateAccountId(authCtx);
+  if (!accountId) return null;
+  const bindingKey = authCtx.affinityKey ?? authCtx.conversationStateKey ?? fallbackAffinityKey ?? undefined;
+  if (!bindingKey) return null;
+  return { accountId, bindingKey };
 }
 
 export function rememberServingConversationStateIssuer(
@@ -225,11 +240,13 @@ export function rememberServingConversationStateIssuer(
 ): void {
   const binding = conversationStateBindingFromAuth(authCtx, fallbackAffinityKey);
   if (!binding) return;
-  rememberConversationStateIssuer(binding.bindingKey, binding.accountId);
+  rememberConversationStateIssuer(binding.bindingKey, binding.accountId, undefined,
+    authCtx.kind === "pool" ? { generation: authCtx.generation, chatgptAccountId: authCtx.chatgptAccountId } : undefined);
 }
 
 export interface ApplyAccountChangeConversationStateScrubArgs {
   body: unknown;
+  headers?: Headers;
   bindingKey: string;
   servingAccountId: string;
   /** Account this request body was prepared for, when this is an in-request move. */
@@ -257,9 +274,13 @@ export function applyAccountChangeConversationStateScrub(
   // The issuer record can outlive the serving-route cache. Even a retained ciphertext cannot
   // make its reasoning item id resolvable in the new account's store.
   if (parsed) parsed._dropForeignReasoningItemIds = true;
-  if (canPortConversationState(collectConversationStateCarriers(body)).portable) return false;
+  let headerScrubbed = false;
+  if (args.headers?.has("x-codex-turn-state")) {
+    args.headers.delete("x-codex-turn-state");
+    headerScrubbed = true;
+  }
   const scrubbed = scrubUnportableConversationStateInPlace(body);
-  if (!scrubbed) return false;
+  if (!scrubbed && !headerScrubbed) return false;
   if (parsed) {
     delete parsed.previousResponseId;
     parsed._stripNativeCompactionEncryptedContent = true;
@@ -302,7 +323,9 @@ export function accountChangeFileReferenceRefusal(
   const { body, bindingKey, servingAccountId, priorAccountId } = args;
   if (!servingAccountId || !bindingKey) return undefined;
   const issuer = peekConversationStateIssuer(bindingKey);
-  const accountChanged = (issuer != null && issuer !== servingAccountId)
+  const accountChanged = (issuer === CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER
+    ? peekConversationStateStoredIssuerAccount(bindingKey) !== servingAccountId
+    : issuer != null && issuer !== servingAccountId)
     || (priorAccountId != null && priorAccountId !== servingAccountId);
   if (!accountChanged) return undefined;
   // Checked against the carriers directly rather than through the portability verdict: that

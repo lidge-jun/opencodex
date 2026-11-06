@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 /**
  * /api/github/star and /api/update/badge — the two cheap polls behind the
  * sidebar's GitHub star and update controls.
@@ -40,7 +41,7 @@ import type { ManagementContext } from "./context";
  * request an agent cannot fabricate, so that is what this now reads.
  */
 function hasBrowserSessionEvidence(ctx: ManagementContext): boolean {
-  return ctx.principal === "gui-session";
+  return hasHumanDashboardSession(ctx);
 }
 
 // Known edge, deliberately fail-closed: a non-loopback operator dashboard that signs

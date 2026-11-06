@@ -30,6 +30,7 @@ export {
   pickComboTarget,
   pickComboTargetWithWait,
   quotaInactiveReason,
+  settleComboReprobeSuccess,
   snapshotComboQuotaCooldowns,
   tryPickComboModel,
   UnknownComboError,

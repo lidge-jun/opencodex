@@ -101,10 +101,12 @@ etkisiz bir yeniden başlatma işlemi garanti etmez.
 
 ## Hata davranışı ve bilinen sınırlar
 
-Platform macOS değilse, OpenCodex çalışma zamanı eksikse veya filtre öz sınaması
-başarısızsa başlatıcı özgün dosyayı stdout'u değiştirmeden çalıştırır. Paketlenmiş
-app-server dosyasının eksikliği istisnadır: geri dönülecek dosya olmadığı için
-başlatıcı hatayla çıkar.
+Başlatıcı, Desktop'ın yeniden başlattığı işlemler dahil her çalıştırmadan önce
+yürütülebilir dosyayı doğrular. Stdout filtresi kullanılamıyorsa veya öz sınaması
+başarısızsa doğrulanmış dosya stdout değiştirilmeden çalışır. Dosya doğrulaması
+başarısızsa ya da OpenCodex doğrulayıcısı kullanılamıyorsa başlatıcı app-server'ı
+çalıştırmadan hatayla çıkar. Paketlenmiş app-server dosyasının eksikliği de
+başlatmayı engeller.
 
 Öz sınamayı geçen filtre oturum ortasında çökerse boru kapanır. Paketlenmiş
 app-server'ın bundan sonra ne yaptığı doğrulanmamıştır; SIGPIPE/yazma hatası
@@ -115,8 +117,9 @@ ham baytlara geçirir.
 
 Deney; paketlenmiş dosya yoluna, uygulamanın `CODEX_CLI_PATH` değerini kullanmasına
 ve güncel RPC alan biçimlerine bağlıdır. Güncellemeler bunları değiştirebilir.
-OpenCodex taşınır veya kaldırılırsa başlatıcının ön kontrolü başarısız olur ve
-özgün dosya çalışır. Kurulumu taşıdıktan sonra `ocx chatgpt launch` komutunu yeniden çalıştırın.
+OpenCodex taşınır veya kaldırılırsa başlatıcı dosyayı doğrulayamayabilir ve
+başlatmayı reddeder. Kurulumu taşıdıktan sonra `ocx chatgpt launch` komutunu yeniden
+çalıştırın veya geçersiz kılmayı kaldırmak için `ocx chatgpt restore` kullanın.
 
 Uygulama güncellemesi paketlenmiş app-server dosyasını taşır veya kaldırırsa
 başlatıcı onu çalıştıramaz: stderr üzerinde `ocx chatgpt launch` ve

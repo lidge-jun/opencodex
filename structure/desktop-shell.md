@@ -5,7 +5,7 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
-The desktop Cargo package requires Rust 1.88 or newer.
+The desktop Cargo package requires Rust 1.90 or newer, matching its pinned Tauri build, runtime, utils and updater crates.
 The manual-poll test in `desktop/src-tauri/src/process_spawn.rs` uses `std::task::Waker::noop()` (stable since Rust 1.85).
 The lockfile selects patched `serde_with` and `time` releases, with compatible exact
 `serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
@@ -235,7 +235,11 @@ stops answering Quit.
 
 ## Keeping the runtime alive
 
-`desktop/src-tauri/src/supervisor.rs` brings back a runtime that went away without the app asking.
+`desktop/src-tauri/src/supervisor.rs` brings back a runtime that went away without the app asking; [native recovery evidence](desktop-recovery.md) preserves this supervision across the child-free backoff.
+The recovery listener credits an actual startup, confirmed owned runtime or scheduled recovery,
+not the exit coordinator's generic desire for a runtime. A terminal ordinary launch failure and
+guest attachment alone do not grant that credit; the existing watchdog can still schedule a later
+recovery. Generation-bound activity and reservations preserve the handoff into the next run.
 The startup sequence used to run only at launch and from the failure page's retry, so a runtime that
 exited later — a crash, a terminal `ocx stop`, or a restart the runtime carried out by handing the
 port to a detached grandchild the app could not see — left the port refusing connections until the

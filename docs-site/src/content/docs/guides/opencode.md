@@ -201,6 +201,43 @@ CLI export, dashboard export, managed refresh and the launcher share the effecti
 The `opencodex` provider block is regenerated on every launch, so per-model tweaks made inside it
 will not survive. Keep custom entries under a provider key of your own instead.
 
+## Slow local models (prefill timeouts)
+
+opencode waits a bounded time for the first response header from a provider (five minutes by
+default in current V2), and a separate, longer bound between streamed chunks. Behind the
+`opencodex` provider, a local model (LM Studio, vLLM,
+Ollama, or any self-hosted endpoint) can spend longer than that in prompt *prefill* on a large
+prompt — processing the prompt before it emits a single token. On a non-streaming turn the proxy
+sends opencode nothing until the upstream completes, so opencode's own header wait fires first and
+the turn fails with `Timed out waiting for response headers`, even though the model is still
+working.
+
+Because the generated `opencodex` provider multiplexes every routed upstream under one block and
+opencode's timeouts are provider-wide, raise or disable the wait for the whole provider with
+`opencodeClientExport` in your opencodex config. It is omitted by default, so opencode keeps its
+native waits (header and the longer chunk bound) unless you opt in:
+
+```json
+{
+  "opencodeClientExport": {
+    "headerTimeoutMs": false,
+    "chunkTimeoutMs": 1800000
+  }
+}
+```
+
+| Field | opencode setting | Meaning |
+| --- | --- | --- |
+| `headerTimeoutMs` | `settings.headerTimeout` | Wait for the proxy's first response header. A number of milliseconds, or `false` to disable. |
+| `chunkTimeoutMs` | `settings.chunkTimeout` | Wait between streamed response chunks. A number of milliseconds, or `false` to disable. |
+| `timeoutMs` | `settings.timeout` | Whole-request bound. A number of milliseconds, or `false`. opencode applies no default. |
+
+Each value is emitted verbatim into both the `provider.opencodex` (`options`) and
+`providers.opencodex` (`settings`) blocks. Disabling `headerTimeout` removes opencode's safety net
+against a genuinely hung proxy for every model routed through it, so prefer a large explicit value
+(for example `1800000` for thirty minutes) unless you specifically want no bound. A malformed value
+is dropped and opencode keeps its native default rather than failing to load.
+
 ## Requirements
 
 opencode must be installed and on `PATH`:

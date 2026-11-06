@@ -1,6 +1,7 @@
 import { probe, confirmHost, apply } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
+import { requireRemotePlatform } from "../../link/remote-platform";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
@@ -217,7 +218,9 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
     };
     if (!force && record.direction === "hub-initiated") {
       try {
-        const result = await runnerFor(ctx).run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"]), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
+        const runner = runnerFor(ctx);
+        const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, knownHostsFile(ctx));
+        const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
         if (result.code !== 0) {
           await restartTunnel();
           return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));

@@ -48,7 +48,7 @@ account selectors and uploaded-file constraints continue to suppress alternate m
 
 `src/oauth/account-auto-pause.ts` captures the exact sending OAuth snapshot, Codex context
 or API-key selection and validates outgoing credential headers before observing a response.
-`src/oauth/account-auto-pause-policy.ts` recognizes whole account-scoped 401/403 messages,
+`src/oauth/account-auto-pause-policy.ts` recognizes whole account-scoped 401/403 messages (for Google, only the whole Cloud Code Assist Terms of Service account-ban messages Google has returned, alone or with its fixed contact or appeal sentence, on a consistent 403 `PERMISSION_DENIED` envelope; project-scoped `CONSUMER_SUSPENDED` and service-enablement errors are excluded),
 serializes response-arrival decisions, resets on accepted HTTP responses, and excludes
 transient/quota/model/request failures. No provider body or account identifier enters its log.
 The opt-in counter defaults to two refusals; each process owns its counters. Durable pause

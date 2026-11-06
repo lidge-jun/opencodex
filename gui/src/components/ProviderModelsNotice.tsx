@@ -14,6 +14,43 @@ export interface ProviderModelsNoticeProps {
   onRetry?: () => void;
 }
 
+const FOCUS_FALLBACK_REGIONS = [".pws-detail-panel", ".pws-detail", ".pws-main", ".page-head"] as const;
+const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function isUsableFocusTarget(element: Element | null): element is HTMLElement {
+  if (!element || !element.isConnected || typeof (element as HTMLElement).focus !== "function") return false;
+  if (element === document.body || element === document.documentElement) return false;
+  if ((element as HTMLButtonElement).disabled === true) return false;
+  for (let cur: Element | null = element; cur && cur !== document.documentElement; cur = cur.parentElement) {
+    const htmlCur = cur as HTMLElement;
+    if (htmlCur.hidden || cur.hasAttribute("inert") || cur.getAttribute("aria-hidden") === "true") return false;
+    if (htmlCur.style?.display === "none" || htmlCur.style?.visibility === "hidden" || htmlCur.style?.visibility === "collapse") {
+      return false;
+    }
+    if (typeof window !== "undefined" && typeof window.getComputedStyle === "function") {
+      const cs = window.getComputedStyle(cur);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse") return false;
+    }
+  }
+  return true;
+}
+
+function restoreOrFallbackFocus(previous: HTMLElement | null): void {
+  if (isUsableFocusTarget(previous)) {
+    previous.focus();
+    if (document.activeElement === previous) return;
+  }
+  for (const regionSelector of FOCUS_FALLBACK_REGIONS) {
+    for (const region of document.querySelectorAll<HTMLElement>(regionSelector)) {
+      for (const candidate of region.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) {
+        if (!isUsableFocusTarget(candidate)) continue;
+        candidate.focus();
+        if (document.activeElement === candidate) return;
+      }
+    }
+  }
+}
+
 export default function ProviderModelsNotice(props: ProviderModelsNoticeProps) {
   const t = useT();
   const titleId = useId();
@@ -22,7 +59,7 @@ export default function ProviderModelsNotice(props: ProviderModelsNoticeProps) {
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     primary.current?.focus();
-    return () => { if (previous?.isConnected && typeof previous.focus === "function") previous.focus(); };
+    return () => { restoreOrFallbackFocus(previous); };
   }, []);
   const pending = props.selection?.status === "pending";
   const unavailable = props.failed || !props.providerKnown;

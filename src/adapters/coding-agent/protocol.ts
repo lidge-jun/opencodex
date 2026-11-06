@@ -731,11 +731,16 @@ function imagePart(imageUrl: string): WireContentPart | undefined {
   return undefined;
 }
 
-export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: ReadonlyMap<string, string>): string {
+/** Render replay prose; only Qoder opts into unsupported-reference history markers. */
+export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: ReadonlyMap<string, string>, markUnsupportedImages = false): string {
   if (message.role === "user") {
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(p => (p.type === "text" || p.type === "document" ? p.text : `[${p.type}]`)).join("\n");
+      : message.content.map(p => {
+        if (p.type === "text" || p.type === "document") return p.text;
+        if (markUnsupportedImages && p.type === "image" && !imagePart(p.imageUrl)) return "[image omitted: unsupported reference]";
+        return `[${p.type}]`;
+      }).join("\n");
     return `USER:\n${text}`;
   }
   if (message.role === "assistant") {
@@ -758,7 +763,11 @@ export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: 
   if (message.role === "toolResult") {
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(p => (p.type === "text" || p.type === "document" ? p.text : "[image]")).join("");
+      : message.content.map(p => {
+        if (p.type === "text" || p.type === "document") return p.text;
+        if (markUnsupportedImages && p.type === "image" && !imagePart(p.imageUrl)) return "[image omitted: unsupported reference]";
+        return "[image]";
+      }).join("");
     const status = message.isError ? " (error)" : "";
     return `TOOL RESULT (call_id: ${message.toolCallId})${status}:\n${text}`;
   }
@@ -774,7 +783,7 @@ export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: 
  */
 export function buildInputLines(
   message: OcxMessage,
-  options: { vendorNameByWire?: ReadonlyMap<string, string> } = {},
+  options: { vendorNameByWire?: ReadonlyMap<string, string>; markUnsupportedImages?: boolean } = {},
 ): string[] {
   if (message.role === "developer") return [];
 
@@ -788,6 +797,7 @@ export function buildInputLines(
         else if (part.type === "image") {
           const image = imagePart(part.imageUrl);
           if (image) content.push(image);
+          else if (options.markUnsupportedImages) content.push(textPart("[image omitted: unsupported reference]"));
         } else if (part.type === "document") {
           content.push(textPart(part.text));
         } else {
@@ -796,7 +806,7 @@ export function buildInputLines(
       }
     }
   } else {
-    const formatted = formatMessageForHistory(message, options.vendorNameByWire);
+    const formatted = formatMessageForHistory(message, options.vendorNameByWire, options.markUnsupportedImages);
     if (formatted) content.push(textPart(formatted));
   }
 
@@ -832,7 +842,7 @@ export function buildSystemPrompt(parsed: OcxParsedRequest): string | undefined 
  */
 export function buildConversationInput(
   parsed: OcxParsedRequest,
-  options: { maxHistoryChars?: number; vendorNameByWire?: ReadonlyMap<string, string> } = {},
+  options: { maxHistoryChars?: number; vendorNameByWire?: ReadonlyMap<string, string>; markUnsupportedImages?: boolean } = {},
 ): string[] {
   const nonDev = parsed.context.messages.filter(m => m.role !== "developer");
   if (nonDev.length === 0) {
@@ -840,7 +850,7 @@ export function buildConversationInput(
   }
 
   if (nonDev.length === 1 && nonDev[0]!.role === "user") {
-    return buildInputLines(nonDev[0]!, { vendorNameByWire: options.vendorNameByWire });
+    return buildInputLines(nonDev[0]!, options);
   }
 
   // Multi-turn conversation or history with tool results:
@@ -911,14 +921,14 @@ export function buildConversationInput(
     const status = currentMessage.isError ? " (error)" : "";
     currentRequestText = `TOOL RESULT (call_id: ${currentMessage.toolCallId})${status}:\n${text}\n\nPlease proceed based on the above tool result.`;
   } else {
-    currentRequestText = formatMessageForHistory(currentMessage, options.vendorNameByWire);
+    currentRequestText = formatMessageForHistory(currentMessage, options.vendorNameByWire, options.markUnsupportedImages);
   }
 
   const imageBlocks: WireContentPart[] = [...historyImageBlocks, ...currentImageBlocks];
 
   const maxHistoryChars = options.maxHistoryChars ?? MAX_PROJECTED_HISTORY_CHARS;
   let historyText = historyMessages
-    .map(msg => formatMessageForHistory(msg, options.vendorNameByWire))
+    .map(msg => formatMessageForHistory(msg, options.vendorNameByWire, options.markUnsupportedImages))
     .filter(Boolean)
     .join("\n\n");
   if (historyText.length > maxHistoryChars) {

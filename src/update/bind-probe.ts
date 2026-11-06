@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { probeSpawnSync } from "./mutation-guard.mjs";
 
 /**
  * Strict bind script: exit 0 only after listen+close. Any listen error (including
@@ -17,7 +17,7 @@ export function strictBindProbeScript(port: number, hostname: string): string {
 
 export function spawnBindProbe(bin: string, script: string): boolean {
   try {
-    const r = spawnSync(bin, ["-e", script], {
+    const r = probeSpawnSync(bin, ["-e", script], {
       windowsHide: true,
       timeout: 4000,
       stdio: "ignore",

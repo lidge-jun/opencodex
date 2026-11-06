@@ -9,12 +9,15 @@ import {
   readSync,
   realpathSync,
   statSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
 import { posix, win32 } from "node:path";
 import { getConfigDir } from "../config";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";
+import { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
+export { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
 import { isSpawnableCodexCandidate } from "./exec-invocation";
 import {
   codexRuntimeStatePath,
@@ -36,15 +39,6 @@ const MAX_RUNTIME_STATE_BYTES = 256 * 1024;
 const MAX_MANIFEST_ANCESTORS = 12;
 /** The published package entrypoint is a few KB; 1 MiB leaves wide headroom. */
 const MAX_PACKAGE_ENTRYPOINT_BYTES = 1024 * 1024;
-/**
- * The native companion binary is streamed in HELD_READ_CHUNK_BYTES chunks and
- * never buffered whole, so this bound limits read time, not memory. Published
- * backings outgrew the former 256 MiB: `@openai/codex@0.163.0-linux-x64` ships a
- * 296,865,480-byte binary, in platform packages of 341-430 MB unpacked. 1 GiB
- * leaves more than 3x headroom over that binary while staying finite; larger
- * files are refused by fstat before any read.
- */
-export const MAX_NATIVE_BACKING_BYTES = 1024 * 1024 * 1024;
 const HELD_READ_CHUNK_BYTES = 1024 * 1024;
 
 export type CodexCliInstallKind =
@@ -126,6 +120,26 @@ export interface CodexCliInstallReport {
     backingKind: "backup" | "real" | null;
   }>;
   readonly evidence: readonly CodexCliInstallEvidence[];
+}
+
+/** Process-local evidence; deliberately absent from the public/redacted report. */
+export interface CodexCliMutationEvidence {
+  readonly prefix: string;
+  readonly launcher: string;
+  readonly canonicalLauncher: string;
+  readonly packageRoot: string;
+  readonly backingRoot: string | null;
+}
+const mutationEvidence = new WeakMap<CodexCliInstallReport, CodexCliMutationEvidence>();
+export function codexCliMutationEvidence(report: CodexCliInstallReport): CodexCliMutationEvidence | null {
+  return mutationEvidence.get(report) ?? null;
+}
+/** Final synchronous selector/link observation after a potentially long full-file readback. */
+export function codexCliMutationSelectionMatches(evidence: CodexCliMutationEvidence, deps: CodexCliInstallProvenanceDeps): boolean {
+  const selected = observeCodexCliSelectedCommand(deps);
+  const path = selected ? resolveCandidateCommandPath(selected, deps) : null;
+  return !!path && canonicalize(path, deps) === evidence.canonicalLauncher
+    && canonicalize(evidence.launcher, deps) === evidence.canonicalLauncher;
 }
 
 export interface CodexCliInstallProvenanceDeps {
@@ -414,6 +428,7 @@ export function isAppBundledCodexPath(path: string, platform: NodeJS.Platform): 
   if (platform === "win32") {
     return normalized.includes("/windowsapps/")
       || normalized.includes("/microsoft/windowsapps/")
+      || normalized.includes("/openai/codex/bin/")
       || normalized.includes("/packages/openai.codex_");
   }
   if (platform === "darwin") return /[.]app\/contents\//i.test(normalized);
@@ -455,13 +470,14 @@ function configuredVersionManagerRoots(
   const roots: string[] = [];
   for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) {
     const raw = platform === "win32" ? caseInsensitiveEnv(env, name) : env[name];
-    if (!raw || !isLocalAbsoluteInspectionPath(raw, platform)) continue;
-    // Windows roots are advisory lexical labels only in this first slice. Do
-    // not resolve or open them until the handle-bound Windows layer exists.
+    if (!raw) continue;
+    // Preserve Windows root spellings for lexical exclusions; the managed-plan
+    // layer refuses roots that cannot be verified as canonical through handles.
     if (platform === "win32") {
       roots.push(normalizePath(win32.normalize(raw), platform));
       continue;
     }
+    if (!isLocalAbsoluteInspectionPath(raw, platform)) continue;
     const canonical = isSafeLocalInspectionPath(raw, deps) ? canonicalize(raw, deps) : null;
     if (canonical) roots.push(normalizePath(canonical, platform));
   }
@@ -488,10 +504,10 @@ function readBoundedFile(
   // injected stat/read behavior.
   const inspectLexical = deps.lstat
     ?? (deps.stat === undefined && deps.readFile === undefined ? lstatSync : null);
-  let lexicalBefore: ReturnType<typeof lstatSync> | null = null;
+  let lexicalBefore: BigIntStats | null = null;
   if (inspectLexical) {
     try {
-      lexicalBefore = inspectLexical(path);
+      lexicalBefore = inspectLexical(path, { bigint: true });
       if (lexicalBefore.isSymbolicLink() || !lexicalBefore.isFile()) return null;
     } catch {
       return null;
@@ -505,9 +521,9 @@ function readBoundedFile(
         ? fsConstants.O_RDONLY
         : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
       fd = openSync(path, flags);
-      const before = fstatSync(fd);
+      const before = fstatSync(fd, { bigint: true });
       if (!before.isFile() || before.size > maxBytes) return null;
-      const bytes = Buffer.allocUnsafe(before.size);
+      const bytes = Buffer.allocUnsafe(Number(before.size));
       let offset = 0;
       while (offset < bytes.length) {
         const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
@@ -516,16 +532,16 @@ function readBoundedFile(
       }
       const extra = Buffer.allocUnsafe(1);
       if (readSync(fd, extra, 0, 1, offset) !== 0) return null;
-      const after = fstatSync(fd);
-      const lexicalAfter = inspectLexical ? inspectLexical(path) : null;
+      const after = fstatSync(fd, { bigint: true });
+      const lexicalAfter = inspectLexical ? inspectLexical(path, { bigint: true }) : null;
       if (lexicalAfter?.isSymbolicLink()) return null;
-      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+      if (!sameFileIdentity(before, after) || before.size !== after.size
+        || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs)
         || (lexicalBefore !== null && (lexicalAfter === null || lexicalAfter.isSymbolicLink()
-          || lexicalBefore.dev !== before.dev || lexicalBefore.ino !== before.ino
-          || lexicalAfter.dev !== after.dev || lexicalAfter.ino !== after.ino
-          || lexicalAfter.size !== after.size || lexicalAfter.mtimeMs !== after.mtimeMs
-          || lexicalAfter.ctimeMs !== after.ctimeMs))) return null;
+          || !sameFileIdentity(lexicalBefore, before)
+          || !sameFileIdentity(lexicalAfter, after)
+          || lexicalAfter.size !== after.size || statTimeMs(lexicalAfter.mtimeNs) !== statTimeMs(after.mtimeNs)
+          || statTimeMs(lexicalAfter.ctimeNs) !== statTimeMs(after.ctimeNs)))) return null;
       return bytes;
     } catch {
       return null;
@@ -537,20 +553,19 @@ function readBoundedFile(
   const stat = deps.stat;
   const read = deps.readFile;
   try {
-    const before = stat(path);
+    const before = stat(path, { bigint: true });
     if (!before.isFile() || before.size > maxBytes) return null;
     const bytes = read(path);
-    const after = stat(path);
-    const lexicalAfter = inspectLexical ? inspectLexical(path) : null;
+    const after = stat(path, { bigint: true });
+    const lexicalAfter = inspectLexical ? inspectLexical(path, { bigint: true }) : null;
     if (
-      bytes.byteLength !== before.size
-      || before.dev !== after.dev
-      || before.ino !== after.ino
+      BigInt(bytes.byteLength) !== before.size
+      || !sameFileIdentity(before, after)
       || before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs
+      || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs)
       || (lexicalBefore !== null && (lexicalAfter === null || lexicalAfter.isSymbolicLink()
-        || lexicalBefore.dev !== before.dev || lexicalBefore.ino !== before.ino
-        || lexicalAfter.dev !== after.dev || lexicalAfter.ino !== after.ino))
+        || !sameFileIdentity(lexicalBefore, before)
+        || !sameFileIdentity(lexicalAfter, after)))
     ) return null;
     return bytes;
   } catch {
@@ -700,6 +715,9 @@ const CODEX_PLATFORM_BACKING: Readonly<Record<string, Readonly<{ triple: string;
   "win32:x64": { triple: "x86_64-pc-windows-msvc", package: "@openai/codex-win32-x64" },
   "win32:arm64": { triple: "aarch64-pc-windows-msvc", package: "@openai/codex-win32-arm64" },
 };
+export function codexCliPlatformBacking(platform: NodeJS.Platform, arch: string) {
+  return CODEX_PLATFORM_BACKING[platform + ":" + arch] ?? null;
+}
 
 /** Node's Module._nodeModulePaths: every ancestor's node_modules child, closest first. */
 function nodeModuleDirs(fromDir: string, platform: NodeJS.Platform): string[] {
@@ -782,6 +800,13 @@ interface ObservedContentFile {
 function fileContentDomain(role: InstallContentFile["role"]): string {
   return role === "manifest" ? "codex-cli-package-manifest-v1" : "codex-cli-observed-file-v1";
 }
+export function codexCliContentFileDigest(role: InstallContentFile["role"], bytes: Buffer): string {
+  return sha256(fileContentDomain(role), bytes);
+}
+export function codexCliContentSetDigest(platform: NodeJS.Platform, arch: string, triple: string,
+  backingKind: "optional-package" | "package-vendor", files: readonly { role: string; digest: string | undefined }[]): string {
+  return sha256("codex-cli-install-content-v1", JSON.stringify({ layout: "npm-global", platform, arch, triple, backingKind, files }));
+}
 
 /**
  * Hash every requested file under one observation window. Native POSIX mode
@@ -805,16 +830,16 @@ function observeHeldFileSet(
     const read = deps.readFile;
     if (!stat || !read) return null;
     const results = new Map<string, ObservedContentFile>();
-    const identities: { before: Stats; req: InstallContentFile }[] = [];
+    const identities: { before: BigIntStats; req: InstallContentFile }[] = [];
     try {
       for (const req of requests) {
-        const before = stat(req.path);
+        const before = stat(req.path, { bigint: true });
         if (!before.isFile() || before.size > req.maxBytes) return null;
         const bytes = read(req.path);
-        const after = stat(req.path);
-        if (bytes.byteLength !== before.size
-          || before.dev !== after.dev || before.ino !== after.ino
-          || before.size !== after.size || before.mtimeMs !== after.mtimeMs) return null;
+        const after = stat(req.path, { bigint: true });
+        if (BigInt(bytes.byteLength) !== before.size
+          || !sameFileIdentity(before, after)
+          || before.size !== after.size || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs)) return null;
         identities.push({ before, req });
         results.set(req.role, {
           digest: sha256(fileContentDomain(req.role), bytes),
@@ -823,9 +848,9 @@ function observeHeldFileSet(
       }
       // A replacement that slipped in after a file's own read still failed.
       for (const { before, req } of identities) {
-        const now = stat(req.path);
-        if (before.dev !== now.dev || before.ino !== now.ino
-          || before.size !== now.size || before.mtimeMs !== now.mtimeMs) return null;
+        const now = stat(req.path, { bigint: true });
+        if (!sameFileIdentity(before, now)
+          || before.size !== now.size || statTimeMs(before.mtimeNs) !== statTimeMs(now.mtimeNs)) return null;
       }
       if (finalize && !finalize()) return null;
       return results;
@@ -833,7 +858,7 @@ function observeHeldFileSet(
       return null;
     }
   }
-  const held: { fd: number; req: InstallContentFile; before: Stats }[] = [];
+  const held: { fd: number; req: InstallContentFile; before: BigIntStats }[] = [];
   const openedFds: number[] = [];
   try {
     const flags = process.platform === "win32"
@@ -845,7 +870,7 @@ function observeHeldFileSet(
       // The descriptor joins the close set before any check that can bail, so
       // an fstat failure or a refused type/size cannot leak it.
       openedFds.push(fd);
-      const before = fstatSync(fd);
+      const before = fstatSync(fd, { bigint: true });
       // O_NONBLOCK keeps a FIFO open nonblocking, so the type check must come
       // first: anything that is not a regular file is refused before a read.
       if (!before.isFile() || before.size > req.maxBytes) return null;
@@ -856,11 +881,12 @@ function observeHeldFileSet(
       const hasher = createHash("sha256")
         .update(fileContentDomain(req.role), "utf8")
         .update("\0", "utf8");
-      const bytes = keepBytes(req.role) ? Buffer.allocUnsafe(before.size) : null;
-      const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(HELD_READ_CHUNK_BYTES, before.size)));
+      const size = Number(before.size);
+      const bytes = keepBytes(req.role) ? Buffer.allocUnsafe(size) : null;
+      const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(HELD_READ_CHUNK_BYTES, size)));
       let offset = 0;
-      while (offset < before.size) {
-        const count = readSync(fd, chunk, 0, Math.min(chunk.length, before.size - offset), offset);
+      while (offset < size) {
+        const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - offset), offset);
         if (count <= 0) return null;
         hasher.update(chunk.subarray(0, count));
         if (bytes) chunk.copy(bytes, offset, 0, count);
@@ -871,15 +897,15 @@ function observeHeldFileSet(
       results.set(req.role, { digest: hasher.digest("hex"), bytes });
     }
     for (const { fd, req, before } of held) {
-      const after = fstatSync(fd);
-      const lexical = lstatSync(req.path);
-      const followed = statSync(req.path);
-      if (before.dev !== after.dev || before.ino !== after.ino
-        || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-        || before.ctimeMs !== after.ctimeMs
+      const after = fstatSync(fd, { bigint: true });
+      const lexical = lstatSync(req.path, { bigint: true });
+      const followed = statSync(req.path, { bigint: true });
+      if (!sameFileIdentity(before, after)
+        || before.size !== after.size || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs)
+        || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs)
         || lexical.isSymbolicLink() || !lexical.isFile()
-        || lexical.dev !== before.dev || lexical.ino !== before.ino
-        || followed.dev !== before.dev || followed.ino !== before.ino) return null;
+        || !sameFileIdentity(lexical, before)
+        || !sameFileIdentity(followed, before)) return null;
     }
     if (finalize && !finalize()) return null;
     return results;
@@ -907,6 +933,7 @@ function observeInstallContent(
   env: NodeJS.ProcessEnv,
   deps: CodexCliInstallProvenanceDeps,
   selection: { readonly lexical: string; readonly canonical: string },
+  observedBacking?: (root: string | null) => void,
 ): string | null {
   const arch = deps.arch ?? process.arch;
   const backing = CODEX_PLATFORM_BACKING[platform + ":" + arch];
@@ -1022,15 +1049,10 @@ function observeInstallContent(
       return null;
     }
   }
-  const record = {
-    layout: "npm-global" as const,
-    platform,
-    arch,
-    triple: backing.triple,
-    backingKind: backingManifestPath ? "optional-package" as const : "package-vendor" as const,
-    files: requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })),
-  };
-  return sha256("codex-cli-install-content-v1", JSON.stringify(record));
+  observedBacking?.(backingPackageDir);
+  return codexCliContentSetDigest(platform, arch, backing.triple,
+    backingManifestPath ? "optional-package" : "package-vendor",
+    requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })));
 }
 
 /** Inspect ownership of one configured Codex CLI candidate, without mutation. */
@@ -1053,11 +1075,9 @@ export async function inspectCodexCliInstall(
 
   const env = deps.env ?? process.env;
   if (platform === "win32") {
-    // This first slice never opens a candidate-controlled Windows pathname.
-    // A boolean precheck followed by lstat/realpath/open is raceable when an
-    // ancestor can be replaced with a remote reparse point. Preserve only
-    // lexical, report-only classifications until a handle-bound inspector is
-    // introduced; every result remains unattested and unmanaged.
+    // Lexical exclusions precede the restricted handle-bound plan predicate.
+    // Other Windows layouts remain observation-only; pathname prechecks alone
+    // cannot prove a writable ancestor stayed local and non-reparse.
     const lexicalCandidatePath = win32.isAbsolute(candidate.command)
       && isLocalAbsoluteInspectionPath(candidate.command, platform)
       ? win32.normalize(candidate.command)
@@ -1090,9 +1110,12 @@ export async function inspectCodexCliInstall(
         evidence: Object.freeze([appBundle ? "app_bundle_path" : "version_manager_path"]),
       });
     }
-   return unknownWindowsReport("windows_inspection_deferred", candidate, {
+   const deferred = unknownWindowsReport("windows_inspection_deferred", candidate, {
      location: publicExecutableLocation(lexicalCandidatePath, platform),
    });
+   return (await import("./cli-windows-plan-provenance")).inspectWindowsCodexCliPlanInstall(deps, deferred,
+     path => isAppBundledCodexPath(path, platform) || isCodexCliUpdateVersionManagerPath(path, platform)
+       || isWithinConfiguredVersionManagerRoot(path, managerRoots, platform), managerRoots);
  }
   const configDir = deps.configDir ?? getConfigDir();
   if (!isSafeLocalInspectionPath(configDir, deps)) {
@@ -1227,6 +1250,7 @@ export async function inspectCodexCliInstall(
     const npmPrefix = manifestOwned
       ? manifest.root.slice(0, manifest.root.length - "/lib/node_modules/@openai/codex".length)
       : "";
+    let backingRoot: string | null = null;
     const installContentDigest = manifestOwned && deps.observeInstallContent === true
       // The selection's own lexical->canonical link is part of the claim:
       // verified again at the end of the observation so a retargeted launcher
@@ -1234,14 +1258,14 @@ export async function inspectCodexCliInstall(
       ? observeInstallContent(manifest, npmPrefix, platform, env, deps, {
         lexical: ownershipPath,
         canonical: canonicalOwnershipPath,
-      })
+      }, root => { backingRoot = root; })
       : null;
     const versionMatches = candidate.version === null || candidate.version === manifest.version;
     const reason: CodexCliInstallReason = !global || !linked
       ? "npm_global_unverified"
       : !versionMatches ? "version_mismatch"
         : selectionAttested ? "managed_npm_global" : "selection_unattested";
-    return freezeReport({
+    const report = freezeReport({
       schemaVersion: 1,
       candidateAvailable: true,
       candidateVersion: candidate.version,
@@ -1272,6 +1296,11 @@ export async function inspectCodexCliInstall(
         ...(installContentDigest ? ["install_content_digest" as const] : []),
       ]),
     });
+    if (report.managed && report.installContentDigest && shim.status === "not-tracked") {
+      mutationEvidence.set(report, Object.freeze({ prefix: npmPrefix, launcher: ownershipPath,
+        canonicalLauncher: canonicalOwnershipPath, packageRoot: manifest.root, backingRoot }));
+    }
+    return report;
   }
 
   const stat = deps.stat ?? statSync;

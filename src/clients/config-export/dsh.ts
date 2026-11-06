@@ -2,7 +2,7 @@
 import type { ExportModel, ExportContext, ManagedContribution } from "./contracts";
 import type { OcxConfig } from "../../types";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { normalizeExportModels, authoritativeContextWindow, exportModelLabel, singleFragment } from "./model-metadata";
+import { normalizeExportModels, authoritativeContextWindow, exportModelLabel, knownOutputBudget, singleFragment } from "./model-metadata";
 import { OPENCODE_PROVIDER_ID } from "./constants";
 
 
@@ -26,6 +26,11 @@ export interface DshModelEntry {
   name: string;
   input: string[];
   contextWindow?: number;
+  /**
+   * Output ceiling DSH should treat as the model's real `max_tokens`. DSH falls back to its
+   * own 32768 default when this is absent, so a limit it does not know stays undeclared.
+   */
+  maxTokens?: number;
   reasoningEfforts?: Partial<Record<DshReasoningEffort, DshWireReasoningEffort>>;
 }
 
@@ -97,12 +102,14 @@ export function buildDshClientConfig(ctx: ExportContext): DshGeneratedConfig {
     const input = dshInputModalities(model.inputModalities);
     if (input === null) continue;
     const contextWindow = authoritativeContextWindow(model.contextWindow);
+    const maxTokens = contextWindow === undefined ? undefined : knownOutputBudget(contextWindow, model);
     const reasoningEfforts = dshReasoningEfforts(model);
     models.push({
       id: model.namespaced,
       name: exportModelLabel(model),
       input,
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(reasoningEfforts ? { reasoningEfforts } : {}),
     });
   }

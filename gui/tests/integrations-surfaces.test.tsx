@@ -1819,7 +1819,7 @@ test("the LazyCodex role section sits on the omo tab and only when LazyCodex is 
     mountCount += 1;
     apiBase = `http://ocx-test-${mountCount}.invalid`;
     lazycodexRoles = { lazycodex: { detected: roles.detected }, omoJsonc: roles.omoJsonc, roles: roles.roles };
-    setClientResourceData(`lazycodex-role-models:${apiBase}`, roles);
+    setClientResourceData(`lazycodex-role-models:${apiBase}`, { history: [], ...roles });
     await act(async () => {
       root?.unmount();
       root = createRoot(container);

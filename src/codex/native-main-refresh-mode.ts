@@ -10,7 +10,11 @@
  * The default is "codex" only when a version-checked binary is available. Without one, or
  * when the operator sets `nativeMainRefresh: "opencodex"`, the guarded writer stays.
  */
-import { codexExecInvocation } from "./exec-invocation";
+import {
+  CodexExecTrustError,
+  validatedCodexExecInvocationAsync,
+  type CodexExecBoundaryAsyncDeps,
+} from "./exec-boundary";
 import { resolveCodexHomeDir } from "./home";
 import { compareCodexVersions, displayCodexRuntimePath, resolveCodexRuntimeAsync } from "./runtime";
 import type { ResolveCodexRuntimeResult } from "./runtime";
@@ -97,10 +101,21 @@ export async function resolveNativeMainRefreshMode(
  */
 export async function requestCodexAuthStatus(
   command: string,
-  options: { refresh: boolean; signal: AbortSignal; codexHome?: string },
+  options: { refresh: boolean; signal: AbortSignal; codexHome?: string; execDeps?: CodexExecBoundaryAsyncDeps },
 ): Promise<CodexAuthStatus> {
   if (options.signal.aborted) throw options.signal.reason;
-  const invocation = codexExecInvocation(command, ["-c", 'model_provider="openai"', "app-server"]);
+  let invocation;
+  try {
+    invocation = await validatedCodexExecInvocationAsync(
+      command, ["-c", 'model_provider="openai"', "app-server"],
+      { env: process.env, signal: options.signal, ...(options.execDeps ?? {}) });
+  } catch (cause) {
+    if (options.signal.aborted) throw options.signal.reason;
+    if (cause instanceof CodexExecTrustError) {
+      throw new CodexAuthStatusError("codex app-server target failed trust verification", { cause });
+    }
+    throw new CodexAuthStatusError("could not start codex app-server", { cause });
+  }
   let proc: ReturnType<typeof Bun.spawn<"pipe", "pipe", "ignore">>;
   try {
     proc = Bun.spawn([invocation.file, ...invocation.args], {

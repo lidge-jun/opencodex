@@ -1,0 +1,36 @@
+/* ── First-party Claude Desktop model picker ── */
+.claude-picker {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 14px;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.claude-picker-header { display: flex; align-items: flex-start; gap: var(--space-4); }
+.claude-picker-copy { min-width: 0; flex: 1 1 auto; }
+.claude-picker-title { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.claude-picker-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; text-wrap: pretty; }
+.claude-picker-header .toggle { margin-top: 1px; }
+.claude-picker-state,
+.claude-picker-models,
+.claude-picker-offline-note { margin: 0; font-size: 12px; line-height: 1.45; }
+.claude-picker-state { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); color: var(--text); }
+.claude-picker-state-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: var(--radius-round); background: var(--muted); }
+.claude-picker-state-active .claude-picker-state-dot { background: var(--green); }
+.claude-picker-state-trust_pending .claude-picker-state-dot,
+.claude-picker-state-restart_required .claude-picker-state-dot { background: var(--amber); }
+.claude-picker-state-trust_declined .claude-picker-state-dot,
+.claude-picker-state-profile_failed .claude-picker-state-dot { background: var(--red); }
+.claude-picker-state code { color: var(--muted); }
+.claude-picker-models { color: var(--muted); }
+.claude-picker-offline-note {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  color: var(--faint);
+  text-wrap: pretty;
+}
+@media (max-width: 640px) {
+  .claude-picker-header { align-items: center; }
+}

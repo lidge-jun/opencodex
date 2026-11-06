@@ -101,7 +101,10 @@ describe("retained reasoning public wire contracts", () => {
     }
   });
 
-  test.each([undefined, 1])("routed fallback preserves opaque compaction exactly (cap=%s)", async maxTokens => {
+  test.each([
+    [undefined, "text/event-stream"], [1, "text/event-stream"],
+    [undefined, "Text/Event-Stream; charset=UTF-8"], [1, "TEXT/EVENT-STREAM"],
+  ] as const)("routed fallback preserves opaque compaction exactly (cap=%s, Content-Type=%s)", async (maxTokens, contentType) => {
     const config = keyProviderConfig();
     config.reasoningRetention = { enabled: true };
     config.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
@@ -115,9 +118,11 @@ describe("retained reasoning public wire contracts", () => {
       if (req.url.endsWith("/responses/compact")) return new Response("Not Found", { status: 404 });
       // A canonical 404 fallback still speaks native v2 and must see the original reasoning.
       expect(await req.text()).toContain("original reasoning");
-      return sseResponse([{ type: "response.completed", response: {
+      const response = sseResponse([{ type: "response.completed", response: {
         id: "resp_opaque", status: "completed", output: [item],
       } }]);
+      response.headers.set("content-type", contentType);
+      return response;
     }) as typeof fetch;
     const req = compactionRequest({ model: "gpt-5.6-luna", input: [
       { type: "message", role: "user", content: "retain history" }, reasoning("original reasoning"),

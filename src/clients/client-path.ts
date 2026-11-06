@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import type { OpencodeLaunchEnv } from "./config-export/contracts";
 
 // Leaf owner of client path validation, shared by config-export and gentle-shell-path
@@ -21,14 +21,22 @@ import type { OpencodeLaunchEnv } from "./config-export/contracts";
  */
 export class ClientPathError extends Error {}
 
-export function absoluteClientPath(raw: string, home: string, variable: string): string {
+/** Windows rooted paths without a drive still depend on the process's current drive. */
+export function isAbsoluteClientPath(raw: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "win32"
+    ? win32.isAbsolute(raw) && win32.parse(raw).root.length > 1
+    : posix.isAbsolute(raw);
+}
+
+export function absoluteClientPath(raw: string, home: string, variable: string, platform: NodeJS.Platform = process.platform): string {
   const trimmed = raw.trim();
   if (trimmed === "~") return home;
-  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return join(home, trimmed.slice(2));
-  if (!isAbsolute(trimmed)) {
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return (platform === "win32" ? win32 : posix).join(home, trimmed.slice(2));
+  if (!isAbsoluteClientPath(trimmed, platform)) {
     throw new ClientPathError(
       `${variable} must be an absolute path or start with ~; "${trimmed}" depends on the working directory, `
-      + "so opencodex and the client would disagree about which file it names.",
+      + "so opencodex and the client would disagree about which file it names."
+      + (platform === "win32" ? " Use a drive letter or UNC share; drive-less rooted paths depend on the current drive." : ""),
     );
   }
   return trimmed;

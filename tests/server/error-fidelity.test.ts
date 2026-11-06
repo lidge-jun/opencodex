@@ -34,6 +34,10 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 describe("error fidelity", () => {
+  test("a structured upstream stall is 504 and an ordinary upstream failure stays 502", () => {
+    expect(httpStatusFromTerminalError({ type: "upstream_error", code: "upstream_stall_timeout", message: "Upstream response body stalled for 1000ms" })).toBe(504);
+    expect(httpStatusFromTerminalError({ type: "upstream_error", code: "upstream_server_error", message: "Upstream connection failed" })).toBe(502);
+  });
   test("classifyError maps Codex-recognized context/quota/rate failures", () => {
     expect(classifyError(400, "upstream_error", "Your input exceeds the context window")).toMatchObject({
       type: "invalid_request_error",
@@ -46,6 +50,14 @@ describe("error fidelity", () => {
     expect(classifyError(402, "upstream_error", "You exceeded your current quota")).toMatchObject({
       type: "insufficient_quota",
       code: "insufficient_quota",
+    });
+    expect(classifyError(400, "upstream_error", "Your weekly usage quota has been exhausted")).toMatchObject({
+      type: "insufficient_quota",
+      code: "insufficient_quota",
+    });
+    expect(classifyError(400, "invalid_request_error", "Invalid configuration: weekly usage quota must be greater than zero")).toMatchObject({
+      type: "invalid_request_error",
+      code: "invalid_request_error",
     });
     expect(classifyError(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin")).toMatchObject({
       type: "invalid_request_error",

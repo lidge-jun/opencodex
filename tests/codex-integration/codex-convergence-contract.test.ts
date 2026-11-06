@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -23,11 +23,15 @@ import {
 } from "../../src/codex/convergence";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
 import {
+  codexRuntimeStateEpoch,
+  loadPersistedCodexRuntime,
+  peekCodexRuntimeProcessCache,
   persistCodexRuntime,
   resetCodexRuntimeResolveCacheForTests,
   setCodexRuntimeResolveCacheForTests,
 } from "../../src/codex/runtime";
 import {
+  bundledCatalogCacheState,
   invalidateBundledCatalogCache,
   setBundledCatalogCacheForTests,
 } from "../../src/codex/catalog/bundled";
@@ -208,6 +212,83 @@ test("used process-local authority drift rejects before every catalog target wri
   invalidateBundledCatalogCache();
   expect(await commitCodexCatalogCandidate(gathered, 1_000)).toEqual({ kind: "stale", reason: "process-local" });
   expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+});
+
+// No await or fake timers inside this scope: even a busy commit restores real time before yielding.
+function atObservedNow<T>(now: number, read: (restore: () => void) => T): T {
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  let restored = false;
+  const restore = () => { if (!restored) { restored = true; clock.mockRestore(); } };
+  try { return read(restore); } finally { restore(); }
+}
+
+function seedBoundaryRuntime(now: number) {
+  const runtime = { command: join(root, "observed-runtime"), version: "0.146.0", source: "environment" as const };
+  persistCodexRuntime(runtime);
+  atObservedNow(now, () => {
+    setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+    setBundledCatalogCacheForTests(runtime, JSON.parse(sourceCatalog("bundled-boundary")) as never);
+  });
+  expect(loadPersistedCodexRuntime()?.command === runtime.command).toBe(true);
+  expect(loadPersistedCodexRuntime()?.selectedVersion).toBe(runtime.version);
+  return runtime;
+}
+
+test.each([14_999, 15_000])("adopted runtime memo at age %i preserves the convergence stale boundary", async age => {
+  const start = Date.now(); seedBoundaryRuntime(start);
+  const memo = atObservedNow(start + 14_999, () => peekCodexRuntimeProcessCache());
+  expect(memo.kind).toBe("available");
+  const epoch = codexRuntimeStateEpoch(), bundled = bundledCatalogCacheState();
+  // The real gather selects its process memo synchronously before its first await.
+  const gathered = await atObservedNow(start + 14_999, () => candidate());
+  expect(codexRuntimeStateEpoch()).toBe(epoch);
+  const before = manifest(codexHome);
+  let guardedInClockTurn = false;
+  // Zero deadline means one real synchronous acquisition attempt; busy is a failure, never a retry.
+  const result = await atObservedNow(start + age, restore => commitCodexCatalogCandidate(gathered, 0, {
+    beforeCommit: () => { guardedInClockTurn = Date.now() === start + age; restore(); return true; },
+  }));
+  expect(codexRuntimeStateEpoch()).toBe(epoch);
+  expect(bundledCatalogCacheState()).toEqual(bundled);
+  if (age === 14_999) {
+    expect(guardedInClockTurn).toBe(true);
+    expect(result.kind).toBe("committed");
+  } else {
+    expect(guardedInClockTurn).toBe(false);
+    expect(result).toEqual({ kind: "stale", reason: "process-local" });
+    expect(manifest(codexHome)).toEqual(before);
+  }
+});
+
+test("persisted runtime authority commits across memo expiry after a pre-admission reset", async () => {
+  const start = Date.now(); seedBoundaryRuntime(start);
+  const bundled = bundledCatalogCacheState();
+  resetCodexRuntimeResolveCacheForTests();
+  expect(atObservedNow(start + 14_999, () => peekCodexRuntimeProcessCache()).kind).toBe("unavailable");
+  const epoch = codexRuntimeStateEpoch();
+  const gathered = await atObservedNow(start + 14_999, () => candidate());
+  let guardedInClockTurn = false;
+  const result = await atObservedNow(start + 15_000, restore => commitCodexCatalogCandidate(gathered, 0, {
+    beforeCommit: () => { guardedInClockTurn = Date.now() === start + 15_000; restore(); return true; },
+  }));
+  expect(guardedInClockTurn).toBe(true);
+  expect(result.kind).toBe("committed");
+  expect(codexRuntimeStateEpoch()).toBe(epoch);
+  expect(bundledCatalogCacheState()).toEqual(bundled);
+});
+
+test("persisted runtime replacement after gather still refuses without catalog writes", async () => {
+  const start = Date.now(), runtime = seedBoundaryRuntime(start);
+  resetCodexRuntimeResolveCacheForTests();
+  const gathered = await atObservedNow(start + 14_999, () => candidate());
+  const before = manifest(codexHome);
+  persistCodexRuntime({ ...runtime, command: join(root, "replacement-runtime"), version: "0.147.0" });
+  expect(loadPersistedCodexRuntime()?.selectedVersion).toBe("0.147.0");
+  expect(await atObservedNow(start + 15_000, restore => commitCodexCatalogCandidate(gathered, 0, {
+    beforeCommit: () => { restore(); return true; },
+  })))
+    .toEqual({ kind: "stale", reason: "source-observation" });
+  expect(manifest(codexHome)).toEqual(before);
 });
 
 test("custom catalog runtime-support drift rejects before every catalog target write", async () => {

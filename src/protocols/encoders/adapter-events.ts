@@ -1,3 +1,4 @@
+import { markProxyError, isProxyError } from "../../lib/client-error-body";
 /**
  * AdapterEvent -> client wire, without the internal Responses SSE (PF-09).
  *
@@ -88,14 +89,25 @@ export interface EncodedTerminal {
   durable: boolean;
 }
 
+const encoderTransportFailures = new WeakSet<object>();
+const originalErrorEvidence = new WeakMap<object, { status?: number; type?: string; code?: string; message: string }>();
+/** Original adapter fields for a client writer; terminal classification stays independent. */
+export function encoderOriginalErrorEvidence(terminal: EncodedTerminal) {
+  return originalErrorEvidence.get(terminal);
+}
+
+export function isEncoderTransportFailure(terminal: EncodedTerminal): boolean {
+  return encoderTransportFailures.has(terminal);
+}
+
 /** Frame output owned by the driver: budget reservation, delivery release and relay counts. */
 export interface ClientFrameSink {
   readonly budget: TranslatorBudget;
-  emit(text: string, observation?: RelayedEventObservation): void;
+  emit(text: string, observation?: RelayedEventObservation, onAdmitted?: () => void, admissionText?: string): void;
   /** Admit every frame before exposing any of them. */
   emitBatch(frames: { text: string; observation?: RelayedEventObservation }[]): void;
   /** A fixed, bounded frame that must reach the client even when the budget is exhausted. */
-  emitBounded(text: string): void;
+  emitBounded(text: string, onAdmitted?: () => void): void;
   /** A transport keepalive; it counts as neither wire activity nor a relayed event. */
   emitKeepalive(text: string): void;
   desiredSize(): number;
@@ -143,6 +155,8 @@ export interface ClientEncodeHooks {
 export interface AdapterEventEncodeOptions {
   translatorBudget: TranslatorBudget;
   hideThinkingSummary?: boolean;
+  /** Chat client delivery only, independent of upstream thinking/summary configuration. */
+  chatRawReasoningVisible?: boolean;
   /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
   hideRawReasoning?: boolean;
   toolNsMap?: ReadonlyMap<string, { namespace: string; name: string; freeform?: true }>;
@@ -179,9 +193,7 @@ export function encodeAdapterEventStream(
   const heartbeatMs = options.heartbeatMs ?? 2_000;
   const setTimer = options.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearTimer = options.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
-  const maxStallTicks = Math.ceil(
-    (resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream: options.localUpstream }) * 1000) / heartbeatMs,
-  );
+  let localUpstream = options.localUpstream;
   const textEncoder = new TextEncoder();
 
   let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -202,10 +214,11 @@ export function encodeAdapterEventStream(
   const relayed = (observation?: RelayedEventObservation) => {
     try { hooks.onRelayed?.(observation ?? {}); } catch { /* counters never break the stream */ }
   };
-  const enqueueCharged = (text: string, observation?: RelayedEventObservation, activity = true): void => {
+  const enqueueCharged = (text: string, observation?: RelayedEventObservation, activity = true, onAdmitted?: () => void, admissionText: string = text): void => {
     if (closed) return;
     const frame = textEncoder.encode(text);
-    const reservation = budget.reserveTransient(frame.byteLength, { kind: "live_transient" });
+    const admittedBytes = admissionText === text ? frame.byteLength : Buffer.byteLength(admissionText);
+    const reservation = budget.reserveTransient(admittedBytes, { kind: "live_transient" });
     try {
       controller.enqueue(frame);
     } catch {
@@ -214,16 +227,17 @@ export function encodeAdapterEventStream(
       return;
     }
     reservation.commitRetained();
-    queuedFrameBytes.push(frame.byteLength);
+    queuedFrameBytes.push(admittedBytes);
     emittedFrames++;
     if (activity) wireActivity = true;
     // A keepalive is transport liveness, not a relayed event: the bridge enqueues its heartbeat
     // outside the relay counter, and the converters' keepalives never reach it either.
     if (activity) relayed(observation);
+    onAdmitted?.();
   };
   const sink: ClientFrameSink = {
     budget,
-    emit: (text, observation) => enqueueCharged(text, observation),
+    emit: (text, observation, onAdmitted, admissionText) => enqueueCharged(text, observation, true, onAdmitted, admissionText),
     emitBatch: frames => {
       if (closed) return;
       const staged: { frame: Uint8Array; reservation: ReturnType<TranslatorBudget["reserveTransient"]>; observation?: RelayedEventObservation }[] = [];
@@ -252,12 +266,13 @@ export function encodeAdapterEventStream(
       }
       wireActivity = true;
     },
-    emitBounded: text => {
+    emitBounded: (text, onAdmitted) => {
       if (closed) return;
       try {
         controller.enqueue(textEncoder.encode(text));
         emittedFrames++;
         relayed({ terminal: true });
+        onAdmitted?.();
       } catch {
         closed = true;
       }
@@ -525,6 +540,7 @@ export function encodeAdapterEventStream(
       reportUsage: false,
       durable: false,
     };
+    markProxyError(terminal);
     runBeforeTerminalSync(terminal);
     try {
       writer.terminal(terminal);
@@ -544,10 +560,13 @@ export function encodeAdapterEventStream(
     stepping = true;
     gated = false;
     const emittedAtStart = emittedFrames;
+    let readingUpstream = false;
     try {
       while (!terminated && !closed && emittedFrames === emittedAtStart) {
         iteratorStarted = true;
+        readingUpstream = true;
         const next = await it.next();
+        readingUpstream = false;
         // A cancel during the await must not process or charge a late event.
         if (closed || clientCancelled) {
           gated = true;
@@ -640,7 +659,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "reasoning_raw_delta": {
-            if (options.hideThinkingSummary || options.hideRawReasoning) {
+            if (!(options.chatRawReasoningVisible ?? !options.hideThinkingSummary) || options.hideRawReasoning) {
               hiddenRawBytes += Buffer.byteLength(event.text);
               break;
             }
@@ -682,6 +701,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "tool_call_end": {
+            if (event.incomplete) { failCurrentToolCall(); break; }
             // Streamed fragments cannot be repaired: unusable arguments fail the turn.
             if (currentToolCall && currentToolCall.kind === "function" && !toolCallArgumentsUsable(currentToolCall.args)) {
               failCurrentToolCall();
@@ -765,6 +785,7 @@ export function encodeAdapterEventStream(
               reportUsage: true,
               durable: true,
             };
+            if (isProxyError(event)) markProxyError(terminal);
             break;
           }
           case "error": {
@@ -790,6 +811,7 @@ export function encodeAdapterEventStream(
               reportUsage: event.usage !== undefined,
               durable: true,
             };
+            originalErrorEvidence.set(terminal, { status: event.status, type: event.errorType, code: event.code, message: event.message });
             break;
           }
           default:
@@ -819,6 +841,7 @@ export function encodeAdapterEventStream(
           reportUsage: false,
           durable: false,
         };
+        if (readingUpstream) encoderTransportFailures.add(terminal);
         try {
           if (!await deliverTerminalGuarded(terminal)) return;
         } catch { /* a failing hook on the failure path must not throw into the pull */ }
@@ -844,6 +867,7 @@ export function encodeAdapterEventStream(
         reportUsage: true,
         durable: true,
       };
+      markProxyError(terminal);
       try {
         if (!await deliverTerminalGuarded(terminal)) return;
       } catch { /* see the catch path above */ }
@@ -867,6 +891,8 @@ export function encodeAdapterEventStream(
       gated = true;
       beat = setTimer(() => {
         if (closed || gated) return;
+        if (localUpstream !== options.localUpstream) { localUpstream = options.localUpstream; stallTicks = 0; }
+        const maxStallTicks = Math.ceil((resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream }) * 1000) / heartbeatMs);
         if (upstreamActivity) {
           upstreamActivity = false;
           stallTicks = 0;

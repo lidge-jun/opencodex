@@ -28,7 +28,7 @@ selector가 없을 때의 priority는 다음과 같습니다.
 | --- | ---: | --- |
 | `subagentModels[i]` | `i` (`0`부터 `4`) | `src/codex/catalog/sync.ts`의 featured rank map |
 | 그 밖의 라우팅 모델 | `5` | `src/codex/catalog/sync.ts`의 라우팅 항목 생성 |
-| 기본 네이티브 GPT slug | `9` | `src/codex/catalog/sync.ts`의 네이티브 항목 생성 |
+| 기본 네이티브 GPT slug | `sourcePriority` | `src/codex/catalog/sync.ts`의 네이티브 항목 생성 |
 | featured 목록이 있을 때 선택되지 않은 네이티브 모델 | 최소 `featured.length + 100` | `src/codex/catalog/sync.ts`의 네이티브 카탈로그 병합 |
 
 관리 API는 `src/server/management/agent-settings-routes.ts`의 `slice(0, 5)`로 `subagentModels`를 최대
@@ -69,7 +69,7 @@ Codex의 priority 정렬에서도 이 선두 순서가 보존됩니다.
 3. 카탈로그 병합 과정에서 featured 블록 아래로 밀린 선택되지 않은 네이티브 모델
 
 `subagentModels`가 없으면 라우팅 모델은 priority `5`를 유지하고, 네이티브 GPT 항목은 정상 priority
-(opencodex가 만든 항목은 보통 `9`)를 사용합니다. 라우팅 그룹 내부는 계속 프로바이더/id
+(sourcePriority, 출처가 없으면 `9`)를 사용합니다. 라우팅 그룹 내부는 계속 프로바이더/id
 알파벳순입니다.
 
 ## 예시

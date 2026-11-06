@@ -138,7 +138,11 @@ For a model explicitly listed in `modelPreferHostedTools`, a non-forward Respons
 to remove colliding client `image_gen` declarations before this normalization and rewrite their
 selectors to hosted `image_generation`, so a provider-reserved hosted tool takes precedence without
 loosening a caller's tool-choice restriction. The opt-in is intentionally model-scoped: the default
-alias path remains safest for ordinary public Responses endpoints.
+alias path remains safest for ordinary public Responses endpoints. Each build records the replaced
+caller identities in `AdapterRequest.hostedToolSubstitutions`, including an empty array when no
+substitution applies. Streaming combo validation consumes the metadata from the actual send under
+the [caller required-tool contract](../transports/responses-combo-boundaries.md#streaming-required-tool-contract),
+so queued rebuilds can add or remove that authority without weakening the caller's requirement.
 
 For OpenAI API virtual `-pro` models, preference lookup checks the selected public ID first and
 uses the resolved base wire-model ID as a fallback. `modelAdapters` resolves the public ID first and
@@ -149,8 +153,10 @@ Client-facing API-key responses perform the inverse mapping: JSON output and SSE
 items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
 extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify
 pass (`src/server/sse-payload-rewrite.ts`) rather than chaining separate JS pull wrappers.
-Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
-replays to return upstream without leaking a client-only namespace shape. The image-gen layer itself
+Ordinary inspection and continuation-cache branches keep the raw upstream alias, allowing stored
+replays to return upstream without leaking a client-only namespace shape. Mandatory combo streams
+share the authorized image restorer across judgment, client delivery and continuation observers;
+the adapter encodes restored calls back to their wire aliases on replay. The image-gen layer itself
 leaves malformed and empty image-gen namespaces untouched, but on a noncanonical route the general
 namespace boundary above runs after it and lowers whatever remains, so no private group reaches the
 wire. ChatGPT forward mode preserves the private namespace and hosted tool because that backend

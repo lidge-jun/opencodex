@@ -38,7 +38,8 @@ import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
 import ProviderJsonEditor, { type JsonEditorState } from "./ProviderJsonEditor";
 
 import type { ModelRow } from "../../pages/models-shared";
-import { parseModelInventory, countModelInventory, parseModelSelection } from "../../provider-workspace/model-inventory";
+import { parseModelInventory, countModelInventory, parseModelSelection, parseProviderDiscoveryMap } from "../../provider-workspace/model-inventory";
+import type { ProviderDiscoverySummary } from "../../models-groups";
 
 export type AddProviderIntent = { tier?: "accounts" | "free" | "paid"; custom?: boolean };
 
@@ -86,6 +87,7 @@ export default function ProviderWorkspaceShell({
   jsonEditor,
   jsonSaving = false,
   modelsRefreshToken = 0,
+  fetchDiscovery = false,
   onModelsSettled,
   activeAccountNeedsReauth,
   /** Stable key of active OAuth account ids — refetch overview quotas after account switch. */
@@ -108,6 +110,8 @@ export default function ProviderWorkspaceShell({
   jsonSaving?: boolean;
   /** Bump after login/config changes so /api/selected-models is refetched. */
   modelsRefreshToken?: number;
+  /** Join per-provider `/api/providers` discovery status into the revision-bound model snapshot. */
+  fetchDiscovery?: boolean;
   /** Registration feedback re-reads config only after this discovery actually settles. */
   onModelsSettled?: (ok: boolean) => void;
   activeAccountNeedsReauth?: Record<string, boolean>;
@@ -148,6 +152,7 @@ export default function ProviderWorkspaceShell({
   const [railFocusName, setRailFocusName] = useState<string | null>(null);
   const [modelSnapshot, setModelSnapshot] = useState<{
     revision: string; rows: ModelRow[]; selection: ReturnType<typeof parseModelSelection>;
+    discovery?: Record<string, ProviderDiscoverySummary>;
   } | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
@@ -209,8 +214,15 @@ export default function ProviderWorkspaceShell({
             fetch(`${apiBase}/api/models`, { signal: bounded.signal })
               .then(readJsonOrThrow).then(parseModelInventory),
           ]);
+          // Fetch /api/providers after discovery has run inside /api/selected-models + /api/models,
+          // and commit it in the same revision-bound snapshot so discovery status can never lag or
+          // survive a later refresh pass.
+          const discovery = fetchDiscovery
+            ? await fetch(`${apiBase}/api/providers`, { signal: bounded.signal })
+                .then(readJsonOrThrow).then(parseProviderDiscoveryMap)
+            : undefined;
           if (cancelled) return;
-          setModelSnapshot({ revision: modelRevision, selection, rows });
+          setModelSnapshot({ revision: modelRevision, selection, rows, ...(discovery ? { discovery } : {}) });
           setModelsLoadFailed(false);
           succeeded = true;
         } catch {
@@ -229,7 +241,7 @@ export default function ProviderWorkspaceShell({
       bounded.controller.abort();
       bounded.clear();
     };
-  }, [apiBase, modelRevision]);
+  }, [apiBase, fetchDiscovery, modelRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -581,7 +593,11 @@ export default function ProviderWorkspaceShell({
             onSave={() => { void jsonEditor.onSave(); }}
           />
         ) : selectedItem ? (
-          detail?.(selectedItem, {
+          detail?.(
+            modelRowsReady && selectedItem.discovery === undefined && modelSnapshot?.discovery?.[selectedItem.name]
+              ? { ...selectedItem, discovery: modelSnapshot.discovery[selectedItem.name] }
+              : selectedItem,
+            {
             usageTotals: usageTotals[selectedItem.name],
             modelUsage: usageModels[selectedItem.name],
             quotaReport: quotaReports[selectedItem.name],
@@ -594,7 +610,8 @@ export default function ProviderWorkspaceShell({
             modelsLoading: modelsLoading || (!modelRowsReady && !modelsLoadFailed),
             modelsLoadFailed,
             onRetryModels: retryModels,
-          }) ?? (
+          },
+          ) ?? (
             <div className="pws-detail-placeholder">
               <h3>{formatProviderDisplayName(selectedItem.name, t)}</h3>
               <p className="muted">{t("pws.detailComingSoon")}</p>

@@ -65,6 +65,8 @@ export function canonicalContribution(contribution: ManagedContribution): string
 }
 
 export interface OwnershipRecord {
+  /** Per-connection export policy; absent legacy records mean routed. */
+  modelNames?: import("../clients/config-export/model-names").ExportModelNames;
   clientId: IntegrationClientId;
   configPath: string;
   /** Hash of the WHOLE file as we left it — protects whole-file restore. */
@@ -113,6 +115,7 @@ export function isOwnershipRecord(value: unknown): value is OwnershipRecord {
     && typeof record.opId === "string" && record.opId.length > 0
     && typeof record.appliedAt === "string" && Number.isFinite(Date.parse(record.appliedAt))
     && hash(record.fileFingerprint) && hash(record.blockFingerprint)
+    && (record.modelNames === undefined || record.modelNames === "routed" || record.modelNames === "alias")
     && paths(record.fragmentPaths) && (record.fragmentPaths as unknown[]).length > 0
     && ["semanticBlockFingerprint", "protectedBlockFingerprint", "semanticProtectedBlockFingerprint"]
       .every(key => record[key] === undefined || hash(record[key]))

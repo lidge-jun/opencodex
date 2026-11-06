@@ -33,6 +33,7 @@ import {
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
+import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
 
 export { withUpstreamHttpVersion };
 
@@ -382,6 +383,10 @@ export function providerFetch(
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unobserved = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
+    // Turn-state handles are redeemed here, at the send, where the admitted caller, the provider and
+    // the outbound account are all settled; a handle bound to anything else is not forwarded.
+    const sendHeaders = (sent?: RequestInit) => new Headers(sent?.headers ?? (input instanceof Request ? input.headers : undefined));
+    init = redeemOutboundTurnState(init, turnStateBinding(providerName, sendHeaders(init)));
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
@@ -412,7 +417,8 @@ export function providerFetch(
       };
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
         httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing, null)) as typeof globalThis.fetch;
-      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url), wsInit ?? init,
+      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url),
+        { ...(wsInit ?? init), [TURN_STATE_BINDING_INIT]: turnStateBinding(providerName, sendHeaders(wsInit ?? init)) } as RequestInit,
         fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
         async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold),
         { provider, http: markEgressTransparentExecutor(fallback) });
@@ -558,7 +564,7 @@ export async function fetchWithHeaderTimeout(
   _manualRedirect = false,
 ): Promise<Response> {
   const pacing = executor as ProviderFetch;
-  const slot = await pacing.waitForPacing?.(abortSignal);
+  const slot = pacing.waitForPacing ? await pacing.waitForPacing(abortSignal) : undefined;
   const fetchExecutor = pacing.unpacedFetch ?? executor;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -568,6 +574,10 @@ export async function fetchWithHeaderTimeout(
       pause() { if (timer) clearTimeout(timer); timer = undefined; },
       resume() {
         this.pause();
+        // A non-positive budget disables the header deadline: a local upstream (LM Studio, Ollama)
+        // can stay silent for minutes during prompt prefill, so the request is bounded only by the
+        // caller's own abort signal. See resolveConnectTimeoutMs in src/stall-timeout.ts.
+        if (timeoutMs <= 0) return;
         timer = setTimeout(() => {
           if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
         }, timeoutMs);

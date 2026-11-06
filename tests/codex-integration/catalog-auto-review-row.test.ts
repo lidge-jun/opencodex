@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyFullModelPickerOrder, buildCatalogEntriesFromObservedState,
@@ -17,7 +18,8 @@ import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/accoun
 import { RESERVE_METADATA_SOURCE_FIELD } from "../../src/codex/catalog/reserve";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../../src/codex/catalog/kinds";
 import snapshot from "../../src/codex/data/upstream-models.json";
-import { repoPath, repoRoot } from "../helpers/repo-root";
+import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
+import { createFixtureNamespaceOwner } from "../helpers/fixture-namespace-owner";
 import { CODEX_INTERNAL_OPENAI_MODELS } from "../../src/codex/control-plane-models";
 import { NoEnabledOpenAiProviderError, routeModel } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
@@ -224,9 +226,11 @@ test("router keeps the exact reviewer wire id and fails without canonical OpenAI
 for (const writer of ["retained-sync", "convergence"] as const) {
   for (const includeNative of [true, false]) {
     test(`${writer} ${includeNative ? "keeps" : "omits"} the reviewer across two catalog/cache writes`, () => {
-      const base = repoPath(".tmp", "auto-review-verification");
+      // Keep Windows namespace paths short; POSIX needs native temp permissions (WSL /mnt/c lacks them).
+      const base = process.platform === "win32" ? repoPath(".tmp") : tmpdir();
       mkdirSync(base, { recursive: true });
-      const root = mkdtempSync(join(base, "writer-"));
+      const root = mkdtempSync(join(base, "ar-"));
+      const namespaceOwner = createFixtureNamespaceOwner(root);
       const codexHome = join(root, "codex");
       const ocxHome = join(root, "ocx");
       mkdirSync(codexHome); mkdirSync(ocxHome);
@@ -282,8 +286,12 @@ for (const writer of ["retained-sync", "convergence"] as const) {
         })();
       `;
       try {
-        const result = spawnSync(process.execPath, ["--eval", script], {
-          cwd: repoRoot(), env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+        const result = spawnSync(process.execPath, ["--preload", helperPath("fixture-windows-runtime-preload.ts"), "--eval", script], {
+          // Windows children otherwise pay cold cache I/O for the entire server graph.
+          cwd: repoRoot(), env: {
+            ...process.env, ...namespaceOwner, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome,
+            ...(process.platform === "win32" ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } : {}),
+          },
           encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
         });
         expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });

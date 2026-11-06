@@ -231,7 +231,7 @@ describe("mock-max wire clamp (nativeEffortClamp)", () => {
 
   test("ultra folds to max even where the pinned ladder lists it (#7590)", () => {
     // The ChatGPT backend accepts none..max only; ultra is the client-facing delegation choice.
-    for (const slug of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-future"]) {
+    for (const slug of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-future"]) {
       expect(nativeEffortClamp(slug, "ultra")).toBe("max");
       expect(nativeEffortClamp(slug, "max")).toBe(null);
     }

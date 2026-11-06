@@ -42,6 +42,7 @@ test("buildClaudeDesktopState gives native rows their real context window", asyn
     expect(sol!.contextWindow).toBe(nativeOpenAiContextWindow("gpt-5.6-sol"));
     expect(sol!.contextWindow).toBe(272_000);
     expect(state.models.find(m => m.route === "native/gpt-6.1-sol")).toMatchObject({ contextWindow: 500_000 });
+    expect(state.models.find(m => m.route === "native/gpt-6.1-terra")).toMatchObject({ contextWindow: 500_000 });
 
     // Every native row that the catalog knows a window for must carry it.
     for (const slug of visibleNativeSlugs(config)) {
@@ -69,17 +70,21 @@ test("the desktop-3p writer resolves the same native window as the DTO", () => {
 });
 
 
-test.each(["legacy", "profile"] as const)(
-  "GPT-6.1 Sol %s config enables supports1m only with long-window opt-in", mode => {
-    const slug = "gpt-6.1-sol";
+test.each([
+  ["legacy", "gpt-6.1-sol", "GPT 6.1 Sol (native)"],
+  ["profile", "gpt-6.1-sol", "GPT 6.1 Sol (native)"],
+  ["legacy", "gpt-6.1-terra", "GPT 6.1 Terra (native)"],
+  ["profile", "gpt-6.1-terra", "GPT 6.1 Terra (native)"],
+] as const)(
+  "%s %s config enables supports1m only with long-window opt-in", (mode, slug, label) => {
     const profile = mode === "profile" ? emptyDesktopProfile() : undefined;
     expect(nativeOpenAiContextWindow(slug)).toBe(500_000);
     const defaultSol = generateDesktop3pModels([slug], [], profile)[0];
-    expect(defaultSol?.labelOverride).toBe("GPT 6.1 Sol (native)");
+    expect(defaultSol?.labelOverride).toBe(label);
     expect(defaultSol?.supports1m).toBeUndefined();
     expect(defaultSol?.prefer1m).toBeUndefined();
 
     const optedInSol = generateDesktop3pModels([slug], [], profile, { modelWindows: { [slug]: 872_000 } })[0];
-    expect(optedInSol).toMatchObject({ labelOverride: "GPT 6.1 Sol (native)", supports1m: true, prefer1m: true });
+    expect(optedInSol).toMatchObject({ labelOverride: label, supports1m: true, prefer1m: true });
   },
 );

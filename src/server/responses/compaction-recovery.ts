@@ -1,3 +1,4 @@
+import { clientFacingModelText } from "../../lib/error-destination";
 import type { AdapterEvent, OcxConfig } from "../../types";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { routeConcreteModel, type RouteResult } from "../../router";
@@ -5,6 +6,7 @@ import { copyPlainData } from "../../lib/plain-data";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isRequestExecutionBudget, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import { isNonReplayableResponse, isNonReplayableUpstreamCode, markResponseNonReplayable, TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
 import { isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
@@ -159,10 +161,11 @@ export async function runWithCompactionRecovery(
     let target: RouteResult;
     try { target = routeConcreteModel(config, recovery.model); } catch { return keep(response); }
     if (!routed(target, kind) || identity(sourceRoute) === identity(target)) return keep(response);
-    const originalModel = firstOptions.compactionRoutingOverride?.sourceModel ?? String(snapshot.model);
+    const originalModel = firstOptions.clientModelLabel ? clientFacingModelText(firstOptions.clientModelLabel)
+      : firstOptions.compactionRoutingOverride?.sourceModel ?? String(snapshot.model);
     // Use the established protocol commit boundary. For runTurn streams the direct event
     // observer additionally preserves side-effect heartbeats that the bridge does not publish.
-    if (response.ok && response.headers.get("content-type")?.includes("text/event-stream")) {
+    if (response.ok && hasResponseMediaType(response.headers, "text/event-stream")) {
       const native = isNativePassthroughSseResponse(response);
       const eager = isEagerRelaySseResponse(response);
       const preflight = await preflightComboStreamResponse(response, logCtx);
@@ -267,7 +270,7 @@ export async function runWithCompactionRecovery(
         options.accountLoad.lease = null;
       }
       fallback = await dispatch(child, config, logCtx, {
-        ...options, compactionRecoveryAttempted: true, compactionRecoveryPermit: recoveryPermit,
+        ...options, clientModelLabel: firstOptions.clientModelLabel, compactionRecoveryAttempted: true, compactionRecoveryPermit: recoveryPermit,
         compactionRoutingOverride: { sourceModel: originalModel },
         onRequestBodyRead: undefined, onRequestBodyParsed: undefined,
         onCompactionRecoveryRoute: undefined, onCompactionRecoveryAdapterEvent: undefined,

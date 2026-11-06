@@ -294,6 +294,8 @@ export interface ModelCapabilities extends ReasoningCapabilities {
   video?: { processing?: "static" | "agentic" };
   /** Opt in exact first-party DeepSeek models to one-hour image file persistence. */
   deepseekImageFiles?: boolean;
+  /** Images a first-party Mistral Chat request may carry for this model; older ones are pruned. */
+  mistralMaxImages?: number;
 }
 
 /**
@@ -434,6 +436,14 @@ export interface OcxProviderConfig {
   fastEnabled?: boolean;
   /** Exact upstream model ids that override the provider-level service-tier capability. */
   modelSupportsServiceTier?: Record<string, boolean>;
+  /**
+   * Whether to promote Codex Desktop's `additional_tools` input items into top-level `tools`
+   * and strip the wrapper from `input`. Enabled automatically for OpenCode Go and xAI
+   * (`api.x.ai` and `cli-chat-proxy.grok.com`) except on forward-auth routes, which need an
+   * explicit `true`; other strict gateways that return HTTP 422 for unknown item types in
+   * `input` can opt in here.
+   */
+  promoteAdditionalTools?: boolean;
   /**
    * Responses upstream whose native contract accepts plaintext reasoning replay
    * (DeepSeek documents reasoning items with plaintext content). When set, the
@@ -1011,6 +1021,8 @@ export interface OcxProviderConfig {
    * keeps its slot in the conversation.
    */
   foldDeveloperRoleToSystem?: boolean;
+  /** Merge text-only Chat instruction messages into one leading system message. LM Studio seeds true. */
+  singleLeadingSystemMessage?: boolean;
   /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown

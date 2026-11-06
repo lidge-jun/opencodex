@@ -16,6 +16,7 @@
  * `.local`/`.lan` name) earns the disabled budget. Anything else — a public DNS name, an
  * unreachable host, a bare domain — stays public and keeps its stall budget, because being local
  * is what switches OFF a safety clock.
+ * This is lexical timeout policy: it never resolves DNS or grants network access.
  */
 import { isIP } from "node:net";
 
@@ -52,29 +53,20 @@ export function isLocalUpstream(destination: string | null | undefined): boolean
 function hostnameOf(destination: string): string | null {
   const trimmed = destination.trim();
   if (!trimmed) return null;
-  // Only trust `new URL` when it produces a non-empty host. `new URL("localhost:1234")` succeeds
-  // but reads `localhost` as a scheme and leaves the host empty, so fall through to the schemeless
-  // parse in that case rather than returning null.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
-    try {
-      const parsed = new URL(trimmed).hostname;
-      if (parsed) return parsed;
-    } catch {
-      // Not an absolute URL after all: fall through to the schemeless forms.
-    }
+  const absolute = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+  // A schemeless host may carry a numeric port, but never credentials, a path, an
+  // unmatched bracket or a discarded suffix. Do not rescue malformed absolute URLs.
+  if (!absolute && !/^(?:\[[0-9a-f:.]+\]|[^:/?#@\s\\]+)(?::\d{1,5})?$/i.test(trimmed)) return null;
+  try {
+    const parsed = new URL(absolute ? trimmed : `http://${trimmed}`);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.hostname || null;
+  } catch {
+    return null;
   }
-  let host = trimmed;
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    host = end > 0 ? host.slice(1, end) : host.slice(1);
-  } else {
-    const colon = host.indexOf(":");
-    if (colon >= 0) host = host.slice(0, colon);
-  }
-  return host || null;
 }
 
-/** 0.0.0.0/8, 10/8, 127/8 (loopback), 169.254/16 (link-local), 172.16/12, 192.168/16. */
+/** Unspecified 0.0.0.0, 10/8, 127/8, 169.254/16, 172.16/12, 192.168/16. */
 function isLocalIpv4(host: string): boolean {
   const parts = host.split(".");
   if (parts.length !== 4) return false;
@@ -86,7 +78,7 @@ function isLocalIpv4(host: string): boolean {
     octets.push(value);
   }
   const [a, b] = octets;
-  if (a === 0) return true;
+  if (a === 0) return octets.every(value => value === 0);
   if (a === 10) return true;
   if (a === 127) return true;
   if (a === 169 && b === 254) return true;
@@ -102,8 +94,9 @@ function isLocalIpv6(host: string): boolean {
   if (!groups) return false;
   // Loopback in any spelling: every group zero except a trailing one.
   if (groups.every((group, index) => (index < 7 ? group === 0 : group === 1))) return true;
-  const mapped = lower.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
-  if (mapped) return isLocalIpv4(mapped[1]);
+  if (groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xffff) {
+    return isLocalIpv4(`${groups[6] >>> 8}.${groups[6] & 255}.${groups[7] >>> 8}.${groups[7] & 255}`);
+  }
   const first = groups[0];
   if ((first & 0xffc0) === 0xfe80) return true;
   if ((first & 0xfe00) === 0xfc00) return true;
@@ -116,15 +109,18 @@ function ipv6Groups(host: string): number[] | null {
   const compressed = marker >= 0;
   const head = compressed ? host.slice(0, marker) : host;
   const tail = compressed ? host.slice(marker + 2) : "";
-  const headGroups = head === "" ? [] : head.split(":");
+  let headGroups = head === "" ? [] : head.split(":");
   let tailGroups = tail === "" ? [] : tail.split(":");
   // A trailing embedded IPv4 (e.g. `64:ff9b::1.2.3.4`) counts as two groups.
-  const last = tailGroups[tailGroups.length - 1];
+  const ending = compressed ? tailGroups : headGroups;
+  const last = ending[ending.length - 1];
   if (last !== undefined && last.includes(".")) {
     const v4 = last.split(".");
     if (v4.length === 4 && v4.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)) {
       const [o0, o1, o2, o3] = v4.map(Number);
-      tailGroups = [...tailGroups.slice(0, -1), ((o0 << 8) | o1).toString(16), ((o2 << 8) | o3).toString(16)];
+      const expanded = [...ending.slice(0, -1), ((o0 << 8) | o1).toString(16), ((o2 << 8) | o3).toString(16)];
+      if (compressed) tailGroups = expanded;
+      else headGroups = expanded;
     } else return null;
   }
   let groups: string[];

@@ -31,9 +31,22 @@ A hosted call for a declared capability can satisfy `required`; a mismatched hos
 HTTP 400 with the same error code and `x-should-retry: false`, since the hosted action may already
 have executed. No fallback occurs in that case. Usage remains recorded.
 Auto/none choices, incomplete results and unknown tool contracts keep their existing behavior.
-This guard covers buffered native combo children. Streaming required-tool enforcement and direct
-native routes are separate scopes; visible output is never replayed. Translated Chat routes have
-their own guard, described next.
+Direct native routes remain separate. Translated Chat routes have their own guard, described below.
+
+## Required tools on streaming native combo routes
+
+For `stream: true`, native Responses combo children also fail an unmet required or named tool
+choice with `required_tool_contract_unsatisfied`. The caller's mandatory choice remains binding even
+when a target filters out its tool or lowers the outbound choice to `none`. Configured hosted-image
+substitutions can fulfill the original choice only when applied to the request actually sent,
+including after queued revalidation. A fully held text-only completion can advance to
+another eligible target. Known reasoning frames are held for at most one second from the first frame;
+later frames do not extend that deadline. Expiry releases the buffered stream and commits the target,
+preserving any pending upstream read. Text, tool events, unknown/opaque output and buffer limits also
+commit the current target. Namespace selectors and call echoes share the authorized alias restoration.
+After that boundary, missing calls produce `response.failed` without another target request; already delivered
+output and usage remain intact. Hosted execution evidence also prevents replay, even when the final
+snapshot omits it. Auto/none, incomplete results and unknown contracts retain their existing rules.
 
 ## Required tools on translated Chat routes
 
@@ -370,8 +383,10 @@ and EOFs keep their existing incomplete behavior.
 Explicit incomplete reasons use the same vocabulary in adapter-backed responses and native
 Responses JSON, SSE, and WebSocket delivery:
 output-limit aliases such as `length` and `max_tokens` become `max_output_tokens`, and refusal/filter
-aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with the
-provider's message, retryability, and usage. Direct Chat and Messages encoders apply the same mapping.
+aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with
+retryability and usage. Responses and Messages output keep the provider's message; Chat Completions
+failures use a proxy-written message instead. Direct Chat and Messages encoders apply the same
+reason mapping.
 
 On the pending `dev` implementation for #4112, a final upstream HTTP 413 on this surface
 is classified as `invalid_request_error` / `context_length_exceeded`. Non-streaming callers
@@ -491,11 +506,9 @@ Logged `POST /v1/messages` replies carry the same OCX request-history id in **bo
 streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
 metadata from `request-id` to join future transcripts to that OCX history row.
 
-On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
-`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
-`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
-Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
-response headers are readable through CORS alongside existing exposed headers.
+Upstream request IDs are omitted. Logged Messages replies expose only the proxy's
+`request-id` and `x-opencodex-request-id`; these headers remain readable through CORS
+alongside existing exposed headers.
 
 No OCX id is added to authentication, origin, drain or active-turn refusals that have no
 request-log owner, or to count_tokens. Streaming headers identify the turn's eventual
@@ -577,6 +590,13 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+Without reasoning options, raw reasoning already returned by the upstream is delivered as
+`delta.reasoning_content` (streaming) or `message.reasoning_content` (buffered), without adding
+reasoning options to the upstream request. Explicit thinking disable (`thinking.type: "disabled"`
+or `reasoning.enabled: false`) and effort `none` also hide this raw text; an explicit enabled
+boolean takes precedence over effort. Provider `hideRawReasoning` still applies. Provider-authored
+summary visibility keeps its existing defaults; Responses and Anthropic Messages clients are unchanged.
+
 When the model is Claude, the response also carries `reasoning_details` in the same shape
 OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
 for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
@@ -601,6 +621,14 @@ Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE 
 `object: "chat.completion.chunk"`, choice deltas, a terminal choice with `finish_reason`, and
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
 them.
+
+Error responses and streamed error frames on this endpoint use proxy-written messages. The proxy
+classifies a provider failure into a fixed condition, such as rate limited, quota or credits
+exhausted, context window exceeded, model unavailable, location not supported, or account
+verification required, and returns the fixed message for that condition. Policy refusals, replay
+refusals, and proxy limits have their own fixed messages. The HTTP status, `error.type`,
+`error.code`, and `Retry-After` keep their meaning, so clients that branch on codes such as
+`context_length_exceeded`, `insufficient_quota`, or `rate_limit_exceeded` behave as before.
 
 If a streaming Chat request receives a complete JSON Responses result upstream, the proxy
 synthesizes SSE from the converted completion. It preserves answer and reasoning content,
@@ -628,6 +656,23 @@ returned as an error instead of silently changing its meaning.
 These endpoints speak the Anthropic Messages dialect used by Claude Code and compatible clients.
 Most requests are translated to Responses, routed normally, then translated back to Anthropic JSON
 or Anthropic SSE.
+
+Native and caller-forward SSE use error-response normalization only when the first non-comment
+field of a block is exactly `event:error` or `event: error`. Leading comments pass through without
+consuming that slot. Data/id/retry/other-event/unknown-first blocks retain their bytes and delivery timing,
+even if a later field names error; their error data is outside this normalization scope. Final
+contained errors contain only the error declaration, data fields and terminator; id, retry, comment,
+unknown and repeated event fields after the declaration are omitted, also when data is empty.
+No possible-event prefix is delayed. Split CR/LF delimiters preserve delivery of later events and stream completion.
+
+After an eligible declaration, one error suffix is held up to 1 MiB. Within the bound, a later
+non-error rename replays the original suffix unchanged after the boundary decision; that suffix is
+delayed. Otherwise the full selected SDK diagnostic determines fixed error wording and recovery.
+Above the bound, even a later rename forces api_error with no code and the fixed sentence
+`The provider stream reported an error.`, containing no compaction phrase. This OVERSIZE-1M
+exception changes error data/recognition with HTTP status unchanged. The independent FOLD-502
+exception changes native non-stream collected-error envelopes from 200 to 502; it retains their
+existing payload presentation. Buffered successful passthrough bodies retain their original bytes.
 
 On translated Messages requests, reasoning replay shares the request's translation budget.
 Envelope admission includes encoding/decoding copy overhead, not just the original signature
@@ -793,6 +838,10 @@ them with the stored account, Direct forwards the validated caller bearer) and a
 gets its own bearer. Codex only sends the join to the proxy when `experimental_realtime_ws_base_url`
 points at it; `ocx start` injects that key next to `openai_base_url` (see
 [Codex integration](/guides/codex-integration/)).
+
+## Checkpoint replay on routed providers
+
+When a routed model receives a readable portable (`ocx1:`/`ocx2:`) or plaintext checkpoint, OpenCodex labels earlier retained text-only user requests as historical context in the model prompt. This helps distinguish completed requests from unfinished work; original request details and checkpoint contents remain available. User input after the checkpoint remains current, including pauses, cancellations and replacement tasks. Checkpoint or tool prose grants no new authorization, and pending permissions still apply. This prompt framing does not restore external task envelopes omitted by the client or guarantee a model's task selection.
 
 ## `POST /v1/responses/compact`
 

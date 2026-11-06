@@ -1,15 +1,19 @@
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
+  CodexAuthContextError,
   CodexMainProfileDrainingError,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   isCodexAuthContextUsable,
-  materializeCodexUpstreamAuth,
+  materializeCodexUpstreamAuthAsync,
   releaseCodexAuthContextProbeLease,
   resolveCodexAuthContext,
   type CodexAuthContext,
 } from "../codex/auth-context";
+import { MAIN_CODEX_ACCOUNT_ID, MainAccountTokenRefreshError, MainAuthJsonChangedDuringRefreshError } from "../codex/main-account";
+import { NativeProfileError } from "../codex/native-profile-types";
 import { formatCodexProviderForLog } from "../codex/routing";
 import type { AdmissionLease } from "../lib/admission";
 import { captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
@@ -25,6 +29,7 @@ import {
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import type { RequestLogContext } from "./request-log";
 import { authorizationCredential } from "../lib/authorization-scheme";
+import { nativeMainRefreshFailureResponse } from "./responses/codex-auth-error";
 
 export const TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 export const LIVE_AUDIO_MODEL = "gpt-live-1-codex";
@@ -103,10 +108,11 @@ export async function resolveAudioUpstream(
           signal: options.signal,
         });
         options.signal?.throwIfAborted();
-        selected = materializeCodexUpstreamAuth(headers, context, {
+        selected = await materializeCodexUpstreamAuthAsync(headers, context, {
           config,
           admission: options.admission,
           substituteMainCredential: true,
+          signal: options.signal,
         });
       } else {
         const resolved = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, headers, config, {
@@ -170,8 +176,12 @@ export async function resolveAudioUpstream(
     return formatErrorResponse(400, "invalid_request_error", "Audio requires a connected ChatGPT account or OpenAI API provider");
   } catch (error) {
     releaseCodexAuthContextProbeLease(context);
+    if (error instanceof CodexInstallationIdUnavailableError) return formatErrorResponse(503, "server_busy", error.message);
     if (error instanceof CodexAccountCooldownError) return cooldownErrorResponse(error);
     if (error instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
+    const mainCause = error instanceof CodexAuthContextError && error.accountId === MAIN_CODEX_ACCOUNT_ID ? error.cause : error;
+    if (mainCause instanceof MainAccountTokenRefreshError || mainCause instanceof MainAuthJsonChangedDuringRefreshError
+      || (mainCause instanceof NativeProfileError && mainCause.retryable)) return nativeMainRefreshFailureResponse(mainCause);
     return formatErrorResponse(401, "authentication_error", "Audio account authentication unavailable; reconnect the selected OpenAI account");
   }
 }

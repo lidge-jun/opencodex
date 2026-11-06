@@ -36,6 +36,25 @@ import type { OcxConfig } from "../../src/types";
  * runners, which these tests never invoke, so an empty object is enough. */
 const fakeDeps = {} as unknown as CliDispatchDeps;
 
+test.each(["models", "provider"])("%s dispatch retains normal handler exit codes", async command => {
+  const handler = command === "models"
+    ? spyOn(await import("../../src/cli/models"), "handleModels")
+    : spyOn(await import("../../src/cli/provider"), "handleProviderCommand");
+  const previousExit = process.exitCode;
+  try {
+    const args = [command, "list"];
+    for (const code of [0, 1, 2, 4, 5, 79]) {
+      handler.mockImplementation(async () => { process.exitCode = code; });
+      process.exitCode = 99;
+      expect(await dispatchCommand({ kind: "command", command, args }, { ...fakeDeps, args })).toBe(code);
+      expect(process.exitCode).toBe(code);
+    }
+    expect(handler).toHaveBeenCalledTimes(6);
+    expect(handler).toHaveBeenLastCalledWith(["list"]);
+    // Bun keeps the last code when exitCode is set to undefined, so restore an explicit 0.
+  } finally { handler.mockRestore(); process.exitCode = previousExit ?? 0; }
+});
+
 describe("CLI dispatch command coverage", () => {
   test("every non-hidden registry command is dispatchable", () => {
     const aliasResolved = new Set([...DISPATCH_COMMANDS, ...DISPATCH_ALIASES.keys()]);
@@ -182,7 +201,7 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
     } finally {
       sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); log.mockRestore();
     }
@@ -438,7 +457,7 @@ describe("start probes the configured port before shadowing it (source-level)", 
   test("handleStart waits out its restart parent and refuses it on both paths after the wait", () => {
     const start = cliSource.slice(cliSource.indexOf("async function handleStart("));
     expect(start).toContain("takeRestartHandoffMarkers(process.env)");
-    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: supervisedServiceChild }), restartParent)");
+    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: true }), restartParent)");
     expect(start.match(/decision === "refuse" \|\| decision === "await-parent"/g)?.length).toBe(2);
     expect(start).toContain("livePid: fencedLive.pid, restartParentPid: restartParent.restartParentPid,");
   });
@@ -625,7 +644,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // #7563 adds a connected client to the same gate; the sibling term is unchanged.
     expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
     expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling && !connectedClientSkip) record.sharedTeardown = "performed-by-proxy";');
-    expect(stop).toContain("fetchFn: connectedClientSkip ? directLocalHttpFetch as typeof fetch : undefined,");
+    expect(stop).not.toContain("fetchFn:");
     // The system env was never the sibling's to set, so its stop does not roll it back either.
     expect(stop).toContain("if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }");
     expect(stop).not.toMatch(/\n {2}try \{ revertSystemEnv\(\); \}/);
@@ -709,8 +728,10 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(honorAt).toBeLessThan(start.indexOf("findProxyOwnerBeforeJournalRecovery("));
     const owner = slice("async function findProxyOwnerBeforeJournalRecovery(", "async function handleStart(");
     expect(owner).not.toContain("reconcileJournal(");
-    expect(start.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
-    expect(start.indexOf("markCrossHomeSibling()")).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
+    expect(start).toContain("recover: () => recoverStartJournalAfterOwnerRecheck(owner, siblingStart)");
+    const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
+    expect(recovery.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
+    expect(recovery.indexOf("markCrossHomeSibling()")).toBeLessThan(recovery.indexOf("reconcileStartupJournal()"));
     const detached = slice("function detachedStartEnvironment(", "async function handleEnsure(");
     expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
     expect(detached).toContain("delete env.OCX_SERVICE;");
@@ -724,11 +745,14 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
       ["src/cli/claude.ts", 'env: withProcessRuntimeProvenance(withoutSiblingMarker({ ...process.env, OCX_SERVICE: "1" })),'],
       ["src/cli/opencode.ts", opencodeStartEnv],
       ["src/cli/minimax.ts", opencodeStartEnv],
-      ["src/update/job.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
+      ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
       ["src/update/index.ts", "const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));"],
     ] as const) {
       expect(readFileSync(repoPath(path), "utf8"), path).toContain(env);
     }
+    const worker = readFileSync(repoPath("src/update/job.ts"), "utf8");
+    expect(worker).toContain('import { spawnWorkerPinnedStart } from "./job-pinned-start"');
+    expect(worker).toContain("return spawnWorkerPinnedStart(restartCommand(false, installer, launcher, port), authorizeMutation,");
     // The package launcher's own post-update restart cannot import the helper; it deletes inline.
     expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_OF_PORT;");
     expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_HANDOFF_NONCE;");

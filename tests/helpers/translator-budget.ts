@@ -37,7 +37,7 @@ type TestAdapter<T extends ProviderAdapter> = Omit<T, "buildRequest" | "parseStr
     parsed: Parameters<T["buildRequest"]>[0],
     incoming?: Partial<IncomingMeta>,
   ): ReturnType<T["buildRequest"]>;
-  parseStream(response: Response, budget?: TranslatorBudget): ReturnType<T["parseStream"]>;
+  parseStream(response: Response, budget?: TranslatorBudget, tierMetadata?: Parameters<ProviderAdapter["parseStream"]>[2], streamContext?: Parameters<ProviderAdapter["parseStream"]>[3]): ReturnType<T["parseStream"]>;
   parseResponse?: (
     response: Response,
     budget?: TranslatorBudget,
@@ -59,8 +59,8 @@ export function withTestTranslatorBudget<T extends ProviderAdapter>(adapter: T):
         translatorBudget: incoming?.translatorBudget ?? budget,
       });
     },
-    parseStream(response: Response, explicitBudget?: TranslatorBudget) {
-      return parseStream(response, explicitBudget ?? budget);
+    parseStream(response: Response, explicitBudget?: TranslatorBudget, tierMetadata?: Parameters<ProviderAdapter["parseStream"]>[2], streamContext?: Parameters<ProviderAdapter["parseStream"]>[3]) {
+      return parseStream(response, explicitBudget ?? budget, tierMetadata, streamContext);
     },
     ...(parseResponse ? {
       parseResponse(response: Response, explicitBudget?: TranslatorBudget) {

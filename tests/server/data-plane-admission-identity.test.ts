@@ -6,6 +6,7 @@ import {
   requireResponsesApiAuth,
   resolveApiAuth,
   resolveContextPrincipal,
+  resolveDurableReplayPrincipal,
   resolveDataPlaneAdmissionSecret,
   resolveResponsesApiAuth,
 } from "../../src/server/auth-cors";
@@ -340,4 +341,30 @@ describe("the Responses WebSocket handshake", () => {
   // its purpose and is gone: phase 3 is what adds them, and a guard that must be
   // deleted by the next commit is a scheduling note, not a test. What survives is
   // the payload assertion above, which stays true regardless of who consumes it.
+});
+
+
+describe("durable structural replay principal", () => {
+  const signing = new Uint8Array(32).fill(17);
+  test("same verified local credential has stable scope, independent of process principal", () => {
+    const config=loopbackConfig(), req=request({"x-opencodex-api-key":"ocx_data_firstsecret"});
+    const first=resolveDurableReplayPrincipal(req, config, {kind:"loopback",source:"loopback"}, signing);
+    expect(first).toBeDefined();
+    expect(resolveDurableReplayPrincipal(req, config, {kind:"configured",source:"dedicated",keyId:"first-key",contextPrincipalId:"different-process-principal"}, signing)).toBe(first);
+    expect(first).not.toContain("ocx_data_firstsecret");
+  });
+  test("missing admission, wrong key, keyless loopback and mismatched named admission refuse scope", () => {
+    const config=loopbackConfig(), req=request({"x-opencodex-api-key":"ocx_data_firstsecret"});
+    expect(resolveDurableReplayPrincipal(req, config, undefined, signing)).toBeUndefined();
+    expect(resolveDurableReplayPrincipal(request(), config, {kind:"loopback",source:"loopback"}, signing)).toBeUndefined();
+    expect(resolveDurableReplayPrincipal(request({"authorization":"Bearer upstream-only"}),config,{kind:"loopback",source:"loopback"},signing)).toBeUndefined();
+    expect(resolveDurableReplayPrincipal(req,config,{kind:"configured",source:"dedicated",keyId:"second-key"},signing)).toBeUndefined();
+    expect(resolveDurableReplayPrincipal(req,config,{kind:"loopback",source:"loopback"},new Uint8Array(31))).toBeUndefined();
+  });
+  test("explicit credential or signing-key rotation changes structural ownership", () => {
+    const config=loopbackConfig(), admission={kind:"loopback",source:"loopback"} as const;
+    const first=resolveDurableReplayPrincipal(request({"x-opencodex-api-key":"ocx_data_firstsecret"}),config,admission,signing);
+    expect(resolveDurableReplayPrincipal(request({"x-opencodex-api-key":"ocx_data_secondsecret"}),config,admission,signing)).not.toBe(first);
+    expect(resolveDurableReplayPrincipal(request({"x-opencodex-api-key":"ocx_data_firstsecret"}),config,admission,new Uint8Array(32).fill(18))).not.toBe(first);
+  });
 });

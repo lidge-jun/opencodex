@@ -588,6 +588,15 @@ function isEncryptedPayload(value: unknown): value is EncryptedNativeEnvelopeV1 
     && typeof v.envelopeSha256 === "string" && HASH_RE.test(v.envelopeSha256);
 }
 
+export function countLocalNativeProfileSlots(raw: Record<string, unknown> | null, homeId: string): { inactive: number; active: boolean } {
+  if (raw === null) return { inactive: 0, active: false };
+  const vault = parseVaultObject(structuredClone(raw), homeId);
+  return {
+    inactive: vault.profiles.filter(profile => profile.state === "inactive").length,
+    active: vault.activeProfileId !== null,
+  };
+}
+
 function parseVaultObject(value: unknown, homeId: string): NativeMainProfileVaultV1 {
   if (!value || typeof value !== "object") throw new Error("root");
   const vault = value as NativeMainProfileVaultV1;

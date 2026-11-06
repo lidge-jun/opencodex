@@ -512,10 +512,20 @@ export function antigravityReplaySessionKeysForTests(): string[] {
 
 function extractSignature(part: Record<string, unknown>): string | undefined {
   const direct = part.thoughtSignature ?? part.thought_signature;
-  if (typeof direct === "string" && direct.length >= MIN_SIGNATURE_LEN && direct !== THOUGHT_SIGNATURE_BYPASS) return direct;
+  if (
+    typeof direct === "string"
+    && direct.length >= MIN_SIGNATURE_LEN
+    && direct !== THOUGHT_SIGNATURE_BYPASS
+    && direct !== THOUGHT_SIGNATURE_CONTEXT_BYPASS
+  ) return direct;
   const extra = part.extra_content as { google?: { thought_signature?: unknown } } | undefined;
   const nested = extra?.google?.thought_signature;
-  if (typeof nested === "string" && nested.length >= MIN_SIGNATURE_LEN && nested !== THOUGHT_SIGNATURE_BYPASS) return nested;
+  if (
+    typeof nested === "string"
+    && nested.length >= MIN_SIGNATURE_LEN
+    && nested !== THOUGHT_SIGNATURE_BYPASS
+    && nested !== THOUGHT_SIGNATURE_CONTEXT_BYPASS
+  ) return nested;
   return undefined;
 }
 
@@ -630,6 +640,7 @@ export function antigravityUsesReplayCache(model: string): boolean {
  * validator-bypass token.
  */
 export const THOUGHT_SIGNATURE_BYPASS = "skip_thought_signature_validator";
+export const THOUGHT_SIGNATURE_CONTEXT_BYPASS = "context_engineering_is_the_way_to_go";
 
 /**
  * True when the model speaks the Gemini wire dialect that requires a thought signature on the

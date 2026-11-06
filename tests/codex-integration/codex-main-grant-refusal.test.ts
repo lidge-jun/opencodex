@@ -48,7 +48,7 @@ function mockEndpoint(reply: () => Response | Promise<Response>): string[] {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.href !== "https://auth.openai.com/oauth/token") throw new Error("unexpected mocked endpoint");
-    grants.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
+    grants.push((JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "");
     return reply();
   }) as typeof fetch;
   return grants;

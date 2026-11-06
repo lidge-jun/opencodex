@@ -1,6 +1,7 @@
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
+import { isAuthorizedDesktopCompatibilityMutation } from "./desktop-compatibility-authorization";
 import type { DesktopCompatibilityRuntime } from "../../codex/desktop-compatibility/runtime";
 
 const PATH = "/api/codex/desktop-compatibility/runtime";
@@ -11,7 +12,7 @@ const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stoppin
 export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== PATH) return null;
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-  if (ctx.req.method === "POST" && (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
+  if (ctx.req.method === "POST" && !isAuthorizedDesktopCompatibilityMutation(ctx)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   let action: "start" | "stop" | "observe" | "apply" | "launch" | undefined;
   if (ctx.req.method === "POST") {
     let body: unknown;

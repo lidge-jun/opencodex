@@ -151,7 +151,7 @@ function composeGatedClientVersionFloor(
 
 // Reads every pinned row (codex-rs snapshot plus roster-captured rows), so a gated slug whose row
 // arrives through roster-pinned-models.json still contributes its floor. None does today:
-// gpt-6-sol/luna and gpt-6.1-sol are ungated, and gpt-6-astra-minor has no row and no measured minimum.
+// GPT-6 Sol/Luna and GPT-6.1 Sol/Terra are ungated; Astra Minor has no row or measured minimum.
 export const GATED_MODEL_CLIENT_VERSION_FLOOR: string = composeGatedClientVersionFloor(
   pinnedNativeModelRows(),
 );

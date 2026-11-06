@@ -1,22 +1,27 @@
+import { clientFacingModelLabel } from "../../src/lib/error-destination";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { clearModelCache } from "../../src/codex/model-cache";
+import * as oauth from "../../src/oauth";
 import {
   antigravityModelUnlistedMessage,
   antigravitySelectedAccountUnlistedMessage,
   clearGenericFailoverHealth,
 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { createOAuthRefreshIntentLock, getAccountSet, saveCredential, setAccountPaused, setActiveAccount, getAccountCredentialWithStatus, mergeAccountCredential } from "../../src/oauth/store";
 import { clearPoolRotationState } from "../../src/oauth/pool-kernel";
-import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
+import { antigravityAccountSupportsModel, clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as retry from "../../src/lib/upstream-retry";
+import * as failover from "../../src/oauth/generic-account-failover";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
 // #7500: an Antigravity request reaches only accounts whose own model discovery may serve it.
 const provider = "google-antigravity";
@@ -30,7 +35,7 @@ let originalFetch: typeof fetch;
 let sleep: ReturnType<typeof spyOn>;
 let ids: string[];
 let sends: string[];
-let onSend: ((auth: string) => Promise<Response | undefined>) | undefined;
+let onSend: ((auth: string, wireModel: string) => Promise<Response | undefined>) | undefined;
 
 beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -58,7 +63,7 @@ beforeEach(async () => {
       throw new Error("Unexpected external request in Antigravity model routing regression");
     const auth = new Headers(init?.headers).get("authorization")!;
     sends.push(auth);
-    return await onSend?.(auth) ?? Response.json({ response: {
+    return await onSend?.(auth, JSON.parse(String(init?.body)).model) ?? Response.json({ response: {
       candidates: [{ content: { role: "model", parts: [{ text: "synthetic result" }] }, finishReason: "STOP" }],
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
     } });
@@ -96,15 +101,59 @@ function rosters(...lists: Array<boolean | undefined>): void {
   });
 }
 
-async function turn(cfg: OcxConfig): Promise<{ status: number; body: { error?: { message?: string; type?: string; code?: string } } }> {
+async function turn(cfg: OcxConfig, options: Parameters<typeof handleResponses>[3] = {}): Promise<{ status: number; body: { error?: { message?: string; type?: string; code?: string } } }> {
   const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: `${provider}/${model}`, input: "synthetic input", stream: false }),
-  }), cfg, { model, provider }, {});
+  }), cfg, { model, provider }, options);
   return { status: response.status, body: await response.json() as never };
 }
 
 const bearer = (index: number) => `Bearer synthetic-${["one", "two", "three"][index]}`;
+
+test("an independent request retries a discovery-owned refresh cancelled before dispatch", async () => {
+  const cfg = config(true);
+  const id = ids[1]!;
+  const prior = getAccountCredentialWithStatus(provider, id)!.credential;
+  await mergeAccountCredential(provider, id, { ...prior, expires: Date.now() - 1 });
+  rosters(false, true, false);
+  const guard = await createOAuthRefreshIntentLock(provider, id).acquire();
+  let current = true, joined!: () => void;
+  const atJoin = new Promise<void>(resolve => { joined = resolve; });
+  const discovery = oauth.getValidAccessSnapshotForAccount(provider, id, {
+    requireUsableAccount: true, authorityCurrent: () => current,
+  }).catch(error => error);
+  const originalResolve = oauth.getValidAccessSnapshotForAccount;
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount").mockImplementation((...args) => {
+    const result = originalResolve(...args);
+    if (args[1] === id && !args[2]?.authorityCurrent) joined();
+    return result;
+  });
+  let tokenRequests = 0;
+  const projects: unknown[] = [];
+  const fixtureFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.href === "https://oauth2.googleapis.com/token") tokenRequests++;
+    if (url.pathname.endsWith(":generateContent")) projects.push(JSON.parse(String(init?.body)).project);
+    return fixtureFetch(input, init);
+  }) as typeof fetch;
+  const request = turn(cfg);
+  try {
+    await atJoin;
+    expect(tokenRequests).toBe(0);
+    current = false;
+    clearModelCache(provider);
+    expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBe(false);
+    guard.release();
+    expect(await discovery).toBeInstanceOf(oauth.OAuthTokenRefreshStaleError);
+    expect((await request).status).toBe(200);
+    expect(tokenRequests).toBe(1);
+    expect(sends).toEqual(["Bearer synthetic-refreshed"]);
+    expect(projects).toEqual([prior.projectId]);
+    expect(getAccountCredentialWithStatus(provider, id)!.needsReauth).toBe(false);
+  } finally { guard.release(); await Promise.allSettled([request, discovery]); resolver.mockRestore(); clearModelCache(); }
+});
 
 test("an active account that lists the model, or has no roster yet, is used unchanged", async () => {
   rosters(undefined, true, true);
@@ -127,7 +176,7 @@ test("every usable account omitting the model refuses locally without an upstrea
   const result = await turn(config(true));
   expect(result.status).toBe(403);
   expect(result.body.error).toMatchObject({
-    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(model),
+    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)),
   });
   expect(sends).toEqual([]);
 });
@@ -137,7 +186,7 @@ test("without failover an omitting selected account is refused, not moved", asyn
   for (const enabled of [undefined, false]) {
     const result = await turn(config(enabled));
     expect(result.status).toBe(403);
-    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(model));
+    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)));
   }
   expect(sends).toEqual([]);
   expect(getAccountSet(provider)!.activeAccountId).toBe(ids[0]);
@@ -154,4 +203,125 @@ test("a recovery rebind onto a newly selected omitting account is abandoned, not
   const result = await turn(config());
   expect(result.status).not.toBe(200);
   expect(sends).not.toContain(bearer(1));
+});
+
+const notFound = (wireModel: string) => Response.json({ error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found.",
+  details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceType: "aiplatform.googleapis.com/Model", resourceName: `models/${wireModel}` }],
+} }, { status: 404 });
+
+test("a bounded CCA model 404 rotates within the request and caches only that account's denial", async () => {
+  onSend = async (auth, wireModel) => auth === bearer(0) ? notFound(wireModel) : undefined;
+  expect((await turn(config(true))).status).toBe(200);
+  expect(sends).toEqual([bearer(0), bearer(1)]);
+  expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBe(false);
+  expect(antigravityAccountSupportsModel(provider, ids[0]!, "unrelated-model")).toBeUndefined();
+});
+
+test("all accounts denying a model gives a model-specific exhaustion without cycling", async () => {
+  onSend = async (_auth, wireModel) => notFound(wireModel);
+  const result = await turn(config(true));
+  expect(result.status).toBe(404);
+  expect(sends).toEqual([bearer(0), bearer(1), bearer(2)]);
+  expect(result.body.error?.message).toContain(`No eligible stored Google Antigravity account can serve the model "${model}"`);
+});
+
+test("an unrelated 404 never rotates or records a model denial", async () => {
+  onSend = async () => Response.json({ error: { message: "route not found" } }, { status: 404 });
+  expect((await turn(config(true))).status).toBe(404);
+  expect(sends).toEqual([bearer(0)]);
+  expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBeUndefined();
+});
+
+for (const subject of ["Project projects/p", "Model 'other-model'"]) {
+  test(`incidental model mention in a missing ${subject} never denies or rotates`, async () => {
+    onSend = async (_auth, wireModel) => Response.json({ error: { code: 404, status: "NOT_FOUND",
+      message: `${subject} was not found while resolving models/${wireModel}`,
+    } }, { status: 404 });
+    expect((await turn(config(true))).status).toBe(404);
+    expect(sends).toEqual([bearer(0)]);
+    for (const id of ids) expect(antigravityAccountSupportsModel(provider, id, model)).toBeUndefined();
+    onSend = undefined;
+    expect((await turn(config(true))).status).toBe(200);
+    expect(sends).toEqual([bearer(0), bearer(0)]);
+  });
+}
+
+test("an erroring 404 body stays 404 without denial, rotation or retry", async () => {
+  onSend = async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.error(new TypeError("synthetic body reset")); },
+  }), { status: 404 });
+  const result = await turn(config(true));
+  expect(result.status).toBe(404);
+  expect(result.body.error?.message).toContain("HTTP 404");
+  expect(sends).toEqual([bearer(0)]);
+  for (const id of ids) expect(antigravityAccountSupportsModel(provider, id, model)).toBeUndefined();
+});
+
+test("a generic resource 404 with the CCA sentence never poisons model eligibility or rotates", async () => {
+  onSend = async () => Response.json({ error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found.",
+    details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceType: "cloudresourcemanager.googleapis.com/Project",
+      resourceName: "projects/synthetic-project-one" }],
+  } }, { status: 404 });
+  const result = await turn(config(true));
+  expect(result.status).toBe(404);
+  expect(result.body.error?.message).toContain("Requested entity was not found.");
+  expect(result.body.error?.message).not.toContain("No eligible stored");
+  expect(sends).toEqual([bearer(0)]);
+  for (const id of ids) expect(antigravityAccountSupportsModel(provider, id, model)).toBeUndefined();
+  onSend = undefined;
+  expect((await turn(config(true))).status).toBe(200);
+  expect(sends).toEqual([bearer(0), bearer(0)]);
+});
+
+test("a spent send budget preserves the 404 and reports recovery failure rather than no eligible account", async () => {
+  const cfg = config(true);
+  const sendBudget = createRequestExecutionBudget({ maxTotalModelSends: 1, baseSendAllowance: 1,
+    finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
+  onSend = async (_auth, wireModel) => notFound(wireModel);
+  const result = await turn(cfg, { sendBudget });
+  expect(result.status).toBe(404);
+  expect(sends).toEqual([bearer(0)]);
+  expect(result.body.error?.message).toContain("could not be resolved, admitted, or sent within the request budget");
+  expect(result.body.error?.message).not.toContain("No eligible stored");
+});
+
+for (const replacement of [false, true]) {
+  test(`a delayed old 404 cannot override newer positive discovery${replacement ? " for replacement credentials" : " in the same generation"}`, async () => {
+    let release404!: () => void;
+    let sent!: () => void;
+    const atSend = new Promise<void>(resolve => { sent = resolve; });
+    const delayed = new Promise<void>(resolve => { release404 = resolve; });
+    onSend = async (auth, wireModel) => {
+      if (auth !== bearer(0)) return undefined;
+      sent(); await delayed; return notFound(wireModel);
+    };
+    const pending = turn(config(true));
+    await atSend;
+    try {
+      if (replacement) {
+        const row = getAccountCredentialWithStatus(provider, ids[0]!)!;
+        await mergeAccountCredential(provider, ids[0]!, { ...row.credential, access: "synthetic-replacement", refresh: "synthetic-new-refresh" });
+      }
+      rosters(true, undefined, undefined);
+    } finally { release404(); }
+    expect((await pending).status).toBe(404);
+    expect(sends).toEqual([bearer(0)]);
+    expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBe(true);
+  });
+}
+
+test("replacement admission failure is reported separately from no eligible account", async () => {
+  let failure: ReturnType<typeof spyOn> | undefined;
+  onSend = async (auth, wireModel) => {
+    if (auth !== bearer(0)) return undefined;
+    failure = spyOn(failover, "failoverAccountSnapshot").mockRejectedValue(new Error("synthetic resolution failure"));
+    return notFound(wireModel);
+  };
+  try {
+    const result = await turn(config(true));
+    expect(result.status).toBe(404);
+    expect(sends).toEqual([bearer(0)]);
+    expect(result.body.error?.message).toContain("could not be resolved, admitted, or sent within the request budget");
+    expect(result.body.error?.message).not.toContain("No eligible stored");
+  } finally { failure?.mockRestore(); }
 });

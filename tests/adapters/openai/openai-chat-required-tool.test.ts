@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
+import { withRequiredChatToolResult } from "../../../src/adapters/openai-chat/required-tool-result";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import type { AdapterEvent, OcxParsedRequest, OcxToolChoice } from "../../../src/types";
 
@@ -7,6 +8,21 @@ const usage = { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 };
 const tools = Array.from({ length: 151 }, (_, i) => ({ name: `marker_${i}`, description: "Synthetic marker", parameters: { type: "object", properties: {} } }));
 const request = (choice: OcxToolChoice | undefined): OcxParsedRequest => ({ modelId: "fixture", stream: false,
   context: { messages: [{ role: "user", content: "Use a marker", timestamp: 0 }], tools }, options: { toolChoice: choice } });
+
+test("an explicitly unfinished call cannot satisfy a required client call", async () => {
+  const adapter = withRequiredChatToolResult({
+    name: "fixture", buildRequest: () => ({ url: "https://fixture.invalid", method: "POST", headers: {}, body: "{}" }),
+    async *parseStream() {
+      yield { type: "tool_call_start", id: "call", name: "marker_0" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      yield { type: "tool_call_end", incomplete: true };
+      yield { type: "done" };
+    },
+  });
+  await adapter.buildRequest(request("required"));
+  const events = await Array.fromAsync(adapter.parseStream(new Response(), createTestTranslatorBudget()));
+  expect(events.at(-1)).toMatchObject({ type: "error", code: "required_tool_not_called" });
+});
 async function parse(choice: OcxToolChoice | undefined, stream: boolean, call?: string, finish = "stop") {
   const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key" });
   await adapter.buildRequest(request(choice), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() });

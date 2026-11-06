@@ -5,7 +5,9 @@
  *
  * Passive-read guard in the style of link-management-relay.test.ts: inside the read, any fetch,
  * process spawn or file write is a finding, the Home's durable state must not change, and a pool
- * account with an expired token must not be refreshed (a refresh would have to fetch).
+ * account with an expired token must not be refreshed (a refresh would have to fetch). No active
+ * provider-quota read warms the report cache first: the pooled windows come from the held account
+ * rows alone.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -23,6 +25,7 @@ import { writeLinkStore } from "../../src/link/store";
 import { linkManagementReadAllowed } from "../../src/link/management-routes";
 import { relayHubManagementRequest } from "../../src/client/hub-relay";
 import { readQuotaPoolIdentity } from "../../src/quota-pool/identity";
+import { getProviderQuotaReportCache, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -149,6 +152,8 @@ beforeEach(async () => {
   // The seeding above persists the quota cache on a 250 ms debounce; let it land before any
   // test takes its durable-state baseline, so only the read is measured.
   await Bun.sleep(600);
+  // Cold report cache: whatever startup published, the pool must not need it.
+  setProviderQuotaReportCache(null);
 });
 
 /** Refused by the management auth layer before the handler runs. */
@@ -192,6 +197,9 @@ async function expectPool(response: Response, role = "hub") {
   expect(openai?.accounts.map(row => row.state).filter(state => state === "reauth")).toEqual([]);
   const account = openai?.accounts.find(row => row.windows.length > 0);
   expect(account?.windows.map(window => [window.kind, window.usedPercent])).toEqual([["burst_5h", 64], ["weekly", 18]]);
+  expect(getProviderQuotaReportCache()).toBeNull();
+  expect(openai?.pooled.windows.map(window => [window.kind, window.usedPercent, window.source, window.exhausted]))
+    .toEqual([["burst_5h", 64, "estimated", false], ["weekly", 18, "estimated", false]]);
   return pool;
 }
 

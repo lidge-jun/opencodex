@@ -137,7 +137,7 @@ function readNetstatAno(): string {
  * Bare IPv6 rows (`::1`, `::`, etc.) are skipped (not coerced into IPv4 wildcards);
  * IPv6 TCB reclamation is unsupported on this path.
  */
-export function dropWindowsTcpRowsForLocalPort(port: number): WindowsTcpDropResult {
+export function dropWindowsTcpRowsForLocalPort(port: number, mayMutate?: () => boolean): WindowsTcpDropResult {
   if (process.platform !== "win32" || !Number.isFinite(port) || port <= 0) {
     return { dropped: 0, skippedIpv6: 0, accessDenied: 0 };
   }
@@ -171,8 +171,10 @@ export function dropWindowsTcpRowsForLocalPort(port: number): WindowsTcpDropResu
     view.setUint32(8, htons(row.localPort), true);
     view.setUint32(12, remoteDw, true);
     view.setUint32(16, htons(row.remotePort), true);
+    const pointer = ptr(buf);
+    if (mayMutate && mayMutate() !== true) throw Object.assign(new Error("TCP deletion refused"), { code: "EUPDATEAUTHORITY" });
     try {
-      const rc = setTcpEntry(ptr(buf));
+      const rc = setTcpEntry(pointer);
       if (rc === 0) dropped += 1;
       // 5 = ERROR_ACCESS_DENIED, 317 = non-elevated SetTcpEntry (MSDN).
       else if (rc === 5 || rc === 317) accessDenied += 1;

@@ -27,6 +27,7 @@ import { currentHistoryDbBusyTimeoutMs, resolveExistingHistoryBackupPath } from 
 import { spawnWorker } from "../lib/worker-embed";
 import type { CodexHistoryFailureReason, CodexHistoryVerifiedNoopProof } from "./history-provider";
 import { getCodexHome, resolveCodexStateDbPath } from "./paths";
+import type { RestoreOwnershipRefusal } from "../client/restore-ownership";
 
 /**
  * Resolve the paths a history job needs, at CALL time.
@@ -103,6 +104,7 @@ export interface CodexHistoryJobRequest {
   readonly canonicalBackupPath: string;
   readonly operation: CodexHistoryWorkerOperation;
   readonly expectedDesiredEnabled?: boolean;
+  readonly guardStopOwnership?: boolean;
 }
 
 export type CodexHistoryJobOutcome =
@@ -111,6 +113,7 @@ export type CodexHistoryJobOutcome =
   | { readonly kind: "blocked"; readonly reason: "busy" | "database" | "unsafe-path" | "desired_disabled" | "desired_enabled" }
   | { readonly kind: "failed"; readonly reason: "worker-error" | "worker-died" | "timeout";
       readonly message: string; readonly historyFailureReason?: CodexHistoryFailureReason;
+      readonly restoreBoundary?: RestoreOwnershipRefusal;
       /** Specific integrity condition when `historyFailureReason` is `"integrity"`. */
       readonly historyIntegrityCode?: string;
       readonly rows?: number; readonly files?: number };
@@ -178,6 +181,8 @@ function isPlausibleWorkerResult(
         || message.reason === "desired_disabled" || message.reason === "desired_enabled";
     case "error":
       return typeof message.message === "string"
+        && (message.restoreBoundary === undefined || (target?.operation === "restore-openai"
+          && (message.restoreBoundary === "hub-owned" || message.restoreBoundary === "unproven")))
         && (message.rows === undefined || (Number.isSafeInteger(message.rows) && Number(message.rows) >= 0))
         && (message.files === undefined || (Number.isSafeInteger(message.files) && Number(message.files) >= 0))
         && ((message.rows === undefined && message.files === undefined)
@@ -307,6 +312,7 @@ function classifyWorkerResult(result: HistoryWorkerResult): CodexHistoryJobOutco
       kind: "failed",
       reason: "worker-error",
       message: redactWorkerMessage(result.message),
+      ...(result.restoreBoundary ? { restoreBoundary: result.restoreBoundary } : {}),
       ...(result.reason ? { historyFailureReason: result.reason } : {}),
       ...(result.integrityCode ? { historyIntegrityCode: result.integrityCode } : {}),
       ...(result.rows !== undefined && result.files !== undefined
@@ -438,6 +444,7 @@ export async function runCodexHistoryJob(
       canonicalStateDbPath: request.canonicalStateDbPath,
       canonicalBackupPath: request.canonicalBackupPath,
       ...(request.expectedDesiredEnabled === undefined ? {} : { expectedDesiredEnabled: request.expectedDesiredEnabled }),
+      ...(request.guardStopOwnership ? { guardStopOwnership: true } : {}),
       // A Worker is a fresh module realm: it would otherwise open state_5.sqlite with this
       // module's default rather than the timeout this process resolved. Production sends the
       // same codex-rs-matching 5s the Worker would have used on its own.

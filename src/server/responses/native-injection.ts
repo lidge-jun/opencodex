@@ -120,7 +120,7 @@ export class NativeInjectionChannel implements NativeResponseControl {
       this.providerExecutedCallTypes, this.declaredBareToolNames,
     );
     if (undeclared !== undefined) {
-      injectionError(UNDECLARED_TOOL_CALL_ERROR_CODE, undeclaredToolCallMessage(undeclared));
+      injectionError(UNDECLARED_TOOL_CALL_ERROR_CODE, undeclaredToolCallMessage());
     }
   }
   /** Advertise client-owned function/custom calls and approvals, never hosted execution. */

@@ -28,7 +28,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`codex-provider-routing.md`](codex-provider-routing.md) | Explicit provider-ID routing consent, URL-only publication and recovery. |
 | [`codex-home.md`](codex-home.md) | CODEX_HOME resolution, the files opencodex manages there, and Codex-home diagnostics. |
 | [`codex-prompts.md`](codex-prompts.md) | Prompt-layer repair, base import previews and bounded text-probe sources. |
-| [`codex-cli-update.md`](codex-cli-update.md) | Read-only update planning, isolated npm environment, and complete process observation. |
+| [`codex-cli-update.md`](codex-cli-update.md) | Content-bound planning and explicit POSIX/Windows x64 apply with isolated npm, artifact validation, installation leases and readback. |
 | [`catalog.md`](catalog.md) | Shared Codex catalog assembly, account namespaces, pool rotation, and effort ladders. |
 | [`catalog-vendor-context.md`](catalog-vendor-context.md) | Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance. |
 | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) | Persisted effort-clamp observation identity and idempotent sync notices. |
@@ -45,16 +45,20 @@ The wire surfaces a client actually talks to.
 
 | Doc | Scope |
 | --- | --- |
+| [`transports/timeouts.md`](transports/timeouts.md) | Local header and JSON body deadlines, cancellation and optional OpenCode timeout export. |
 | [`remote-messaging.md`](remote-messaging.md) | Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies. |
-| [`local-messaging.md`](local-messaging.md) | Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds. |
+| [`local-messaging.md`](local-messaging.md) | Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds. |
 | [`transports/byte-accounting.md`](transports/byte-accounting.md) | Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission. |
 | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
+| [`transports/response-turn-membership.md`](transports/response-turn-membership.md) | Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization. |
+| [`transports/response-citations.md`](transports/response-citations.md) | OpenAI-operated outbound citation repair and generated JSON/SSE annotation titles. |
+| [`transports/max-output-completion.md`](transports/max-output-completion.md) | Default-off translated Responses text-only token-limit completion and exclusions. |
 | [`transports/responses.md`](transports/responses.md) | The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership. |
 | [`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md) | Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls. |
 | [`transports/responses-citations.md`](transports/responses-citations.md) | Destination-gated citation repair for ordinary Responses and every native compact send. |
 | [`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md) | Mixed-wire model defaults, xAI agent-message continuation, declared-tool membership, and passthrough SSE stream shapes. |
 | [`transports/responses-failover.md`](transports/responses-failover.md) | Upstream reset retry, the ambiguous-resend gate, combo failover and commit boundaries, compaction routing, and output headroom. |
-| [`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md) | Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. |
+| [`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md) | Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities. |
 | [`transports/policy-fallback.md`](transports/policy-fallback.md) | Original policy authorization, concrete candidate retries and physical destination deduplication. |
 | [`transports/responses-spend.md`](transports/responses-spend.md) | Credential-hop and durable spend reservations, and what a spent budget tells the client. |
 | [`transports/streaming-health.md`](transports/streaming-health.md) | Heartbeat and stall deadlines, plus the opt-in WebSocket transport. |
@@ -62,8 +66,13 @@ The wire surfaces a client actually talks to.
 | [`data-planes/images.md`](data-planes/images.md) | Standalone image generation/edit relay and local hosted Responses image display. |
 | [`data-planes/search.md`](data-planes/search.md) | Hosted search relay and exact account selectors. |
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
+| [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) | Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites. |
+| [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) | Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership. |
+| [`data-planes/error-detail.md`](data-planes/error-detail.md) | Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs. Messages error envelopes, construction-registered fixed local-refusal guidance, sliced outcome comparisons and baseline client recovery outcomes across special codes and catch returns, non-2xx passthrough envelopes and unchanged 2xx passthrough bodies and original collector evidence and error-event identity, overflow/native-stream golden parity and normalized Anthropic response headers with full-fraction reset dates and success media types. |
 | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
+| [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) | Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery. |
+| [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) | Opt-in conversation affinity for a caller's own ChatGPT bearer in Pool mode, honest selection-time affinity labels, and the persistence exclusion contract. |
 | [`fallback-policy.md`](fallback-policy.md) | OCX-11 fallback off: what is a model or provider fallback (and what intra-pool rotation is not), scope precedence, the guarded hop sites, the fallback_refused and home_unreachable contracts, and the ocx.fallback/1 state. |
 | [`remote-workspace.md`](remote-workspace.md) | Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration. |
 | [`remote-link.md`](remote-link.md) | SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery. |
@@ -76,6 +85,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | --- | --- |
 | [`quota-snapshots.md`](quota-snapshots.md) | Bounded write deferral and cancellation for Codex and provider account quota snapshots. |
 | [`providers/generic-account-pool.md`](providers/generic-account-pool.md) | Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools. |
+| [`config-ownership.md`](config-ownership.md) | Owner marker, uninstall manifest, its cross-process lock, and the uninstall tombstone. |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
 | [`providers/meta-muse.md`](providers/meta-muse.md) | CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics. |
@@ -91,14 +101,18 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) | Anthropic OAuth instances (primary and Pool 2), account pause, model routes, quota labels, and pool-bound helpers, quota, reset grants and management surfaces. |
 | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) | Headless code-display OAuth login: flow ownership, expiry, unsupported providers, single-operator store. |
 | [`providers/openai-tiers.md`](providers/openai-tiers.md) | Pool/Direct account modes, API-key separation, and the public provider and quota contract. |
+| [`providers/codex-pool-affinity.md`](providers/codex-pool-affinity.md) | Restart persistence of Codex pool pins and conversation-state issuers: store, fences, single-writer lease, fail-closed recovery. |
 | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) | Independent credit-evidence renewal for opted-in exhausted Codex pool accounts. |
 | [`providers/openai-accounts.md`](providers/openai-accounts.md) | Migration and restore, wire identity, store concurrency, pool ordering and exclusions, quota observations, and account-bound retention. |
+| [`providers/codex-round-robin-placement.md`](providers/codex-round-robin-placement.md) | Round-robin new-conversation placement preferring accounts under their effective auto-switch threshold, with all-over fallback and bound, failover and lineage boundaries. |
 | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) | Opt-in effective priority bands that spend other pool accounts before the signed-in identity, its identity observation and management API. |
 | [`providers/cursor.md`](providers/cursor.md) | Cursor native exec, parameterized models, checkpoints, and active-context usage. |
 | [`providers/google.md`](providers/google.md) | Gemini thought-text, response parts, thought-signature replay, and adjacency repair. |
-| [`providers/kiro.md`](providers/kiro.md) | Kiro parallel-tool hints, Responses text controls, and reasoning round-trip. |
+| [`providers/kiro.md`](providers/kiro.md) | Kiro parallel-tool hints, Responses text controls, structured-output emulation, and reasoning round-trip. |
 | [`providers/xai-grok.md`](providers/xai-grok.md) | Grok Build contract parity and hardening. |
+| [`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) | Preset-scoped single-leading-system normalization, configuration and editor policy. |
 | [`providers/chat-compat.md`](providers/chat-compat.md) | Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools. |
+| [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) | Explicit response-only block completion, ordered safe-call delivery and terminal ownership. |
 | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) | Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation. |
 | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) | Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call. |
 | [`adapters/registry.md`](adapters/registry.md) | The single adapter construction authority and contract inheritance. |
@@ -115,15 +129,21 @@ The dashboard, the management API, and third-party client config ownership.
 | [`gui-and-management-api.md`](gui-and-management-api.md) | Dashboard serving, authentication boundaries, /api/* ownership, and startup safety. |
 | [`provider-completion-diagnostic.md`](provider-completion-diagnostic.md) | Explicit single-model completion test: consent, applicability gate, send-time authority fingerprint, bounded streaming and metadata comparison. |
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
+| [`usage-client-attribution.md`](usage-client-attribution.md) | Privacy-bounded client labels carried from request ingress into usage records. |
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
 | [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
+| [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
+| [`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) | Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
 | [`clients/codex-desktop.md`](clients/codex-desktop.md) | Windows package activation, restart context, and protected compatibility authority persistence. |
 | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) | Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries. |
 | [`clients/claude-desktop.md`](clients/claude-desktop.md) | Claude Desktop profile ownership and config-library resolution. |
 | [`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) | Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots. |
+| [`clients/claude-desktop-model-visibility.md`](clients/claude-desktop-model-visibility.md) | Per-client selection of the rows the Claude Desktop 3P model list carries. |
 | [`clients/hermes.md`](clients/hermes.md) | Hermes profile discovery, per-profile selection, ownership stores, and boundaries. |
 | [`clients/qoder.md`](clients/qoder.md) | Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules. |
+| [`clients/client-support-matrix.md`](clients/client-support-matrix.md) | Generated client support page: registry sources, curated protocol and test claims, drift checks. |
+| [`clients/t3code.md`](clients/t3code.md) | T3 Code settings.json Claude provider-instance ownership, proxy environment, custom models and loopback marker rules. |
 | [`companion.md`](companion.md) | Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts. |
 | [`codex-account-controls.md`](codex-account-controls.md) | Account selection order, custom usage thresholds, and stable account-card editing. |
 
@@ -134,11 +154,12 @@ Background service, docs, release, and design discipline.
 | Doc | Scope |
 | --- | --- |
 | [`desktop-shell.md`](desktop-shell.md) | Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence. |
+| [`desktop-recovery.md`](desktop-recovery.md) | Native recovery intent, independently anchored executable and accepted-connection proof, cold-start decisions and installation scope. |
 | [`desktop-terminal-command.md`](desktop-terminal-command.md) | Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page. |
 | [`desktop-start-at-login.md`](desktop-start-at-login.md) | macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration. |
 | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) | Service install/repair, platform launchers, tray, and sidecar processes. |
 | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) | Durable Desktop ownership read, takeover-consent handling, live-supervision evidence, the Windows probe's trusted system-directory acquisition, and the supervision latch blocking contract consumed by service and update guards. |
-| [`ops/service-logging.md`](ops/service-logging.md) | Service-only console timestamps and bounded copy-truncate log retention. |
+| [`ops/service-logging.md`](ops/service-logging.md) | Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics. |
 | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) | Opt-in sentinel that turns a hung but listening managed service proxy into an exit its manager restarts. |
 | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) | Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback. |
 | [`ops/plugins.md`](ops/plugins.md) | Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to. |
@@ -157,7 +178,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `app/` | [`overview.md`](overview.md)<br>[`companion.md`](companion.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `bin/ocx.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `bin/ocx.mjs` | [`codex-cli-update.md`](codex-cli-update.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/` | [`desktop-shell.md`](desktop-shell.md)<br>[`companion.md`](companion.md) |
 | `desktop/src-tauri/src/claim.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/cli_command.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
@@ -168,18 +189,22 @@ A source area can be described by more than one doc, because these docs are orga
 | `desktop/src-tauri/src/identity.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/login_registration.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/src-tauri/src/ownership.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/recovery.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `desktop/src-tauri/src/recovery_activity.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `desktop/src-tauri/src/recovery_presence.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `desktop/src-tauri/src/resolve.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/runtime_stop.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
-| `desktop/src-tauri/src/startup.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/startup.rs` | [`desktop-recovery.md`](desktop-recovery.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/supervisor.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `desktop/src-tauri/src/tray_login.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
-| `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `docs-site/` | [`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `gui/` | [`overview.md`](overview.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
 | `gui/src/account-pause-display.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
-| `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `scripts/` | [`overview.md`](overview.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 | `scripts/test-run-lock.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
@@ -188,83 +213,161 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/anthropic-rejection-memo.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-replay.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-tool-catalog.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/adapters/base.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
-| `src/adapters/openai-chat.ts` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
-| `src/adapters/openai-chat/` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/kiro/` | [`providers/kiro.md`](providers/kiro.md) |
+| `src/adapters/openai-chat.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md)<br>[`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-chat/` | [`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-chat/completed-tool-blocks.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/openai-chat/required-tool-result.ts` | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) |
+| `src/adapters/openai-chat/serialized-tool-call-content.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
+| `src/adapters/openai-responses/` | [`transports/response-citations.md`](transports/response-citations.md) |
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
-| `src/adapters/openai-responses/passthrough.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
+| `src/adapters/openai-responses/passthrough.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/opengateway.md`](providers/opengateway.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/adapters/openai-responses/request-strips.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |
+| `src/adapters/openai-responses/transport.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/adapters/unique-tool-call-ids.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/adapters/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
-| `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
+| `src/bridge/` | [`transports/response-citations.md`](transports/response-citations.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
+| `src/bridge/max-output-completion.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
+| `src/bridge/response-json.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
+| `src/bridge/sse.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
+| `src/chat/failure-verdict.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/chat/reasoning-details.ts` | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) |
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
-| `src/claude/` | [`runtime.md`](runtime.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) |
+| `src/claude/` | [`runtime.md`](runtime.md)<br>[`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md)<br>[`clients/claude-desktop-model-visibility.md`](clients/claude-desktop-model-visibility.md) |
+| `src/claude/failure-verdict.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/claude/outbound.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/cli/codex-cli-update.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/update-restart.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
+| `src/client/hub-client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/client/link-connection.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
+| `src/client/link-management-relay.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
-| `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md) |
+| `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
+| `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
+| `src/clients/config-export/` | [`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/codex/account-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/codex/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/codex/affinity-debug.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/app-server-processes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/codex/auth-api/pool-mode-gate.ts` | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) |
+| `src/codex/auth-context-provider.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/codex/auth-context.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md)<br>[`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/routed-gather.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
+| `src/codex/cli-update-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-artifacts.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-inspection-context.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job-execution.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job-store-windows.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-selection-gate.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-layout.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-observation.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-paths.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-worker-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-windows-plan-provenance.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/forward-transport-headers.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/codex/installation-id.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
+| `src/codex/request-owned-affinity.ts` | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
+| `src/codex/request-owned-main-pin.ts` | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
+| `src/codex/routing/selection.ts` | [`providers/codex-round-robin-placement.md`](providers/codex-round-robin-placement.md) |
+| `src/codex/routing/thread-affinity-store.ts` | [`providers/codex-pool-affinity.md`](providers/codex-pool-affinity.md) |
+| `src/codex/routing/thread-affinity.ts` | [`providers/codex-pool-affinity.md`](providers/codex-pool-affinity.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
+| `src/codex/shim.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/codex/windows-cli-child-native.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-child-pipe.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-child.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-recovery-guardian.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-installation-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-npm-execution.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/combos/request.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
+| `src/combos/resolve.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`ops/service-logging.md`](ops/service-logging.md) |
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
 | `src/config.ts` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md) |
-| `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/config/account-auto-pause-revisions.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/live-reconcile.ts` | [`pricing.md`](pricing.md) |
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
 | `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
-| `src/config/schema/leaf-validators.ts` | [`pricing.md`](pricing.md) |
+| `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
+| `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |
 | `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
-| `src/integrations/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md) |
+| `src/integrations/` | [`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/lib/abort.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/lib/account-auto-pause-response.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/lib/advisor-activation.ts` | [`advisor.md`](advisor.md) |
+| `src/lib/bounded-body.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
+| `src/lib/client-error-body.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/client-retry-after.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/config-ownership-removal.ts` | [`config-ownership.md`](config-ownership.md) |
+| `src/lib/config-ownership.ts` | [`config-ownership.md`](config-ownership.md)<br>[`providers/codex-pool-affinity.md`](providers/codex-pool-affinity.md) |
 | `src/lib/decision-quota-sink.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
+| `src/lib/error-destination.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
-| `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/local-upstream.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
+| `src/lib/messages-error-body.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/messages-sse-error-presentation.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/model-identity.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/response-service-tier.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/tool-argument-integers.ts` | [`providers-and-adapters.md`](providers-and-adapters.md) |
+| `src/lib/upstream-condition.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/upstream-retry.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/windows-owner-acl.ts` | [`codex-cli-update.md`](codex-cli-update.md)<br>[`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-messaging.md`](remote-messaging.md)<br>[`remote-link.md`](remote-link.md) |
+| `src/local-credentials/` | [`remote-link.md`](remote-link.md) |
 | `src/messaging/` | [`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md) |
 | `src/oauth/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md)<br>[`providers/antigravity-account-import.md`](providers/antigravity-account-import.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/oauth/account-auto-pause-policy.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/api-key-pool-preserve.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/oauth/generic-account-failover.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/oauth/login-cli.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse-errors.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse-keychain.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
@@ -272,13 +375,19 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
-| `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
+| `src/protocols/codecs/ollama.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/protocols/encoders/adapter-events.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/protocols/encoders/messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) |
 | `src/providers/account-quota-disk.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/providers/anthropic-billing-ownership.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-recovery.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-refusal.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/antigravity-quota-identity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/api-key-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/providers/cc-switch-import-bytes.ts` | [`cli-management.md`](cli-management.md) |
+| `src/providers/cc-switch-import-source.ts` | [`cli-management.md`](cli-management.md) |
+| `src/providers/cc-switch-import.ts` | [`cli-management.md`](cli-management.md) |
 | `src/providers/codex-capacity.ts` | [`providers/openai-tiers.md`](providers/openai-tiers.md) |
 | `src/providers/dsh-account-destination.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/providers/quota-decision-antigravity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
@@ -296,36 +405,88 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/remote/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |
 | `src/routing/` | [`catalog.md`](catalog.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/routing/history/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
-| `src/server/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/server/` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-model-visibility.md`](clients/claude-desktop-model-visibility.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/server/admission-model-scope.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/admitted-http-turn.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/advisor-admission-scope.ts` | [`advisor.md`](advisor.md) |
+| `src/server/anthropic-rate-limit-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/audio-dictation.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/audio-live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/auth-cors.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) |
+| `src/server/capture-admission-policy.ts` | [`advisor.md`](advisor.md) |
+| `src/server/claude-messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/context-history.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/server/images.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
+| `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/index/serve-options.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/index/startup-warnings.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/index/websocket-handler.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
-| `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) |
+| `src/server/live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
+| `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/server/messages-native-tool-guard.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/messages-native.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/messages-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/messages-shared.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/messages-sse-error-filter.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/native-final-log.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/ollama-inbound.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/ollama-native-paths.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/ollama-route-policy.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/request-log-failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/request-log.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
+| `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
-| `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |
+| `src/server/responses/codex-ws-pool.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/responses/codex-ws-request.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/responses/core-combo.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
+| `src/server/responses/input-admission.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
+| `src/server/responses/passthrough-build-error.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/passthrough-completion.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-dispatch.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
-| `src/server/responses/request-transport.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/request-prepare.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/responses/request-transport.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/run-turn-execution.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
+| `src/server/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/safe-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/search.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/sse-payload-rewrite.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/ws-bridge.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |
 | `src/service/cli.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-command-guard.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-recovery-process.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `src/service/desktop-recovery.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/service/desktop-startup.ts` | [`desktop-start-at-login.md`](desktop-start-at-login.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-supervision.d.mts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-supervision.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
@@ -340,26 +501,38 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service/repair.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/sidecar/` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/sidecar/anthropic-binding.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
-| `src/stall-timeout.ts` | [`runtime.md`](runtime.md) |
+| `src/stall-timeout.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`runtime.md`](runtime.md) |
 | `src/storage/` | [`runtime.md`](runtime.md) |
 | `src/tray/` | [`runtime.md`](runtime.md) |
 | `src/types.ts` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
-| `src/types/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/types/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/types/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/types/admission-policy.ts` | [`advisor.md`](advisor.md) |
+| `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`config.md`](config.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/update/guarded-port-reclaim.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
+| `src/update/guarded-runtime-ops.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
+| `src/update/guarded-tray-ops.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/index.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/update/job-pinned-start.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/job-supervised-restart.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/job.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
+| `src/update/mutation-guard.mjs` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/restart-ownership.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/update/supervised-recovery.mjs` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`companion.md`](companion.md) |
+| `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
+| `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/usage/summary.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/usage/user-cost-overlays.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/user-cost-validation.ts` | [`pricing.md`](pricing.md) |
 | `src/vision/` | [`runtime.md`](runtime.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/web-search/` | [`runtime.md`](runtime.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
+| `src/web-search/header-deadline.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `tests/` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 
 ### Not described by any doc

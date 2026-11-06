@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
+import { readCliConfigForMutation } from "./config-mutation";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
@@ -260,7 +262,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       // `mutatePersistedConfig` reruns this callback against the latest validated disk
       // state, so the operation is applied to what is actually there at commit time.
       let savedValue: unknown = null;
-      const outcome = mutatePersistedConfig(fresh => {
+      const outcome = await withConfigDirHardeningSettled(getConfigDir(), () => mutatePersistedConfig(fresh => {
         // Snapshot BEFORE mutating: comparing after the write compares a value with
         // itself and would report every no-op as a change, bumping the generation.
         const before = JSON.stringify(fresh);
@@ -285,9 +287,9 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
         }
         Object.assign(fresh, config);
         return { changed: JSON.stringify(fresh) !== before, value: undefined };
-      });
+      }));
       if (outcome.status === "unavailable") {
-        throw new Error(outcome.reason === "conflict"
+        throw new CliUsageError(outcome.reason === "conflict"
           ? "config changed while applying this update; retry"
           : `config is ${outcome.reason}`);
       }
@@ -327,7 +329,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!path) throw new CliUsageError("import path is required", USAGE);
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
-      saveConfig(validate(loadInput(path)));
+      await withConfigDirHardeningSettled(getConfigDir(), () => {
+        readCliConfigForMutation();
+        saveConfig(validate(loadInput(path)));
+      });
       printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ocx sync if needed.`]);
       return;
     }

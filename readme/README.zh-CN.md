@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="opencodex —— 面向 Codex、Claude Code、Claude Desktop 和 Grok Build 的通用提供商代理" width="100%">
+  <img src="../assets/banner.png" alt="opencodex — 连接 Codex、Claude Code、Claude Desktop、Grok Build 等工具的本地网关" width="100%">
 </p>
 
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>面向 OpenAI Codex、Claude Code、Claude Desktop 和 Grok Build 的通用提供商代理</b><br>
-两条命令，它们就都能跑你指定的任意 LLM。</p>
+<h3 align="center">一个本地网关，连接你的 AI 编程工具与模型。</h3>
+<p align="center"><b>在 Codex、Claude Code、Claude Desktop 和 Grok Build 中使用你选择的模型，<br>并通过托管配置连接 OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code 等工具。</b><br>
+<a href="https://opencodex.me/zh-cn/reference/client-support/">查看所有受支持的工具 →</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上关注 @claudeebum"></a>
@@ -80,11 +80,7 @@ Sol 驱动会话，并调用 Kimi K3 子代理。
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/zh-cn/"><b>完整文档 →</b></a>
 </p>
 
-opencodex 是一个轻量级本地代理，把 Codex 的 Responses API 翻译成你的提供商所讲的协议 ——
-流式传输、工具调用、推理令牌、图片，双向都通。用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、
-Qwen、Ollama 或任意其他 LLM 搭配 Codex、Claude Code、Claude Desktop 和 Grok Build。它还能为
-Codex 认证管理一个 **ChatGPT 账户池**：添加账户，在仪表板中刷新配额，让新会话自动路由到
-使用量最低的健康账户，而已有线程则固定在启动它们的账户上。
+opencodex 是连接编程工具与模型提供商的轻量级本地网关。它接受 Responses、Chat Completions 和 Anthropic Messages API 请求，并将请求转换为提供商使用的协议；在客户端、模型和提供商支持的情况下，传递流式输出、工具调用、推理和图像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[客户端支持页面](https://opencodex.me/zh-cn/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等提供商。它还能管理用于 Codex 认证的 **ChatGPT 账号池**：添加账号并在仪表盘刷新配额，新会话会自动路由到用量最低的健康账号，现有线程则保持绑定到启动它们的账号。
 
 ## 快速开始
 
@@ -100,6 +96,21 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 打开 **http://localhost:10100**，在 Web 仪表板中完成所有配置 —— 添加提供商
 （40 多个内置，或任意 OpenAI 兼容端点）、选择模型、管理账户。随时运行 `ocx gui`
 可重新打开仪表板。
+
+### 连接你的工具
+
+连接你正在使用的工具：
+
+| 工具 | 连接方式 |
+|---|---|
+| Codex | 打开仪表盘 **Connect** 页面上的 Codex 开关，然后照常运行 `codex`。在本地监听下，这会让 Codex 内置提供商指向代理。使用终端时，请在仪表盘添加提供商之前运行 `ocx init` 并接受其 Codex 提示。 |
+| Claude Code | 安装 `claude` CLI 后运行 `ocx claude`。它会在需要时启动代理，并通过代理启动 Claude Code。 |
+| Claude Desktop | 运行 `ocx claude desktop`。全新安装时会为整个应用设置网关配置；已有的 first-party 设置会保持原样，可运行 `ocx claude desktop apply --gateway` 明确切换。详见 [Claude Code 指南](https://opencodex.me/zh-cn/guides/claude-code/)。 切换后请完全退出并重新打开 Claude Desktop。 |
+| Grok Build | 在本地监听且启用 Grok 集成时，若 `~/.grok` 存在，`ocx start` 会注册模型；在 Grok Build 中选择 `ocx-*` 模型。远程配置请参见 [Grok Build 指南](https://opencodex.me/zh-cn/guides/grok-build/)。添加提供商后，重启代理（或在启用 Codex 自启动时运行 `ocx ensure`）以刷新列表。 |
+| 有托管集成的工具 | 使用仪表盘 **Connect** 页面，或运行 `ocx integration client enable --client <id>`。 |
+| 其他工具 | 将自定义 OpenAI 兼容 base URL 设为 `http://localhost:10100/v1`，或将 Anthropic base URL 设为 `http://localhost:10100`。 |
+
+[客户端支持页面](https://opencodex.me/zh-cn/reference/client-support/)列出了各工具的接入方式及所用协议。
 
 <details>
 <summary><b>桌面应用（测试版）</b></summary>

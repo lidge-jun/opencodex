@@ -109,6 +109,8 @@ plain `unknown` or `unsupported` cannot clear a prior block. Without a prior blo
 unknown and unsupported preserve the existing durable-owner and liveness decisions.
 Service install, repair, start and restart refuse before mutation, including registration staging.
 Update gates re-read supervision before stop, package replacement, restoration and recovery;
+Orchestrated plans classify a Desktop-owned installation as `desktop-app-owned` and
+refuse apply; the package launcher handles orchestrated requests before Desktop handoff.
 they refuse even for a separate npm/Bun install. Use the app updater for its bundle, or quit
 Desktop before updating the CLI install. Service stop and uninstall remain available.
 `src/service/desktop-command-guard.ts` carries that refusal for `src/service/cli.ts`,
@@ -117,6 +119,13 @@ latch in `src/update/index.ts` and `src/update/restart-ownership.ts`, the update
 surface in `src/cli/update-restart.ts`, and stop guidance in
 `src/cli/desktop-runtime-guidance.ts`.
 These decisions follow [runtime ownership](../runtime.md#background-service-runtime-ownership).
+
+Update recovery computes the Node install argv (including its backend read) and
+the Bun direct-start runtime provenance before the final mutation authorizer.
+The spawn arguments then use those prepared values; in-memory argv/environment
+formatting is the only allowlisted work between that authorizer and process creation.
+`tests/update/update-home-launcher.test.ts` and `tests/update/update-home-recovery.test.ts`
+exercise refusal when preparation changes the home observation, plus stable-home starts.
 
 The bypass ledger classifies these guards as **early warning**, not enforcement:
 

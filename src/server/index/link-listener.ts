@@ -26,6 +26,8 @@ export interface LinkListenerStartContext<T> {
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
   maxRequestBodySize: number;
   keyFingerprints?: (apiKeyId: string) => readonly string[];
+  /** The Home supervisor's current tunnel connection for a link (relay-auth.ts). */
+  connectionGeneration?: (linkId: string) => string | undefined;
 }
 
 export interface LinkListenerDeps {
@@ -112,7 +114,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
-    const sessions = createLinkRelaySessions({ peers, fingerprints: (keyId, linkId) => {
+    const sessions = createLinkRelaySessions({ peers, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId), fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
       return startContext?.keyFingerprints?.(keyId) ?? [];
     } });

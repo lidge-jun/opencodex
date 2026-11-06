@@ -202,7 +202,7 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     // Never reach a real restart: on an unfixed tree a stray restart flag would end the Codex
     // app-servers and desktop app of whoever runs this file.
     const restarts = spyOn(restartScope, "handleRestartScopeAfterWrite").mockImplementation(async () => ({}));
-    const shimRepairs = spyOn(shimAutoRestore, "runCodexShimAutoRestore").mockImplementation(() => {});
+    const shimRepairs = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
     const error = spyOn(console, "error").mockImplementation((...parts: unknown[]) => { errors.push(parts.map(String).join(" ")); });
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -416,13 +416,13 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
   });
 });
 
-describe("the CLI root leaves a pinned sync to its own check", () => {
-  test("the shim preflight skips a pinned sync and keeps repairing a plain one", () => {
+describe("the CLI root leaves sync to its own guard", () => {
+  test("the shim preflight skips sync until the mutex is acquired", () => {
     const skips = shimAutoRestore.skipsCodexShimAutoRestore;
     expect(skips("sync", ["sync", "--expect-link", LINK_ID])).toBe(true);
     expect(skips("sync", ["sync", `--expect-hub-key=${HUB_KEY_ID}`])).toBe(true);
-    expect(skips("sync", ["sync"])).toBe(false);
-    expect(skips("sync", ["sync", "--expect-linked"])).toBe(false);
+    expect(skips("sync", ["sync"])).toBe(true);
+    expect(skips("sync", ["sync", "--expect-linked"])).toBe(true);
   });
 
   test("a malformed pinned sync exits 2 at the root, before any preflight", async () => {
@@ -432,7 +432,7 @@ describe("the CLI root leaves a pinned sync to its own check", () => {
       throw new Error("process.exit");
     }) as typeof process.exit);
     const error = spyOn(console, "error").mockImplementation(() => {});
-    const preflight = spyOn(shimAutoRestore, "maybeAutoRestoreCodexShim");
+    const preflight = spyOn(shimAutoRestore, "maybeAutoRestoreCodexShimAsync");
     try {
       await expect(runCli(["sync", "--expect-link", "not-a-link-id"])).rejects.toThrow("process.exit");
       expect(exits).toEqual([2]);

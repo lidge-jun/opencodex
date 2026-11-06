@@ -10,3 +10,5 @@
  */
 export const CLAUDE_CLI_VERSION = "2.1.280";
 export const CLAUDE_CLI_USER_AGENT = `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`;
+export const CLAUDE_CLI_SDK_PACKAGE_VERSION = "0.112.1";
+export const CLAUDE_CLI_RUNTIME_VERSION = "v26.3.0";

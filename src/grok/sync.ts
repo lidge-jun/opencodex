@@ -26,14 +26,21 @@ async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]>
  * Build the model list and inject the fenced block. `hostname` should be the hostname the
  * RUNNING proxy actually bound (live.hostname from proxy-liveness for ensure's live branch;
  * config.hostname for a freshly spawned start) — a stale config.hostname could otherwise
- * name a host the process never bound.
+ * name a host the process never bound. `probeHostname` is only the reachable destination;
+ * it never replaces bind scope for admission policy or an explicit secondary listener.
  */
 export async function syncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean } } = {},
+  opts: { hostname?: string; probeHostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean };
+    /** Recheck caller-owned desired state/lifecycle after asynchronous catalog work. */
+    admit?: () => boolean } = {},
   deps: GrokSyncDeps = { fetchAllModels: defaultFetchAllModels, injectGrokConfig },
 ): Promise<GrokInjectResult> {
+  const skipped = (): GrokInjectResult => ({
+    ok: true, changed: false, message: "Grok config sync skipped: caller admission is no longer current.",
+  });
+  if (opts.admit && !opts.admit()) return skipped();
   let projection: ReturnType<typeof projectGrokCatalog>;
   try {
     const allRouted = await deps.fetchAllModels(config);
@@ -53,10 +60,15 @@ export async function syncGrokConfig(
     unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener,
   });
   const targetUrl = new URL(target.baseUrl);
+  // Admission and the synchronous writer share one event-loop turn. A toggle or
+  // shutdown that landed while catalog discovery awaited must win over this snapshot.
+  if (opts.admit && !opts.admit()) return skipped();
   return deps.injectGrokConfig(Number(targetUrl.port), projection.models, {
     hostname: target.requiresAdmissionToken
       ? (opts.hostname ?? config.hostname)
       : targetUrl.hostname,
+    ...(opts.probeHostname !== undefined && !config.unauthenticatedLoopbackListener?.enabled
+      ? { probeHostname: opts.probeHostname } : {}),
     ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}),
     ...opts.refreshOnly ? { refreshOnly: opts.refreshOnly } : {},
     excluded: new Set(config.grokExcludedModels ?? []),

@@ -9,14 +9,27 @@
  * Desktop.
  *
  * Rules, in order:
- * - A running Desktop app is the supervisor. Wait for its proxy; never start a competing one.
- * - A durable Desktop claim with no running app: start Desktop (hidden, by the path its own
- *   login registration recorded — LaunchServices never picks the bundle) where that is
- *   verifiable, then wait. Elsewhere, fail with guidance. A missing Desktop process
- *   never authorizes a CLI proxy by itself; handing ownership to the CLI stays an explicit
+ * - Facts re-observed after the asynchronous recovery inspection keep first refusal:
+ *   ownership or the process list that cannot be read is not evidence of absence.
+ * - Verified native intent wins over every other signal: an independently verified recovery
+ *   keeps its replacement, including without a claim, while a verified stop refuses. The
+ *   current bundled CLI (or protected system installation) anchors the executable; the
+ *   accepted socket, process incarnation and fresh native intent bind the recovery proof.
+ * - Conflicting native evidence — drift, contradiction or an unprovable observation on a
+ *   platform that can verify — refuses even under a durable claim. A claim outranks only
+ *   the structurally unsupported verdict of a platform with no live-image binding.
+ * - An unclaimed start cannot be authorized or suppressed by a name, locator file or
+ *   unverifiable observation: unknown still refuses; otherwise the ordinary CLI cold start
+ *   runs. Unsupported per-user installations do not acquire authority from their
+ *   self-reported identity; use their bundled CLI.
+ * - A running Desktop app with a durable Desktop claim is the supervisor. Wait for its proxy;
+ *   never start a competing one. A process name alone is not ownership evidence. A durable
+ *   Desktop claim with no running app: start Desktop (hidden, by the path its own login
+ *   registration recorded — LaunchServices never picks the bundle) where that is verifiable,
+ *   then wait. Elsewhere, fail with guidance. A missing Desktop process never authorizes a
+ *   CLI proxy by itself; an unsupported verdict beside an absent observation is
+ *   contradictory and refuses. Handing ownership to the CLI stays an explicit
  *   `ocx service install` consent step.
- * - Ownership or the process list that cannot be read is not evidence of absence: refuse.
- * - No claim and no running app: the ordinary CLI cold start.
  *
  * Concurrent shim launches share one Desktop launch through a lease file held by a live process;
  * every caller then waits on the same readiness probe.
@@ -28,6 +41,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveServiceOwnership } from "../service/state";
+import { inspectDesktopRecovery, type DesktopRecoveryEvidence } from "../service/desktop-recovery";
 
 export type DesktopProcessState = "running" | "absent" | "unknown";
 export type DesktopOwnershipState = "desktop" | "other" | "unknown";
@@ -36,16 +50,28 @@ export type EnsureColdStartPlan =
   | { kind: "spawn-cli" }
   | { kind: "wait-desktop" }
   | { kind: "launch-desktop" }
-  | { kind: "refuse"; reason: "desktop-unlaunchable" | "unverified" };
+  | { kind: "refuse"; reason: "desktop-unlaunchable" | "desktop-stopped" | "unverified" };
 
 export function planEnsureColdStart(facts: {
   ownership: DesktopOwnershipState;
   desktopProcess: DesktopProcessState;
   platform: NodeJS.Platform;
+  recovery?: DesktopRecoveryEvidence;
 }): EnsureColdStartPlan {
-  if (facts.desktopProcess === "running") return { kind: "wait-desktop" };
   if (facts.ownership === "unknown" || facts.desktopProcess === "unknown") return { kind: "refuse", reason: "unverified" };
-  if (facts.ownership === "other") return { kind: "spawn-cli" };
+  if (facts.recovery?.kind === "recovering") return { kind: "wait-desktop" };
+  if (facts.recovery?.kind === "stopped") return { kind: "refuse", reason: "desktop-stopped" };
+  // Drifted or contradictory native evidence refuses even under a durable claim; the claim
+  // outranks only the structurally unsupported verdict of a platform with no image binding.
+  if (facts.recovery?.kind === "unknown" && facts.recovery.unsupported !== true) return { kind: "refuse", reason: "unverified" };
+  if (facts.ownership === "other") {
+    // An unclaimed start cannot be authorized or suppressed by an unverifiable observation.
+    return facts.recovery?.kind === "unknown" ? { kind: "refuse", reason: "unverified" } : { kind: "spawn-cli" };
+  }
+  if (facts.desktopProcess === "running") return { kind: "wait-desktop" };
+  // A matched native process beside an absent observation is contradictory; refuse rather
+  // than launch a new app or guess at the supervisor's state.
+  if (facts.recovery?.kind === "unknown") return { kind: "refuse", reason: "unverified" };
   return facts.platform === "darwin" ? { kind: "launch-desktop" } : { kind: "refuse", reason: "desktop-unlaunchable" };
 }
 
@@ -61,6 +87,7 @@ export interface DesktopColdStartDeps<T> {
   platform: NodeJS.Platform;
   ownership: () => DesktopOwnershipState;
   desktopProcess: () => DesktopProcessState;
+  desktopRecovery?: () => Promise<DesktopRecoveryEvidence>;
   /** Start the Desktop app hidden. Returns false when the request could not be made. */
   launchDesktop: () => boolean;
   /** Returns a release function when this caller should launch, or null when another caller already did. */
@@ -72,15 +99,18 @@ export interface DesktopColdStartDeps<T> {
 const QUIT_HINT = "To run the proxy from this CLI instead, quit OpenCodex and run `ocx service install` or `ocx start`.";
 
 export async function runDesktopColdStart<T>(deps: DesktopColdStartDeps<T>): Promise<DesktopColdStartResult<T>> {
+  const recovery = await deps.desktopRecovery?.();
   const plan = planEnsureColdStart({
     ownership: deps.ownership(),
     desktopProcess: deps.desktopProcess(),
     platform: deps.platform,
+    recovery,
   });
   if (plan.kind === "spawn-cli") return { kind: "cli" };
   if (plan.kind === "refuse") {
     return { kind: "failed", message: plan.reason === "unverified"
       ? "Could not verify whether OpenCodex Desktop manages this proxy, so no CLI proxy was started. Run `ocx doctor`, or start the proxy explicitly with `ocx start`."
+      : plan.reason === "desktop-stopped" ? `OpenCodex Desktop has stopped its proxy. Use Start Proxy in the OpenCodex menu. ${QUIT_HINT}`
       : `OpenCodex Desktop manages this proxy but is not running. Open OpenCodex to start it. ${QUIT_HINT}` };
   }
   if (plan.kind === "launch-desktop") {
@@ -374,6 +404,7 @@ export function productionDesktopColdStartDeps<T>(waitForProxy: (timeoutMs: numb
       } catch { return "unknown"; }
     },
     desktopProcess: () => inspectDesktopProcess(),
+    desktopRecovery: () => inspectDesktopRecovery(),
     launchDesktop: () => launchDesktopApp(),
     acquireLaunchLease: () => acquireDesktopLaunchLease(getConfigDir()),
     waitForProxy,

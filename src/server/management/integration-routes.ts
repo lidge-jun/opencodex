@@ -28,6 +28,7 @@ import {
 import { detectRaycast, type RaycastInstall } from "../../integrations/raycast-detect";
 import { readIntegrationState, readOwnedDroidReasoningDefaults } from "../../integrations/state";
 import { droidReasoningModels, validateDroidReasoningDefaults } from "../../clients/config-export";
+import { isExportModelNames, supportsAliasModelNames, type ExportModelNames } from "../../clients/config-export/model-names";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../integrations/store";
 import {
   applyIntegrationCoordinated,
@@ -123,6 +124,7 @@ export interface IntegrationJournalRow {
 
 export interface IntegrationToggleBody {
   enabled: boolean;
+  modelNames?: ExportModelNames;
   /**
    * Opt in to replacing a conflicted block with the one opencodex would write.
    *
@@ -284,6 +286,7 @@ async function buildIntegrationWriteInput(
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
+  modelNames?: ExportModelNames,
 ): Promise<IntegrationWriteInput> {
   return {
     clientId,
@@ -291,6 +294,7 @@ async function buildIntegrationWriteInput(
     config: ctx.config,
     port: managementInferencePort(ctx),
     ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
+    ...(modelNames === undefined ? {} : { modelNames }),
     store,
     io: integrationMutationTestHooks?.io,
     ...scopedPathOverrides(ctx, clientId),
@@ -310,6 +314,7 @@ async function buildIntegrationPreviewInput(
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
+  modelNames?: ExportModelNames,
 ): Promise<{ input: IntegrationWriteInput; identity: string } | null> {
   const snapshot = previewExportSnapshot(ctx.config);
   // No cached roster means no honest snapshot to plan against. Gathering one here would make a
@@ -323,6 +328,7 @@ async function buildIntegrationPreviewInput(
       config: ctx.config,
       port: managementInferencePort(ctx),
       ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
+      ...(modelNames === undefined ? {} : { modelNames }),
       store,
       io: integrationMutationTestHooks?.io,
       ...scopedPathOverrides(ctx, clientId),
@@ -381,6 +387,15 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 
 function invalidDroidDefaultsResponse(ctx: ManagementContext, message: string): Response {
   return jsonResponse({ error: message, code: "invalid_droid_reasoning_defaults" }, 400, ctx.req, ctx.config);
+}
+
+function readModelNames(ctx: ManagementContext, body: Record<string, unknown>, client: string, operation: string): ExportModelNames | Response | undefined {
+  if (!Object.hasOwn(body, "modelNames")) return undefined;
+  if (!isExportModelNames(body.modelNames) || !supportsAliasModelNames(client)
+    || (operation !== "apply" && operation !== "overwrite")) {
+    return jsonResponse({ error: "modelNames must be alias or routed and requires Hermes or Command Code apply or overwrite", code: "invalid_model_names" }, 400, ctx.req, ctx.config);
+  }
+  return body.modelNames;
 }
 
 function readDroidReasoningDefaults(
@@ -455,6 +470,7 @@ function stalePlanGuard(
   fingerprint: string,
   capturedIdentity: string | null,
   droidReasoningDefaults?: Record<string, string>,
+  modelNames?: ExportModelNames,
 ): {
   revalidate: NonNullable<CoordinatedIntegrationOptions["revalidate"]>;
   response: () => Response | null;
@@ -470,7 +486,7 @@ function stalePlanGuard(
        * without ever swapping the roster this mutation is about to use.
        */
       if (exportSnapshotIdentity(ctx.config) !== capturedIdentity) {
-        const refreshed = await buildIntegrationPreviewInput(clientId, ctx, store, droidReasoningDefaults);
+        const refreshed = await buildIntegrationPreviewInput(clientId, ctx, store, droidReasoningDefaults, modelNames);
         stale = refreshed === null ? "unavailable" : previewIntegration(refreshed.input, request);
         return { ok: false, reason: "conflict", state: "conflict", clientId, message: "the model roster changed while confirming" };
       }
@@ -668,6 +684,17 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
 }
 
 export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+  // Aside delegates before the ordinary client handler. Reject unsupported intent before that
+  // delegation can enumerate profiles, load catalogs, or write a different preference.
+  if (/^\/api\/client-integrations\/aside\/profiles(?:\/|$)/.test(ctx.url.pathname)
+    && (ctx.req.method === "PUT" || ctx.req.method === "POST")) {
+    const body = await readJsonBody({ ...ctx, req: ctx.req.clone() });
+    if (body instanceof Response) return body;
+    if (isPlainRecord(body)) {
+      const naming = readModelNames(ctx, body, "aside", "apply");
+      if (naming instanceof Response) return naming;
+    }
+  }
   const hermesBase = { store: integrationStore(), ...pathOverrides() };
   const hermesProfiles = await hermesProfileListResponse(ctx, hermesBase, () => loadExportModels(ctx.config),
     (scope, models) => readIntegrationState({
@@ -836,9 +863,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
     const droidDefaults = readDroidReasoningDefaults(ctx, parsed, previewClient, operation);
     if (droidDefaults instanceof Response) return droidDefaults;
+    const modelNames = readModelNames(ctx, parsed, previewClient, operation);
+    if (modelNames instanceof Response) return modelNames;
     try {
       const captured = await buildIntegrationPreviewInput(
-        previewClient as IntegrationClientId, ctx, integrationStore(ctx), droidDefaults,
+        previewClient as IntegrationClientId, ctx, integrationStore(ctx), droidDefaults, modelNames,
       );
       if (!captured) return previewUnavailableResponse(ctx);
       if (droidDefaults !== undefined) {
@@ -855,6 +884,10 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
     if (parsed instanceof Response) return parsed;
+    if (isPlainRecord(parsed)) {
+      const naming = readModelNames(ctx, parsed, "", "restore");
+      if (naming instanceof Response) return naming;
+    }
     if (!isPlainRecord(parsed) || typeof parsed.opId !== "string" || parsed.opId.trim().length === 0) {
       return jsonResponse({ error: "opId must be a non-empty string", code: "invalid_op_id" }, 400, req, ctx.config);
     }
@@ -901,6 +934,10 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
     if (parsed instanceof Response) return parsed;
+    if (isPlainRecord(parsed)) {
+      const naming = readModelNames(ctx, parsed, "", "restore");
+      if (naming instanceof Response) return naming;
+    }
     if (!isPlainRecord(parsed) || typeof parsed.opId !== "string" || parsed.opId.trim().length === 0) {
       return jsonResponse({
         error: "opId must be a non-empty string",
@@ -1080,6 +1117,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     : "disable";
   const droidDefaults = readDroidReasoningDefaults(ctx, parsed, requestedClient, requestedOperation);
   if (droidDefaults instanceof Response) return droidDefaults;
+  const modelNames = readModelNames(ctx, parsed, requestedClient, requestedOperation);
+  if (modelNames instanceof Response) return modelNames;
   const binding = planBindingOf(parsed);
   if (binding === "half") return halfBoundResponse(ctx);
   if (binding === "unknown-operation" || (binding !== "none" && binding.operation !== requestedOperation)) {
@@ -1100,11 +1139,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
      */
     const boundToggle = binding === "none"
       ? null
-      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults);
+      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
     if (binding !== "none" && boundToggle === null) return previewUnavailableResponse(ctx);
     const input = boundToggle
       ? boundToggle.input
-      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults);
+      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
     if (droidDefaults !== undefined) {
       const invalid = validateDroidReasoningDefaults(input.models, droidDefaults);
       if (invalid) return invalidDroidDefaultsResponse(ctx, invalid);
@@ -1117,10 +1156,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       binding.fingerprint,
       boundToggle === null ? null : boundToggle.identity,
       droidDefaults,
+      modelNames,
     );
     const result = await runIntegrationMutationFlight(
       requestedClient,
-      scopedFlightKey(ctx, parsed.enabled ? (parsed.overwriteConflict === true ? "overwrite" : "apply") : "disable"),
+      scopedFlightKey(ctx, `${requestedOperation}:modelNames:${modelNames ?? "omitted"}`),
       input.io?.now ?? Date.now,
       () => {
         const options = {

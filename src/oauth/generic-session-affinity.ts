@@ -22,6 +22,13 @@ export function clearGenericSessionAffinity(provider?: string): void {
   const scope = prefix(provider);
   for (const id of bindings.keys()) if (id.startsWith(scope)) bindings.delete(id);
 }
+
+export function clearGenericSessionAffinityForAccount(provider: string, accountId: string): void {
+  const scope = prefix(provider);
+  for (const [id, entry] of bindings) {
+    if (id.startsWith(scope) && entry.accountId === accountId) bindings.delete(id);
+  }
+}
 subscribeAccountSelections(event => { if (event.kind === "oauth") clearGenericSessionAffinity(event.provider); });
 
 /** Unlike new-session strategy selection, keeping the surviving account needs no 2+ quorum. */

@@ -34,7 +34,7 @@ Aşağıdaki öncelik tabloları ve örnek, seçicinin tamamını sıralama modu
 | --- | ---: | --- |
 | `subagentModels[i]` | `i` (`0` - `4`) | `src/codex/catalog/sync.ts` içindeki öne çıkan sıra haritası |
 | Diğer yönlendirilen modeller | `5` | `src/codex/catalog/sync.ts` içindeki yönlendirilen girdi oluşturma |
-| Varsayılan olarak yerel GPT slug'ları | `9` | `src/codex/catalog/sync.ts` içindeki yerel girdi oluşturma |
+| Varsayılan olarak yerel GPT slug'ları | `sourcePriority` | `src/codex/catalog/sync.ts` içindeki yerel girdi oluşturma |
 | Öne çıkan bir liste varken seçilmeyen yerel modeller | En az `featured.length + 100` | `src/codex/catalog/sync.ts` içindeki yerel katalog birleştirme |
 
 Yönetim API'si `src/server/management/agent-settings-routes.ts` içinde `slice(0,
@@ -89,8 +89,7 @@ olduğunda ortaya çıkan sıra şöyledir:
    modeller.
 
 `subagentModels` olmadan yönlendirilen modeller `5` önceliğinde kalır, yerel GPT
-girdileri normal önceliklerini kullanır (opencodex tarafından oluşturulan
-girdiler için normalde `9`) ve yönlendirilen grup sağlayıcı/kimlik olarak
+girdileri normal önceliklerini kullanır (sourcePriority, kaynak yoksa `9`) ve yönlendirilen grup sağlayıcı/kimlik olarak
 alfabetik kalır.
 
 ## Örnek

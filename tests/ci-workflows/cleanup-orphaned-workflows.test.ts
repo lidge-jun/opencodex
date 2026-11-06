@@ -52,7 +52,7 @@ describe("orphaned GitHub Actions cleanup", () => {
       permissions?: Record<string, string>;
       jobs?: Record<string, {
         "timeout-minutes"?: number;
-        steps?: Array<{ uses?: string; run?: string }>;
+        steps?: Array<{ uses?: string; run?: string; with?: Record<string, unknown> }>;
       }>;
     };
 
@@ -67,9 +67,15 @@ describe("orphaned GitHub Actions cleanup", () => {
     expect(steps.some(step =>
       step.uses === "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
     )).toBe(true);
-    expect(steps.some(step =>
-      step.uses === "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6"
-    )).toBe(true);
+    // Bun comes from package.json dependencies.bun through the repository composite;
+    // a hand-pinned setup-bun step here once drifted to 1.4.2 after the runtime moved on.
+    const checkoutIndex = steps.findIndex(step => step.uses?.startsWith("actions/checkout@"));
+    const setupIndex = steps.findIndex(step => step.uses === "./.github/actions/setup-project-bun");
+    expect(checkoutIndex).toBeGreaterThanOrEqual(0);
+    expect(setupIndex).toBeGreaterThan(checkoutIndex);
+    expect(steps[setupIndex]?.with).toBeUndefined();
+    expect(steps.some(step => step.uses?.startsWith("oven-sh/setup-bun@"))).toBe(false);
+    expect(text).not.toContain("bun-version");
     expect(steps.some(step =>
       step.run === "bun scripts/ci/cleanup-orphaned-workflows.mjs"
     )).toBe(true);

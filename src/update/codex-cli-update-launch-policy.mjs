@@ -39,6 +39,15 @@ export function isCodexCliUpdateInspectionArgv(argv) {
   return args[0] === "system" && args[1] === "codex-cli-update";
 }
 
+/** Long-lived published proxy servers need the same proof-bound snapshot so management routes
+ * can inspect the Node-selected Codex CLI without accepting a client path or ambient dotenv value.
+ * This only controls snapshot inclusion; it does not extend the one-shot inspection restrictions.
+ */
+export function carriesCodexCliUpdateInspectionContext(argv) {
+  const args = argv.slice(2).filter(value => !value.startsWith("--ocx-internal-launch-proof="));
+  return isCodexCliUpdateInspectionArgv(argv) || args[0] === "start";
+}
+
 /** Serialized OCX_NODE_LAUNCH_CONTEXT ceiling; src/cli/launcher-context.ts refuses above it. */
 export const NODE_LAUNCH_CONTEXT_MAX_CHARS = 64 * 1024;
 
