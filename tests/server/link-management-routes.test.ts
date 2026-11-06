@@ -172,6 +172,38 @@ afterEach(() => {
 });
 
 describe("link management routes", () => {
+  test.each([["facets", true], ["facets", false], ["report", true], ["report", false]] as const)("a %s scan failure rechecks the session (revoked=%s)", async (kind, revoked) => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-revoked-failed-scan-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    resetUsageAggregateCacheForTests();
+    const h = harness();
+    let paired = true;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const scanning = new Promise<void>(resolve => { started = resolve; });
+    const spy = spyOn(usageLedgerScanner, "scanUsageLedgerCooperatively").mockImplementation(async () => {
+      started(); await gate; throw new Error("fixture scan failed");
+    });
+    try {
+      const path = kind === "facets" ? "/api/usage/source-facets?client=all&device=all" : "/api/usage?client=all&device=unconfigured";
+      const url = new URL(`http://127.0.0.1${path}`);
+      const pending = handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, h.config, h.deps, "gui-session",
+        { isPaired: () => paired, isCurrent: () => paired, revokeCurrent: () => true },
+        { trustedLoopback: true, guiSessionIssuance: "pairing" });
+      expect(await Promise.race([scanning.then(() => "scanning"), pending.then(response => `early:${response?.status}`)])).toBe("scanning");
+      paired = !revoked; release();
+      const response = await pending;
+      expect(response?.status).toBe(revoked ? 401 : kind === "facets" ? 503 : 500);
+      if (revoked || kind === "facets") expect(response?.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      release(); spy.mockRestore(); resetUsageAggregateCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
+  });
+
   test("a revoked session cannot receive an in-flight unconfigured-key report", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-usage-revocation-"));
     const previousHome = process.env.OPENCODEX_HOME;

@@ -221,6 +221,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       if (JSON.stringify(ids) !== JSON.stringify(currentIds) || links !== currentLinks) throw new Error("inventory changed");
       return Response.json(facets, { headers: { "cache-control": "no-store" } });
     } catch {
+      if (auth(ctx, "dashboard")) return expiredUsageSession();
       return Response.json({ error: "usage_facets_unavailable" }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "1" } });
     }
   }
@@ -431,6 +432,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       }
       return jsonResponse(requestedSummary);
     } catch {
+      if (sessionGuard && sessionGuard(ctx, "dashboard")) return expiredUsageSession();
       // A missing ledger is handled as an empty installation by the reader. Reaching this catch
       // therefore means the report is unavailable, not that usage was measured as zero. Keep the
       // transport status aligned with the JEV projection above so every dashboard consumer can
