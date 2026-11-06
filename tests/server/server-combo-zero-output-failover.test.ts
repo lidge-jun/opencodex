@@ -605,4 +605,44 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(body).not.toContain("must not run");
     });
   }
+
+  test("remote compaction zero-output max_output_tokens terminal fails over to backup target", async () => {
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      if (parsed.modelId === "m1") {
+        emit({ type: "heartbeat" });
+        emit({
+          type: "incomplete",
+          reason: "max_output_tokens",
+          usage: { inputTokens: 100, outputTokens: 0, totalTokens: 100 },
+        });
+        return;
+      }
+      emit({ type: "text_delta", text: "compacted summary output" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/free",
+        input: [
+          { type: "message", role: "user", content: "previous context" },
+          { type: "compaction_trigger" },
+        ],
+        stream: true,
+      }),
+    }), config, parent);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(body).toContain('"type":"compaction"');
+    expect(hits).toEqual(["m1", "m2"]);
+  });
 });

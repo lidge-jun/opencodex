@@ -143,7 +143,7 @@ describe("combo stream preflight", () => {
     expect(await result.response.text()).toBe(expected);
   });
 
-  for (const reason of ["max_output_tokens", "content_filter", "future_semantic_reason", "", null])
+  for (const reason of ["content_filter", "future_semantic_reason", "", null])
   test(`does not replay semantic or explicit unknown incomplete reasons (${JSON.stringify(reason)})`, async () => {
     const source = sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },
@@ -707,4 +707,53 @@ describe("combo stream preflight", () => {
     })).toBe(true);
   });
 
+  test("converts a zero-output incomplete with max_output_tokens into a retryable failure", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "zero_output_token_limit",
+        message: "Provider reached its output token limit before producing output",
+      },
+      response: {
+        usage: { input_tokens: 25, output_tokens: 0 },
+      },
+    });
+  });
+
+  test("does not retry max_output_tokens when output was already produced", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_text.delta", delta: "partial answer" },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+        },
+      },
+    );
+
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
 });

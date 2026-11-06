@@ -762,7 +762,7 @@ export async function executeResponsesRunTurn(
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
       // Called only at the first meaningful event; preflight protects side effects.
-      const zeroOutputLimit = !routedCompaction && classifyZeroOutputTokenLimit(event);
+      const zeroOutputLimit = classifyZeroOutputTokenLimit(event);
       if (zeroOutputLimit) return zeroOutputLimit;
       // This tool is declared to the adapter by the private search loop.
       if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
