@@ -147,7 +147,7 @@ test("C1/C2 ingress constructors have explicit producer rows and local identity"
   for (const path of new Bun.Glob("src/**/*.ts").scanSync(repoRoot())) {
     const source = readFileSync(repoPath(path), "utf8");
     const calls = [...source.matchAll(/new AnthropicRequestError\(/g)];
-    if (calls.length) actual[path] = calls.length;
+    if (calls.length) actual[path.replaceAll("\\", "/")] = calls.length;
     for (const call of calls) expect(source.slice(0, call.index).endsWith("markProxyError(")).toBe(true);
   }
   expect(actual).toEqual(Object.fromEntries(ingressProducerRows.map(([path, count]) => [path, count])));
@@ -173,7 +173,7 @@ test("W1/W3 envelope writers are covered by explicit dispositions", () => {
   for (const path of new Bun.Glob("src/**/*.ts").scanSync(repoRoot())) {
     const lines = readFileSync(repoPath(path), "utf8").split("\n");
     const count = lines.filter(line => /anthropicError(Response|Body)\(/.test(line)).length;
-    if (count) actual[path] = count;
+    if (count) actual[path.replaceAll("\\", "/")] = count;
   }
   expect(actual).toEqual(Object.fromEntries(envelopeWriterRows.map(([path, count]) => [path, count])));
   const bypassRows = [
