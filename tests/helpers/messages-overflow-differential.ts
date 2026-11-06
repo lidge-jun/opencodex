@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash } from "./messages-overflow-cases";
 import { measure, flushMeasurements } from "./messages-overflow-measure";
@@ -11,6 +11,19 @@ if (diagEnabled) Reflect.set(globalThis, "__overflowMeasure", measure);
 const [mode, scratch, output, selectedLane, offset = "0", limit] = process.argv.slice(2) as [string, string, string, string?, string?, string?];
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 const base = mode === "--generate-base";
+const sqliteControl = process.env.OCX_OVERFLOW_SQLITE_CONTROL === "1";
+if (sqliteControl && (process.platform !== "win32" || base || !diagEnabled || !scratch || !basename(scratch).startsWith("ocx-overflow-slice-")
+  || process.env.HOME !== scratch || process.env.USERPROFILE !== scratch || process.env.OPENCODEX_HOME !== join(scratch, "ocx")
+  || process.env.CODEX_HOME !== join(scratch, "codex") || process.env.TEMP !== join(scratch, "tmp")
+  || (selectedLane !== "native-fold" && selectedLane !== "translated-http"))) throw new Error("SQLite diagnostic control requires a dedicated Windows overflow fixture home");
+if (sqliteControl) {
+  Reflect.set(globalThis, "__overflowSqliteControl", (name: string, database: { exec(sql: string): unknown; query(sql: string): { get(): unknown } }) => measure(`control.${name}_sqlite_off`, () => {
+    database.exec("PRAGMA synchronous = OFF");
+    const observed = database.query("PRAGMA synchronous").get() as { synchronous?: number } | null;
+    if (observed?.synchronous !== 0) throw new Error("SQLite diagnostic control was not applied");
+  }));
+  diag("control_sqlite_synchronous_off_fixture_only");
+}
 if (base && selectedLane) throw new Error("Baseline generation requires the complete case table");
 if (selectedLane && !(messagesOverflowLanes as readonly string[]).includes(selectedLane)) throw new Error("Unknown Messages lane");
 const first = Number(offset); const count = limit === undefined ? Infinity : Number(limit);
@@ -51,7 +64,7 @@ const overlayStarted = performance.now();
 {
   const existing = base ? new Set(git("ls-tree", "-r", "--name-only", "72e80d280", "--", "src").trim().split("\n")) : new Set<string>();
   const changed = base ? git("diff", "--name-only", "72e80d280", "--", "src").trim().split("\n").filter(path => existing.has(path))
-    : ["src/server/claude-messages.ts", "src/claude/outbound.ts", "src/server/messages-native.ts", "src/protocols/encoders/messages.ts", ...(diagEnabled ? ["src/config.ts", "src/config/atomic-write.ts", "src/config/persist-unlocked.ts", "src/lib/spend-ledger-owner.ts"] : [])];
+    : ["src/server/claude-messages.ts", "src/claude/outbound.ts", "src/server/messages-native.ts", "src/protocols/encoders/messages.ts", ...(diagEnabled ? ["src/config.ts", "src/config/atomic-write.ts", "src/config/persist-unlocked.ts", "src/config/mutation-lock.ts", "src/lib/spend-ledger-owner.ts", "src/codex/routing/thread-affinity-store.ts"] : [])];
   const overlays = new Map<string, string>();
   for (const path of changed) {
     let source = base ? git("show", `72e80d280:${path}`) : readFileSync(repoPath(path), "utf8");
@@ -63,8 +76,30 @@ const overlayStarted = performance.now();
       '() => atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } })',
       '() => globalThis.__overflowMeasure("persist.atomic", () => atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } }))');
     if (path === "src/lib/spend-ledger-owner.ts") {
+      source = replaceOnce(source, 'const requestedHome = stateDirectoryIdentity(configDir);', 'const requestedHome = globalThis.__overflowMeasure("spend.identity", () => stateDirectoryIdentity(configDir));');
+      source = replaceOnce(source, 'prepared = prepareOwnerPath(configDir);', 'prepared = globalThis.__overflowMeasure("spend.prepare", () => prepareOwnerPath(configDir));');
+      source = replaceOnce(source, 'database = new Database(prepared.path, { create: true });', `database = globalThis.__overflowMeasure("spend.open", () => new Database(prepared.path, { create: true }));${sqliteControl ? ' globalThis.__overflowSqliteControl("spend", database);' : ""}`);
+      source = replaceOnce(source, 'database.exec(`PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = ${busyTimeout}; BEGIN IMMEDIATE`);', 'globalThis.__overflowMeasure("spend.begin", () => database.exec(`PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = ${busyTimeout}; BEGIN IMMEDIATE`));');
+      source = replaceOnce(source, 'try { hook(owner.home); } catch', 'try { globalThis.__overflowMeasure("spend.acquired_hook", () => hook(owner.home)); } catch');
+      source = replaceOnce(source, 'for (const hook of releasingHooks) {\n            try { hook(); } catch', 'for (const hook of releasingHooks) {\n            try { globalThis.__overflowMeasure("spend.releasing_hook", () => hook()); } catch');
+      source = replaceOnce(source, 'for (const hook of releaseHooks) {\n        try { hook(); } catch', 'for (const hook of releaseHooks) {\n        try { globalThis.__overflowMeasure("spend.released_hook", () => hook()); } catch');
       source = replaceOnce(source, 'try { owner.database.exec("ROLLBACK"); }', 'try { globalThis.__overflowMeasure("spend.rollback", () => owner.database.exec("ROLLBACK")); }');
       source = replaceOnce(source, 'try { owner.database.close(); }', 'try { globalThis.__overflowMeasure("spend.close", () => owner.database.close()); }');
+    }
+    if (path === "src/config/mutation-lock.ts") {
+      source = replaceOnce(source, 'const path = configMutationDatabasePath(dir);', 'const path = globalThis.__overflowMeasure("config.lock.prepare", () => configMutationDatabasePath(dir));');
+      source = replaceOnce(source, 'database = new Database(path, { create: true });', `database = globalThis.__overflowMeasure("config.lock.open", () => new Database(path, { create: true }));${sqliteControl ? ' globalThis.__overflowSqliteControl("config", database);' : ""}`);
+      source = replaceOnce(source, 'database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");', 'globalThis.__overflowMeasure("config.lock.begin", () => database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"));');
+      source = replaceOnce(source, 'initializeConfigGeneration(database);', 'globalThis.__overflowMeasure("config.lock.initialize", () => initializeConfigGeneration(database));');
+      source = replaceOnce(source, 'database.exec("COMMIT");', 'globalThis.__overflowMeasure("config.lock.commit", () => database.exec("COMMIT"));');
+      source = replaceOnce(source, 'try { database.close(); }', 'try { globalThis.__overflowMeasure("config.lock.close", () => database.close()); }');
+    }
+    if (path === "src/codex/routing/thread-affinity-store.ts") {
+      source = replaceOnce(source, 'db = new Database(path);', `db = globalThis.__overflowMeasure("affinity.open", () => new Database(path));${sqliteControl ? ' globalThis.__overflowSqliteControl("affinity", db);' : ""}`);
+      source = replaceOnce(source, 'db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");', 'globalThis.__overflowMeasure("affinity.open_begin", () => db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"));');
+      source = replaceOnce(source, '    db.exec("COMMIT");\n    const after = checkFile(path);', '    globalThis.__overflowMeasure("affinity.open_commit", () => db.exec("COMMIT"));\n    const after = checkFile(path);');
+      source = replaceOnce(source, '    if (clean) db.exec("UPDATE meta SET value=1 WHERE name=\'clean\'");\n    db.exec("COMMIT");', '    if (clean) db.exec("UPDATE meta SET value=1 WHERE name=\'clean\'");\n    globalThis.__overflowMeasure("affinity.flush_commit", () => db.exec("COMMIT"));');
+      source = replaceOnce(source, '    flush(s, true);\n    retire();', '    globalThis.__overflowMeasure("affinity.flush", () => flush(s, true));\n    globalThis.__overflowMeasure("affinity.retire", () => retire());');
     }
     if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
       "const upstream = await handleResponses(internalReq, {",

@@ -139,8 +139,8 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
     expect(slices.flat().map(key)).toEqual(rows.map(key));
     const plans = slices.map((selected, index) => ({ selected, offset: index * sliceSize, mode: "matrix" }));
     if (process.platform === "win32" && (lane === "translated-http" || lane === "native-fold")) {
-      const offset = lane === "translated-http" ? 192 : 0;
-      for (const mode of ["quiet", "trace", "cold"]) plans.push({ selected: rows.slice(offset, offset + 16), offset, mode });
+      const offset = lane === "translated-http" ? 320 : 0;
+      for (const mode of ["quiet", "trace", "cold", "sqlite-off"]) plans.push({ selected: rows.slice(offset, offset + 16), offset, mode });
     }
     for (const { selected, offset, mode } of plans) {
       const name = mode === "matrix" ? `${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}` : `${lane}: diagnostic ${mode} rows ${offset + 1}-${offset + selected.length}`;
@@ -155,7 +155,7 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
           const diagnostic = (lane === "translated-http" || lane === "native-fold") && mode !== "quiet";
           if (mode === "cold") mkdirSync(join(scratch, "cache"));
           const spawnStarted = performance.now();
-          const child = Bun.spawn([process.execPath, helperPath("messages-overflow-differential.ts"), "head", scratch, output, lane, String(offset), String(sliceSize)], { cwd: repoRoot(), env: { ...process.env, ...(mode === "cold" ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(scratch, "cache") } : {}), OCX_OVERFLOW_DIAG: diagnostic ? "1" : "0", HOME: scratch, USERPROFILE: scratch, TEMP: join(scratch, "tmp"), TMP: join(scratch, "tmp"), TMPDIR: join(scratch, "tmp"), OPENCODEX_HOME: join(scratch, "ocx"), CODEX_HOME: join(scratch, "codex"), CODEX_SQLITE_HOME: join(scratch, "codex"), OCX_OWNER_REGISTRY_DIR: join(scratch, "ocx", "ocx-homes"), CLAUDE_CONFIG_DIR: join(scratch, "claude"), GROK_HOME: join(scratch, "grok") }, stdout: "pipe", stderr: "pipe" });
+          const child = Bun.spawn([process.execPath, helperPath("messages-overflow-differential.ts"), "head", scratch, output, lane, String(offset), String(sliceSize)], { cwd: repoRoot(), env: { ...process.env, ...(mode === "cold" ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(scratch, "cache") } : {}), OCX_OVERFLOW_DIAG: diagnostic ? "1" : "0", OCX_OVERFLOW_SQLITE_CONTROL: mode === "sqlite-off" ? "1" : "0", HOME: scratch, USERPROFILE: scratch, TEMP: join(scratch, "tmp"), TMP: join(scratch, "tmp"), TMPDIR: join(scratch, "tmp"), OPENCODEX_HOME: join(scratch, "ocx"), CODEX_HOME: join(scratch, "codex"), CODEX_SQLITE_HOME: join(scratch, "codex"), OCX_OWNER_REGISTRY_DIR: join(scratch, "ocx", "ocx-homes"), CLAUDE_CONFIG_DIR: join(scratch, "claude"), GROK_HOME: join(scratch, "grok") }, stdout: "pipe", stderr: "pipe" });
           safeToRemove = false;
           const { exit, stdout, stderr } = await collectOverflowChild(child, process.platform === "win32" ? started + 25_000 : null, 2_000, diagnostic ? line => {
             console.info(`OVERFLOW_CHILD ${lane} ${offset} mode=${mode} ${line}`);
