@@ -308,7 +308,7 @@ restores the owned name before normal native metadata upgrades. Divergent extern
 subject to those upgrades: Astra still replaces non-pinned names with its pinned native name.
 Template-derived rows discard the marker. The overlay leaves model IDs, metadata (including
 capabilities), ordering, routed combo aliases, custom rows and account-qualified rows unchanged;
-it does not relabel HTTP model listings or virtual `*-pro` rows.
+it does not relabel `/v1/models` or virtual `*-pro` rows. `src/server/management/model-rows.ts` also applies exact nonblank native overrides to bare rows with operator provenance. Client exports preserve these labels and their existing suffix rules. Absent or blank overrides keep previous fallbacks; account-qualified rows remain unchanged.
 
 ## Native passthrough
 
