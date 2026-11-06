@@ -137,7 +137,8 @@ export function isThroughputLimitText(message: string): boolean {
 }
 
 /** Codes that say nothing about the cause, so the message decides (#8127). */
-const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "api_error", "internal_error"]);
+/** Generic 5xx responses use `upstream_server_error`; 503 uses `server_is_overloaded`. */
+const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "upstream_server_error", "api_error", "internal_error"]);
 const NON_OVERFLOW_ERROR_TYPES: ReadonlySet<string> = new Set(["rate_limit_error", "authentication_error", "permission_error"]);
 const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
 /**
