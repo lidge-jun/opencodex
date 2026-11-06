@@ -3,13 +3,13 @@
  *
  * Sorted round-robin split the suite evenly by count while file durations differ by three orders of
  * magnitude, so the slowest Linux shard carried 394 s of tests against 248 s on another (run
- * 35816902207). The batch runner now weighs each file by `scripts/ci/test-durations.tsv` and puts
+ * 35816902207). The batch runner now weighs each file by its platform duration table and puts
  * the heaviest file on the least-loaded shard. These cases run the real runner with a fake `bun`
  * and `timeout`, the same way ci-crash-disposition.test.ts does, and exercise the refresh tool that
  * keeps the table current.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DURATIONS_TABLE, LINUX_DURATIONS_TABLE, mergeDurations, parseJobLog, parseTable, renderTable, WINDOWS_DURATIONS_TABLE } from "../../scripts/ci/test-durations";
@@ -44,8 +44,10 @@ type ShardOptions = {
   durations?: Record<string, number> | null;
   batchSize?: string;
   timeoutSeconds?: string;
-  /** Leave BUN_TEST_DURATIONS_FILE unset so the runner picks its own committed table. */
+  /** Leave BUN_TEST_DURATIONS_FILE unset so the runner picks its platform table. */
   defaultTable?: boolean;
+  /** Pair with defaultTable to exercise these copied platform tables without an override. */
+  fixtureTables?: { shared: Record<string, number>; linux?: Record<string, number> };
   env?: Record<string, string>;
 };
 
@@ -64,16 +66,26 @@ function runShardWithOutput(shard: string, options: ShardOptions = {}): { batche
     writeFileSync(join(bin, "bun"), FAKE_BUN, { mode: 0o755 });
     writeFileSync(join(bin, "timeout"), FAKE_TIMEOUT, { mode: 0o755 });
     const durations = join(directory, "durations.tsv");
-    if (options.durations) {
-      writeFileSync(durations, [
+    const writeTable = (path: string, weights: Record<string, number>) =>
+      writeFileSync(path, [
         "# fixture",
-        ...Object.entries(options.durations).map(([file, ms]) => `${ms}\ttests/${file}`),
+        ...Object.entries(weights).map(([file, ms]) => `${ms}\ttests/${file}`),
         "",
       ].join("\n"));
+    if (options.durations) writeTable(durations, options.durations);
+    let runner = RUNNER;
+    if (options.fixtureTables) {
+      const scripts = join(directory, "runner");
+      mkdirSync(scripts);
+      runner = join(scripts, "run-bun-test-batches.sh");
+      copyFileSync(RUNNER, runner);
+      copyFileSync(repoPath("scripts", "ci", "bun-crash-signatures.sh"), join(scripts, "bun-crash-signatures.sh"));
+      writeTable(join(scripts, "test-durations.tsv"), options.fixtureTables.shared);
+      if (options.fixtureTables.linux) writeTable(join(scripts, "test-durations.linux.tsv"), options.fixtureTables.linux);
     }
     const calls = join(directory, "calls.log");
     writeFileSync(calls, "");
-    const result = Bun.spawnSync(["bash", RUNNER, shard], {
+    const result = Bun.spawnSync(["bash", runner, shard], {
       cwd: directory,
       env: {
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
@@ -152,6 +164,21 @@ describe.skipIf(process.platform === "win32")("duration-weighted shards, execute
     expect(tableUsed({})).toBe("test-durations.tsv");
     expect(tableUsed({ RUNNER_OS: "Windows" }, false)).toBe("durations.tsv");
     expect(tableUsed({ RUNNER_OS: "Linux" }, false)).toBe("durations.tsv");
+  }, SPAWN_BUDGET_MS);
+
+  test("Linux falls back to shared weights when its platform table is absent", () => {
+    const shared = Object.fromEntries(FILES.map(file => [file, file === "bravo.test.ts" ? 10_000 : 1_000]));
+    const result = runShardWithOutput("1/2", { defaultTable: true, env: { RUNNER_OS: "Linux" }, fixtureTables: { shared } });
+    expect(result.output).toContain("recorded durations (test-durations.tsv)");
+    expect(filesOf(result.batches)).toEqual(tests(["bravo.test.ts"]));
+  }, SPAWN_BUDGET_MS);
+
+  test("Linux default weights determine membership rather than the shared table", () => {
+    const shared = Object.fromEntries(FILES.map(file => [file, file === "bravo.test.ts" ? 10_000 : 1_000]));
+    const linux = Object.fromEntries(FILES.map(file => [file, file === "alpha.test.ts" ? 10_000 : 1_000]));
+    const options = { defaultTable: true, env: { RUNNER_OS: "Linux" }, fixtureTables: { shared, linux } };
+    expect(filesOf(runShard("1/2", options))).toEqual(tests(["alpha.test.ts"]));
+    expect(filesOf(runShard("2/2", options))).toEqual(tests(FILES.filter(file => file !== "alpha.test.ts")));
   }, SPAWN_BUDGET_MS);
 });
 
