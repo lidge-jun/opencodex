@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
@@ -17,11 +17,16 @@ import { createLocalAttestationProof, createLocalAttestationSecret, LOCAL_ATTEST
 import { skipsCodexShimAutoRestore } from "../../src/cli/codex-shim-autorestore";
 import { withClientLifecycleSync } from "../../src/client/lifecycle-lock";
 import { handleConfigCommand } from "../../src/cli/config-command";
+import { acquireOwnershipMutationLease } from "../../src/service/ownership-mutation-lease.mjs";
+import { inspectServiceManagerInstallation } from "../../src/service-manager-probe";
+import { buildServiceShellCommand } from "../../src/service/definition";
+import { inspectOrphanServiceAdmission } from "../../src/client/orphan-token-recovery";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
+const noService = () => ({ kind: "absent" as const });
 
 function client(overrides: Record<string, unknown> = {}) {
   return {
@@ -279,7 +284,7 @@ describe("client link connection contracts", () => {
       try {
         const result = await handleDisconnectCommand(["--orphaned-token", "--yes", "--json"], {
           lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
-          orphanRecoveryDeps: { acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
         } as never);
         expect(result).toBe(0);
         const output = log.mock.calls.flat().join(" ");
@@ -295,6 +300,209 @@ describe("client link connection contracts", () => {
           expect(lstatSync(join(payload.backupDir, "service-api-token")).mode & 0o777).toBe(0o600);
         }
       } finally { log.mockRestore(); err.mockRestore(); }
+    });
+  });
+
+  test.each(["hub", "non-loopback", "configured-token", "configured-token-file", "matching-api-key", "matching-pending-key", "service-exported", "service-unknown", "service-probe-failed"])(
+    "orphan recovery refuses %s admission ownership", async scenario => {
+      await withLinkHome(async home => {
+        const tokenPath = join(home, "service-api-token");
+        writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+        const config = getDefaultConfig();
+        if (scenario === "hub") config.runtimeRole = "hub";
+        if (scenario === "non-loopback") config.hostname = "0.0.0.0";
+        if (scenario === "matching-api-key") config.apiKeys = [{ id: "fixture", name: "fixture", key, createdAt: "2026-01-01T00:00:00.000Z" }];
+        if (scenario === "matching-pending-key") config.apiKeys = [{ id: "fixture", name: "fixture", key: "different-key", createdAt: "2026-01-01T00:00:00.000Z", pendingRotation: { id: "rotation", key, createdAt: "2026-01-01T00:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z" } }];
+        saveConfig(config);
+        const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+        const previousTokenFile = process.env.OCX_API_TOKEN_FILE;
+        if (scenario === "configured-token") process.env.OPENCODEX_API_AUTH_TOKEN = key;
+        if (scenario === "configured-token-file") process.env.OCX_API_TOKEN_FILE = tokenPath;
+        let inspectServiceManager = noService;
+        if (scenario === "service-exported") {
+          const serviceHome = join(home, "service-user");
+          const directory = join(serviceHome, ".config", "systemd", "user");
+          mkdirSync(directory, { recursive: true });
+          const definition = join(directory, "opencodex-proxy.service");
+          const command = buildServiceShellCommand("/usr/bin/bun", null, 12345, tokenPath);
+          writeFileSync(definition, `[Service]\nEnvironment="OPENCODEX_HOME=${home}"\nExecStart=${command}\n`);
+          expect(command).toContain("OPENCODEX_API_AUTH_TOKEN");
+          expect(command).toContain(tokenPath);
+          const inspection = inspectServiceManagerInstallation({ platform: "linux", home: serviceHome,
+            run: () => ({ status: 0, stdout: `LoadState=loaded\nActiveState=inactive\nFragmentPath=${definition}\nNeedDaemonReload=no\n`, stderr: "", timedOut: false, spawnFailed: false }) });
+          expect(inspection.kind).toBe("present");
+          inspectServiceManager = (() => inspection) as typeof noService;
+        }
+        if (scenario === "service-unknown") inspectServiceManager = (() => ({ kind: "unknown", reason: "fixture" })) as unknown as typeof noService;
+        if (scenario === "service-probe-failed") inspectServiceManager = (() => inspectOrphanServiceAdmission({ platform: "linux", home,
+          run: () => ({ status: null, stdout: "", stderr: "", timedOut: false, spawnFailed: true }) })) as typeof noService;
+        const err = spyOn(console, "error").mockImplementation(() => {});
+        const log = spyOn(console, "log").mockImplementation(() => {});
+        try {
+          const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+            lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+            orphanRecoveryDeps: { inspectServiceManager, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
+          } as never);
+          expect(result).toBe(1);
+          expect(err.mock.calls.flat().join(" ").toLowerCase()).toContain(scenario === "hub" ? "hub" : "admission");
+          expect(readFileSync(tokenPath, "utf8")).toBe(`${key}\n`);
+        } finally {
+          if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN; else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
+          if (previousTokenFile === undefined) delete process.env.OCX_API_TOKEN_FILE; else process.env.OCX_API_TOKEN_FILE = previousTokenFile;
+          err.mockRestore(); log.mockRestore();
+        }
+      });
+    },
+  );
+
+  test("orphan recovery permits a completed disconnect receipt", async () => {
+    await withLinkHome(async home => {
+      writeFileSync(join(home, "service-api-token"), `${key}\n`, { mode: 0o600 });
+      mkdirSync(join(home, "desktop-remote"), { mode: 0o700 });
+      const receipt = { version: 1, owner: { serverUrl: "http://127.0.0.1:34567", apiKeyId: "key-1", connectedAt: "2026-09-25T00:00:00.000Z" },
+        tokenFingerprint: "a".repeat(64), keepCatalog: false, phase: "complete" };
+      writeFileSync(join(home, "desktop-remote", "disconnect.json"), JSON.stringify(receipt), { mode: 0o600 });
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect(await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
+        } as never)).toBe(0);
+      } finally { log.mockRestore(); }
+    });
+  });
+
+  test("Windows-style recovery closes source handles before moving and retains the identity witness", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      writeFileSync(`${tokenPath}.prev`, "previous-private-key\n", { mode: 0o600 });
+      const tokenInode = lstatSync(tokenPath).ino;
+      let observed = false;
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes", "--json"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true,
+            windowsMoveForTest: true, onWindowsHandlesClosed: (fds: readonly number[]) => {
+              expect(fds.length).toBe(2);
+              for (const fd of fds) expect(() => fstatSync(fd)).toThrow();
+              observed = true;
+            } },
+        } as never);
+        expect(result).toBe(0);
+        expect(observed).toBe(true);
+        const backup = JSON.parse(log.mock.calls.flat().join(" ")) as { backupDir: string };
+        expect(lstatSync(join(backup.backupDir, "service-api-token")).ino).toBe(tokenInode);
+        expect(readFileSync(join(backup.backupDir, "service-api-token"), "utf8")).toBe(`${key}\n`);
+        expect(readFileSync(join(backup.backupDir, "service-api-token.prev"), "utf8")).toBe("previous-private-key\n");
+        expect(readdirSync(backup.backupDir).sort()).toEqual(["service-api-token", "service-api-token.prev"]);
+      } finally { log.mockRestore(); }
+    });
+  });
+
+  test("orphan recovery rechecks service admission after liveness", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      let checks = 0;
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { acquireLease: () => ({ release() {} }), runtimeSafe: async () => true,
+            inspectServiceManager: () => ++checks === 1 ? { kind: "absent" } : { kind: "unknown", reason: "fixture" } },
+        } as never);
+        expect(result).toBe(1);
+        expect(checks).toBe(2);
+        expect(err.mock.calls.flat().join(" ")).toContain("admission secret");
+        expect(readFileSync(tokenPath, "utf8")).toBe(`${key}\n`);
+      } finally { err.mockRestore(); }
+    });
+  });
+
+  test("orphan recovery rechecks the admission bind after liveness", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => {
+            const config = getDefaultConfig(); config.hostname = "0.0.0.0"; saveConfig(config); return true;
+          } },
+        } as never);
+        expect(result).toBe(1);
+        expect(err.mock.calls.flat().join(" ")).toContain("admission secret");
+        expect(readFileSync(tokenPath, "utf8")).toBe(`${key}\n`);
+      } finally { err.mockRestore(); }
+    });
+  });
+
+  test("orphan recovery rechecks an admission-token environment change after liveness", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      const previous = process.env.OPENCODEX_API_AUTH_TOKEN;
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => {
+            process.env.OPENCODEX_API_AUTH_TOKEN = key; return true;
+          } },
+        } as never);
+        expect(result).toBe(1);
+        expect(err.mock.calls.flat().join(" ")).toContain("admission secret");
+        expect(readFileSync(tokenPath, "utf8")).toBe(`${key}\n`);
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN; else process.env.OPENCODEX_API_AUTH_TOKEN = previous;
+        err.mockRestore();
+      }
+    });
+  });
+
+  test("Windows-style identity pin preserves the original if the source name is replaced", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true,
+            windowsMoveForTest: true, onWindowsHandlesClosed: () => {
+              renameSync(tokenPath, join(home, "moved-original"));
+              writeFileSync(tokenPath, "different-private-key\n", { mode: 0o600 });
+            } },
+        } as never);
+        expect(result).toBe(1);
+        expect(readFileSync(tokenPath, "utf8")).toBe("different-private-key\n");
+        expect(readFileSync(join(home, "moved-original"), "utf8")).toBe(`${key}\n`);
+        const backupName = readdirSync(home).find(name => name.startsWith("orphaned-token-"));
+        expect(backupName).toBeDefined();
+        expect(readFileSync(join(home, backupName!, ".service-api-token.identity"), "utf8")).toBe(`${key}\n`);
+        expect(err.mock.calls.flat().join(" ")).toContain("orphan recovery incomplete");
+      } finally { err.mockRestore(); }
+    });
+  });
+
+  test("orphan recovery refuses a held start ownership lease", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      const statePaths = [join(home, "service-state.json")];
+      const held = acquireOwnershipMutationLease(statePaths, { isolated: true, waitMs: 0 });
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => acquireOwnershipMutationLease(statePaths, { isolated: true, waitMs: 0 }), runtimeSafe: async () => true },
+        } as never)).toBe(1);
+        expect(err.mock.calls.flat().join(" ")).toContain("mutation lease");
+        expect(readFileSync(tokenPath, "utf8")).toBe(`${key}\n`);
+      } finally { held.release(); err.mockRestore(); }
     });
   });
 
@@ -330,7 +538,7 @@ describe("client link connection contracts", () => {
       try {
         expect(await handleDisconnectCommand(["--orphaned-token", "--yes", "--json"], {
           lifecycleLockDeps: { lockPath },
-          orphanRecoveryDeps: { acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
         } as never)).toBe(0);
         const backup = JSON.parse(log.mock.calls.flat().join(" ")) as { backupDir: string };
         const newKey = `ocx_data_${"b".repeat(40)}`;
@@ -379,7 +587,7 @@ describe("client link connection contracts", () => {
       try {
         const pending = handleDisconnectCommand(["--orphaned-token", "--yes"], {
           lifecycleLockDeps: { lockPath },
-          orphanRecoveryDeps: { acquireLease: () => ({ release() {} }), runtimeSafe: async () => { observed(); await gate; return true; } },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => { observed(); await gate; return true; } },
         } as never);
         await started;
         expect(() => withClientLifecycleSync(() => {}, { lockPath })).toThrow("client_lifecycle_busy");
@@ -412,7 +620,7 @@ describe("client link connection contracts", () => {
           const args = ["--orphaned-token", ...(scenario === "missing-confirmation" ? [] : ["--yes"])];
           const result = await handleDisconnectCommand(args, {
             lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
-            orphanRecoveryDeps: { acquireLease: () => ({ release() {} }), runtimeSafe: async () => {
+            orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => {
               if (scenario === "token-replaced") writeFileSync(tokenPath, "replacement-private-key\n", { mode: 0o600 });
               if (scenario === "backup-appeared") writeFileSync(`${tokenPath}.prev`, "new-backup\n", { mode: 0o600 });
               if (scenario === "pending-appeared") writeFileSync(join(home, "client-connect-pending"), `${"a".repeat(64)}\n`, { mode: 0o600 });
@@ -446,14 +654,14 @@ describe("client link connection contracts", () => {
     },
   );
 
-  test.each(["client", "unknown", "absent", "standalone", "dual-client", "legacy-live", "live-pid-no-endpoint"])("orphan recovery checks real local liveness: %s", async scenario => {
+  test.each(["client", "unknown", "absent", "standalone", "live-public-bind", "live-unknown-bind", "dual-client", "legacy-live", "live-pid-no-endpoint"])("orphan recovery checks real local liveness: %s", async scenario => {
     await withLinkHome(async home => {
       const tokenPath = join(home, "service-api-token");
       writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
       const secret = createLocalAttestationSecret();
       const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: req => {
         if (scenario === "unknown") return new Response("not ready", { status: 503 });
-        const response = Response.json({ service: "opencodex", version: "1.0.0", ...(["standalone", "dual-client"].includes(scenario) ? { providerReloadCapability: "v1" } : scenario === "legacy-live" ? {} : { role: "client" }), pid: process.pid, port: server.port, uptime: 1 });
+        const response = Response.json({ service: "opencodex", version: "1.0.0", ...(["standalone", "dual-client", "live-public-bind", "live-unknown-bind"].includes(scenario) ? { providerReloadCapability: "v1" } : scenario === "legacy-live" ? {} : { role: "client" }), pid: process.pid, port: server.port, uptime: 1 });
         const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
         const proof = challenge && createLocalAttestationProof(secret, challenge, process.pid, server.port!);
         if (proof) response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, proof);
@@ -462,9 +670,10 @@ describe("client link connection contracts", () => {
       const port = server.port!;
       const second = scenario === "dual-client" ? Bun.serve({ port, hostname: "::1", fetch: () => Response.json({ service: "opencodex", version: "1.0.0", role: "client", pid: process.pid, port, uptime: 1 }) }) : null;
       writeFileSync(join(home, "config.json"), JSON.stringify({ ...getDefaultConfig(), port, hostname: "127.0.0.1" }));
-      if (scenario === "standalone" || scenario === "dual-client" || scenario === "legacy-live" || scenario === "live-pid-no-endpoint") {
+      if (["standalone", "dual-client", "legacy-live", "live-pid-no-endpoint", "live-public-bind", "live-unknown-bind"].includes(scenario)) {
         writeFileSync(join(home, "ocx.pid"), String(process.pid));
-        if (scenario !== "live-pid-no-endpoint") writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid: process.pid, port, hostname: "127.0.0.1", attestationSecret: secret }));
+        if (scenario !== "live-pid-no-endpoint") writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid: process.pid, port,
+          ...(scenario === "live-unknown-bind" ? {} : { hostname: scenario === "live-public-bind" ? "0.0.0.0" : "127.0.0.1" }), attestationSecret: secret }));
       }
       if (scenario === "absent" || scenario === "live-pid-no-endpoint") await server.stop(true);
       const log = spyOn(console, "log").mockImplementation(() => {});
@@ -472,12 +681,12 @@ describe("client link connection contracts", () => {
       try {
         const result = await handleDisconnectCommand(["--orphaned-token", "--yes", "--json"], {
           lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
-          orphanRecoveryDeps: { acquireLease: () => ({ release() {} }) },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }) },
         } as never);
         const allowed = scenario === "absent" || scenario === "standalone";
         expect(result).toBe(allowed ? 0 : 1);
         expect(existsSync(tokenPath)).toBe(!allowed);
-        if (!allowed) expect(err.mock.calls.flat().join(" ")).toContain("runtime is live or runtime state is unverified");
+        if (!allowed) expect(err.mock.calls.flat().join(" ")).toContain(scenario === "live-public-bind" ? "admission secret" : "runtime is live or runtime state is unverified");
       } finally { log.mockRestore(); err.mockRestore(); await second?.stop(true); await server.stop(true); }
     });
   });
@@ -492,7 +701,7 @@ describe("client link connection contracts", () => {
       try {
         const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
           lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
-          orphanRecoveryDeps: { acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
         } as never);
         expect(result).toBe(1);
         expect(err.mock.calls.flat().join(" ")).toContain("unsafe token file");

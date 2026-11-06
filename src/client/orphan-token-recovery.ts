@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, renameSync } from "node:fs";
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics, withConfigMutationLockSync } from "../config";
 import { readConfigGenerationInCurrentMutationTransaction } from "../config/mutation-lock";
@@ -8,6 +8,7 @@ import { readAlivePid, readRuntimePort } from "../config/process-state";
 import { readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { readServiceApiTokenState, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, verifyLocalAttestationProof } from "../lib/local-management-attestation";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../lib/local-provider-reload-contract";
 import { loopbackFamilyAvailability } from "../lib/loopback-family";
@@ -15,6 +16,8 @@ import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lea
 import { serviceStatePaths } from "../service/state";
 import { classifyHealthz, DEFAULT_PROBE_TIMEOUT_MS, loopbackProbeHosts, observeProxyLiveness, probeEndpointLiveness, probeHostname, proveLiveProxyOwnedByHome, START_OWNERSHIP_LIVENESS, type LiveProxy } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
+import { configuredApiAuthToken, isApiAuthRequired } from "../server/auth-cors";
+import { defaultProbeRunner, defaultRawProbeRunner, inspectServiceManagerInstallation, type ProbeDeps } from "../service-manager-probe";
 import { endpointsToProve, everyEndpointProvenDownAsync } from "../cli/uninstall-plan";
 import { withClientLifecycle, type ClientLifecycleLockDeps } from "./lifecycle-lock";
 import { pendingClientConnectMayOwnToken, readClientConnectionState } from "./state";
@@ -24,15 +27,52 @@ export interface OrphanTokenRecoveryDeps {
   acquireLease?: () => { release(): void };
   /** Test seam: production uses the attested runtime and tri-state endpoint probes below. */
   runtimeSafe?: () => Promise<boolean>;
+  /** Test seam: production checks installed and indeterminate service definitions. */
+  inspectServiceManager?: typeof inspectServiceManagerInstallation;
+  /** Exercise Windows handle ordering on other platforms; never set by the CLI. */
+  windowsMoveForTest?: boolean;
+  onWindowsHandlesClosed?: (fds: readonly number[]) => void;
 }
 
 function assertDisconnected(): void {
   if (readClientConnectionState().kind !== "disconnected") throw new Error("orphan recovery refused: client state is not disconnected");
+  const diagnostics = readConfigDiagnostics();
+  if (diagnostics.source === "fallback") throw new Error("orphan recovery refused: admission configuration is unverified; repair the configuration before retrying");
+  if (diagnostics.config.runtimeRole === "hub") throw new Error("orphan recovery refused: this is a Hub; manage its admission secret through the Hub service instead");
+  const runtime = readRuntimePort();
+  if (isApiAuthRequired(diagnostics.config) || (runtime?.hostname && isApiAuthRequired({ hostname: runtime.hostname }))
+    || configuredApiAuthToken() || process.env.OCX_API_TOKEN_FILE?.trim()) {
+    throw new Error("orphan recovery refused: this installation may use an admission secret; inspect its bind and token configuration before retrying");
+  }
+  const token = readServiceApiTokenState();
+  if (token.kind === "present" && diagnostics.config.apiKeys?.some(entry =>
+    [entry.key, entry.pendingRotation?.key].some(value => value && serviceApiTokenFingerprint(value.trim()) === token.fingerprint))) {
+    throw new Error("orphan recovery refused: the token matches a configured admission secret; inspect the API keys before retrying");
+  }
   if (pendingClientConnectMayOwnToken()) throw new Error("orphan recovery refused: client connect is pending");
   const receipt = readDesktopDisconnectReceipt();
   if (receipt.kind === "unsafe" || (receipt.kind === "valid" && receipt.value.phase !== "complete")) {
     throw new Error("orphan recovery refused: disconnect is pending or unsafe");
   }
+}
+
+function assertNoServiceAdmission(inspect: typeof inspectServiceManagerInstallation): void {
+  let service;
+  try { service = inspect(); }
+  catch { throw new Error("orphan recovery refused: service admission use is unverified; inspect the service configuration before retrying"); }
+  if (service.kind !== "absent") {
+    throw new Error("orphan recovery refused: an installed or unverified service may use the admission secret; inspect 'ocx service status' and remove or migrate the service before retrying");
+  }
+}
+
+/** Unlike generic discovery, failure to launch a manager probe cannot prove token ownership absent. */
+export function inspectOrphanServiceAdmission(deps: ProbeDeps = {}): ReturnType<typeof inspectServiceManagerInstallation> {
+  const run = deps.run ?? defaultProbeRunner;
+  const runRaw = deps.runRaw ?? defaultRawProbeRunner;
+  return inspectServiceManagerInstallation({ ...deps,
+    run: (...args) => { const result = run(...args); if (result.spawnFailed) throw new Error("service manager unavailable"); return result; },
+    runRaw: (...args) => { const result = runRaw(...args); if (result.spawnFailed) throw new Error("service manager unavailable"); return result; },
+  });
 }
 
 function configWitness(): { generation: number; digest: string | null } {
@@ -56,7 +96,7 @@ async function runtimeIsSafe(): Promise<boolean> {
   if (observation.kind === "absent") return readAlivePid() === null && everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness);
   const live = observation.live;
   if (!live) return false;
-  if (live.role === "client" || !runtime || runtime.siblingOfPort !== undefined) return false;
+  if (live.role === "client" || !runtime || !runtime.hostname?.trim() || runtime.siblingOfPort !== undefined) return false;
   const observed = { ...live, hostname: live.probeHostname ?? live.hostname };
   if (await proveLiveProxyOwnedByHome(observed, START_OWNERSHIP_LIVENESS) !== "proven") return false;
   if (!await proveStandalone(observed, runtime)) return false;
@@ -85,7 +125,7 @@ async function proveStandalone(live: LiveProxy, runtime: NonNullable<ReturnType<
   } catch { return false; }
 }
 
-type OpenSource = { path: string; name: string; fd: number; dev: number; ino: number; hash: string };
+type OpenSource = { path: string; name: string; fd: number | null; dev: number; ino: number; hash: string };
 type Sources = { home: string; dev: number; ino: number; entries: { path: string; name: string; source: OpenSource | null }[] };
 
 function fingerprint(fd: number): string {
@@ -135,12 +175,26 @@ function readSources(): Sources {
     if (!entries.some(entry => entry.source)) throw new Error("orphan recovery refused: no token files found");
     return { home, dev: dirStat.dev, ino: dirStat.ino, entries };
   } catch (error) {
-    for (const entry of entries) if (entry.source) closeSync(entry.source.fd);
+    for (const entry of entries) if (entry.source?.fd != null) closeSync(entry.source.fd);
     throw error;
   }
 }
 
-function moveToPrivateBackup(sources: Sources): { backupDir: string; files: string[] } {
+function verifyPinnedFile(path: string, source: OpenSource): void {
+  const entry = lstatSync(path);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 2 || entry.dev !== source.dev || entry.ino !== source.ino) {
+    throw new Error("orphan recovery refused: token identity witness changed");
+  }
+  const fd = openSync(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 2 || opened.dev !== source.dev || opened.ino !== source.ino || fingerprint(fd) !== source.hash) {
+      throw new Error("orphan recovery refused: token identity witness changed");
+    }
+  } finally { closeSync(fd); }
+}
+
+function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): { backupDir: string; files: string[] } {
   const home = getConfigDir();
   let backupDir: string | undefined;
   try {
@@ -155,30 +209,67 @@ function moveToPrivateBackup(sources: Sources): { backupDir: string; files: stri
           && (now.dev !== entry.source.dev || now.ino !== entry.source.ino || now.hash !== entry.source.hash))) {
           throw new Error("orphan recovery refused: token file changed");
         }
-      } finally { if (now) closeSync(now.fd); }
+      } finally { if (now?.fd != null) closeSync(now.fd); }
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     backupDir = mkdtempSync(join(home, `orphaned-token-${stamp}-`));
     if (process.platform === "win32") hardenSecretDir(backupDir, { required: true });
     else chmodSync(backupDir, 0o700);
+    const windowsMove = process.platform === "win32" || deps.windowsMoveForTest === true;
+    const pins = new Map<string, string>();
+    if (windowsMove) {
+      // A private hard link keeps each original file identity allocated after its Windows handle
+      // closes. Thus the rename cannot substitute a recycled file ID without detection.
+      for (const { source } of sources.entries) {
+        if (!source || source.fd === null) continue;
+        const pin = join(backupDir, `.${source.name}.identity`);
+        linkSync(source.path, pin);
+        if (process.platform === "win32") hardenSecretPath(pin, { required: true });
+        const pinned = lstatSync(pin);
+        const original = fstatSync(source.fd);
+        if (!pinned.isFile() || pinned.nlink !== 2 || pinned.dev !== source.dev || pinned.ino !== source.ino
+          || original.dev !== source.dev || original.ino !== source.ino || original.nlink !== 2) {
+          throw new Error("orphan recovery refused: token file changed before move");
+        }
+        verifyPinnedFile(pin, source);
+        pins.set(source.name, pin);
+      }
+      const closed: number[] = [];
+      for (const { source } of sources.entries) {
+        if (source?.fd == null) continue;
+        closeSync(source.fd);
+        closed.push(source.fd);
+        source.fd = null;
+      }
+      deps.onWindowsHandlesClosed?.(closed);
+    }
     for (const { source } of sources.entries) {
       if (!source) continue;
-      if (process.platform !== "win32") fchmodSync(source.fd, 0o600);
+      if (process.platform !== "win32" && source.fd !== null) fchmodSync(source.fd, 0o600);
       const current = lstatSync(source.path);
-      if (!current.isFile() || current.nlink !== 1 || current.dev !== source.dev || current.ino !== source.ino) {
+      if (!current.isFile() || current.nlink !== (windowsMove ? 2 : 1) || current.dev !== source.dev || current.ino !== source.ino) {
         throw new Error("orphan recovery refused: token file changed");
       }
       const destination = join(backupDir, source.name);
       renameSync(source.path, destination);
       const moved = lstatSync(destination);
       if (!moved.isFile() || moved.dev !== source.dev || moved.ino !== source.ino) throw new Error("orphan recovery refused: token file changed during move");
+      const pin = pins.get(source.name);
+      if (pin) {
+        const witness = lstatSync(pin);
+        if (!witness.isFile() || witness.dev !== source.dev || witness.ino !== source.ino || witness.nlink !== 2 || moved.nlink !== 2) {
+          throw new Error("orphan recovery refused: token identity witness changed");
+        }
+        verifyPinnedFile(destination, source);
+        unlinkSync(pin);
+      }
       if (process.platform === "win32") hardenSecretPath(destination, { required: true });
       const verified = openSource(destination, source.name);
       try {
         if (!verified || verified.dev !== source.dev || verified.ino !== source.ino || verified.hash !== source.hash) {
           throw new Error("orphan recovery refused: token file changed during move");
         }
-      } finally { if (verified) closeSync(verified.fd); }
+      } finally { if (verified?.fd != null) closeSync(verified.fd); }
     }
     return { backupDir, files: sources.entries.filter(entry => entry.source).map(entry => entry.name) };
   } catch (error) {
@@ -197,15 +288,19 @@ export async function recoverOrphanedTokens(deps: OrphanTokenRecoveryDeps = {}):
         return { witness: configWitness(), runtime: JSON.stringify(readRuntimePort()), pid: readAlivePid(), sources: readSources() };
       });
       try {
+        assertNoServiceAdmission(deps.inspectServiceManager ?? inspectOrphanServiceAdmission);
         if (!await (deps.runtimeSafe ?? runtimeIsSafe)()) throw new Error("orphan recovery refused: client runtime is live or runtime state is unverified");
-        return await withConfigDirHardeningSettled(getConfigDir(), () => withConfigMutationLockSync(() => {
-          assertDisconnected();
-          if (JSON.stringify(configWitness()) !== JSON.stringify(prepared.witness)) throw new Error("orphan recovery refused: config changed during liveness check");
-          if (JSON.stringify(readRuntimePort()) !== prepared.runtime || readAlivePid() !== prepared.pid) throw new Error("orphan recovery refused: runtime changed during liveness check");
-          return moveToPrivateBackup(prepared.sources);
-        }));
+        return await withConfigDirHardeningSettled(getConfigDir(), () => {
+          assertNoServiceAdmission(deps.inspectServiceManager ?? inspectOrphanServiceAdmission);
+          return withConfigMutationLockSync(() => {
+            assertDisconnected();
+            if (JSON.stringify(configWitness()) !== JSON.stringify(prepared.witness)) throw new Error("orphan recovery refused: config changed during liveness check");
+            if (JSON.stringify(readRuntimePort()) !== prepared.runtime || readAlivePid() !== prepared.pid) throw new Error("orphan recovery refused: runtime changed during liveness check");
+            return moveToPrivateBackup(prepared.sources, deps);
+          });
+        });
       } finally {
-        for (const entry of prepared.sources.entries) if (entry.source) closeSync(entry.source.fd);
+        for (const entry of prepared.sources.entries) if (entry.source?.fd != null) closeSync(entry.source.fd);
       }
     }, deps.lifecycleLockDeps);
   } finally { lease.release(); }

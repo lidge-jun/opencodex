@@ -46,5 +46,7 @@ reconstruction: it moves the service token and any rotation backup to a private 
 prints its location and restoration guidance. Under the existing start ownership lease and client
 lifecycle lock, check that no client runtime is live, treating unknown as a refusal; under the
 config mutation lock recheck disconnected state, pending-connect marker, disconnect receipt, and
-token file identities immediately before moving. Refuse unsafe paths and preserve all backup bytes
-if any part fails. The normal disconnect, sync and enrollment paths retain their ownership checks.
+token file identities immediately before moving. Hub role, admission-secret use and installed or
+unverified service definitions refuse recovery. On Windows, private hard links retain file identity
+while source handles close before rename. Refuse unsafe paths and preserve all backup bytes if any
+part fails. The normal disconnect, sync and enrollment paths retain their ownership checks.

@@ -343,8 +343,8 @@ Drives no management route.
 | `--yes` | boolean | Explicitly confirm orphan-token recovery; requires --orphaned-token. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |
 
-- Orphan recovery requires a disconnected durable state, no pending connect or disconnect, and verified absence of a client runtime. It preserves rather than deletes token files and does not establish their ownership.
-- Stop OpenCodex and move the saved files back only when their original names are absent. Never print their contents.
+- Orphan recovery requires a disconnected durable state, no pending connect or disconnect, no Hub or admission-secret use, no installed or unverified service, and verified absence of a client runtime. It preserves rather than deletes token files and does not establish their ownership.
+- If refused, inspect the bind, API keys, token environment and service status; manage a Hub secret through its service. Stop OpenCodex and move saved files back only when their original names are absent. Never print their contents.
 
 ### `ocx hub disable`
 
