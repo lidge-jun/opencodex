@@ -1387,18 +1387,21 @@ describe("launchd service plist", () => {
     const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-    const codexHome = process.platform === "win32" ? "C:\\ocx-test\\codex-home" : "/tmp/codex-home";
-    const openCodexHome = process.platform === "win32" ? "C:\\ocx-test\\opencodex-home" : "/tmp/opencodex-home";
+    const root = mkdtempSync(join(tmpdir(), "ocx-plist-&-"));
+    const codexHome = join(root, "codex-home");
+    const openCodexHome = join(root, "opencodex-home");
+    const xml = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
     try {
       process.env.CODEX_HOME = codexHome;
       process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
       process.env.OPENCODEX_HOME = openCodexHome;
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const plist = buildPlist();
-      expect(plist).toContain(`<key>CODEX_HOME</key><string>${codexHome}</string>`);
+      expect(plist).toContain(`<key>CODEX_HOME</key><string>${xml(codexHome)}</string>`);
       expect(plist).toContain("<key>CODEX_SQLITE_HOME</key><string>/tmp/codex-sqlite-home</string>");
-      expect(plist).toContain(`<key>OPENCODEX_HOME</key><string>${openCodexHome}</string>`);
-      expectTextToContainPath(plist, serviceApiTokenFilePath());
+      expect(plist).toContain(`<key>OPENCODEX_HOME</key><string>${xml(openCodexHome)}</string>`);
+      expect(plist).toContain(xml(serviceApiTokenFilePath()));
       expect(plist).not.toContain("local-secret");
       expect(plist).not.toContain("<key>OPENCODEX_API_AUTH_TOKEN</key>");
     } finally {
@@ -1410,6 +1413,7 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
+      removeTreeWithRetry(root);
     }
   });
 
