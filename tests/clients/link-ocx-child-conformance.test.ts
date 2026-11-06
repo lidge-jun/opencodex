@@ -170,7 +170,9 @@ function applyMultiAgentFeature(content: string, mode: HomeCodexSettings["multiA
 function stripSurgicalTableFeatures(
   content: string,
   wroteFastMode: boolean | null,
+  priorUserFastModeLine: string | null,
   wroteMultiAgentV2: boolean | null,
+  priorUserMultiAgentV2Line: string | null,
 ): string {
   if (wroteFastMode === null && wroteMultiAgentV2 === null) return content;
   const lines = content.split("\n");
@@ -178,11 +180,18 @@ function stripSurgicalTableFeatures(
   if (featIdx === -1) return content;
   let endIdx = lines.findIndex((line, i) => i > featIdx && /^\s*\[/.test(line));
   if (endIdx === -1) endIdx = lines.length;
-  const body = lines.slice(featIdx + 1, endIdx).filter(line => {
-    if (wroteFastMode !== null && new RegExp(`^\\s*fast_mode\\s*=\\s*${wroteFastMode}\\s*(?:#.*)?$`).test(line)) return false;
-    if (wroteMultiAgentV2 !== null && new RegExp(`^\\s*multi_agent_v2\\s*=\\s*${wroteMultiAgentV2}\\s*(?:#.*)?$`).test(line)) return false;
-    return true;
-  });
+  const body: string[] = [];
+  for (const line of lines.slice(featIdx + 1, endIdx)) {
+    if (wroteFastMode !== null && new RegExp(`^\\s*fast_mode\\s*=\\s*${wroteFastMode}\\s*(?:#.*)?$`).test(line)) {
+      if (priorUserFastModeLine !== null) body.push(priorUserFastModeLine);
+      continue;
+    }
+    if (wroteMultiAgentV2 !== null && new RegExp(`^\\s*multi_agent_v2\\s*=\\s*${wroteMultiAgentV2}\\s*(?:#.*)?$`).test(line)) {
+      if (priorUserMultiAgentV2Line !== null) body.push(priorUserMultiAgentV2Line);
+      continue;
+    }
+    body.push(line);
+  }
   if (body.every(line => line.trim() === "" || line.trim().startsWith("#"))) {
     const next = [...lines.slice(0, featIdx), ...lines.slice(endIdx)];
     return next.join("\n").replace(/\n{3,}/g, "\n\n");
@@ -230,7 +239,9 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
   let replacedUserWebSearch: string | null = null;
   let wroteWebSearch: string | null = null;
   let wroteFastMode: boolean | null = null;
+  let priorUserFastModeLine: string | null = null;
   let wroteMultiAgentV2: boolean | null = null;
+  let priorUserMultiAgentV2Line: string | null = null;
   let wroteSubagent: WrittenSubagentDefaults | null = null;
 
   const applySettings = (rawInput: string, settings: HomeCodexSettings): string => {
@@ -247,11 +258,17 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     lf = setRootOpenaiBaseUrlForTarget(lf, target).content;
     lf = setRootRealtimeWsBaseUrl(lf, target).content;
     if (settings.fastMode !== null) {
+      if (wroteFastMode === null) {
+        const fmMatch = lf.split("\n").find(l => /^\s*fast_mode\s*=/.test(l));
+        priorUserFastModeLine = fmMatch ?? null;
+      }
       lf = ensureFastModeFeature(lf, settings.fastMode);
       wroteFastMode = settings.fastMode;
     }
     if (settings.multiAgentMode !== null) {
-      lf = applyMultiAgentFeature(lf, settings.multiAgentMode).content;
+      const v2Res = applyMultiAgentFeature(lf, settings.multiAgentMode);
+      if (wroteMultiAgentV2 === null) priorUserMultiAgentV2Line = v2Res.priorLine;
+      lf = v2Res.content;
       wroteMultiAgentV2 = settings.multiAgentMode === "v2";
     }
     const desiredSub = settings.subagentDefaults
@@ -363,7 +380,13 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     injectedValue: wroteWebSearch,
     replacedUserLine: replacedUserWebSearch ? replacedUserWebSearch.replace(/(?:\r?\n)+$/, "") : null,
   }).content;
-  surgical = stripSurgicalTableFeatures(surgical, wroteFastMode, wroteMultiAgentV2);
+  surgical = stripSurgicalTableFeatures(
+    surgical,
+    wroteFastMode,
+    priorUserFastModeLine,
+    wroteMultiAgentV2,
+    priorUserMultiAgentV2Line,
+  );
   surgical = stripSurgicalSubagentDefaults(surgical, wroteSubagent);
   surgical = surgical.replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n");
   if (surgical.length > 0 && !surgical.endsWith("\n")) surgical += "\n";

@@ -24,7 +24,11 @@ pub struct ChildInjectedLedger {
     pub injected_web_search: Option<String>,
     pub replaced_user_web_search_line: Option<String>,
     pub wrote_fast_mode: Option<bool>,
+    #[serde(default)]
+    pub prior_user_fast_mode_line: Option<String>,
     pub wrote_multi_agent_v2: Option<bool>,
+    #[serde(default)]
+    pub prior_user_multi_agent_v2_line: Option<String>,
     pub wrote_subagent_defaults: Option<WrittenSubagentDefaults>,
 }
 
@@ -192,10 +196,114 @@ fn parse_simple_table_name(line: &str) -> Option<String> {
     }
 }
 
-fn root_end_index(lines: &[&str]) -> usize {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MultilineQuote {
+    Basic,
+    Literal,
+}
+
+fn quote_run_length(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut end = start;
+    while end < bytes.len() && bytes[end] == quote && end - start < 5 {
+        end += 1;
+    }
+    end - start
+}
+
+/// Ports `markStructuralLines` (`src/codex/toml-source-lines.ts:158-223`) so lines beginning
+/// inside multiline strings (`"""`/`'''`) or multiline arrays/inline tables are never treated
+/// as table headers, root keys, or ownership markers. Returns `(structural_flags, unclosed_multiline)`.
+pub fn mark_structural_lines<S: AsRef<str>>(lines: &[S]) -> (Vec<bool>, bool) {
+    let mut multiline: Option<MultilineQuote> = None;
+    let mut square_depth: usize = 0;
+    let mut curly_depth: usize = 0;
+    let mut flags = Vec::with_capacity(lines.len());
+
+    for raw in lines {
+        let text = raw.as_ref();
+        flags.push(multiline.is_none() && square_depth == 0 && curly_depth == 0);
+        let mut single: Option<MultilineQuote> = None;
+        let bytes = text.as_bytes();
+        let mut idx = 0usize;
+        while idx < bytes.len() {
+            if let Some(MultilineQuote::Basic) = multiline {
+                if bytes[idx..].starts_with(b"\"\"\"") {
+                    multiline = None;
+                    idx += quote_run_length(bytes, idx, b'"');
+                } else if bytes[idx] == b'\\' {
+                    idx = (idx + 2).min(bytes.len());
+                } else {
+                    idx += 1;
+                }
+                continue;
+            }
+            if let Some(MultilineQuote::Literal) = multiline {
+                if bytes[idx..].starts_with(b"'''") {
+                    multiline = None;
+                    idx += quote_run_length(bytes, idx, b'\'');
+                } else {
+                    idx += 1;
+                }
+                continue;
+            }
+            if let Some(MultilineQuote::Basic) = single {
+                if bytes[idx] == b'\\' {
+                    idx = (idx + 2).min(bytes.len());
+                } else if bytes[idx] == b'"' {
+                    single = None;
+                    idx += 1;
+                } else {
+                    idx += 1;
+                }
+                continue;
+            }
+            if let Some(MultilineQuote::Literal) = single {
+                if bytes[idx] == b'\'' {
+                    single = None;
+                }
+                idx += 1;
+                continue;
+            }
+            if bytes[idx] == b'#' {
+                break;
+            }
+            if bytes[idx..].starts_with(b"\"\"\"") {
+                multiline = Some(MultilineQuote::Basic);
+                idx += 3;
+            } else if bytes[idx..].starts_with(b"'''") {
+                multiline = Some(MultilineQuote::Literal);
+                idx += 3;
+            } else if bytes[idx] == b'"' {
+                single = Some(MultilineQuote::Basic);
+                idx += 1;
+            } else if bytes[idx] == b'\'' {
+                single = Some(MultilineQuote::Literal);
+                idx += 1;
+            } else if bytes[idx] == b'[' {
+                square_depth += 1;
+                idx += 1;
+            } else if bytes[idx] == b']' {
+                square_depth = square_depth.saturating_sub(1);
+                idx += 1;
+            } else if bytes[idx] == b'{' {
+                curly_depth += 1;
+                idx += 1;
+            } else if bytes[idx] == b'}' {
+                curly_depth = curly_depth.saturating_sub(1);
+                idx += 1;
+            } else {
+                idx += 1;
+            }
+        }
+    }
+    (flags, multiline.is_some())
+}
+
+fn root_end_index<S: AsRef<str>>(lines: &[S], structural: &[bool]) -> usize {
     lines
         .iter()
-        .position(|l| is_table_header(l))
+        .enumerate()
+        .position(|(i, l)| structural[i] && is_table_header(l.as_ref()))
         .unwrap_or(lines.len())
 }
 
@@ -208,9 +316,14 @@ fn is_opencodex_catalog_path(path: &str) -> bool {
 pub fn external_codex_model_provider(content: &str) -> Option<String> {
     let lf = apply_eol(content, "\n");
     let lines: Vec<&str> = lf.split('\n').collect();
-    let root_end = root_end_index(&lines);
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     let mut provider: Option<String> = None;
-    for &line in &lines[..root_end] {
+    for i in 0..root_end {
+        if !structural[i] {
+            continue;
+        }
+        let line = lines[i];
         if let Ok(Some(val)) = parse_single_line_string_assignment(line, "model_provider") {
             provider = Some(val);
             break;
@@ -225,6 +338,9 @@ pub fn external_codex_model_provider(content: &str) -> Option<String> {
     let target_table_2 = format!("model_providers.\"{prov}\"");
     let mut table_start: Option<usize> = None;
     for (idx, &line) in lines.iter().enumerate() {
+        if !structural[idx] {
+            continue;
+        }
         if let Some(tname) = parse_simple_table_name(line) {
             let normalized = tname.replace(' ', "");
             if normalized == target_table_1 || normalized == target_table_2 {
@@ -235,11 +351,14 @@ pub fn external_codex_model_provider(content: &str) -> Option<String> {
     }
     if let Some(start) = table_start {
         let mut has_base_url = false;
-        for &line in &lines[start + 1..] {
-            if is_table_header(line) {
+        for idx in (start + 1)..lines.len() {
+            if !structural[idx] {
+                continue;
+            }
+            if is_table_header(lines[idx]) {
                 break;
             }
-            if let Ok(Some(_)) = parse_single_line_string_assignment(line, "base_url") {
+            if let Ok(Some(_)) = parse_single_line_string_assignment(lines[idx], "base_url") {
                 has_base_url = true;
                 break;
             }
@@ -260,13 +379,21 @@ pub fn detect_unowned_root_routing_conflict(content: &str) -> Result<(), String>
     }
     let lf = apply_eol(content, "\n");
     let lines: Vec<&str> = lf.split('\n').collect();
-    let root_end = root_end_index(&lines);
+    let (structural, unclosed) = mark_structural_lines(&lines);
+    if unclosed {
+        return Err("attach refused: config.toml contains an unclosed multiline string".to_owned());
+    }
+    let root_end = root_end_index(&lines, &structural);
     for i in 0..root_end {
+        if !structural[i] {
+            continue;
+        }
         let line = lines[i];
         for key in ["openai_base_url", "experimental_realtime_ws_base_url"] {
             match parse_single_line_string_assignment(line, key) {
                 Ok(Some(_)) => {
-                    let marked = i > 0 && is_ocx_routing_marker_line(lines[i - 1]);
+                    let marked =
+                        i > 0 && structural[i - 1] && is_ocx_routing_marker_line(lines[i - 1]);
                     if !marked {
                         return Err(format!(
                             "attach refused: user-owned root {key} already exists in config.toml"
@@ -307,12 +434,13 @@ fn insert_root_lines(content_lf: &str, added: &[String]) -> String {
     if had_trailing_nl && lines.last().is_some_and(String::is_empty) {
         lines.pop();
     }
-    let root_end = lines
-        .iter()
-        .position(|l| is_table_header(l))
-        .unwrap_or(lines.len());
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     if root_end == lines.len() {
-        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        while !lines.is_empty()
+            && structural[lines.len() - 1]
+            && lines.last().is_some_and(|l| l.trim().is_empty())
+        {
             lines.pop();
         }
         lines.extend(added.iter().cloned());
@@ -321,7 +449,7 @@ fn insert_root_lines(content_lf: &str, added: &[String]) -> String {
         return out;
     }
     let mut at = root_end;
-    while at > 0 && lines[at - 1].trim().is_empty() {
+    while at > 0 && structural[at - 1] && lines[at - 1].trim().is_empty() {
         at -= 1;
     }
     for (offset, item) in added.iter().enumerate() {
@@ -340,11 +468,16 @@ fn strip_owned_root_urls(
     journaled_ws: Option<&str>,
 ) -> String {
     let lines: Vec<&str> = content_lf.split('\n').collect();
-    let root_end = root_end_index(&lines);
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     let mut drop = vec![false; lines.len()];
     for i in 0..root_end {
+        if !structural[i] {
+            continue;
+        }
         if let Ok(Some(val)) = parse_single_line_string_assignment(lines[i], "openai_base_url") {
-            let marker_above = i > 0 && is_ocx_routing_marker_line(lines[i - 1]);
+            let marker_above =
+                i > 0 && structural[i - 1] && is_ocx_routing_marker_line(lines[i - 1]);
             let value_match = journaled_base == Some(val.as_str());
             if marker_above || value_match {
                 drop[i] = true;
@@ -357,7 +490,8 @@ fn strip_owned_root_urls(
         } else if let Ok(Some(val)) =
             parse_single_line_string_assignment(lines[i], "experimental_realtime_ws_base_url")
         {
-            let marker_above = i > 0 && is_ocx_routing_marker_line(lines[i - 1]);
+            let marker_above =
+                i > 0 && structural[i - 1] && is_ocx_routing_marker_line(lines[i - 1]);
             let value_match = journaled_ws == Some(val.as_str());
             if marker_above || value_match {
                 drop[i] = true;
@@ -377,11 +511,16 @@ fn strip_owned_root_urls(
 
 fn strip_owned_web_search(content_lf: &str, injected_val: Option<&str>) -> String {
     let lines: Vec<&str> = content_lf.split('\n').collect();
-    let root_end = root_end_index(&lines);
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     let mut drop = vec![false; lines.len()];
     for i in 0..root_end {
+        if !structural[i] {
+            continue;
+        }
         if let Ok(Some(val)) = parse_single_line_string_assignment(lines[i], "web_search") {
-            let marker_above = i > 0 && is_ocx_routing_marker_line(lines[i - 1]);
+            let marker_above =
+                i > 0 && structural[i - 1] && is_ocx_routing_marker_line(lines[i - 1]);
             let value_match = injected_val == Some(val.as_str());
             if marker_above || value_match {
                 drop[i] = true;
@@ -407,11 +546,15 @@ fn ensure_root_web_search(
 ) -> Result<(String, Option<String>, Option<String>), String> {
     let stripped = strip_owned_web_search(content_lf, prior_injected);
     let lines: Vec<&str> = stripped.split('\n').collect();
-    let root_end = root_end_index(&lines);
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     if !disable {
         let mut has_user_ws = false;
-        for &line in &lines[..root_end] {
-            if parse_single_line_string_assignment(line, "web_search")?.is_some() {
+        for i in 0..root_end {
+            if !structural[i] {
+                continue;
+            }
+            if parse_single_line_string_assignment(lines[i], "web_search")?.is_some() {
                 has_user_ws = true;
                 break;
             }
@@ -429,6 +572,9 @@ fn ensure_root_web_search(
     let mut replaced = prior_replaced_user_line.map(str::to_owned);
     let mut saw_user = false;
     for i in 0..root_end {
+        if !structural[i] {
+            continue;
+        }
         if parse_single_line_string_assignment(lines[i], "web_search")?.is_some() {
             if !saw_user {
                 replaced = Some(lines[i].to_owned());
@@ -459,12 +605,13 @@ fn set_root_catalog_path(content_lf: &str, catalog_path: &str) -> String {
         toml_escape_basic_string(catalog_path)
     );
     let mut lines: Vec<String> = content_lf.split('\n').map(str::to_owned).collect();
-    let root_end = lines
-        .iter()
-        .position(|l| is_table_header(l))
-        .unwrap_or(lines.len());
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     let mut owned_indices = Vec::new();
     for (i, line) in lines[..root_end].iter().enumerate() {
+        if !structural[i] {
+            continue;
+        }
         if let Ok(Some(existing)) = parse_single_line_string_assignment(line, "model_catalog_json")
             && is_opencodex_catalog_path(&existing)
         {
@@ -486,12 +633,14 @@ fn set_root_catalog_path(content_lf: &str, catalog_path: &str) -> String {
 
 fn strip_opencodex_catalog_path(content_lf: &str) -> String {
     let lines: Vec<&str> = content_lf.split('\n').collect();
-    let root_end = root_end_index(&lines);
+    let (structural, _) = mark_structural_lines(&lines);
+    let root_end = root_end_index(&lines, &structural);
     lines
         .into_iter()
         .enumerate()
         .filter_map(|(i, l)| {
             if i < root_end
+                && structural[i]
                 && let Ok(Some(p)) = parse_single_line_string_assignment(l, "model_catalog_json")
                 && is_opencodex_catalog_path(&p)
             {
@@ -503,48 +652,64 @@ fn strip_opencodex_catalog_path(content_lf: &str) -> String {
         .join("\n")
 }
 
-fn upsert_table_bool(content_lf: &str, table_name: &str, key: &str, val: bool) -> String {
+fn upsert_table_bool(
+    content_lf: &str,
+    table_name: &str,
+    key: &str,
+    val: bool,
+) -> (String, Option<String>) {
     let mut lines: Vec<String> = content_lf.split('\n').map(str::to_owned).collect();
     let had_trailing_nl = content_lf.ends_with('\n');
     if had_trailing_nl && lines.last().is_some_and(String::is_empty) {
         lines.pop();
     }
-    let table_idx = lines
-        .iter()
-        .position(|l| parse_simple_table_name(l).as_deref() == Some(table_name));
+    let (structural, _) = mark_structural_lines(&lines);
+    let table_idx = lines.iter().enumerate().position(|(i, l)| {
+        structural[i] && parse_simple_table_name(l).as_deref() == Some(table_name)
+    });
     let assign_line = format!("{key} = {val}");
     if let Some(start) = table_idx {
         let end = lines[start + 1..]
             .iter()
-            .position(|l| is_table_header(l))
+            .enumerate()
+            .position(|(rel, l)| structural[start + 1 + rel] && is_table_header(l))
             .map(|rel| start + 1 + rel)
             .unwrap_or(lines.len());
-        for line in &mut lines[start + 1..end] {
+        for idx in (start + 1)..end {
+            if !structural[idx] {
+                continue;
+            }
+            let line = &mut lines[idx];
             if let Some((k, _)) = parse_key_value_line(line)
                 && k == key
             {
+                let prior_line = line.clone();
                 let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
                 *line = format!("{indent}{assign_line}");
                 let mut out = lines.join("\n");
                 out.push('\n');
-                return out;
+                return (out, Some(prior_line));
             }
         }
         let mut insert_at = end;
-        while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
+        while insert_at > start + 1
+            && structural[insert_at - 1]
+            && lines[insert_at - 1].trim().is_empty()
+        {
             insert_at -= 1;
         }
         lines.insert(insert_at, assign_line);
         let mut out = lines.join("\n");
         out.push('\n');
-        return out;
+        return (out, None);
     }
     let trimmed = content_lf.trim_end_matches('\n');
-    if trimmed.is_empty() {
+    let out = if trimmed.is_empty() {
         format!("[{table_name}]\n{assign_line}\n")
     } else {
         format!("{trimmed}\n\n[{table_name}]\n{assign_line}\n")
-    }
+    };
+    (out, None)
 }
 
 fn apply_subagent_defaults(
@@ -560,9 +725,10 @@ fn apply_subagent_defaults(
     if stripped.ends_with('\n') && lines.last().is_some_and(String::is_empty) {
         lines.pop();
     }
-    let ag_idx = lines
-        .iter()
-        .position(|l| parse_simple_table_name(l).as_deref() == Some("agents"));
+    let (structural, _) = mark_structural_lines(&lines);
+    let ag_idx = lines.iter().enumerate().position(|(i, l)| {
+        structural[i] && parse_simple_table_name(l).as_deref() == Some("agents")
+    });
     let mut to_add = vec![
         MANAGED_SUBAGENT_DEFAULT_MARKER.to_owned(),
         format!(
@@ -584,11 +750,16 @@ fn apply_subagent_defaults(
     if let Some(start) = ag_idx {
         let end = lines[start + 1..]
             .iter()
-            .position(|l| is_table_header(l))
+            .enumerate()
+            .position(|(rel, l)| structural[start + 1 + rel] && is_table_header(l))
             .map(|rel| start + 1 + rel)
             .unwrap_or(lines.len());
         // Respect user-owned existing keys in [agents]
-        for line in &lines[start + 1..end] {
+        for idx in (start + 1)..end {
+            if !structural[idx] {
+                continue;
+            }
+            let line = &lines[idx];
             if let Some((k, _)) = parse_key_value_line(line)
                 && (k == "default_subagent_model" || k == "default_subagent_reasoning_effort")
             {
@@ -596,7 +767,10 @@ fn apply_subagent_defaults(
             }
         }
         let mut insert_at = end;
-        while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
+        while insert_at > start + 1
+            && structural[insert_at - 1]
+            && lines[insert_at - 1].trim().is_empty()
+        {
             insert_at -= 1;
         }
         for (off, item) in to_add.into_iter().enumerate() {
@@ -622,19 +796,23 @@ fn apply_subagent_defaults(
 
 fn strip_subagent_defaults(content_lf: &str, written: Option<&WrittenSubagentDefaults>) -> String {
     let lines: Vec<&str> = content_lf.split('\n').collect();
-    let Some(ag_idx) = lines
-        .iter()
-        .position(|l| parse_simple_table_name(l).as_deref() == Some("agents"))
-    else {
+    let (structural, _) = mark_structural_lines(&lines);
+    let Some(ag_idx) = lines.iter().enumerate().position(|(i, l)| {
+        structural[i] && parse_simple_table_name(l).as_deref() == Some("agents")
+    }) else {
         return content_lf.to_owned();
     };
     let end_idx = lines[ag_idx + 1..]
         .iter()
-        .position(|l| is_table_header(l))
+        .enumerate()
+        .position(|(rel, l)| structural[ag_idx + 1 + rel] && is_table_header(l))
         .map(|rel| ag_idx + 1 + rel)
         .unwrap_or(lines.len());
     let mut drop = vec![false; lines.len()];
     for i in (ag_idx + 1)..end_idx {
+        if !structural[i] {
+            continue;
+        }
         let trimmed = lines[i].trim();
         if trimmed == MANAGED_SUBAGENT_DEFAULT_MARKER {
             drop[i] = true;
@@ -659,14 +837,17 @@ fn strip_subagent_defaults(content_lf: &str, written: Option<&WrittenSubagentDef
             }
         }
     }
-    let remaining_body_has_keys = (ag_idx + 1..end_idx)
-        .filter(|&i| !drop[i])
-        .any(|i| !lines[i].trim().is_empty() && !lines[i].trim().starts_with('#'));
+    let remaining_body_has_keys = (ag_idx + 1..end_idx).filter(|&i| !drop[i]).any(|i| {
+        !structural[i] || (!lines[i].trim().is_empty() && !lines[i].trim().starts_with('#'))
+    });
     if !remaining_body_has_keys {
         for d in &mut drop[ag_idx..end_idx] {
             *d = true;
         }
-        if ag_idx > 0 && lines[ag_idx - 1].trim() == MANAGED_AGENTS_TABLE_MARKER {
+        if ag_idx > 0
+            && structural[ag_idx - 1]
+            && lines[ag_idx - 1].trim() == MANAGED_AGENTS_TABLE_MARKER
+        {
             drop[ag_idx - 1] = true;
         }
     }
@@ -681,44 +862,59 @@ fn strip_subagent_defaults(content_lf: &str, written: Option<&WrittenSubagentDef
 fn strip_features_ledger(
     content_lf: &str,
     wrote_fast_mode: Option<bool>,
+    prior_user_fast_mode_line: Option<&str>,
     wrote_multi_agent_v2: Option<bool>,
+    prior_user_multi_agent_v2_line: Option<&str>,
 ) -> String {
     if wrote_fast_mode.is_none() && wrote_multi_agent_v2.is_none() {
         return content_lf.to_owned();
     }
-    let lines: Vec<&str> = content_lf.split('\n').collect();
-    let Some(feat_idx) = lines
-        .iter()
-        .position(|l| parse_simple_table_name(l).as_deref() == Some("features"))
-    else {
+    let mut lines: Vec<String> = content_lf.split('\n').map(str::to_owned).collect();
+    let (structural, _) = mark_structural_lines(&lines);
+    let Some(feat_idx) = lines.iter().enumerate().position(|(i, l)| {
+        structural[i] && parse_simple_table_name(l).as_deref() == Some("features")
+    }) else {
         return content_lf.to_owned();
     };
     let end_idx = lines[feat_idx + 1..]
         .iter()
-        .position(|l| is_table_header(l))
+        .enumerate()
+        .position(|(rel, l)| structural[feat_idx + 1 + rel] && is_table_header(l))
         .map(|rel| feat_idx + 1 + rel)
         .unwrap_or(lines.len());
     let mut drop = vec![false; lines.len()];
     for i in (feat_idx + 1)..end_idx {
-        if let Some((k, rhs)) = parse_key_value_line(lines[i]) {
+        if !structural[i] {
+            continue;
+        }
+        if let Some((k, rhs)) = parse_key_value_line(&lines[i]) {
             let val_clean = strip_inline_comment(rhs).trim();
             if let Some(fm) = wrote_fast_mode
                 && k == "fast_mode"
                 && val_clean == (if fm { "true" } else { "false" })
             {
-                drop[i] = true;
+                if let Some(prior) = prior_user_fast_mode_line {
+                    lines[i] = prior.to_owned();
+                } else {
+                    drop[i] = true;
+                }
+                continue;
             }
             if let Some(v2) = wrote_multi_agent_v2
                 && k == "multi_agent_v2"
                 && val_clean == (if v2 { "true" } else { "false" })
             {
-                drop[i] = true;
+                if let Some(prior) = prior_user_multi_agent_v2_line {
+                    lines[i] = prior.to_owned();
+                } else {
+                    drop[i] = true;
+                }
             }
         }
     }
-    let remaining_has_keys = (feat_idx + 1..end_idx)
-        .filter(|&i| !drop[i])
-        .any(|i| !lines[i].trim().is_empty() && !lines[i].trim().starts_with('#'));
+    let remaining_has_keys = (feat_idx + 1..end_idx).filter(|&i| !drop[i]).any(|i| {
+        !structural[i] || (!lines[i].trim().is_empty() && !lines[i].trim().starts_with('#'))
+    });
     if !remaining_has_keys {
         for d in &mut drop[feat_idx..end_idx] {
             *d = true;
@@ -780,14 +976,24 @@ pub fn apply_design_b_config(
         ],
     );
     let mut wrote_fast = prior_ledger.and_then(|l| l.wrote_fast_mode);
+    let mut prior_fast_line = prior_ledger.and_then(|l| l.prior_user_fast_mode_line.clone());
     if let Some(fm) = settings.fast_mode {
-        lf = upsert_table_bool(&lf, "features", "fast_mode", fm);
+        let (next_lf, overwritten) = upsert_table_bool(&lf, "features", "fast_mode", fm);
+        if wrote_fast.is_none() {
+            prior_fast_line = overwritten;
+        }
+        lf = next_lf;
         wrote_fast = Some(fm);
     }
     let mut wrote_v2 = prior_ledger.and_then(|l| l.wrote_multi_agent_v2);
+    let mut prior_v2_line = prior_ledger.and_then(|l| l.prior_user_multi_agent_v2_line.clone());
     if let Some(mode) = &settings.multi_agent_mode {
         let v2_bool = mode == "v2";
-        lf = upsert_table_bool(&lf, "features", "multi_agent_v2", v2_bool);
+        let (next_lf, overwritten) = upsert_table_bool(&lf, "features", "multi_agent_v2", v2_bool);
+        if wrote_v2.is_none() {
+            prior_v2_line = overwritten;
+        }
+        lf = next_lf;
         wrote_v2 = Some(v2_bool);
     }
     let (sub_lf, wrote_sub) = apply_subagent_defaults(
@@ -803,7 +1009,9 @@ pub fn apply_design_b_config(
         injected_web_search: wrote_ws,
         replaced_user_web_search_line: replaced_ws,
         wrote_fast_mode: wrote_fast,
+        prior_user_fast_mode_line: prior_fast_line,
         wrote_multi_agent_v2: wrote_v2,
+        prior_user_multi_agent_v2_line: prior_v2_line,
         wrote_subagent_defaults: wrote_sub,
     };
     Ok((apply_eol(&lf, eol), ledger))
@@ -818,8 +1026,16 @@ pub fn surgical_detach_config(
     let lf = apply_eol(raw_current, "\n");
     // Validate every root managed key line parses cleanly; fail closed on corrupt spans.
     let lines: Vec<&str> = lf.split('\n').collect();
-    let root_end = root_end_index(&lines);
-    for &line in &lines[..root_end] {
+    let (structural, unclosed) = mark_structural_lines(&lines);
+    if unclosed {
+        return Err("config.toml contains an unclosed multiline string".to_owned());
+    }
+    let root_end = root_end_index(&lines, &structural);
+    for i in 0..root_end {
+        if !structural[i] {
+            continue;
+        }
+        let line = lines[i];
         for managed_key in [
             "openai_base_url",
             "experimental_realtime_ws_base_url",
@@ -836,7 +1052,9 @@ pub fn surgical_detach_config(
     // Also drop orphaned marker above user-edited openai_base_url
     let mut drop_orphan = vec![false; lines.len()];
     for i in 1..root_end {
-        if is_ocx_routing_marker_line(lines[i - 1])
+        if structural[i]
+            && structural[i - 1]
+            && is_ocx_routing_marker_line(lines[i - 1])
             && let Some((k, _)) = parse_key_value_line(lines[i])
             && (k == "openai_base_url" || k == "experimental_realtime_ws_base_url")
         {
@@ -862,7 +1080,13 @@ pub fn surgical_detach_config(
         ledger.replaced_user_web_search_line.as_deref(),
     )?;
     work = ws_restored;
-    work = strip_features_ledger(&work, ledger.wrote_fast_mode, ledger.wrote_multi_agent_v2);
+    work = strip_features_ledger(
+        &work,
+        ledger.wrote_fast_mode,
+        ledger.prior_user_fast_mode_line.as_deref(),
+        ledger.wrote_multi_agent_v2,
+        ledger.prior_user_multi_agent_v2_line.as_deref(),
+    );
     work = strip_subagent_defaults(&work, ledger.wrote_subagent_defaults.as_ref());
     work = collapse_excess_blank_lines(&work);
     if work.trim().is_empty() {
@@ -876,21 +1100,32 @@ pub fn surgical_detach_config(
 }
 
 fn collapse_excess_blank_lines(lf: &str) -> String {
-    let mut out = String::with_capacity(lf.len());
-    let mut consecutive_nl = 0usize;
-    for ch in lf.trim_start_matches('\n').chars() {
-        if ch == '\n' {
-            consecutive_nl += 1;
-            if consecutive_nl <= 2 {
-                out.push('\n');
+    let lines: Vec<&str> = lf.split('\n').collect();
+    let (structural, _) = mark_structural_lines(&lines);
+    let mut out_lines: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut blank_run = 0usize;
+    let mut started = false;
+    for (i, &line) in lines.iter().enumerate() {
+        let is_struct_blank = structural[i] && line.is_empty();
+        if !started && is_struct_blank {
+            continue;
+        }
+        started = true;
+        if is_struct_blank {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
             }
         } else {
-            consecutive_nl = 0;
-            out.push(ch);
+            blank_run = 0;
         }
+        out_lines.push(line);
     }
-    while out.ends_with("\n\n") {
-        out.pop();
+    while out_lines.len() > 1
+        && out_lines.last() == Some(&"")
+        && out_lines[out_lines.len() - 2].is_empty()
+    {
+        out_lines.pop();
     }
-    out
+    out_lines.join("\n")
 }

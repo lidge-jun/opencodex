@@ -970,6 +970,50 @@
       "expectedDetachOutcome": "not_attached",
       "expectedFinalToml": "model_provider = \"openrouter\"\n\n[model_providers.openrouter]\nname = \"OpenRouter\"\nbase_url = \"https://openrouter.ai/api/v1\"\n",
       "expectedFinalCatalog": null
+    },
+    {
+      "id": "multiline_developer_instructions_bracket_line",
+      "preAttachToml": "developer_instructions = \"\"\"\n[Important]\nKeep literal\n\"\"\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_append_table",
+        "appendedToml": "\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "developer_instructions = \"\"\"\n[Important]\nKeep literal\n\"\"\"\n\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "restore_overwritten_user_features_on_surgical_detach",
+      "preAttachToml": "[features]\nfast_mode = false\nmulti_agent_v2 = true\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": true,
+        "multiAgentMode": "v1",
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_append_table",
+        "appendedToml": "\n[extra]\nk = 1\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "[features]\nfast_mode = false\nmulti_agent_v2 = true\n\n[extra]\nk = 1\n",
+      "expectedFinalCatalog": null
     }
   ]
 }

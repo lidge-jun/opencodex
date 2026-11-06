@@ -24,3 +24,4 @@ Per explicit user directive (`"너 상속 으로 해서"`), all PABCD subagents 
 | `wp2` | Completed | Standalone Rust crate `native/ocx-child` (878 KiB / 899,216 B stripped release binary; `cargo test --locked` 6 pass, 0 fail; `clippy -D warnings` & `fmt --check` clean) |
 | `wp3` | Completed | Home discovery (`ssh-argv.ts`, `remote-windows.ts`), detached enrollment preflight (`link-enrollment.ts`), `package.json` scripts/files, and focused + real-binary E2E suites (`link-ocx-child-e2e.test.ts` 811ms pass) |
 | `wp4` | Completed | `structure/manifest.json` + `structure/remote-link.md` + `structure/overview.md` (`INV-LINK-CHILD-01`) + `structure/INDEX.md`, `docs-site/` build (641 pages, 93,153 links), full gate matrix, and PR targeting `dev` |
+| `wp5` | In Progress | Fixed all 3 PR #8237 Codex review findings (write-ahead recovery journal, multiline TOML structural scanner, and overwritten user `[features]` surgical restoration) with shared golden & Rust crash-recovery tests |

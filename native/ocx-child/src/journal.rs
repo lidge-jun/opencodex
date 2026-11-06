@@ -30,10 +30,14 @@ pub struct ChildJournalV1 {
     pub pre_attach_config_sha256: Option<String>,
     pub first_injected_config_sha256: String,
     pub latest_injected_config_sha256: String,
+    #[serde(default)]
+    pub previous_injected_config_sha256: Option<String>,
     pub untouched_by_external_writer: bool,
     pub pre_attach_catalog_existed: bool,
     pub pre_attach_catalog_bytes_b64: Option<String>,
     pub latest_catalog_sha256: String,
+    #[serde(default)]
+    pub previous_catalog_sha256: Option<String>,
     pub pre_attach_models_cache_existed: bool,
     pub pre_attach_models_cache_bytes_b64: Option<String>,
     pub latest_models_cache_sha256: Option<String>,
@@ -143,11 +147,11 @@ pub fn validate_catalog_json(bytes: &[u8]) -> Result<Vec<serde_json::Value>, Str
     Ok(models.clone())
 }
 
-/// Updates `$CODEX_HOME/models_cache.json` matching `invalidateCodexModelsCacheWithPermitOutcome`.
-pub fn refresh_codex_models_cache(
+/// Prepares updated `$CODEX_HOME/models_cache.json` bytes (if changed) and SHA-256 without writing yet.
+pub fn prepare_codex_models_cache(
     cache_path: &Path,
     catalog_models: &[serde_json::Value],
-) -> Result<String, String> {
+) -> Result<(Option<Vec<u8>>, String), String> {
     reject_symlink(cache_path)?;
     let existing_bytes = match fs::read(cache_path) {
         Ok(b) => Some(b),
@@ -189,7 +193,16 @@ pub fn refresh_codex_models_cache(
         .map_err(|e| format!("failed serializing models_cache.json: {e}"))?;
     rendered.push(b'\n');
     let digest = sha256_hex(&rendered);
-    if existing_bytes.as_deref() != Some(rendered.as_slice()) {
+    let to_write = (existing_bytes.as_deref() != Some(rendered.as_slice())).then_some(rendered);
+    Ok((to_write, digest))
+}
+
+pub fn refresh_codex_models_cache(
+    cache_path: &Path,
+    catalog_models: &[serde_json::Value],
+) -> Result<String, String> {
+    let (to_write, digest) = prepare_codex_models_cache(cache_path, catalog_models)?;
+    if let Some(rendered) = to_write {
         write_regular_atomic(cache_path, &rendered)?;
     }
     Ok(digest)
@@ -240,16 +253,19 @@ pub fn apply_attach_or_sync(
     let next_cfg_sha = sha256_hex(next_cfg_text.as_bytes());
     let next_cat_sha = sha256_hex(catalog_bytes);
 
-    let (pre_cfg_existed, pre_cfg_b64, pre_cfg_sha, first_inj_sha, untouched) =
+    let (pre_cfg_existed, pre_cfg_b64, pre_cfg_sha, first_inj_sha, prev_inj_sha, untouched) =
         if let Some(prev) = &existing_journal {
             let cur_sha = current_cfg_bytes.as_ref().map(|b| sha256_hex(b));
             let still_untouched = prev.untouched_by_external_writer
-                && cur_sha.as_deref() == Some(prev.latest_injected_config_sha256.as_str());
+                && (cur_sha.as_deref() == Some(prev.latest_injected_config_sha256.as_str())
+                    || cur_sha == prev.pre_attach_config_sha256
+                    || (cur_sha.is_some() && cur_sha == prev.previous_injected_config_sha256));
             (
                 prev.pre_attach_config_existed,
                 prev.pre_attach_config_bytes_b64.clone(),
                 prev.pre_attach_config_sha256.clone(),
                 prev.first_injected_config_sha256.clone(),
+                Some(prev.latest_injected_config_sha256.clone()),
                 still_untouched,
             )
         } else {
@@ -260,19 +276,21 @@ pub fn apply_attach_or_sync(
                 b64,
                 sha,
                 next_cfg_sha.clone(),
+                None,
                 true,
             )
         };
 
-    let (pre_cat_existed, pre_cat_b64) = if let Some(prev) = &existing_journal {
+    let (pre_cat_existed, pre_cat_b64, prev_cat_sha) = if let Some(prev) = &existing_journal {
         (
             prev.pre_attach_catalog_existed,
             prev.pre_attach_catalog_bytes_b64.clone(),
+            Some(prev.latest_catalog_sha256.clone()),
         )
     } else {
         match fs::read(&catalog_path) {
-            Ok(b) => (true, Some(BASE64.encode(&b))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None),
+            Ok(b) => (true, Some(BASE64.encode(&b)), None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None, None),
             Err(e) => return Err(format!("failed reading {}: {e}", catalog_path.display())),
         }
     };
@@ -290,10 +308,8 @@ pub fn apply_attach_or_sync(
         }
     };
 
-    write_regular_atomic(&catalog_path, catalog_bytes)?;
-    write_private_atomic(&paths.catalog_backup_file, catalog_bytes)?;
-    let latest_cache_sha = refresh_codex_models_cache(&cache_path, &catalog_models)?;
-    write_regular_atomic(&config_path, next_cfg_text.as_bytes())?;
+    let (prepared_cache, latest_cache_sha) =
+        prepare_codex_models_cache(&cache_path, &catalog_models)?;
 
     let journal = ChildJournalV1 {
         schema: CHILD_JOURNAL_SCHEMA.to_owned(),
@@ -307,16 +323,25 @@ pub fn apply_attach_or_sync(
         pre_attach_config_sha256: pre_cfg_sha,
         first_injected_config_sha256: first_inj_sha,
         latest_injected_config_sha256: next_cfg_sha,
+        previous_injected_config_sha256: prev_inj_sha,
         untouched_by_external_writer: untouched,
         pre_attach_catalog_existed: pre_cat_existed,
         pre_attach_catalog_bytes_b64: pre_cat_b64,
         latest_catalog_sha256: next_cat_sha,
+        previous_catalog_sha256: prev_cat_sha,
         pre_attach_models_cache_existed: pre_cache_existed,
         pre_attach_models_cache_bytes_b64: pre_cache_b64,
         latest_models_cache_sha256: Some(latest_cache_sha),
         ledger: next_ledger,
     };
+    // Persist recovery journal BEFORE mutating any file in $CODEX_HOME (write-ahead durability).
     write_journal(&paths.journal_file, &journal)?;
+    write_regular_atomic(&catalog_path, catalog_bytes)?;
+    write_private_atomic(&paths.catalog_backup_file, catalog_bytes)?;
+    if let Some(cache_bytes) = prepared_cache {
+        write_regular_atomic(&cache_path, &cache_bytes)?;
+    }
+    write_regular_atomic(&config_path, next_cfg_text.as_bytes())?;
     Ok(journal)
 }
 
@@ -339,7 +364,9 @@ pub fn offline_detach(
         let cat_bytes = fs::read(catalog_path)
             .map_err(|e| DetachError::Io(format!("failed reading catalog: {e}")))?;
         let cur_cat_sha = sha256_hex(&cat_bytes);
-        if cur_cat_sha != journal.latest_catalog_sha256 {
+        let matches_known_injected = cur_cat_sha == journal.latest_catalog_sha256
+            || Some(cur_cat_sha.as_str()) == journal.previous_catalog_sha256.as_deref();
+        if !matches_known_injected {
             let matches_prior = journal
                 .pre_attach_catalog_bytes_b64
                 .as_ref()
@@ -360,12 +387,16 @@ pub fn offline_detach(
     };
 
     let outcome = match cur_cfg_bytes {
+        None if !journal.pre_attach_config_existed && journal.untouched_by_external_writer => {
+            DetachOutcome::ExactRestore
+        }
         None => DetachOutcome::SurgicalRestore,
         Some(bytes) => {
             let cur_sha = sha256_hex(&bytes);
-            if journal.untouched_by_external_writer
-                && cur_sha == journal.latest_injected_config_sha256
-            {
+            let matches_untouched_sha = cur_sha == journal.latest_injected_config_sha256
+                || Some(cur_sha.as_str()) == journal.pre_attach_config_sha256.as_deref()
+                || Some(cur_sha.as_str()) == journal.previous_injected_config_sha256.as_deref();
+            if journal.untouched_by_external_writer && matches_untouched_sha {
                 if journal.pre_attach_config_existed {
                     let orig = journal
                         .pre_attach_config_bytes_b64

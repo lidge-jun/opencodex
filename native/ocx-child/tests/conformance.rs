@@ -437,3 +437,67 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
         let _ = fs::remove_dir_all(&scratch);
     }
 }
+
+#[test]
+fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
+    let scratch = std::env::temp_dir().join(format!("ocx-child-wal-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let paths = ChildPaths::new(ocx_home, codex_home);
+
+    let pre_toml = "developer_instructions = \"\"\"\n[Important]\nNever inject inside me\n\"\"\"\n";
+    fs::write(paths.codex_config_path(), pre_toml.as_bytes()).unwrap();
+
+    let settings = HomeCodexSettings {
+        fast_mode: Some(true),
+        multi_agent_mode: Some("v1".to_owned()),
+        web_search_sidecar_enabled: true,
+        subagent_defaults: None,
+    };
+    let cat_v1 = b"{\"models\":[{\"slug\":\"m-v1\"}]}\n";
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        cat_v1,
+        &settings,
+    )
+    .unwrap();
+
+    // 1. Verify root keys landed AFTER closing triple quotes, never inside [Important]
+    let injected = fs::read_to_string(paths.codex_config_path()).unwrap();
+    assert!(injected.starts_with(pre_toml), "injected was:\n{injected}");
+    assert!(injected.contains("openai_base_url = \"http://127.0.0.1:10100/v1\""));
+
+    // 2. Simulate crash during a second sync right after write_journal (config & catalog still hold v1)
+    let cat_v2 = b"{\"models\":[{\"slug\":\"m-v2\"}]}\n";
+    let settings_v2 = HomeCodexSettings {
+        fast_mode: Some(false),
+        ..settings.clone()
+    };
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        cat_v2,
+        &settings_v2,
+    )
+    .unwrap();
+    // Roll back config.toml and catalog.json on disk to v1 as if process crashed right after write_journal
+    fs::write(paths.codex_config_path(), injected.as_bytes()).unwrap();
+    fs::write(paths.codex_catalog_path(), cat_v1).unwrap();
+
+    let outcome = offline_detach(&paths, false).unwrap();
+    assert_eq!(outcome, DetachOutcome::ExactRestore);
+    assert_eq!(
+        fs::read_to_string(paths.codex_config_path()).unwrap(),
+        pre_toml
+    );
+    assert!(!paths.codex_catalog_path().exists());
+    let _ = fs::remove_dir_all(&scratch);
+}
