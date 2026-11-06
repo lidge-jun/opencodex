@@ -207,6 +207,31 @@ describe("ocx models", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("sparse canonical native custom rows inherit native metadata without leaking to gateways", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] },
+      },
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "openai", modelId: "gpt-6-luna" },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "relay", modelId: "gpt-6-luna" },
+        { id: "33333333-3333-4333-8333-333333333333", provider: "openai", modelId: "gpt-6-astra", inputModalities: ["text"], reasoningEfforts: [] },
+      ],
+    });
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "openai" && row.model === "gpt-6-luna"))
+        .toMatchObject({ inputModalities: ["text", "image"], reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] });
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "relay" && row.model === "gpt-6-luna"))
+        .toMatchObject({ inputModalities: null, reasoningEfforts: null });
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "openai" && row.model === "gpt-6-astra"))
+        .toMatchObject({ inputModalities: ["text"], reasoningEfforts: [] });
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("listing reads a stale reasoning snapshot without attempting network or liveness", () => {
     const { dir } = freshConfig({ providers: { test: { adapter: "openai-chat",
       baseUrl: "https://opencode.ai/zen/go/v1", models: ["fixture-model"] } } });

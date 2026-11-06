@@ -24,7 +24,7 @@ import { customRowInputModalities } from "../vision/eligibility";
 import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabilities";
-import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
+import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 import type { RuntimeApiDeps } from "./runtime-api";
@@ -86,10 +86,15 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       seen.add(model);
 
       const custom = config.customModels?.find(row => row.provider === provName && row.modelId === model);
+      const nativeMetadata = custom && hasNativeOpenAiCapabilityMetadata(model);
+      const canonicalProvider = provName === OPENAI_CODEX_PROVIDER_ID && prov.authMode === undefined
+        ? { ...prov, authMode: "forward" as const } : prov;
+      const canonicalNativeCustom = nativeMetadata && provName === OPENAI_CODEX_PROVIDER_ID
+        && isCanonicalOpenAiForwardProvider(canonicalProvider);
       const capability = Object.hasOwn(effective.modelCapabilities ?? {}, model)
         ? effective.modelCapabilities?.[model]?.inputModalities : undefined;
       const customModalities = customRowInputModalities(config, provName, model);
-      const modalities = capability ?? customModalities ?? (modelInList(effective.noVisionModels, model)
+      const modalities = capability ?? customModalities ?? (canonicalNativeCustom ? nativeInputModalities(model) : undefined) ?? (modelInList(effective.noVisionModels, model)
         ? ["text"] : modelRecordValue(effective.modelInputModalities, model) ?? effective.inputModalities ?? null);
       // Same reason, for the ladder: `configuredReasoningEfforts` is what the catalog
       // (`provider-fetch`) and the effort cap (`effort-policy`) resolve through, and it
@@ -97,9 +102,8 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       // match, drops levels Codex does not declare, and re-adds tiers the wire map proves
       // the model emits. Restating two of its five lines here reported a ladder the proxy
       // strips, and unsanitized junk as a supported level.
-      let efforts = custom?.reasoningEfforts ?? (reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false
+      let efforts = custom?.reasoningEfforts ?? (canonicalNativeCustom ? nativeReasoningEfforts(model) : undefined) ?? (reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false
         ? [] : configuredReasoningEfforts(effective, model, { refreshMetadata: false }) ?? null);
-      const nativeMetadata = custom && hasNativeOpenAiCapabilityMetadata(model);
       if (nativeMetadata && efforts && efforts.length > 0) {
         const allowed = nativeReasoningEfforts(model);
         if (allowed.length > 0) {
@@ -109,10 +113,7 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
           efforts = surviving.length > 0 ? surviving : [defaultEffort && allowed.includes(defaultEffort) ? defaultEffort : allowed[0]!];
         }
       }
-      const canonicalProvider = provName === OPENAI_CODEX_PROVIDER_ID && prov.authMode === undefined
-        ? { ...prov, authMode: "forward" as const } : prov;
-      const nativeCustomContext = nativeMetadata && provName === OPENAI_CODEX_PROVIDER_ID
-        && isCanonicalOpenAiForwardProvider(canonicalProvider)
+      const nativeCustomContext = canonicalNativeCustom
         ? nativeOpenAiContextWindow(model, {
           ...nativeContextLimits(config),
           ...(custom.contextWindow ? { modelWindows: { ...nativeContextLimits(config).modelWindows, [model]: custom.contextWindow } } : {}),
