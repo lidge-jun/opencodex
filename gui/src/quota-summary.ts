@@ -54,6 +54,7 @@ export function formatQuotaPercent(percent: number | undefined): string {
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
 const HEADLINE_ORDER: TKey[] = ["quota.weeklyLimit", "quota.monthlyLimit", "quota.fiveHourLimit"];
 
+/** Build reported quota windows with distinct IDs, including measured prepaid credits. */
 function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   const windows: QuotaSummaryWindow[] = quotaWindows(quota).map(window => {
     const percent = finite(window.percent) ? window.percent : undefined;
