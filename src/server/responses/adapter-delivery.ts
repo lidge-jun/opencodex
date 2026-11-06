@@ -57,7 +57,7 @@ export async function deliverAdapterResponse(
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
   adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort" | "localUpstream" | "thinkingSignatureRecovery" | "refetchThinkingSignature">,
-  continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry">,
+  continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry" | "isContinuationBodyStall">,
 ): Promise<Response> {
   const { logCtx, options, config } = requestContext;
   const {
@@ -73,6 +73,7 @@ export async function deliverAdapterResponse(
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
     fetchGuardedEmptyCompletionRetry,
+    isContinuationBodyStall,
   } = continuationState;
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
@@ -409,7 +410,9 @@ export async function deliverAdapterResponse(
       commitReasoningReplayServingRoute();
     }
     notifyResponseComplete(json);
-    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
+    const lastError = events.findLast(event => event.type === "error");
+    const status = json.status === "failed" && lastError && isContinuationBodyStall(lastError) ? 504 : 200;
+    return new Response(JSON.stringify(json), { status, headers: { "Content-Type": "application/json" } });
   }
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");

@@ -414,8 +414,64 @@ describe("server terminal guard integration", () => {
 
     const text = await response.text();
     expect(sends).toBe(2);
-    expect(text).toContain("Provider continuation response body stalled before completing");
+    const failure = JSON.parse(text.split("\n").find(line => line.startsWith("data: ") && line.includes('"type":"response.failed"'))!.slice(6));
+    expect(failure.response.error).toMatchObject({ code: "upstream_stall_timeout", message: "Upstream response body stalled for 1000ms" });
+    const log: RequestLogContext = { model: "fixture-model", provider: "fixture" };
+    inspectResponseLogJson(log, JSON.stringify(failure));
+    expect(log.terminalHttpStatus).toBe(504);
+    expect(errorDetailFor({ status: log.terminalHttpStatus!, upstreamError: log.upstreamError }).failureDetail)
+      .toEqual({ code: "body_stall", value: 1000 });
     expect(text).not.toContain("client closed request during terminal continuation");
+  });
+
+  test("a stalled buffered continuation returns 504 with the failed response", async () => {
+    takeInheritedSpendHome();
+    const stallConfig = { ...config, stallTimeoutSec: 1 } as unknown as OcxConfig;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) return Response.json({ id: "msg_fixture", type: "message", role: "assistant",
+        model: "se-claude-opus-4.8", content: [{ type: "text", text: "我接下来会修改相关文件。" }],
+        stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 1 } });
+      return new Response(new ReadableStream<Uint8Array>({}), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "se-claude-opus-4.8", input: "请检查这个问题并修复代码", stream: false,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }] }),
+    }), stallConfig, { model: "", provider: "" });
+    const body = await response.json() as { status: string; error: { code?: string; message: string } };
+    expect(sends).toBe(2);
+    expect(response.status).toBe(504);
+    expect(body.status).toBe("failed");
+    expect(body.error).toMatchObject({ code: "upstream_stall_timeout", message: "Upstream response body stalled for 1000ms" });
+    expect(errorDetailFor({ status: response.status, upstreamError: body.error.message }).failureDetail)
+      .toEqual({ code: "body_stall", value: 1000 });
+  });
+
+  test.each(["invalid-body", "provider-timeout-code"] as const)("a buffered continuation %s keeps the existing HTTP 200", async variant => {
+    takeInheritedSpendHome();
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) return variant === "invalid-body"
+        ? Response.json({ id: "msg_fixture", type: "message", role: "assistant",
+          model: "se-claude-opus-4.8", content: [{ type: "text", text: "我接下来会修改相关文件。" }],
+          stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 1 } })
+        : Response.json({ id: "chat_fixture", choices: [{ message: { role: "assistant", content: "我接下来会修改相关文件。" }, finish_reason: "stop" }] });
+      return variant === "invalid-body" ? Response.json(null)
+        : Response.json({ error: { type: "upstream_error", code: "upstream_stall_timeout", message: "provider supplied code" } });
+    }) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: variant === "invalid-body" ? "se-claude-opus-4.8" : "glm-5.2", input: "请检查这个问题并修复代码", stream: false,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }] }),
+    }), variant === "invalid-body" ? config : openAiChatConfig(true), { model: "", provider: "" });
+    const body = await response.json() as { status: string; error: { code?: string } };
+    expect(sends).toBe(2);
+    expect(response.status).toBe(200);
+    expect(body.status).toBe("failed");
+    if (variant === "provider-timeout-code") expect(body.error.code).toBe("upstream_stall_timeout");
   });
 
   test("a stalled initial body fails with a 504 upstream error instead of a proxy error", async () => {
