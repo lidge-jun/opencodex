@@ -1,4 +1,5 @@
 import { NativeSteeringError } from "./native-steering";
+import { NativeContinuationRefusalError } from "./native-continuation-refusal";
 import { mergeSteeringContinuation } from "./native-steering-settings";
 import { markNativeControlResponse } from "./native-response-control";
 import type { NativeResponseControl } from "./native-response-control";
@@ -27,6 +28,7 @@ interface ExchangeOptions {
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
   onPhysicalDispatch?: () => void;
+  onContinuationDispatch?: () => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
   /**
@@ -527,7 +529,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                 throw new Error("Native steering connection is no longer available");
               }
               beforeDispatch?.(new Headers(headers));
-              if (frame.type === "response.create") continuationBase = prepared.outgoing;
+              if (frame.type === "response.create") {
+                options.onContinuationDispatch?.();
+                continuationBase = prepared.outgoing;
+              }
               try { ws.send(prepared.text); } catch {
                 // A send failure has unknown delivery. Never replay or fall back.
                 failStream("Native steering send failed; delivery is unknown");
@@ -541,7 +546,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               // known non-delivery and keeps its own message; every other failure keeps
               // the unknown-delivery wording.
               void beforeContinuation().then(sendControl).catch(error => failStream(
-                error instanceof NativeSteeringError ? error
+                error instanceof NativeSteeringError || error instanceof NativeContinuationRefusalError ? error
                   : new Error("Native steering continuation could not be dispatched; do not automatically replay queued input"),
               ));
             } else sendControl();

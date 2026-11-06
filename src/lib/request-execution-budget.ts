@@ -182,6 +182,8 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(): number | undefined;
+  /** A validated explicit successor still pays root/spend admission, not the recovery allowance. */
+  claimContinuationPhysicalSend?(): number | undefined;
   /** Claim one root workflow send at physical admission; false refuses the send. */
   claimWorkflowSend?(): boolean;
   beginSpendProducer?(): { close(): void } | undefined;
@@ -255,6 +257,7 @@ let logicalRequestSeq = 0;
 interface SharedSendLedger {
   spent: number;
   physicalStarted: number;
+  explicitPhysicalStarted: number;
   physicalLimit?: number;
   /** Foreign legacy views retain one bounded recovery owner across derived bridges. */
   recoveryOwner?: RequestExecutionBudget;
@@ -352,6 +355,7 @@ export function createPhysicalSendReporter(
   target: () => SpendScopes & { targetKey?: string },
   permit?: SingleUseDispatchPermit,
   telemetry?: (sends: number) => void,
+  options: { explicitContinuation?: boolean } = {},
 ): PhysicalSendReporter {
   const counter = sharedSendLedgers.get(budget as RequestExecutionBudget);
   const observer = counter?.observer;
@@ -397,7 +401,9 @@ export function createPhysicalSendReporter(
     const proof = receipt?.owner === counter ? receipt?.claim() : undefined;
     const seed = observer.ensureSeed?.(selected, proof);
     if (!seed) return false;
-    const ordinal = (budget as RequestExecutionBudget).claimPhysicalSend?.();
+    const ordinal = options.explicitContinuation
+      ? (budget as RequestExecutionBudget).claimContinuationPhysicalSend?.()
+      : (budget as RequestExecutionBudget).claimPhysicalSend?.();
     if (ordinal === undefined) return false;
     producer?.start(seed, ordinal);
     currentOrdinal = ordinal;
@@ -465,7 +471,10 @@ function createRequestExecutionBudgetWithLedger(
 
   const budget: RequestExecutionBudget = {
     get physicalStarted(): number { return counter.physicalStarted; },
-    get physicalLimit(): number | undefined { return recovery?.physicalLimit ?? counter.physicalLimit; },
+    get physicalLimit(): number | undefined {
+      const limit = recovery?.physicalLimit ?? counter.physicalLimit;
+      return limit === undefined ? undefined : limit + counter.explicitPhysicalStarted;
+    },
     get spendEnforced(): boolean { return observer?.enforced === true; },
     get workflowCountObserved(): boolean { return observer?.beforePhysicalSend !== undefined; },
     get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
@@ -485,7 +494,13 @@ function createRequestExecutionBudgetWithLedger(
       budget.startRequest?.();
       const limit = recovery?.physicalLimit ?? counter.physicalLimit;
       if (observer?.enforced !== true || limit === undefined) return undefined;
-      if (counter.physicalStarted >= limit || !budget.claimWorkflowSend!()) return undefined;
+      if (counter.physicalStarted - counter.explicitPhysicalStarted >= limit || !budget.claimWorkflowSend!()) return undefined;
+      return ++counter.physicalStarted;
+    },
+    claimContinuationPhysicalSend(): number | undefined {
+      budget.startRequest?.();
+      if (recovery || observer?.enforced !== true || !budget.claimWorkflowSend!()) return undefined;
+      counter.explicitPhysicalStarted++;
       return ++counter.physicalStarted;
     },
     get used(): number { return counter.spent; },
@@ -677,6 +692,7 @@ export function createRequestExecutionBudget(
   return createRequestExecutionBudgetWithLedger(policy, logicalRequestId, {
     spent: 0,
     physicalStarted: 0,
+    explicitPhysicalStarted: 0,
     pendingExternalSends: new Set(),
     claimAmbiguousResend: grant.claimAmbiguousResend,
     get ambiguousResendSpent(): boolean { return grant.ambiguousResendSpent; },
@@ -733,7 +749,7 @@ export function createBoundedSameTargetRecovery(
     maxTotalModelSends: allowance, baseSendAllowance: allowance, finalRecoveryAllowance: 0,
     maxAlternateTargetSends: 0, maxTargetTransitions: 0,
   }, parent.logicalRequestId, shared, {
-    targetKey, maxAdditionalSends, physicalLimit: shared.physicalStarted + maxAdditionalSends,
+    targetKey, maxAdditionalSends, physicalLimit: shared.physicalStarted - shared.explicitPhysicalStarted + maxAdditionalSends,
     reservationPrefix: `${targetKey}|same-target-recovery:${++logicalRequestSeq}`, reservationSequence: 0,
   });
   const recovery: BoundedSameTargetRecovery = {
@@ -776,6 +792,7 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
     recoveryOwner: parent,
     pendingExternalSends,
     physicalStarted: 0,
+    explicitPhysicalStarted: 0,
     // Asked of the parent rather than counted here. A local counter is a SECOND grant: two
     // scopes derived from one bridged parent, or one scope beside the parent it was derived
     // from, each replaced an unknown-state send once. Pending bookings and the durable-spend

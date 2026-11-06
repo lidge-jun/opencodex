@@ -16,6 +16,7 @@ import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
 import { isProxyError } from "../lib/client-error-body";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
+import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -335,9 +336,10 @@ export async function pumpResponsesSseToWebSocket(
       && isCurrent()
       && ws.readyState === OPEN
       && !(err instanceof WsSendDroppedError)) {
-      reportTerminal("incomplete");
+      reportTerminal(err instanceof NativeContinuationRefusalError ? "failed" : "incomplete");
       try {
-        sendUpstreamError(ws, 502, err);
+        if (err instanceof NativeContinuationRefusalError) await sendResponseToWebSocket(ws, err.response, isCurrent);
+        else sendUpstreamError(ws, 502, err);
       } catch (sendErr) {
         // If delivery is already dropped, there is no useful error frame left
         // to send. Swallow only that expected transport signal; other failures

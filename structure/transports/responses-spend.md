@@ -27,6 +27,19 @@ lease to its active turn. Terminal output or cancellation releases that lease; s
 retain the same physical-send window. `tests/responses/responses-websocket-workflow-ceiling.test.ts`
 starts with an unseen root and verifies its ceiling and lease cleanup in both spend modes.
 
+Native steering and injection keep that same turn lease across saved-result continuations.
+Each explicit successor `response.create` claims and reports a fresh physical start after pacing
+and credential revalidation, immediately before its frame is sent. `response.steer` and
+`response.inject` are control frames, not new sends. `src/server/responses/native-continuation-send.ts` uses a fresh
+reporter without an initial or recovery permit; unconfigured chains do not acquire the retry
+ladder's default send cap. Each successor reserves a fresh token seed before claiming its root
+slot. Explicit starts have separate physical allowance; ordinary retry and bounded recovery grants
+are not replenished, including when recovery is created after earlier successors. A refused successor sends no upstream frame and ends the chain with
+the original locally constructed 429 response, including its workflow-refusal provenance and header.
+It never falls back to HTTP or replays the initial request.
+`tests/responses/ws-native-continuation-send-budget.test.ts` covers both native modes and spend
+policies, repeated sends, cancellation before dispatch, control frames and unconfigured long chains.
+
 Workflow refusals constructed inside native Messages keep the Anthropic `{ type: "error", error: { type, message, code } }`
 envelope, HTTP status, local-refusal header and its CORS exposure. Projection preserves process-local proxy
 provenance, workflow presentation scope and any non-replayable marker. This applies both when the spend observer records the denial and

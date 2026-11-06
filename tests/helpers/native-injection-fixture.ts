@@ -58,11 +58,17 @@ export const waitForInjection = async (condition: () => boolean) => {
   for (let i = 0; i < 1000; i++) { if (condition()) return; await Bun.sleep(1); }
   throw new Error("injection fixture condition timed out");
 };
-export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
+/** Acquire the fixture's real writer before a test binds a spend policy. */
+export function prepareInjectionSpendHome(): void {
   releaseSpendHome ??= acquireOwnedSpendHome();
+}
+export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test", requestHeaders?: HeadersInit) {
+  prepareInjectionSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
-  const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" }) } as WsData,
+  const headers = new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" });
+  new Headers(requestHeaders).forEach((value, name) => headers.set(name, value));
+  const ws = { readyState: 1, data: { headers } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws, 1000, "fixture close"); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
@@ -71,8 +77,8 @@ export function injectionClient(fields: Frame = {}, settings = injectionConfig()
     tools: [{ type: "function", name: "get_value", parameters: { type: "object", properties: {} } }], ...fields });
   return { ws, sent, send, handler };
 }
-export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
-  const client = injectionClient(fields, settings, credential);
+export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test", requestHeaders?: HeadersInit) {
+  const client = injectionClient(fields, settings, credential, requestHeaders);
   await waitForInjection(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = InjectionSocket.all.at(-1)!;
   expect(socket).toBeDefined();

@@ -84,17 +84,17 @@ export function createResponsesSendBudget(
     if (!physicalWorkflowAccounting && !workflowAlreadyCounted) chargeWorkflowSends(workflowRootId, charged);
   };
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
-  // Capture at helper creation, before another leg can replace the pending handoff.
-  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) => {
+  const physicalSendReporter = (permit?: SingleUseDispatchPermit, explicitContinuation = false) => {
     let unreportedWorkflowStarts = 0;
+    const targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined;
     const reporter = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
-      identityId: logCtx.accountLogLabel }), permit, charged => {
+      identityId: logCtx.accountLogLabel, ...(targetKey ? { targetKey } : {}) }), permit, charged => {
       noteTargetSends(Math.max(0, charged));
       options.onCompactionRecoverySendsReported?.(charged);
       const prepaid = Math.min(unreportedWorkflowStarts, Math.max(0, charged));
       unreportedWorkflowStarts -= prepaid;
       if (!physicalWorkflowAccounting) chargeWorkflowSends(workflowRootId, charged - prepaid);
-    });
+    }, { explicitContinuation });
     if (workflowRootId && !physicalWorkflowAccounting) {
       const beforeSend = reporter.beforeSend, close = reporter.close;
       let closed = false;
@@ -111,6 +111,8 @@ export function createResponsesSendBudget(
     }
     return reporter;
   };
+  // Capture at helper creation, before another leg can replace the pending handoff.
+  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) => physicalSendReporter(permit);
   // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
   // dropping the record to make room would hand the fan-out a fresh allowance, which is the
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
@@ -337,6 +339,8 @@ export function createResponsesSendBudget(
     workflowRootId,
     noteTransientSends,
     transientSendReporter,
+    /** A new native continuation cannot consume an initial or recovery booking. */
+    continuationSendReporter: () => physicalSendReporter(undefined, true),
     remainingTransientSendBudget,
     /** Only this child's prepaid send, not every pending external booking, is spendable here. */
     initialSendAllowance: (cap: number): number => Math.min(cap,
@@ -426,6 +430,7 @@ function adapterDispatchBudgetView(
     get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
     startRequest: target => budget.startRequest?.(target),
     claimPhysicalSend: () => budget.claimPhysicalSend?.(),
+    claimContinuationPhysicalSend: () => budget.claimContinuationPhysicalSend?.(),
     claimWorkflowSend: () => budget.claimWorkflowSend?.() ?? true,
     beginSpendProducer: () => budget.beginSpendProducer?.(),
     get used(): number { return budget.used; },

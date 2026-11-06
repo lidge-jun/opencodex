@@ -174,6 +174,7 @@ import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } 
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+import { claimNativeContinuationSend } from "./native-continuation-send";
 import { guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
 
 /** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
@@ -238,6 +239,7 @@ export async function preparePassthroughExchange(
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "transientSendReporter"
+    | "continuationSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
     | "sendBudgetExhausted"
@@ -1023,6 +1025,7 @@ export async function preparePassthroughExchange(
               providerName: route.providerName,
               modelId: route.modelId,
               onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : undefined,
+              onContinuationDispatch: () => claimNativeContinuationSend(sendBudgetState.continuationSendReporter(), logCtx, sendBudgetState.workflowRootId),
               accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
