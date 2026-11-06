@@ -1,11 +1,11 @@
 import { messagesFold502Cases } from "./messages-sse-fold-exceptions";
 import { hostedWindowsQuarantine } from "./windows-ci-quarantine";
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES } from "../../src/lib/client-error-body";
 import { fixturePath, helperPath, repoRoot } from "./repo-root";
+import { collectOverflowChild, finishOverflowScratch, overflowScratchBase } from "./messages-overflow-child";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash, type MessagesOverflowFixture } from "./messages-overflow-cases";
 
 type Observation = { status: number; bodySha256: string; bodyLength: number; clientError: boolean; envelopeType?: string; mediaType: string | null; type?: string; code?: string | null; text: string; clientRecognizes: boolean; compactionSentence: boolean; internalDecisions: Record<string, boolean> };
@@ -22,6 +22,9 @@ if (golden.caseTableSha256 !== messagesOverflowCaseTableHash()) {
 }
 export const cases = messagesOverflowLanes.flatMap(lane => applicableMessagesOverflowFixtures(lane).map(input => ({ lane, input })));
 export const key = (row: Pick<Row, "lane" | "input">) => messagesOverflowCaseId(row.lane, row.input);
+// Hosted Windows 64-row subprocesses for these network-backed lanes approached
+// or exceeded 30s; the pure converter/collector lanes finished in under 1s.
+const WINDOWS_SLOW_LANES = new Set<Row["lane"]>(["passthrough", "count_tokens", "native-http", "native-fold", "native-fold-builtin", "translated-http", "translated-fold", "translated-json"]);
 
 // Reviewed #8148 deltas against the immutable #8153 baseline. No runtime classifier
 // chooses expectations: only these five fixtures on the two direct-writer paths change.
@@ -122,7 +125,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   expect(after.code).toBe(typeof expected.code === "string" && expected.code !== "thread_unsupported_request" && ANTHROPIC_ERROR_CODES.has(expected.code) ? expected.code : undefined);
 }
 
-/** Each test owns only one 64-row child run; no shared hook computes the full matrix. */
+/** Each test owns one bounded child run; no shared hook computes the full matrix. */
 export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
   expect(golden.schemaVersion).toBe(8);
   expect(golden.columns).toEqual(["lane", "status", "clientRecognizes", "decisions", "class", "type", "code", "mediaType", "clientError", "bodySha256?", "bodyLength?"]);
@@ -132,23 +135,32 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
   expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
   for (const lane of lanes) {
     const rows = cases.filter(row => row.lane === lane);
-    const networkBacked = ["passthrough", "count_tokens", "native-http", "native-fold", "native-fold-builtin", "translated-http", "translated-fold", "translated-json"].includes(lane);
-    for (let offset = 0; offset < rows.length; offset += 64) {
-      const selected = rows.slice(offset, offset + 64);
-      test.skipIf(hostedWindowsQuarantine && networkBacked)(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
+    const sliceSize = process.platform === "win32" && WINDOWS_SLOW_LANES.has(lane) ? 16 : 64;
+    const slices = Array.from({ length: Math.ceil(rows.length / sliceSize) }, (_, index) => rows.slice(index * sliceSize, (index + 1) * sliceSize));
+    expect(slices.flat().map(key)).toEqual(rows.map(key));
+    for (const [index, selected] of slices.entries()) {
+      const offset = index * sliceSize;
+      // #8262 hosted-Windows quarantine stays until a Windows lane=all run passes with it removed.
+      test.skipIf(hostedWindowsQuarantine && WINDOWS_SLOW_LANES.has(lane))(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
         const started = performance.now();
-        const scratch = mkdtempSync(join(tmpdir(), "ocx-overflow-slice-"));
+        const scratch = mkdtempSync(join(overflowScratchBase(), "ocx-overflow-slice-"));
+        let safeToRemove = true;
+        let failure: { error: unknown } | undefined;
         try {
-          mkdirSync(join(scratch, "ocx")); mkdirSync(join(scratch, "codex"));
+          mkdirSync(join(scratch, "ocx")); mkdirSync(join(scratch, "codex")); mkdirSync(join(scratch, "tmp"));
           const output = join(scratch, "head.json");
-          const child = Bun.spawn([process.execPath, helperPath("messages-overflow-differential.ts"), "head", scratch, output, lane, String(offset), "64"], { cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: join(scratch, "ocx"), CODEX_HOME: join(scratch, "codex") }, stdout: "pipe", stderr: "pipe" });
-          const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+          const child = Bun.spawn([process.execPath, helperPath("messages-overflow-differential.ts"), "head", scratch, output, lane, String(offset), String(sliceSize)], { cwd: repoRoot(), env: { ...process.env, HOME: scratch, USERPROFILE: scratch, TEMP: join(scratch, "tmp"), TMP: join(scratch, "tmp"), TMPDIR: join(scratch, "tmp"), OPENCODEX_HOME: join(scratch, "ocx"), CODEX_HOME: join(scratch, "codex"), CODEX_SQLITE_HOME: join(scratch, "codex"), OCX_OWNER_REGISTRY_DIR: join(scratch, "ocx", "ocx-homes"), CLAUDE_CONFIG_DIR: join(scratch, "claude"), GROK_HOME: join(scratch, "grok") }, stdout: "pipe", stderr: "pipe" });
+          safeToRemove = false;
+          const { exit, stdout, stderr } = await collectOverflowChild(child, process.platform === "win32" ? started + 25_000 : null);
           if (exit !== 0) throw new Error(`Head slice exited ${exit}\n${stdout}\n${stderr}`);
-          const result = JSON.parse(readFileSync(output, "utf8")) as { rows: Row[] };
+          const result = JSON.parse(readFileSync(output, "utf8")) as { rows: Row[]; fixtureAsyncSpawnsDrained?: boolean };
+          if (result.fixtureAsyncSpawnsDrained !== true) throw new Error("Head slice did not confirm fixture subprocess cleanup");
+          safeToRemove = true;
           expect(result.rows).toHaveLength(selected.length);
           for (const [index, row] of result.rows.entries()) { expect(key(row)).toBe(key(selected[index]!)); assertRow(selected[index]!, row); }
           console.info(`MESSAGES_OVERFLOW_ROWS ${lane} ${offset} ${selected.length} ${Math.round(performance.now() - started)}ms`);
-        } finally { rmSync(scratch, { recursive: true, force: true }); }
+        } catch (error) { failure = { error }; }
+        finally { finishOverflowScratch(scratch, safeToRemove, failure); }
       }, 30000);
     }
   }

@@ -65,6 +65,9 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
     build.onLoad({ filter }, ({ path }) => ({ contents: readFileSync(overlays.get(path)!, "utf8"), loader: "ts" }));
   } });
 }
+// Install before the request graph loads, so even an ACL verifier that returns
+// after requesting termination cannot hide its still-live PowerShell child.
+const spawnTracker = base ? undefined : (await import("./messages-overflow-spawn-tracker")).trackOverflowAsyncSpawns();
 const { runMessagesOverflowCase } = await import("./messages-overflow-case");
 const { upstreamMessagesRequestIdHeaders } = await import("../../src/server/messages-response-headers");
 if (base && upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture" }))["request-id"] !== "req_fixture") throw new Error("Baseline modules were not loaded");
@@ -118,4 +121,17 @@ if (base) {
   const groups = [];
   for (let index = 0; index < lines.length; index += 3) groups.push(lines.slice(index, index + 3).join(","));
   await Bun.write(output, `${JSON.stringify(header).slice(0, -1)},"outcomes":{\n${groups.join(",\n")}\n}}\n`);
-} else await Bun.write(output, JSON.stringify({ schemaVersion: 8, rows }) + "\n");
+} else {
+  // Successful exit is not enough on Windows: an async ACL child can outlive its caller.
+  const { settleBackgroundWork } = await import("../../src/lib/background-work");
+  const settled = await settleBackgroundWork({ timeoutMs: 2_000 });
+  if (!settled.settled) throw new Error(`Overflow background work did not settle: ${settled.pending.join(", ")}`);
+  const { flushConfigDirHardeningForTests } = await import("../../src/config/paths");
+  const { flushWindowsSecretAclReapsBeforeRemoval, windowsSecretAclReapPendingAtOrBelow } = await import("../../src/lib/windows-secret-acl");
+  await flushConfigDirHardeningForTests();
+  await flushWindowsSecretAclReapsBeforeRemoval(scratch);
+  if (windowsSecretAclReapPendingAtOrBelow(scratch)) throw new Error("Overflow ACL child remains active");
+  await spawnTracker!.drain();
+  spawnTracker!.restore();
+  await Bun.write(output, JSON.stringify({ schemaVersion: 8, rows, fixtureAsyncSpawnsDrained: true }) + "\n");
+}
