@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import type { RequestLogContext } from "../../../src/server/request-log";
 import { handleResponses } from "../../../src/server/responses";
+import { handleChatCompletions } from "../../../src/server/chat-completions";
 import { saveConfig } from "../../../src/config";
 import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import { clearCopilotAutoModelsForTests } from "../../../src/providers/github-copilot-auto";
@@ -158,6 +159,22 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
+  test("Chat retains the local mandatory-tool refusal after Copilot OAuth refresh", async () => {
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true });
+    f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "github-copilot/auto", messages: [{ role: "user", content: "Use lookup." }], stream: false,
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }], tool_choice: "required" }) });
+    const response = await handleChatCompletions(req, f.config, {});
+    const body = await response.json();
+    expect(response.status).toBe(400);
+    expect(body.error.message).toContain("mandatory tool_choice cannot be preserved");
+    expect(f.sent.filter(call => call.path === "/models/session/intent").map(call => call.host))
+      .toEqual(["a.githubcopilot.com", "a.githubcopilot.com"]);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(f.refreshCount).toBe(1);
+  });
   test("mandatory tool choice uses the negotiated Responses wire instead of the initial Chat route", async () => {
     const { b } = await accounts();
     await setActiveAccount("github-copilot", b);

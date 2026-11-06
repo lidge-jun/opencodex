@@ -353,8 +353,8 @@ export async function prepareResponsesTransport(
     if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(error, logCtx));
     if (error instanceof PolicyCandidateUnavailableError) {
       if (options.comboAttempt || options.policyRequestScope?.eligibility) return policyCandidateRefusalResponse(error);
-      return formatErrorResponse(400, "invalid_request_error",
-        "This mandatory tool_choice cannot be preserved for a translated Chat destination.");
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "This mandatory tool_choice cannot be preserved for a translated Chat destination."), "copilot");
     }
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = markProxyError(formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",

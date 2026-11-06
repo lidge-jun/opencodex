@@ -24,6 +24,7 @@ Non-forward Copilot routes defer this check until Auto negotiation settles the a
 `src/server/responses/request-transport.ts` repeats the check after every negotiation, including
 credential and session renewal; a static Responses route cannot silently become incompatible Chat.
 Policy and combo children carry the local refusal identity; direct requests retain the same 400.
+The direct Copilot refusal also carries proxy-error provenance so Chat error translation retains its local diagnostic.
 Auto-pause credential refresh maps the same typed refusal before returning from recovery, while its
 unused hop reservation is released. Adapter and native Responses error delivery carry that identity
 through response rebuilding so policy traversal also works after a mid-dispatch renegotiation.
