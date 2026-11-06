@@ -1,4 +1,5 @@
 import type { AdapterEvent } from "../types";
+import { truncationReasonFor } from "../responses/truncated-stop-reason";
 
 type QueueReader = (result: IteratorResult<AdapterEvent>) => void;
 
@@ -166,11 +167,16 @@ async function* replay(
  * can attempt a backup target. Candidate cooling is request-local (`comboFailureCooldownScope` returns
  * "none") because the failure is specific to the requested token limit rather than provider unhealthiness.
  */
-export function classifyZeroOutputTokenLimit(event: AdapterEvent): Extract<AdapterEvent, { type: "error" }> | undefined {
+export const DEFAULT_MAX_REASONING_EVENTS = 65_536;
+
+export function classifyZeroOutputTokenLimit(
+  event: AdapterEvent,
+  options?: { allowCompactionWithContent?: boolean },
+): Extract<AdapterEvent, { type: "error" }> | undefined {
   const zeroOutputLimit = event.type === "incomplete"
     ? event.reason === "max_output_tokens" && event.retryable !== false && event.endTurn !== false && !event.providerState
-    : event.type === "done" && ["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "")
-      && event.endTurn !== false && !event.providerState && !event.compactionEncryptedContent;
+    : event.type === "done" && (["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "") || truncationReasonFor(event.stopReason) === "max_output_tokens")
+      && event.endTurn !== false && !event.providerState && (options?.allowCompactionWithContent || !event.compactionEncryptedContent);
   if (!zeroOutputLimit) return undefined;
   return {
     type: "error", status: 502, errorType: "upstream_error", code: "zero_output_token_limit",
@@ -205,7 +211,7 @@ export function isContentEvent(event: AdapterEvent): boolean {
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
-  options?: { maxWaitMs?: number; honorReady?: boolean },
+  options?: { maxWaitMs?: number; honorReady?: boolean; bufferCompaction?: boolean },
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
@@ -246,10 +252,10 @@ export async function preflightAdapterEvents(
         if (buffered[0]?.type === "heartbeat" && buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
         continue;
       }
-      if (isReasoningEvent(next.value)) {
+      if (isReasoningEvent(next.value) || (options?.bufferCompaction && next.value.type === "text_delta")) {
         buffered.push(next.value);
         bufferedReasoningCodeUnits += retainedEventCodeUnits(next.value);
-        if (buffered.length > 1_024 || bufferedReasoningCodeUnits > DEFAULT_MAX_EVENT_CODE_UNITS) {
+        if (buffered.length > DEFAULT_MAX_REASONING_EVENTS || bufferedReasoningCodeUnits > DEFAULT_MAX_EVENT_CODE_UNITS) {
           return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
         }
         continue;

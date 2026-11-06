@@ -723,4 +723,83 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(body).toContain('"type":"compaction"');
     expect(hits).toEqual(["m1", "m2"]);
   });
+
+  test("streaming long reasoning sequence (>1024 deltas) followed by max_tokens terminal fails over to backup target", async () => {
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      if (parsed.modelId === "m1") {
+        emit({ type: "heartbeat" });
+        for (let i = 0; i < 2_000; i++) {
+          emit({ type: "thinking_delta", thinking: `step ${i} ` });
+        }
+        emit({
+          type: "done",
+          stopReason: "max_tokens",
+          usage: { inputTokens: 100, outputTokens: 2000, totalTokens: 2100 },
+        });
+        return;
+      }
+      emit({ type: "text_delta", text: "long-reasoning backup answer" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+    }), config, parent);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(body).toContain("long-reasoning backup answer");
+    expect(hits).toEqual(["m1", "m2"]);
+  });
+
+  test("remote compaction with text deltas before max_tokens terminal fails over to backup target", async () => {
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      if (parsed.modelId === "m1") {
+        emit({ type: "heartbeat" });
+        emit({ type: "thinking_delta", thinking: "analyzing conversation..." });
+        emit({ type: "text_delta", text: "Partial summary of progress so far..." });
+        emit({
+          type: "done",
+          stopReason: "max_tokens",
+          usage: { inputTokens: 500, outputTokens: 4096, totalTokens: 4596 },
+        });
+        return;
+      }
+      emit({ type: "text_delta", text: "complete compacted summary from backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/free",
+        input: [
+          { type: "message", role: "user", content: "long conversation" },
+          { type: "compaction_trigger" },
+        ],
+        stream: true,
+      }),
+    }), config, parent);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(body).toContain('"type":"compaction"');
+    expect(body).not.toContain("Incomplete response returned");
+    expect(hits).toEqual(["m1", "m2"]);
+  });
 });

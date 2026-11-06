@@ -762,7 +762,9 @@ export async function executeResponsesRunTurn(
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
       // Called only at the first meaningful event; preflight protects side effects.
-      const zeroOutputLimit = options.comboAttempt ? classifyZeroOutputTokenLimit(event) : undefined;
+      const zeroOutputLimit = options.comboAttempt
+        ? classifyZeroOutputTokenLimit(event, { allowCompactionWithContent: routedCompaction })
+        : undefined;
       if (zeroOutputLimit) return zeroOutputLimit;
       // This tool is declared to the adapter by the private search loop.
       if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
@@ -833,7 +835,10 @@ export async function executeResponsesRunTurn(
       }
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(
-          eventSource, classifyUndeclaredFirstTool, { honorReady: false },
+          eventSource, classifyUndeclaredFirstTool, {
+            honorReady: false,
+            bufferCompaction: routedCompaction,
+          },
         );
         if (preflight.error || preflight.empty) {
           if (preflight.error?.usage) transportState.bindKeyUsageFromBridge(preflight.error.usage);
@@ -1047,7 +1052,9 @@ export async function executeResponsesRunTurn(
           .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
         const sawContent = events.some(isContentEvent);
         const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
-        const zeroOutputLimit = !sawContent && terminalEvent ? classifyZeroOutputTokenLimit(terminalEvent) : undefined;
+        const zeroOutputLimit = (!sawContent || routedCompaction) && terminalEvent
+          ? classifyZeroOutputTokenLimit(terminalEvent, { allowCompactionWithContent: routedCompaction })
+          : undefined;
         const firstTool = events.find(event => event.type === "tool_call_start");
         const classifiedError = !replayUnsafe
           ? (zeroOutputLimit ?? (firstTool ? classifyUndeclaredFirstTool(firstTool) : undefined) ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
