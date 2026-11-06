@@ -102,11 +102,17 @@ Direct callers retain their prior hop reporting contract.
 Anthropic web-search helpers in Responses, RunTurn and the passthrough bridge reserve an `auxiliary`
 send before each physical attempt. The shared request's base/total allowance and root count apply in
 both spend modes. A helper cannot consume the final recovery reserve, change routed target history,
-or settle a parent's initial/hop permit. Unsent reservations remain refundable.
+or settle a parent's initial/hop permit. Unsent reservations remain refundable. An inherited budget
+without a physical workflow observer uses synchronous root precheck, permit admission and root claim;
+a refused root returns the still-unused booking before any helper I/O. In that fallback, permit
+admission does not itself charge the root; the following root claim owns the single count.
 Each query invocation owns a fresh seed; bounded reset retries reuse that seed but book each send.
 Admission uses the helper's text/tool estimate and wire output ceiling, its Anthropic pool, and no
 identity scope inherited from the routed account. Pending parent seeds stay live. Routed terminal usage
 settles only a routed send; helper usage remains conservatively unresolved until independently known.
+Auxiliary root/pool refusals retain refusal counters and workflow events without marking the whole
+request terminal. A caught search error can precede a successful answer; later routed refusals still
+set terminal metadata, and an auxiliary refusal never clears an earlier terminal reason.
 Standalone search without a request budget and non-Anthropic search backends retain their existing paths.
 
 ## Credential-hop reservations

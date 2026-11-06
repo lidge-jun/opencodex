@@ -190,14 +190,13 @@ export function createRequestSpendTracker(
       if (!pendingDispatch.has(sendId)) ledger().markDispatched(sendId);
     }
   };
-  const refusal = (denial: import("../../lib/spend-reservation-ledger").SpendDenial): void => {
+  const refusal = (denial: import("../../lib/spend-reservation-ledger").SpendDenial, terminal = true): void => {
         refusals += 1;
         // Preserve the PR's explicit unresolved-history refusal and its distinct operator code.
         if (denial.reason === "pool-history-unresolved") {
           lastRefusal = { reason: "workflow-pool-history-unresolved" };
           const summary = workflowDenialSummary("workflow-pool-history-unresolved");
-          markLocalRequestLogRefusal(logCtx, summary.code);
-          logCtx.errorCode = summary.code;
+          if (terminal) { markLocalRequestLogRefusal(logCtx, summary.code); logCtx.errorCode = summary.code; }
           recordWorkflowRefusalEvent(rootId, "workflow-pool-history-unresolved", Date.now());
           return;
         }
@@ -218,27 +217,28 @@ export function createRequestSpendTracker(
           : undefined;
         lastRefusal = { reason, ...(detail ? { spend: detail } : {}) };
         const summary = workflowDenialSummary(reason, detail);
-        markLocalRequestLogRefusal(logCtx, summary.code);
-        logCtx.errorCode = summary.code;
-        if (detail?.includesUnboundPoolHistory) logCtx.spendRefusalDetail = detail;
+        if (terminal) {
+          markLocalRequestLogRefusal(logCtx, summary.code);
+          logCtx.errorCode = summary.code;
+          if (detail?.includesUnboundPoolHistory) logCtx.spendRefusalDetail = detail;
+        }
         recordWorkflowRefusalEvent(rootId, reason, Date.now(), detail);
         return;
   };
   /** Record a refused root claim here, including its counter, log and event; callers must not repeat it. */
-  const claimWorkflowSend = (): boolean => {
+  const claimWorkflowSend = (terminal = true): boolean => {
     if (reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) return true;
     refusals++;
     lastRefusal = { reason: "workflow-sends-exhausted" };
     const summary = workflowDenialSummary("workflow-sends-exhausted");
-    markLocalRequestLogRefusal(logCtx, summary.code);
-    logCtx.errorCode = summary.code;
+    if (terminal) { markLocalRequestLogRefusal(logCtx, summary.code); logCtx.errorCode = summary.code; }
     recordWorkflowRefusalEvent(rootId, "workflow-sends-exhausted");
     return false;
   };
   const tracker: RequestSpendTracker = {
     recordWorkflowSend() { chargeWorkflowSends(rootId, 1); },
-    beforePhysicalSend() {
-      return claimWorkflowSend();
+    beforePhysicalSend(auxiliary = false) {
+      return claimWorkflowSend(!auxiliary);
     },
     startRequest(target) {
       if (admissionPolicy) return;
@@ -286,7 +286,7 @@ export function createRequestSpendTracker(
       const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...(estimate ?? estimates()), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
-        refusal(decision.denial);
+        refusal(decision.denial, !target.auxiliary);
         return undefined;
       }
       seededAccounting = true;
@@ -379,7 +379,7 @@ export function createRequestSpendTracker(
       const alreadySent = options?.alreadySent === true;
       if (!options?.deferDispatch && !options?.workflowAlreadyCounted) {
         if (alreadySent) chargeWorkflowSends(rootId, 1);
-        else if (!claimWorkflowSend()) return false;
+        else if (!claimWorkflowSend(!options?.auxiliary)) return false;
       }
       if (!alreadySent && tracker.enforced) {
         const seed = tracker.ensureSeed({ ...options?.scopes, targetKey: options?.targetKey,
@@ -415,7 +415,7 @@ export function createRequestSpendTracker(
         // capacity is full. Unconfigured/nonapplicable requests remain observe-only, and a
         // physical send reported after dispatch cannot be refused retroactively.
         if (alreadySent || !enforced) return true;
-        refusal(decision.denial);
+        refusal(decision.denial, !options?.auxiliary);
         return false;
       }
       if (!alreadySent) options?.onReserved?.({ ledger: bookedLedger, sendId });

@@ -151,7 +151,7 @@ export type DispatchDecision =
  */
 export interface RequestSendObserver {
   /** Atomically claim the root workflow count at physical admission, before inference I/O. */
-  beforePhysicalSend?(): boolean;
+  beforePhysicalSend?(auxiliary?: boolean): boolean;
   /** Record an already-sent legacy receipt without booking its durable spend twice. */
   recordWorkflowSend?(): void;
   /**
@@ -191,11 +191,11 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly spendPolicyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
-  claimPhysicalSend?(): number | undefined;
+  claimPhysicalSend?(auxiliary?: boolean): number | undefined;
   /** A validated explicit successor still pays root/spend admission, not the recovery allowance. */
   claimContinuationPhysicalSend?(): number | undefined;
   /** Claim one root workflow send at physical admission; false refuses the send. */
-  claimWorkflowSend?(): boolean;
+  claimWorkflowSend?(auxiliary?: boolean): boolean;
   beginSpendProducer?(): { close(): void } | undefined;
   readonly logicalRequestId: string;
   readonly policyVersion: string;
@@ -496,15 +496,16 @@ function createRequestExecutionBudgetWithLedger(
       }
     },
     beginSpendProducer() { return observer?.enforced ? observer.beginReporter?.() : undefined; },
-    claimWorkflowSend(): boolean {
+    claimWorkflowSend(auxiliary = false): boolean {
       budget.startRequest?.();
-      return observer?.beforePhysicalSend?.() ?? true;
+      return (auxiliary ? observer?.beforePhysicalSend?.(true) : observer?.beforePhysicalSend?.()) ?? true;
     },
-    claimPhysicalSend(): number | undefined {
+    claimPhysicalSend(auxiliary = false): number | undefined {
       budget.startRequest?.();
       const limit = recovery?.physicalLimit ?? counter.physicalLimit;
       if (observer?.enforced !== true || limit === undefined) return undefined;
-      if (counter.physicalStarted - counter.explicitPhysicalStarted >= limit || !budget.claimWorkflowSend!()) return undefined;
+      if (counter.physicalStarted - counter.explicitPhysicalStarted >= limit
+        || !(auxiliary ? budget.claimWorkflowSend!(true) : budget.claimWorkflowSend!())) return undefined;
       return ++counter.physicalStarted;
     },
     claimContinuationPhysicalSend(): number | undefined {
@@ -616,10 +617,10 @@ function createRequestExecutionBudgetWithLedger(
       let executing = false;
       let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
-        if (observer?.enforced !== true) return budget.claimWorkflowSend!();
+        if (observer?.enforced !== true) return auxiliary ? budget.claimWorkflowSend!(true) : budget.claimWorkflowSend!();
         const seed = observer.ensureSeed?.(spendTarget, spendProof);
         if (!seed) return false;
-        const ordinal = budget.claimPhysicalSend?.();
+        const ordinal = auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.();
         if (ordinal === undefined) return false;
         producer = observer.beginReporter?.();
         producer?.start(seed, ordinal);

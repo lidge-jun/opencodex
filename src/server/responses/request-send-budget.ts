@@ -129,7 +129,12 @@ export function createResponsesSendBudget(
     if (!decision.allowed) throw new SendBudgetExhaustedError();
     const permit = decision.permit;
     const run = () => {
+      const policy = currentWorkflowBudgetPolicy();
+      // No await separates this precheck, synchronous permit admission and the root claim.
+      // Refuse before use() so the finally path can return an unused reservation.
+      if (!physicalWorkflowAccounting && workflowSendCeilingReached(workflowRootId, policy)) throw new SendBudgetExhaustedError();
       if (!permit.use()) throw new SendBudgetExhaustedError();
+      if (!physicalWorkflowAccounting && !reserveWorkflowSend(workflowRootId, policy)) throw new SendBudgetExhaustedError();
       return dispatch();
     };
     try { return await (permit.execute ? permit.execute(run) : run()); }
@@ -452,9 +457,9 @@ function adapterDispatchBudgetView(
     get spendPolicyStarted() { return budget.spendPolicyStarted; },
     get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
     startRequest: target => budget.startRequest?.(target),
-    claimPhysicalSend: () => budget.claimPhysicalSend?.(),
+    claimPhysicalSend: auxiliary => auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.(),
     claimContinuationPhysicalSend: () => budget.claimContinuationPhysicalSend?.(),
-    claimWorkflowSend: () => budget.claimWorkflowSend?.() ?? true,
+    claimWorkflowSend: auxiliary => (auxiliary ? budget.claimWorkflowSend?.(true) : budget.claimWorkflowSend?.()) ?? true,
     beginSpendProducer: () => budget.beginSpendProducer?.(),
     get used(): number { return budget.used; },
     set used(next: number) { budget.used = next; },

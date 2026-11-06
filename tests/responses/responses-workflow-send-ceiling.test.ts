@@ -3,7 +3,7 @@ import { createPhysicalSendReporter, createRequestExecutionBudget, createBounded
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
 import { admitWorkflowTurn, DEFAULT_WORKFLOW_BUDGET_POLICY, resetWorkflowBudgetsForTest, workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
 import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
-import { fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { fetchWithTransientRetry, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -26,10 +26,105 @@ function request(enforced: boolean) {
     journal: { read: () => [...lines], append: line => { lines.push(line); }, rewrite: next => { lines.splice(0, lines.length, ...next); } },
     policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: enforced ? { maxTokens: 1_000_000 } : {} },
   });
-  const tracker = createRequestSpendTracker({ provider: "fixture", spendInputEstimateTokens: 1 }, "physical-root", ledger);
+  const logCtx: Parameters<typeof createRequestSpendTracker>[0] = { provider: "fixture", spendInputEstimateTokens: 1 };
+  const tracker = createRequestSpendTracker(logCtx, "physical-root", ledger);
   const budget = createRequestExecutionBudget(undefined, undefined, tracker);
-  return { tracker, budget };
+  return { tracker, budget, logCtx };
 }
+
+const auxiliaryTarget = { poolId: "anthropic", identityId: "", targetKey: "search:q",
+  estimate: { inputTokens: 1, outputCeilingTokens: 1 } };
+function auxiliaryOwner(budget: ReturnType<typeof createRequestExecutionBudget>,
+  logCtx: Parameters<typeof createRequestSpendTracker>[0] = { provider: "fixture" }) {
+  const state = createResponsesSendBudget({ options: { sendBudget: budget }, logCtx,
+    req: new Request("http://fixture/v1/responses", { headers: { "x-codex-parent-thread-id": "physical-root" } }) });
+  if (state instanceof Response) throw new Error("fixture owner refused");
+  return state;
+}
+
+test("auxiliary factory budgets without observers still spend and enforce the root ceiling", async () => {
+  const sends = root(1), budget = createRequestExecutionBudget();
+  const state = auxiliaryOwner(budget);
+  let calls = 0;
+  await state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; });
+  expect(sends()).toBe(1);
+  await expect(state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+  expect(calls).toBe(1); expect(sends()).toBe(1); expect(budget.used).toBe(1);
+});
+
+test("auxiliary root refusal refunds the unused booking on an inherited budget", async () => {
+  const sends = root(1), budget = createRequestExecutionBudget(), state = auxiliaryOwner(budget);
+  const observed = request(false);
+  const first = observed.budget.reserveDispatch({ sendClass: "initial", targetKey: "parent" });
+  if (!first.allowed) throw new Error("initial refused");
+  expect(first.permit.use()).toBe(true);
+  let calls = 0;
+  await expect(state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+  expect(calls).toBe(0); expect(sends()).toBe(1); expect(budget.used).toBe(0);
+  observed.tracker.settle(undefined);
+});
+
+test("concurrent auxiliary factory sends cannot share the last root slot", async () => {
+  const sends = root(1), budget = createRequestExecutionBudget(), state = auxiliaryOwner(budget);
+  let calls = 0;
+  const results = await Promise.allSettled(["a", "b"].map(targetKey =>
+    state.dispatchSidecarSend({ ...auxiliaryTarget, targetKey }, async () => { calls++; })));
+  expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+  expect(calls).toBe(1); expect(sends()).toBe(1); expect(budget.used).toBe(1);
+});
+
+test("auxiliary charge-only observers still use fallback root admission", async () => {
+  const sends = root(1);
+  let charges = 0, refunds = 0, calls = 0;
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    charge: () => { charges++; return true; }, refund: () => { refunds++; },
+  });
+  const state = auxiliaryOwner(budget);
+  await state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; });
+  await expect(state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+  expect(calls).toBe(1); expect(sends()).toBe(1); expect(budget.used).toBe(1);
+  expect(charges - refunds).toBe(1);
+});
+
+test("auxiliary factory sends without a workflow root retain request accounting", async () => {
+  const budget = createRequestExecutionBudget();
+  const state = createResponsesSendBudget({ options: { sendBudget: budget }, logCtx: { provider: "fixture" },
+    req: new Request("http://fixture/v1/responses") });
+  if (state instanceof Response) throw new Error("fixture owner refused");
+  let calls = 0;
+  await state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; });
+  await state.dispatchSidecarSend(auxiliaryTarget, async () => { calls++; });
+  expect(calls).toBe(2); expect(budget.used).toBe(2);
+});
+
+test("auxiliary use refusal consumes neither root capacity nor the unused booking", async () => {
+  const sends = root(1), budget = createRequestExecutionBudget();
+  const reserve = budget.reserveDispatch.bind(budget);
+  budget.reserveDispatch = intent => {
+    const decision = reserve(intent);
+    return decision.allowed ? { allowed: true, permit: { ...decision.permit, use: () => false } } : decision;
+  };
+  const state = auxiliaryOwner(budget);
+  await expect(state.dispatchSidecarSend(auxiliaryTarget, async () => { throw new Error("unexpected dispatch"); })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+  expect(sends()).toBe(0); expect(budget.used).toBe(0);
+});
+
+for (const enforced of [false, true]) test(`auxiliary root refusal is nonterminal until the routed send is refused (spend=${enforced})`, async () => {
+  const sends = root(1), { tracker, budget, logCtx } = request(enforced);
+  const state = auxiliaryOwner(budget, logCtx);
+  const initial = budget.reserveDispatch({ sendClass: "initial", targetKey: "parent" });
+  if (!initial.allowed) throw new Error("initial refused");
+  expect(initial.permit.use()).toBe(true);
+  await expect(state.dispatchSidecarSend(auxiliaryTarget, async () => "unexpected")).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+  expect(tracker.refusals).toBe(1); expect(tracker.lastRefusal?.reason).toBe("workflow-sends-exhausted");
+  expect(logCtx.localTerminalReason).toBeUndefined(); expect(logCtx.errorCode).toBeUndefined();
+  const terminal = budget.reserveDispatch({ sendClass: "transient", targetKey: "parent" });
+  if (!terminal.allowed) throw new Error("expected admission to reach root guard");
+  expect(terminal.permit.use()).toBe(false); terminal.permit.release();
+  expect(logCtx.localTerminalReason).toBe("workflow_sends_exhausted");
+  expect(sends()).toBe(1); tracker.settle(undefined);
+});
 
 test("native successors reserve fresh token capacity before each physical start", () => {
   const release = acquireOwnedSpendHome();

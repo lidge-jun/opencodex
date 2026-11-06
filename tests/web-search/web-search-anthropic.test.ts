@@ -51,19 +51,19 @@ describe("Anthropic helper physical admission", () => {
   const originalFetch = globalThis.fetch;
   const settings = { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false };
   afterEach(() => { globalThis.fetch = originalFetch; oauthAccessError = undefined; });
-  function owner(maxTokens = 100_000) {
+  function owner(maxTokens = 100_000, helperPool = "anthropic") {
     const lines: string[] = [];
     const journal: SpendJournal = { read: () => [...lines], append: line => { lines.push(line); }, rewrite: next => { lines.splice(0, lines.length, ...next); } };
     const ledger = createSpendReservationLedger({ journal, policy: { ...DEFAULT_SPEND_RESERVATION_POLICY,
-      pool: { maxTokens }, canonicalProviderIds: ["parent", "anthropic"] } });
-    const log = { provider: "parent", model: "parent", accountLogLabel: "parent-account", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 1 };
+      pool: { maxTokens }, canonicalProviderIds: ["parent", helperPool] } });
+    const log: Parameters<typeof createRequestSpendTracker>[0] = { provider: "parent", model: "parent", accountLogLabel: "parent-account", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 1 };
     const tracker = createRequestSpendTracker(log, undefined, ledger);
     const budget = createRequestExecutionBudget(undefined, "anthropic-helper", tracker);
     const translatorBudget = createTranslatorBudget();
     const value = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: log,
       options: { sendBudget: budget, translatorBudget } });
     if (value instanceof Response) { translatorBudget.dispose(); throw new Error("fixture refused"); }
-    return { value, budget, tracker, ledger, lines, close: () => translatorBudget.dispose() };
+    return { value, budget, tracker, ledger, lines, log, close: () => translatorBudget.dispose() };
   }
   const ok = () => sseResponse([
     { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
@@ -82,6 +82,31 @@ describe("Anthropic helper physical admission", () => {
       expect(f.tracker.refusals).toBe(1);
       expect(f.budget.used).toBe(0);
     } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  test("a nonterminal auxiliary pool refusal leaves a successful routed answer unmarked", async () => {
+    const f = owner(100, "claude-fixture");
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    const passes: AdapterEvent[][] = [
+      [{ type: "tool_call_start", id: "s1", name: "web_search" }, { type: "tool_call_delta", arguments: '{"query":"fixture"}' }, { type: "tool_call_end" }, { type: "done" }],
+      [{ type: "text_delta", text: "normal answer" }, { type: "done" }],
+    ];
+    const adapter: ProviderAdapter = { name: "nonterminal-auxiliary-fixture",
+      buildRequest: () => ({ url: "https://routed.test", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire"), async *parseStream() { yield* passes.shift()!; } };
+    const translatorBudget = createTranslatorBudget();
+    try {
+      const response = await runWithWebSearch({ parsed: parsedWithWebSearch(), adapter, backend: "anthropic",
+        anthropicSidecar: { providerName: "claude-fixture", provider: anthropicProvider,
+          config: config({ providers: { routed: routedProvider, "claude-fixture": anthropicProvider } }) },
+        dispatchSidecarSend: f.value.dispatchSidecarSend, settings, maxSearches: 1, hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers(), incomingMeta: { headers: new Headers(), translatorBudget } });
+      expect(await response.text()).toContain("normal answer"); expect(fetches).toBe(0);
+      expect(f.tracker.refusals).toBe(1); expect(f.tracker.lastRefusal?.reason).toBe("workflow-spend-exhausted");
+      expect(f.log.localTerminalReason).toBeUndefined(); expect(f.log.errorCode).toBeUndefined();
+      expect(f.log.terminalSource).toBeUndefined();
+    } finally { f.tracker.settle(undefined); translatorBudget.dispose(); f.close(); }
   });
 
   test("each query owns a seed and reset replay counts each actual send", async () => {
