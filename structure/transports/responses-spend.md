@@ -10,6 +10,7 @@ spent budget tells the client. Dispatch and retry behavior is in
 `request-spend.ts` connects this count to both enforced and observe-only request budgets;
 reporter retries, concurrent requests and adapter-owned permits share the root's existing window.
 Unused dispatch permits consume no root sends, and cleanup cannot refund a claimed physical start.
+If root or physical admission refuses after token seeding, the observer immediately retires that exact unstarted seed; started seeds and other pending bookings retain their owners. Permit release remains responsible for the unused request-send booking.
 Root-table eviction preserves active leases, any unexpired send or child counts, and exhausted
 durable spend. Only an idle root with no remaining windowed history and no exhausted spend is
 reusable; when none is safe, a new root is refused before insertion. Count history remains
@@ -36,6 +37,7 @@ ladder's default send cap. Each successor reserves a fresh token seed before cla
 slot. Explicit starts have separate physical allowance; ordinary retry and bounded recovery grants
 are not replenished, including when recovery is created after earlier successors. A refused successor sends no upstream frame and ends the chain with
 the original locally constructed 429 response, including its workflow-refusal provenance and header.
+The request log retains that refusal's HTTP status rather than mapping the failed terminal to 502.
 It never falls back to HTTP or replays the initial request.
 The same known local refusal reaches the response stream when no continuation pacing hook is installed.
 The tracker carries each new denial's reason and spend detail into that response without recording the refusal event twice.

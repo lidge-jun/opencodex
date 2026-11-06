@@ -171,6 +171,8 @@ export interface RequestSendObserver {
   /** Capture request policy at its first admission or actual physical start. */
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }, proof?: SpendReservationProof): SpendSeed | undefined;
+  /** Release only this tracker's unstarted seed when physical admission refuses it. */
+  releaseSeed?(seed: SpendSeed): void;
   beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
   dispatch?(proof: SpendReservationProof): void;
   /** Give back a booking whose send never happened. */
@@ -414,7 +416,7 @@ export function createPhysicalSendReporter(
     const ordinal = options.explicitContinuation
       ? (budget as RequestExecutionBudget).claimContinuationPhysicalSend?.()
       : (budget as RequestExecutionBudget).claimPhysicalSend?.();
-    if (ordinal === undefined) return false;
+    if (ordinal === undefined) { observer.releaseSeed?.(seed); return false; }
     producer?.start(seed, ordinal);
     currentOrdinal = ordinal;
     started++;
@@ -621,7 +623,7 @@ function createRequestExecutionBudgetWithLedger(
         const seed = observer.ensureSeed?.(spendTarget, spendProof);
         if (!seed) return false;
         const ordinal = auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.();
-        if (ordinal === undefined) return false;
+        if (ordinal === undefined) { observer.releaseSeed?.(seed); return false; }
         producer = observer.beginReporter?.();
         producer?.start(seed, ordinal);
         physicalOrdinal = ordinal;

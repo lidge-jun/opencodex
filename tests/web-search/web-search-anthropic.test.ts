@@ -28,6 +28,7 @@ import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type Sp
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { estimateTokens } from "../../src/lib/token-estimate";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { runWithWebSearch } from "../../src/web-search/loop";
 import { runTurnWebSearchLoop } from "../../src/web-search/run-turn-loop";
@@ -114,7 +115,9 @@ describe("Anthropic helper physical admission", () => {
     let fetches = 0;
     const reserves = () => f.lines.map(line => JSON.parse(line)).filter(row => row.kind === "reserve").length;
     const countsAtWire: number[] = [];
-    globalThis.fetch = (async () => {
+    const wireBodies: string[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      wireBodies.push(String(init?.body));
       fetches++; countsAtWire.push(reserves());
       if (fetches === 1) throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
       return ok();
@@ -128,7 +131,9 @@ describe("Anthropic helper physical admission", () => {
       expect(countsAtWire).toEqual([1, 1, 3]);
       expect(reserves()).toBe(3);
       expect(f.budget.used).toBe(3);
-      expect(f.ledger.snapshot("pool", "anthropic")!.reserved).toBeGreaterThan(3 * 8192);
+      const expectedHold = wireBodies.reduce((total, body) =>
+        total + Math.max(1, estimateTokens(body, settings.model)) + (JSON.parse(body) as { max_tokens: number }).max_tokens, 0);
+      expect(f.ledger.snapshot("pool", "anthropic")!.reserved).toBe(expectedHold);
       expect(f.ledger.snapshot("identity", "parent-account")).toBeUndefined();
       expect(f.ledger.snapshot("pool", "parent")).toBeUndefined();
     } finally { f.tracker.settle(undefined); f.close(); }

@@ -29,8 +29,77 @@ function request(enforced: boolean) {
   const logCtx: Parameters<typeof createRequestSpendTracker>[0] = { provider: "fixture", spendInputEstimateTokens: 1 };
   const tracker = createRequestSpendTracker(logCtx, "physical-root", ledger);
   const budget = createRequestExecutionBudget(undefined, undefined, tracker);
-  return { tracker, budget, logCtx };
+  return { tracker, budget, logCtx, ledger, lines };
 }
+
+for (const path of ["reporter", "continuation", "permit"] as const) {
+  test(`a refused ${path} releases its unstarted token seed before settlement`, () => {
+    const sends = root(1);
+    const f = request(true);
+    const continuation = path === "continuation" ? auxiliaryOwner(f.budget, f.logCtx).continuationSendReporter() : undefined;
+    const other = request(false);
+    const sent = createPhysicalSendReporter(other.budget, () => ({ poolId: "fixture" }));
+    expect(sent.beforeSend!()).toBe(true);
+    sent(1); sent.close!(); other.tracker.settle(undefined);
+    const reserved = () => f.ledger.snapshot("root", "physical-root")?.reserved ?? 0;
+    expect(reserved()).toBe(0);
+    try {
+      if (path === "permit") {
+        const decision = f.budget.reserveDispatch({ sendClass: "initial", targetKey: "refused" });
+        if (!decision.allowed) throw new Error("fixture booking refused before physical admission");
+        try {
+          expect(reserved()).toBeGreaterThan(0);
+          expect(decision.permit.use()).toBe(false);
+          expect(reserved()).toBe(0);
+        } finally { decision.permit.release(); }
+      } else {
+        const reporter = continuation ?? createPhysicalSendReporter(f.budget, () => ({ poolId: "fixture" }));
+        try {
+          expect(reporter.beforeSend!()).toBe(false);
+          expect(f.lines.some(line => JSON.parse(line).kind === "reserve")).toBe(true);
+          expect(reserved()).toBe(0);
+        } finally { reporter.close!(); }
+      }
+      expect(sends()).toBe(1);
+    } finally { f.tracker.settle(undefined); }
+  });
+}
+
+test("a refused helper gives back only its seed and preserves a pending parent booking", () => {
+  root(1);
+  const f = request(true);
+  const parent = f.budget.reserveDispatch({ sendClass: "initial", targetKey: "parent", countedExternally: true });
+  if (!parent.allowed) throw new Error("parent booking refused");
+  const parentHold = f.ledger.snapshot("root", "physical-root")!.reserved;
+  const priorHelperPoolHold = f.ledger.snapshot("pool", "anthropic")?.reserved ?? 0;
+  const other = request(false);
+  const sent = createPhysicalSendReporter(other.budget, () => ({ poolId: "fixture" }));
+  expect(sent.beforeSend!()).toBe(true); sent(1); sent.close!(); other.tracker.settle(undefined);
+  const helper = f.budget.reserveDispatch({ sendClass: "auxiliary", targetKey: "helper",
+    spendScopes: { poolId: "anthropic", identityId: "" }, spendEstimate: { inputTokens: 2, outputCeilingTokens: 3 } });
+  if (!helper.allowed) throw new Error("helper booking refused before physical admission");
+  try {
+    expect(f.ledger.snapshot("root", "physical-root")!.reserved).toBeGreaterThan(parentHold);
+    expect(helper.permit.use()).toBe(false);
+    expect(f.ledger.snapshot("root", "physical-root")!.reserved).toBe(parentHold);
+    expect(f.ledger.snapshot("pool", "anthropic")!.reserved).toBe(priorHelperPoolHold);
+    expect(f.ledger.snapshot("pool", "fixture")!.reserved).toBe(parentHold);
+  } finally { helper.permit.release(); parent.permit.release(); f.tracker.settle(undefined); }
+});
+
+test("a refused reporter cannot abandon a seed that already started", () => {
+  root(1);
+  const f = request(true);
+  const first = createPhysicalSendReporter(f.budget, () => ({ poolId: "fixture" }));
+  const refused = createPhysicalSendReporter(f.budget, () => ({ poolId: "fixture" }));
+  try {
+    expect(first.beforeSend!()).toBe(true);
+    const hold = f.ledger.snapshot("pool", "fixture")!.reserved;
+    expect(refused.beforeSend!()).toBe(false);
+    expect(f.ledger.snapshot("pool", "fixture")!.reserved).toBe(hold);
+    first(1);
+  } finally { first.close!(); refused.close!(); f.tracker.settle(undefined); }
+});
 
 const auxiliaryTarget = { poolId: "anthropic", identityId: "", targetKey: "search:q",
   estimate: { inputTokens: 1, outputCeilingTokens: 1 } };

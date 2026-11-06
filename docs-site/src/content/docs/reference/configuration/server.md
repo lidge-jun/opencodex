@@ -92,6 +92,8 @@ Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT
 
 OpenCodex bounds how much one task may fan out. A task is the root conversation, identified by the client's `x-codex-parent-thread-id` header, together with every subagent it starts. Three count ceilings apply to each task, and requests over any of them are refused locally with HTTP 429 and an `x-opencodex-local-refusal` header naming the ceiling (`workflow_concurrency_exhausted`, `workflow_sends_exhausted` or `workflow_children_exhausted`); no provider is contacted.
 
+If physical admission refuses a request after token reservation, its unstarted reservation is returned immediately. Started sends and other pending bookings remain accounted for. Native continuation refusals retain HTTP 429 in the request log as well as in the client error.
+
 | Field | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
 | `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |

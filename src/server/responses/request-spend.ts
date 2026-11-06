@@ -293,6 +293,11 @@ export function createRequestSpendTracker(
       seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true, estimate });
       return decision.seed;
     },
+    releaseSeed(seed) {
+      const entry = [...seeds.entries()].find(([, state]) => state.seed === seed);
+      // A started send or another tracker's seed retains its owner and settlement duty.
+      if (entry && !entry[1].started) retireSeed(entry[0], seed);
+    },
     beginReporter() {
       if (resolved || finalRequested && reporters === 0) throw new Error("Spend reporter registered after final closure");
       deferCleanup();

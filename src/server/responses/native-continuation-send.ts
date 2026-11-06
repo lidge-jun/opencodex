@@ -17,6 +17,7 @@ export function claimNativeContinuationSend(reporter: PhysicalSendReporter, logC
       const refusal = (denied ? workflowRefusalResponse(denied.reason, logCtx, undefined, undefined, denied.spend) : undefined)
         ?? workflowSendCeilingRefusalResponse(logCtx, rootId)
         ?? markProxyError(formatErrorResponse(429, "request_send_budget_exhausted", new SendBudgetExhaustedError().message));
+      logCtx.terminalHttpStatus = refusal.status;
       throw new NativeContinuationRefusalError(refusal);
     }
     reporter(1);

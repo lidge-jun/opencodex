@@ -4,6 +4,7 @@ import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, listWorkflowBudget
 import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { claimNativeContinuationSend } from "../../src/server/responses/native-continuation-send";
 import { NativeContinuationRefusalError } from "../../src/server/responses/native-continuation-refusal";
+import { getRequestLogEntries } from "../../src/server/request-log";
 import { NativeInjectionChannel } from "../../src/server/responses/native-injection";
 import { codexWsUpstreamFetch } from "../../src/server/responses/ws-upstream";
 import { sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
@@ -69,6 +70,7 @@ for (const mode of ["injection", "steering"] as const) for (const enforced of [f
     expect(refusal.status).toBe(429);
     expect(refusal.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_sends_exhausted");
     expect(refusal.error.message).toContain("no additional provider request was sent");
+    expect(getRequestLogEntries().filter(entry => entry.errorCode === "workflow_sends_exhausted").at(-1)?.status).toBe(429);
     expect(workflowBudgetSnapshot(root)).toMatchObject({ sends: limit, active: 0 });
     expect(listWorkflowBudgetEvents().filter(event => event.rootId === root && event.kind === "refused")).toHaveLength(1);
     expect(InjectionSocket.all).toHaveLength(1);
