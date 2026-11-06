@@ -262,7 +262,7 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 
 Remote Link Home에서는 최신 카탈로그가 성공적으로 커밋된 뒤 `ocx sync`가 조건을 충족하는 연결된 Child에도 동기화를 전파합니다. `--local-only`는 이 전파를 끕니다. `--json`은 Home 결과와 각 Child의 상태를 담은 단일 `ocx.sync.fanout/1` 문서를 출력하며, 건너뛴 Child의 이유도 표시합니다. Home 자체의 종료 코드가 0이 아니면 그 코드를 그대로 반환합니다. Home이 성공한 경우 Child 실패나 시간 초과 또는 링크 저장소를 읽을 수 없는 경우 종료 코드 6을 반환하며, 그 외에는 Child를 건너뛴 경우를 포함해 0으로 종료합니다. 링크 저장소를 읽을 수 없으면 텍스트 모드에서 경로가 없는 오류를 출력합니다. 코드 7은 업데이트 진행 중을 위해 예약되어 있습니다. JSON 모드에서 Home 동기화가 예외를 던져도 stdout에는 결과 문서 하나만 출력하고 stderr에는 안전하게 변환된 진단을 출력합니다.
 
-전파는 Child의 Codex 앱이나 app-server 재시작을 요청하지 않습니다. 재시작이 필요하면 GOAT를 사용하거나 해당 Child에서 `ocx sync --restart-codex`를 실행하세요. 다만 Child의 고정 대상 동기화는 변경된 Home 설정을 적용한 뒤 자체 OpenCodex 클라이언트 런타임을 재시작할 수 있습니다. Home이 시간 초과로 로컬 SSH 프로세스를 중지하더라도 이미 시작된 원격 동기화는 Child에서 계속될 수 있습니다.
+전파는 Child의 Codex 앱이나 app-server 재시작을 요청하지 않습니다. 재시작이 필요하면 GOAT를 사용하거나, 전체 `ocx` Child에서는 `ocx sync --restart-codex`를 실행하고 경량 `ocx-child` 호스트에서는 Codex 데스크톱 앱과 `app-server`를 별도로 재시작하세요. 다만 Child의 고정 대상 동기화는 변경된 Home 설정을 적용한 뒤 자체 OpenCodex 클라이언트 런타임을 재시작할 수 있습니다. Home이 시간 초과로 로컬 SSH 프로세스를 중지하더라도 이미 시작된 원격 동기화는 Child에서 계속될 수 있습니다.
 
 > **Remote Link Child:** 전체 `ocx` Child에서는 `ocx sync`가 Home의 Codex 설정도 적용하며, 클라이언트 런타임이 그 적용보다 먼저 시작되었으면 재시작 플래그 없이도 재시작하고 실패하더라도 이전 런타임이 계속 서비스한 채 0이 아닌 코드로 끝납니다. 경량 `ocx-child` 호스트에서는 `ocx-child sync`가 릴레이가 없을 때 `ocx-child serve`를 시작하고 `runtimeStartedAt < lastApplyAt`이면 교체하며 `stale`이 아닌 동기화에서 최선을 다해 parity를 보고합니다(교체 실패 시 이전 릴레이가 멈춘 상태로 0이 아닌 코드로 끝나며, Codex 데스크톱 앱과 장기 실행 `app-server` 프로세스는 별도로 재시작해야 합니다). Child의 `ocx status --json`(또는 `ocx-child status --json`)과 Home의 `ocx link status --json` 필드는 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)(영문)를 참고하세요.
 

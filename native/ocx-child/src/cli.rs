@@ -301,13 +301,29 @@ impl AttachRollbackSnapshot {
             && self.prior_was_serving
             && probe_local_healthz(prev.listen_port, Duration::from_millis(250)).is_none()
         {
-            match start_or_rollover_daemon(paths, &mut prev, None) {
-                Ok(_) => {
-                    if let Err(e) = write_child_state(&paths.state_file, &prev) {
-                        errors.push(format!("restore daemon state: {e}"));
-                    }
+            let state_key_consistent = match read_child_state(&paths.state_file) {
+                StateReadOutcome::Valid(st)
+                    if st.link_id == prev.link_id
+                        && st.token_fingerprint == prev.token_fingerprint =>
+                {
+                    read_verified_link_key(&paths.key_file, &st.token_fingerprint).is_ok()
                 }
-                Err(e) => errors.push(format!("restart prior daemon: {e}")),
+                _ => false,
+            };
+            if !state_key_consistent {
+                errors.push("prior relay restart skipped: restored state.json and link-key are inconsistent".to_owned());
+            } else {
+                let had_file_errors = !errors.is_empty();
+                match start_or_rollover_daemon(paths, &mut prev, None) {
+                    Ok(_) => {
+                        if let Err(e) = write_child_state(&paths.state_file, &prev) {
+                            errors.push(format!("restore daemon state: {e}"));
+                        } else if had_file_errors {
+                            errors.push("prior relay restart attempted and succeeded".to_owned());
+                        }
+                    }
+                    Err(e) => errors.push(format!("restart prior daemon: {e}")),
+                }
             }
         }
         if errors.is_empty() {
