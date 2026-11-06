@@ -1235,7 +1235,15 @@ unless you pass `--tag latest|preview`. It detects a source checkout and tells y
 `git pull && bun install` instead, and is a no-op if you are already on the newest version for that
 tag. Before stopping anything, npm installations run a bounded Unix cache ownership and access
 check. Nested symlinks are checked with `lstat` but not followed; Windows explicitly skips this
-Unix-only check. A failure aborts while the tray and proxy are still running. A running proxy is
+Unix-only check. A failure aborts while the tray and proxy are still running.
+For Bun installations, `ocx update` runs an early configuration preflight before stopping the proxy:
+if `config.json` cannot be read (including dangling symlinks) or requires diagnostics fallback or salvage,
+the update aborts with exit code 1 while the service and tray continue running. For a readable
+but invalid file, run `ocx config validate` to diagnose it, then back up and correct the file.
+Validation does not change the file. For an unreadable or non-regular entry, inspect the config
+path, permissions, and any symlink target; correct them or restore a readable regular config from
+a trusted backup before retrying. Validation may report defaults when a symlink target is missing,
+so its success alone does not resolve that condition. Reparable configurations do not abort. A running proxy is
 then stopped before files are replaced; an installed service is rebuilt and started automatically,
 while a foreground installation prints `ocx start` as the next step. Dashboard update records
 redact profile/cache paths and UID/GID values before they are persisted.
