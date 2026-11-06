@@ -294,7 +294,10 @@ Before uninstalling a supported Desktop installation, open **Terminal command** 
 dashboard or tray and choose **Remove terminal command**. Desktop removes only its unchanged
 managed configuration. Modified blocks or files are preserved and reported; resolve those
 issues before deleting the app. Uninstalling the app directly does not guarantee cleanup
-of shell files or the user `Path`.
+of shell files or the user `Path`. On macOS/Linux, a stale enabled Desktop command record
+also blocks eligible npm/pnpm launcher calls if the selected app executable is gone. Repair
+or remove the terminal command before deleting the app. `OCX_NO_DESKTOP_HANDOFF=1` permits
+one explicit package-launcher invocation; it does not repair the record, shim or PATH.
 
 On macOS, drag `OpenCodex.app` from Applications to the Trash. On Windows, remove
 OpenCodex from **Installed apps**. On Debian-based Linux systems, run:
