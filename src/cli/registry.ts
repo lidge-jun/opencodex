@@ -379,7 +379,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|preset|context|shadow> ...",
     summary: "List models and manage custom (manually registered) models.",
     details: [
-      "List available models from static config with no subcommand (liveModels may add more at runtime).",
+      "List available models: saved and router-known IDs include custom models and the process-local cache; models live reads the running proxy catalog.",
       "add/remove support --live for the selected proxy; live or JSON removal requires --yes.",
       "Local add/remove JSON reports saved state and opportunistic sync; no proxy keeps the save successful/pending.",
       "display-name <provider/raw-model> --set <label> or --clear changes an exact upstream model label.",
