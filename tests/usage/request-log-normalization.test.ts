@@ -156,6 +156,31 @@ describe("request log metadata", () => {
     }
   });
 
+  for (const shape of ["non-enumerable", "inherited"] as const) test(`projection classifies ${shape} quota reset evidence`, () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-quota-evidence-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    resetUsageReadCacheForTests();
+    try {
+      const entry = log({ provider: "meta-muse", status: 429, timestamp: Date.parse("2026-11-01T00:00:00Z"), errorCode: "rate_limit_exceeded" });
+      const message = "Subscription quota exhausted. Your usage window resets at 2026-11-02T00:00:00Z.";
+      if (shape === "inherited") Object.setPrototypeOf(entry, { upstreamError: message });
+      else Object.defineProperty(entry, "upstreamError", { value: message, enumerable: false });
+      addRequestLog(entry);
+      const live = getRequestLogEntries()[0]!;
+      expect(live.rateLimitResetAt).toBe(Date.parse("2026-11-02T00:00:00Z"));
+      expect(readUsageEntries()[0]?.rateLimitResetAt).toBe(live.rateLimitResetAt);
+      expect(JSON.stringify(requestLogDto(live))).not.toContain(message);
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
   test("sanitizing a normalized lossy row preserves its loss marker across surfaces", () => {
     const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
       status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" } as const;

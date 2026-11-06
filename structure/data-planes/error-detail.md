@@ -33,7 +33,8 @@ through the disk reader. A row keeps:
 - `rateLimitResetAt`, finite epoch milliseconds after the request and at most eight days later, derived
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
-  the number on hydration.
+  the number on hydration. Direct log rows also classify non-enumerable or inherited quota
+  evidence before discarding its text; `tests/usage/request-log-normalization.test.ts` covers both.
 - `failureDetail`, a closed `{ code, value?, type? }` from `src/lib/failure-detail.ts`: `code` is a member of
   `FAILURE_DETAIL_CODES`, `value` a safe integer (milliseconds or bytes) kept only for codes that take one,
   and `type` a closed Anthropic error class kept only on `provider_error`. `recordLocalFailureDetail` in
