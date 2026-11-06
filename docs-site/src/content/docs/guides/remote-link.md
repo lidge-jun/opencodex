@@ -77,6 +77,8 @@ On a Child, `GET /healthz` only says that OpenCodex is running. `GET /readyz` (a
 
 The reason `client_state_changed` means the running Child's saved connection is missing or now names another owner or link. Its machine and link status endpoints also return `503` with this reason. Stop or restart the Child and check its connection before re-linking; this readiness result does not itself disconnect the relay.
 
+If `ocx connect status --json` reports `disconnected` but a leftover service token prevents a new link, inspect the situation on the Child. After confirming that preserving the existing token files is intended, run `ocx disconnect --orphaned-token --yes`. It refuses a connected or pending client and any live client runtime or unverified runtime state. It moves the token and any rotation backup into a private directory under the OpenCodex config directory, prints the location, and does not infer that either token belonged to the link. Stop OpenCodex to restore: move the saved files back only when the original names are absent. The command does not revoke a Home key or restore missing client configuration.
+
 To confirm which Home is serving a Child, compare the `x-opencodex-served-by` header on the Child's `GET /v1/models` with the `instanceId` in the Home's `GET /healthz`. The Child passes the Home's header through unchanged, so the two match while the link works. The value is an opaque id, never a hostname; see [Home identity and the served-by header](/reference/management-api/#home-identity-and-the-served-by-header).
 
 ## What a Child shows and manages
@@ -88,6 +90,8 @@ A Child runs on the Home's providers, accounts and settings, so the Home is wher
 
   When OpenCodex Desktop or a background service supervises the Child runtime, sync succeeds after applying settings and reports that the runtime restart is deferred. The settings take effect when that supervisor restarts the runtime: use **Quit** in the OpenCodex tray menu, then reopen OpenCodex, or run `ocx service restart` for a service.
 - **CLI.** Commands that only read, such as `ocx account list`, `ocx provider quota` and `ocx usage`, read the Home. They show what the Home has already observed: a read from a Child never makes the Home probe a provider, refresh a token or start a process, so quota and account details are as fresh as the Home's own activity keeps them. Reads that only exist to run provider discovery or a forced refresh, such as `ocx models live`, `ocx models preset show` and `ocx account list --quota`, are refused like changes. Commands that change configuration are refused with one message that names the Home and the link and says no request was sent. `ocx status` describes the Home and the link. `ocx provider list` and `ocx config get` still show this computer's own configuration, labelled as local and inactive while the computer is linked. `ocx config set`, `ocx config unset` and `ocx config import` still write locally, each with the same note, and `ocx provider add`, `remove` and `set-default` are refused because those providers are not used while linked.
+
+An import that would replace or remove an active client connection is refused. Disconnect that client first, or import a file that preserves its connection record exactly.
 
 These reads need an OpenCodex version with the Remote Link management relay on both the Home and the Child. An older Home answers with a message asking you to upgrade it.
 

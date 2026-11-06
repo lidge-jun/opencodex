@@ -37,3 +37,14 @@ therefore does not establish that the present token belongs to the sidecar, and 
 followed by compare-and-swap alone only proves that the token did not change during cleanup. A
 recovery implementation needs an independent owner witness and a safe path for legacy orphans;
 it must not interpret sidecar presence as proof of token ownership.
+
+## Explicit legacy recovery
+
+The operator can instead authorize preservation of the unowned files explicitly with
+`ocx disconnect --orphaned-token --yes`. This is a recovery action, not a connection
+reconstruction: it moves the service token and any rotation backup to a private directory and
+prints its location and restoration guidance. Under the existing start ownership lease and client
+lifecycle lock, check that no client runtime is live, treating unknown as a refusal; under the
+config mutation lock recheck disconnected state, pending-connect marker, disconnect receipt, and
+token file identities immediately before moving. Refuse unsafe paths and preserve all backup bytes
+if any part fails. The normal disconnect, sync and enrollment paths retain their ownership checks.
