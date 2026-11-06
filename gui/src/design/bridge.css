@@ -257,7 +257,8 @@
 .nav-search-close:hover { color: var(--ocx-fg); background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); }
 .nav-search-results { display: flex; flex-direction: column; gap: 1px; }
 .nav-search-result.is-highlighted { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
-.nav-search-context { margin-left: auto; padding-left: 8px; font-size: 11.5px; color: var(--ocx-fg-subtle); white-space: nowrap; }
+.nav-search-result .nav-item-label { flex-shrink: 0; max-width: 65%; }
+.nav-search-context { min-width: 0; margin-left: auto; padding-left: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--ocx-fg-subtle); white-space: nowrap; }
 .nav-search-empty { padding: 8px; font-size: 12.5px; color: var(--ocx-fg-subtle); }
 
 /* Row shortcuts stay out of sight until the row is hovered or focused: a quiet sidebar. */

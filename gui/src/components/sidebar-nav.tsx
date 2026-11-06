@@ -52,6 +52,9 @@ export function SidebarNav({ activeGroupId, pageLabel, pageAvailable, onNavigate
   const [advancedOpen, setAdvancedOpen] = useState(readAdvancedOpen);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const searchDialogRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const openedFromButton = useRef(false);
   const listId = useId();
 
   useEffect(() => {
@@ -74,21 +77,72 @@ export function SidebarNav({ activeGroupId, pageLabel, pageAvailable, onNavigate
   const trimmed = query.trim().toLowerCase();
   const results = useMemo(() => (trimmed ? entries.filter(entry => entry.haystack.includes(trimmed)) : []), [entries, trimmed]);
 
-  const openSearch = useCallback(() => {
+  const openSearch = useCallback((fromButton = false) => {
+    if (searching) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    openedFromButton.current = fromButton || returnFocusRef.current === searchButtonRef.current;
     onReveal();
     setSearching(true);
-    // The input mounts (and a collapsed rail or the phone drawer opens) on this render. The
-    // drawer is still sliding in, and focus() no-ops while its visibility transitions.
-    requestAnimationFrame(() => inputRef.current?.focus());
-    setTimeout(() => { if (document.activeElement !== inputRef.current) inputRef.current?.focus(); }, 200);
-  }, [onReveal]);
+  }, [onReveal, searching]);
+
+  useEffect(() => {
+    if (!searching) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    // The mobile drawer may still be transitioning from visibility:hidden.
+    const timer = setTimeout(() => {
+      if (!searchDialogRef.current?.contains(document.activeElement)) inputRef.current?.focus();
+    }, 200);
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [searching]);
+
+  useEffect(() => {
+    const dialog = searchDialogRef.current;
+    if (!searching || !dialog) return;
+    // A modal's background must be unavailable to pointer and assistive technology too.
+    const changed: Element[] = [];
+    for (let node: Element | null = dialog; node?.parentElement; node = node.parentElement) {
+      for (const sibling of Array.from(node.parentElement.children)) {
+        if (sibling !== node && !sibling.hasAttribute("inert")) {
+          sibling.setAttribute("inert", "");
+          changed.push(sibling);
+        }
+      }
+      if (node.parentElement === document.body) break;
+    }
+    const containFocus = (event: FocusEvent) => {
+      if (!dialog.contains(event.target as Node)) inputRef.current?.focus();
+    };
+    document.addEventListener("focusin", containFocus);
+    return () => {
+      document.removeEventListener("focusin", containFocus);
+      changed.forEach(element => element.removeAttribute("inert"));
+    };
+  }, [searching, trimmed]);
 
   const closeSearch = useCallback((restoreFocus: boolean) => {
     setQuery("");
     setHighlight(0);
     setSearching(false);
-    if (restoreFocus) requestAnimationFrame(() => searchButtonRef.current?.focus());
+    if (restoreFocus) requestAnimationFrame(() => {
+      const target = openedFromButton.current ? searchButtonRef.current : returnFocusRef.current;
+      if (target?.isConnected) target.focus();
+      else searchButtonRef.current?.focus();
+    });
   }, []);
+
+  useEffect(() => {
+    if (!searching) return;
+    // The drawer's Escape listener is on window; capture also covers its slide-in
+    // interval before the search input can receive focus.
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeSearch(true);
+    };
+    window.addEventListener("keydown", onEscape, true);
+    return () => window.removeEventListener("keydown", onEscape, true);
+  }, [closeSearch, searching]);
 
   const go = useCallback((page: Page) => {
     closeSearch(false);
@@ -99,7 +153,8 @@ export function SidebarNav({ activeGroupId, pageLabel, pageAvailable, onNavigate
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const commandK = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === "k" || event.key === "K");
+      if (searching || event.defaultPrevented || event.isComposing) return;
+      const commandK = (style.endsWith("mac") ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) && !event.altKey && !event.shiftKey && (event.key === "k" || event.key === "K");
       if (commandK || (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !isEditableTarget(event.target))) {
         event.preventDefault();
         openSearch();
@@ -122,13 +177,25 @@ export function SidebarNav({ activeGroupId, pageLabel, pageAvailable, onNavigate
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [daily, desktopShell, onNavigate, openSearch, style]);
+  }, [daily, desktopShell, onNavigate, openSearch, searching, style]);
 
-  const onSearchKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+  const onDialogKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.nativeEvent.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       closeSearch(true);
-    } else if (event.key === "ArrowDown") {
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      const close = searchDialogRef.current?.querySelector<HTMLButtonElement>(".nav-search-close");
+      if (event.shiftKey ? document.activeElement === inputRef.current : document.activeElement !== close) close?.focus();
+      else inputRef.current?.focus();
+    }
+  };
+
+  const onSearchKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    if (event.key === "ArrowDown") {
       event.preventDefault();
       setHighlight(index => (results.length ? (index + 1) % results.length : 0));
     } else if (event.key === "ArrowUp") {
@@ -174,24 +241,42 @@ export function SidebarNav({ activeGroupId, pageLabel, pageAvailable, onNavigate
           return (
             <div key={tier} className="nav-tier" data-tier={tier}>
               {searching ? (
-                <div className="nav-search" role="search">
-                  <IconSearch aria-hidden="true" />
-                  <input ref={inputRef} type="search" className="nav-search-input" value={query}
-                    placeholder={t("shellV2.navSearchPlaceholder")}
-                    aria-label={searchLabel}
-                    aria-controls={listId}
-                    aria-activedescendant={results.length ? `${listId}-${Math.min(highlight, results.length - 1)}` : undefined}
-                    onChange={event => { setQuery(event.target.value); setHighlight(0); }}
-                    onKeyDown={onSearchKey}
-                    onBlur={() => { if (!query) closeSearch(false); }} />
-                  <button type="button" className="nav-search-close" onClick={() => closeSearch(true)} aria-label={t("common.close")} title={t("common.close")}>
-                    <IconX />
-                  </button>
+                <div ref={searchDialogRef} role="dialog" aria-modal="true" aria-label={searchLabel} onKeyDown={onDialogKey}>
+                  <div className="nav-search">
+                    <IconSearch aria-hidden="true" />
+                    <input ref={inputRef} type="search" className="nav-search-input" value={query}
+                      placeholder={t("shellV2.navSearchPlaceholder")}
+                      aria-label={searchLabel} role="combobox" aria-expanded="true" aria-autocomplete="list"
+                      aria-controls={listId}
+                      aria-activedescendant={results.length ? `${listId}-${Math.min(highlight, results.length - 1)}` : undefined}
+                      onChange={event => { setQuery(event.target.value); setHighlight(0); }}
+                      onKeyDown={onSearchKey} />
+                    <button type="button" className="nav-search-close" onClick={() => closeSearch(true)} aria-label={t("common.close")} title={t("common.close")}>
+                      <IconX />
+                    </button>
+                  </div>
+                  {trimmed && results.length === 0 && <div className="nav-search-empty" role="status">{t("shellV2.navSearchEmpty")}</div>}
+                  <div id={listId} className="nav-search-results" role="listbox" aria-label={searchLabel}>
+                    {results.map((entry, index) => {
+                      const { Icon } = entry.group;
+                      return (
+                        <button key={entry.page} id={`${listId}-${index}`} type="button" role="option" tabIndex={-1}
+                          aria-selected={index === Math.min(highlight, results.length - 1)}
+                          className={`nav-item nav-search-result${index === Math.min(highlight, results.length - 1) ? " is-highlighted" : ""}`}
+                          onMouseEnter={() => setHighlight(index)}
+                          onMouseDown={event => event.preventDefault()}
+                          onClick={() => go(entry.page)}>
+                          <Icon /> <span className="nav-item-label">{entry.label}</span>
+                          {entry.context && <span className="nav-search-context">{entry.context}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : (
                 <div className="nav-tier-head">
                   <div className="nav-tier-label" aria-hidden="true">{t(tierKey)}</div>
-                  <button ref={searchButtonRef} type="button" className="nav-search-open" onClick={openSearch}
+                  <button ref={searchButtonRef} type="button" className="nav-search-open" onClick={() => openSearch(true)}
                     aria-label={`${searchLabel} (${searchHint})`} title={`${searchLabel} (${searchHint})`}
                     aria-keyshortcuts={searchHint === "⌘K" ? "Meta+K" : "Control+K"}>
                     <IconSearch aria-hidden="true" />
@@ -199,25 +284,7 @@ export function SidebarNav({ activeGroupId, pageLabel, pageAvailable, onNavigate
                   </button>
                 </div>
               )}
-              {trimmed ? (
-                <div id={listId} className="nav-search-results" role="listbox" aria-label={searchLabel}>
-                  {results.length === 0 && <div className="nav-search-empty">{t("shellV2.navSearchEmpty")}</div>}
-                  {results.map((entry, index) => {
-                    const { Icon } = entry.group;
-                    return (
-                      <button key={entry.page} id={`${listId}-${index}`} type="button" role="option"
-                        aria-selected={index === highlight}
-                        className={`nav-item nav-search-result${index === highlight ? " is-highlighted" : ""}`}
-                        onMouseEnter={() => setHighlight(index)}
-                        onMouseDown={event => event.preventDefault()}
-                        onClick={() => go(entry.page)}>
-                        <Icon /> <span className="nav-item-label">{entry.label}</span>
-                        {entry.context && <span className="nav-search-context">{entry.context}</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : groups.map((group, index) => row(group, index < 9 ? shortcutLabel(style, String(index + 1)) : null))}
+              {!trimmed && groups.map((group, index) => row(group, index < 9 ? shortcutLabel(style, String(index + 1)) : null))}
             </div>
           );
         }
