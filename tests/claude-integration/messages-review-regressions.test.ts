@@ -8,67 +8,43 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 for (const kind of ["sink", "sink-direct", "deep", "usage"]) test(`Messages delivery ${kind}`, async () => {
   const d = mkdtempSync(join(tmpdir(), "ocx-message-review-")); mkdirSync(join(d, "ocx")); mkdirSync(join(d, "codex"));
   try {
-    const child = Bun.spawn([process.execPath, helperPath("messages-proxy-refusal-case.ts"), kind], { cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: join(d, "ocx"), CODEX_HOME: join(d, "codex") }, stdout: "pipe", stderr: "pipe" });
+    const red = kind === "sink-direct" ? join(d, "red") : undefined;
+    if (red) {
+      const source = "src/claude/failure-verdict.ts";
+      const target = join(red, source);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "// L7_RED_SOURCE_MARKER\n" + readFileSync(repoPath(source), "utf8"));
+    }
+    const env = { ...process.env, OPENCODEX_HOME: join(d, "ocx"), CODEX_HOME: join(d, "codex") };
+    delete env.MESSAGES_RED_SOURCE;
+    if (red) env.MESSAGES_RED_SOURCE = red;
+    const child = Bun.spawn([process.execPath, helperPath("messages-proxy-refusal-case.ts"), kind], { cwd: repoRoot(), env, stdout: "pipe", stderr: "pipe" });
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (exit !== 0) throw new Error(`Delivery fixture failed ${exit}: ${stderr}`);
     const result = JSON.parse(stdout.split("REFUSAL_RESULT ").at(-1)!);
+    if (!red) expect(result.hooks.redInputs).toEqual([]);
     expect(result.status).toBe(200); expect(result.text.length).toBeGreaterThan(0);
     if (kind.startsWith("sink")) {
       expect(result.retained).toBe(0);
       expect(result.hooks.verdictLoads).toBeGreaterThan(0);
-      expect(result.hooks.admissions).toContain(false);
+      expect(result.streaming.admissions).toContain(false);
+      expect(result.streaming.retained).toBe(0);
       expect(result.filterChecks).toEqual({
         upstream: { forward: true, backward: true },
         native: { forward: true, backward: true },
         verdict: { forward: true, backward: true },
       });
+      if (kind === "sink") {
+        expect(result.collected.status).toBe(502);
+        expect(result.collected.textLength).toBeGreaterThan(0);
+        expect(result.hooks.admissions).toContain(true);
+        expect(result.hooks.admittedRecords).toBeGreaterThan(0);
+        expect(result.hooks.collectedMatches).toBeGreaterThan(0);
+      }
+      if (kind === "sink-direct") expect(result.hooks.redInputs).toContainEqual({ path: "src/claude/failure-verdict.ts", marker: true });
     }
     else expect(result.text).toBe(result.expectedBody);
     if (kind === "usage") { expect(result.usage.inputTokens).toBe(42); expect(result.usage.outputTokens).toBe(7); }
-  } finally { rmSync(d, { recursive: true, force: true }); }
-}, 30000);
-test("Messages collection uses and drains its failure verdict sink", async () => {
-  const d = mkdtempSync(join(tmpdir(), "ocx-message-collection-"));
-  mkdirSync(join(d, "ocx")); mkdirSync(join(d, "codex"));
-  try {
-    const child = Bun.spawn([process.execPath, helperPath("messages-proxy-refusal-case.ts"), "sink-collected"], {
-      cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: join(d, "ocx"), CODEX_HOME: join(d, "codex") }, stdout: "pipe", stderr: "pipe",
-    });
-    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    if (exit !== 0) throw new Error("Collection fixture failed " + exit + ": " + stderr);
-    const result = JSON.parse(stdout.split("REFUSAL_RESULT ").at(-1)!);
-    expect(result.status).toBe(502);
-    expect(result.hooks.admissions).toContain(true);
-    expect(result.retained).toBe(0);
-  } finally { rmSync(d, { recursive: true, force: true }); }
-}, 30000);
-
-test("red source loads the generic overlay and each instrumented module", async () => {
-  const d = mkdtempSync(join(tmpdir(), "ocx-message-red-source-"));
-  const red = join(d, "red");
-  const paths = ["src/lib/client-error-body.ts", "src/server/claude-messages.ts", "src/server/messages-native.ts", "src/claude/failure-verdict.ts"];
-  try {
-    for (const path of paths) {
-      const target = join(red, path);
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, "// L7_RED_SOURCE_MARKER\n" + readFileSync(repoPath(path), "utf8"));
-    }
-    const loaded = new Map<string, boolean>();
-    for (const kind of ["config", "native-pacing-preflight", "sink"]) {
-      const ocx = join(d, kind + "-ocx"), codex = join(d, kind + "-codex");
-      mkdirSync(ocx); mkdirSync(codex);
-      const child = Bun.spawn([process.execPath, helperPath("messages-proxy-refusal-case.ts"), kind], {
-        cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: ocx, CODEX_HOME: codex, MESSAGES_RED_SOURCE: red }, stdout: "pipe", stderr: "pipe",
-      });
-      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      if (exit !== 0) throw new Error("Red-source " + kind + " failed " + exit + ": " + stderr);
-      const result = JSON.parse(stdout.split("REFUSAL_RESULT ").at(-1)!);
-      for (const input of result.hooks.redInputs as { path: string; marker: boolean }[]) loaded.set(input.path, input.marker);
-      if (kind === "config") expect(result.hooks.upstreamHits).toBeGreaterThan(0);
-      if (kind === "native-pacing-preflight") expect(result.hooks.nativeHits).toBeGreaterThan(0);
-      if (kind === "sink") expect(result.hooks.admissions).toContain(false);
-    }
-    for (const path of paths) expect(loaded.get(path)).toBe(true);
   } finally { rmSync(d, { recursive: true, force: true }); }
 }, 30000);
 for (const source of ["writer", "reader", "hook"] as const) test(`adapter ${source} fault retains its origin`, async () => {

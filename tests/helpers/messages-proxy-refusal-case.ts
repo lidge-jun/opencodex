@@ -3,7 +3,9 @@ import { join, relative } from "node:path";
 import { repoPath } from "./repo-root";
 const hooks = {
   upstreamLoads: 0, upstreamHits: 0, nativeLoads: 0, nativeHits: 0, verdictLoads: 0,
-  admissions: [] as boolean[], redInputs: [] as { path: string; marker: boolean }[],
+  admittedRecords: 0, collectedMatches: 0, admissions: [] as boolean[],
+  redInputs: [] as { path: string; marker: boolean }[],
+  redFilterChecks: [] as { forward: boolean; backward: boolean }[],
 };
 (globalThis as typeof globalThis & { __fixtureHooks: typeof hooks }).__fixtureHooks = hooks;
 const portable = (path: string) => path.replaceAll("\\", "/");
@@ -24,6 +26,10 @@ if (process.env.MESSAGES_RED_SOURCE) {
   const paths = [...new Bun.Glob("src/**/*.ts").scanSync(process.env.MESSAGES_RED_SOURCE)].filter(path => !instrumented.has(portable(path)));
   const escape = (part: string) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const filter = new RegExp("^(?:" + paths.map(path => portable(repoPath(path)).split("/").map(escape).join("[\\\\/]")).join("|") + ")$");
+  hooks.redFilterChecks = paths.map(path => {
+    const candidate = portable(repoPath(path));
+    return { forward: filter.test(candidate), backward: filter.test(candidate.replaceAll("/", "\\")) };
+  });
   Bun.plugin({ name: "935199a98 red source", setup(build) {
     build.onLoad({ filter }, ({ path }) => ({ contents: readOriginal(path), loader: "ts" }));
   } });
@@ -53,9 +59,13 @@ Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
   });
   build.onLoad({ filter: filters.verdict }, ({ path }) => {
     hooks.verdictLoads++;
-    return { loader: "ts", contents: replaceOnce(readOriginal(path),
-      "  if (sink) (sink.delivered",
-      "  globalThis.__fixtureHooks.admissions.push(Boolean(sink));\n  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n  if (sink) (sink.delivered") };
+    const admission = "  if (sink) (sink.delivered ??= []).push({ client: JSON.stringify(client), legacy });";
+    const observed = replaceOnce(readOriginal(path), admission,
+      "  globalThis.__fixtureHooks.admissions.push(Boolean(sink));\n  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n" + admission
+      + "\n  if (sink) globalThis.__fixtureHooks.admittedRecords += sink.delivered?.length ?? 0;");
+    return { loader: "ts", contents: replaceOnce(observed,
+      "    sink.collectedProjection = true;",
+      "    sink.collectedProjection = true;\n    if (sink.collected === next.legacy) globalThis.__fixtureHooks.collectedMatches++;") };
   });
 } });
 const { handleClaudeMessages, handleClaudeCountTokens } = await import("../../src/server/claude-messages");
@@ -81,7 +91,7 @@ if (kind.startsWith("native-pacing")) {
   if (kind.startsWith("body-overflow")) { expectedBody = "x".repeat(314160); absent = "314159"; }
   if (kind === "body-stall") absent = "1s";
   globalThis.fetch = (async () => new Response(kind === "body-stall" ? new ReadableStream({ pull() {} }) : expectedBody, { headers: { "content-type": "application/json" } })) as typeof fetch;
-} else if (kind === "sink" || kind === "sink-collected") {
+} else if (kind === "sink") {
   produced = new Response('event: response.failed\ndata: '+JSON.stringify({ type: "response.failed", response: { error: { message: KEY, type: "server_error" } } })+'\n\n', { headers: { "content-type": "text/event-stream" } });
 } else if (kind === "sink-direct") {
   // The delivery layer chooses whether collection owns a legacy-record sink.
@@ -127,7 +137,7 @@ if (kind.startsWith("native-pacing")) {
     { upstream: new AbortController(), connectMs: 0, rateLimitPolicy: null, thinkingSignatureRecovery: { prepareHttp: async () => false } } as any);
   const response = new Response(encodeAnthropicMessageSse(continuations.fetchTerminalGuardContinuation(parsed), { model: "fixture", translatorBudget, proxyErrorContext: logCtx }));
   const text = await response.text(); translatorBudget.dispose();
-  console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent: KEY, code: null, fetched })); process.exit(0);
+  console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent: KEY, code: null, fetched, hooks })); process.exit(0);
 } else if (kind === "discovery" || kind === "muse") {
   const oauth = await import("../../src/oauth");
   const { AntigravityProjectDiscoveryError } = await import("../../src/oauth/antigravity-discovery-diagnostics");
@@ -138,7 +148,7 @@ if (kind.startsWith("native-pacing")) {
 } else if (kind === "native-usage") {
   const { runMessagesOverflowCase } = await import("./messages-overflow-case");
   const row = await runMessagesOverflowCase("native-http", { id: "local-usage", message: "fixture", fault: "usage-limit", classification: { "native-http": "error" }, recovery: { "native-http": false } });
-  console.log("REFUSAL_RESULT " + JSON.stringify({ status: row.status, text: row.text, absent: "1970", code: row.code ?? null })); process.exit(0);
+  console.log("REFUSAL_RESULT " + JSON.stringify({ status: row.status, text: row.text, absent: "1970", code: row.code ?? null, hooks })); process.exit(0);
 } else if (kind === "provider") {
   produced = Response.json({ error: { type: "permission_error", message: KEY }, proxyAuthored: true, presentation: "roster" }, { status: 403 });
 } else if (kind === "pacing") {
@@ -194,6 +204,7 @@ if (kind.startsWith("native-pacing")) {
   produced = (markProxyError as any)(formatErrorResponse(status, code, message), kind === "model" ? "model_availability" : kind);
 }
 if (produced) (globalThis as any).__localRefusalReply = produced;
+const collectedUpstream = kind === "sink" ? produced?.clone() : undefined;
 saveConfig(config);
 const logCtx: any = { model: "fixture", provider: "fixture" };
 const req = new Request(`http://localhost/v1/messages${["roster-count", "body-overflow-count"].includes(kind) ? "/count_tokens" : ""}`, { method: "POST", headers: { "content-type": "application/json", ...((kind === "deep" || kind === "usage" || kind.startsWith("body-")) ? { authorization: "Bearer sk-ant-oat01-fixture" } : {}) }, body: JSON.stringify({ model, max_tokens: 16, stream: kind === "sink", messages: [{ role: "user", content: kind === "input" ? "a".repeat(4000) : "fixture" }] }) });
@@ -205,5 +216,17 @@ const direct = kind === "sink-direct" ? await (async () => {
 const chat = kind === "chat-roster" ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "fixture" }], stream: false }) }), config, logCtx) : undefined;
 const response = chat ?? direct ?? (["roster-count", "body-overflow-count"].includes(kind) ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, logCtx, kind === "scope-direct" ? { requestId: crypto.randomUUID(), start: Date.now(), admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined));
 const text = await response.text();
-const observations = globalThis as typeof globalThis & { __observedSinks?: { delivered?: unknown[] }[]; __copilotCalls?: string[] };
-console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: [...new Set(observations.__observedSinks ?? [])].reduce((n, sink) => n + (sink.delivered?.length ?? 0), 0), expectedBody, copilotCalls: observations.__copilotCalls, usage: logCtx.usage, hooks, filterChecks }));
+const observations = globalThis as typeof globalThis & { __localRefusalReply?: Response; __observedSinks?: { delivered?: unknown[] }[]; __copilotCalls?: string[] };
+const retainedCount = () => [...new Set(observations.__observedSinks ?? [])].reduce((n, sink) => n + (sink.delivered?.length ?? 0), 0);
+const streaming = kind.startsWith("sink") ? { admissions: [...hooks.admissions], retained: retainedCount() } : undefined;
+let collected: { status: number; textLength: number } | undefined;
+if (collectedUpstream) {
+  observations.__localRefusalReply = collectedUpstream;
+  const collectedRequest = new Request("http://localhost/v1/messages", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, max_tokens: 16, stream: false, messages: [{ role: "user", content: "fixture" }] }),
+  });
+  const collectedResponse = await handleClaudeMessages(collectedRequest, config, { model: "fixture", provider: "fixture" });
+  collected = { status: collectedResponse.status, textLength: (await collectedResponse.text()).length };
+}
+console.log("REFUSAL_RESULT " + JSON.stringify({ status: response.status, text, absent, code: kind.startsWith("sink") ? null : JSON.parse(text).error?.code ?? null, retained: retainedCount(), expectedBody, copilotCalls: observations.__copilotCalls, usage: logCtx.usage, hooks, filterChecks, streaming, collected }));
