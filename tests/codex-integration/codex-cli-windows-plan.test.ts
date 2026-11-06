@@ -361,7 +361,8 @@ native("npm toolchain drift after inspection refuses metadata without executing 
   for (const f of [fixture(), fixture(true)]) {
     let queries = 0;
     const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps, inspect: async deps => {
-      const report = await inspectCodexCliInstall(deps); expect(report.managed).toBe(true);
+      const report = await inspectCodexCliInstall(deps);
+      expect(report.managed, report.managed ? undefined : `Windows toolchain inspection refused (${f.prefix === f.toolchainPrefix ? "prefix-local" : "separate-PATH"}): ${JSON.stringify(windowsCodexCliPlanRefusalForTests(report))}`).toBe(true);
       writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"), "throw new Error('replacement');");
       return report;
     }, resolveTarget: () => { queries++; throw new Error("must not query changed toolchain"); } });
