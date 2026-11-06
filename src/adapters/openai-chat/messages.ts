@@ -2,6 +2,7 @@ import { isMistralChatTarget, isNativeOpenAIChatTarget, stripBracketedModelSuffi
 import { reasoningDetailSegmentForWire } from "./response-events";
 import { translatedChatDeveloperWireRole } from "./developer-role";
 import { singleLeadingSystemMessages } from "./single-system";
+import { limitMistralChatImages } from "./mistral-image-limit";
 import { isVolcengineArkPaygChatTarget } from "./tool-schema";
 import { contentPartsToText } from "../image";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
@@ -439,7 +440,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
 
   flushPendingToolCalls();
   releaseDeferredBarriers();
-  return singleLeadingSystemMessages(out, provider) as unknown[];
+  return limitMistralChatImages(singleLeadingSystemMessages(out, provider), provider, parsed.modelId) as unknown[];
 }
 
 export function safeToolName(name: string | undefined): string {
