@@ -80,17 +80,33 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       severity: quotaSeverity(credits.percent),
     });
   }
-  return windows;
+  // Credits are appended after provider windows, whose labels can equal any fixed id.
+  const used = new Set<string>();
+  return windows.map(window => {
+    let id = window.id;
+    let suffix = 1;
+    while (used.has(id)) id = `${window.id}#${suffix++}`;
+    used.add(id);
+    return id === window.id ? window : { ...window, id };
+  });
 }
 
+/** Critical credits displace the preferred regular window only when it is not critical. */
 function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undefined {
   const measured = windows.filter(window => window.modelId === undefined && window.percent !== undefined);
   const byId = new Map(measured.map(window => [window.id, window]));
+  let regular: QuotaSummaryWindow | undefined;
   for (const id of HEADLINE_ORDER) {
     const hit = byId.get(id);
-    if (hit) return hit;
+    if (hit) {
+      regular = hit;
+      break;
+    }
   }
-  return measured[0];
+  if (!regular) regular = measured.find(window => window.labelKey !== "quotaSummary.credits");
+  const credits = measured.find(window => window.labelKey === "quotaSummary.credits");
+  if (credits && credits.severity === "critical" && regular?.severity !== "critical") return credits;
+  return regular ?? measured[0];
 }
 
 /**

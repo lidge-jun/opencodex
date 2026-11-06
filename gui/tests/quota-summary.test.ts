@@ -51,4 +51,36 @@ describe("quota summary", () => {
       ["credits", "quotaSummary.credits", "critical"],
     ]);
   });
+
+  test("critical credits override a noncritical headline, but not a critical one", () => {
+    const credits = (percent: number) => ({ used: percent, limit: 100, remaining: 100 - percent, percent });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "exhausted", updatedAt: now, quota: { weeklyPercent: 7, creditsUsd: credits(100), updatedAt: now } },
+      { provider: "threshold", updatedAt: now, quota: { weeklyPercent: 70, creditsUsd: credits(90), updatedAt: now } },
+      { provider: "both", updatedAt: now, quota: { weeklyPercent: 95, creditsUsd: credits(100), updatedAt: now } },
+      { provider: "normal", updatedAt: now, quota: { weeklyPercent: 7, creditsUsd: credits(50), updatedAt: now } },
+    ], now);
+    expect(buildQuotaSummary(reports, name).map(row => [row.provider, row.headline.labelKey, row.headline.percent, row.severity])).toEqual([
+      ["exhausted", "quotaSummary.credits", 100, "critical"],
+      ["threshold", "quotaSummary.credits", 90, "critical"],
+      ["both", "quota.weeklyLimit", 95, "critical"],
+      ["normal", "quota.weeklyLimit", 7, "normal"],
+    ]);
+  });
+
+  test("a custom window named like credits remains distinct, with or without actual credits", () => {
+    const customWindows = [{ label: "quotaSummary.credits", percent: 95 }];
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "custom-only", updatedAt: now, quota: { weeklyPercent: 7, customWindows, updatedAt: now } },
+      { provider: "with-credits", updatedAt: now, quota: { weeklyPercent: 7, customWindows, creditsUsd: { used: 90, limit: 100, remaining: 10, percent: 90 }, updatedAt: now } },
+      { provider: "custom-fallback", updatedAt: now, quota: { customWindows, creditsUsd: { used: 90, limit: 100, remaining: 10, percent: 90 }, updatedAt: now } },
+    ], now);
+    const [customOnly, withCredits, customFallback] = buildQuotaSummary(reports, name);
+    expect([customOnly!.headline.labelKey, customOnly!.headline.percent]).toEqual(["quota.weeklyLimit", 7]);
+    expect([withCredits!.headline.labelKey, withCredits!.headline.percent]).toEqual(["quotaSummary.credits", 90]);
+    expect([customFallback!.headline.label, customFallback!.headline.percent]).toEqual(["quotaSummary.credits", 95]);
+    for (const row of [customOnly!, withCredits!, customFallback!]) {
+      expect(new Set(row.windows.map(window => window.id)).size).toBe(row.windows.length);
+    }
+  });
 });
