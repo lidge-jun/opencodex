@@ -16,12 +16,12 @@ import {
 import { encodedModelIdCollides, resolveSlugSelection, routedSlug } from "../providers/slug-codec";
 import { isModelsRuntimeSubcommand } from "./models-runtime-subcommands";
 import { knownModelIdsForProvider } from "../router";
-import { enrichProviderFromRegistry, registryInputModalitiesForDestination } from "../providers/derive";
+import { azureVendorModelMetadata, enrichProviderFromRegistry, registryInputModalitiesForDestination } from "../providers/derive";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { providerMatchesRegistryTransportWithStaticGuards } from "../providers/static-model-discovery";
 import { resolveModelPolicy } from "../providers/resolved-model-policy";
 import { customRowInputModalities } from "../vision/eligibility";
-import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
+import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../providers/context-cap";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabilities";
 import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
@@ -38,6 +38,13 @@ const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <n
 const REMOVE_USAGE = "Usage: ocx models remove <customId|provider/modelId> [--yes] [--live] [--json]";
 const LIST_CUSTOM_USAGE = "Usage: ocx models list-custom [--json]";
 const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
+
+function printJson(value: unknown): void {
+  const encoded = JSON.stringify(value, null, 2);
+  if (encoded === undefined) throw new TypeError("Cannot serialize model output");
+  console.log(encoded.replace(/[\u007f-\u009f\u2028\u2029]/g, character =>
+    `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`));
+}
 
 import { parseReasoningArgs } from "./models-custom-input";
 import { redactSecretArgs } from "./secret-args";
@@ -122,10 +129,19 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
           ...nativeContextLimits(config),
           ...(custom.contextWindow ? { modelWindows: { ...nativeContextLimits(config).modelWindows, [model]: custom.contextWindow } } : {}),
         }) : undefined;
-      const inferredContext = canInferVendorContext(provName, effective)
+      const cap = providerContextCap(config, provName);
+      const explicitContext = nativeCustomContext ?? custom?.contextWindow;
+      const configuredContext = configuredContextWindow(effective, model);
+      const canInfer = canInferVendorContext(provName, effective);
+      const hintEligible = !custom || canInfer || (prov.models ?? []).includes(model) || prov.defaultModel === model;
+      const azureWindow = explicitContext === undefined && configuredContext === undefined && hintEligible
+        ? azureVendorModelMetadata(effective.baseUrl, model, getConfigDir())?.contextWindow : undefined;
+      const azureContext = Number.isSafeInteger(azureWindow) && azureWindow! > 0 ? azureWindow : undefined;
+      const inferredContext = explicitContext === undefined && configuredContext === undefined && azureContext === undefined && canInfer
         ? vendorContextInference(model)?.contextWindow : undefined;
-      const contextWindow = nativeCustomContext ?? custom?.contextWindow
-        ?? applyProviderContextCap(configuredContextWindow(effective, model) ?? inferredContext, providerContextCap(config, provName));
+      const fallbackContext = hintEligible && cap !== undefined ? resolveUnknownRoutedContextWindow(cap) : undefined;
+      const contextWindow = explicitContext
+        ?? applyProviderContextCap(configuredContext ?? azureContext ?? inferredContext ?? fallbackContext, cap);
 
       entries.push({
         provider: provName,
@@ -174,8 +190,8 @@ function consumeFlagValue(args: string[], flag: string): string | undefined {
 }
 
 function fail(message: string, usage?: string): never {
-  console.error(`Error: ${message}`);
-  if (usage) console.error(usage);
+  console.error(`Error: ${terminalSafeText(message)}`);
+  if (usage) console.error(terminalSafeText(usage));
   process.exit(1);
 }
 
@@ -205,13 +221,13 @@ function printCustomMutation(action: "added" | "removed", model: OcxCustomModel,
   const complete = sync.configApplied === true && sync.ok;
   if (sync.status !== "not-attempted" && (!sync.ok || sync.status === "refused")) process.exitCode = 1;
   if (wantsJson) {
-    console.log(JSON.stringify({ action,
+    printJson({ action,
       model: action === "added" ? model : { id: model.id, provider: model.provider, modelId: model.modelId },
-      needsSync: !complete, sync }, null, 2));
+      needsSync: !complete, sync });
     return;
   }
-  if (sync.warning) console.log(`Warning: ${sync.warning}`);
-  console.log(`${action === "added" ? "Added" : "Removed"} custom model ${routedSlug(model.provider, model.modelId)}${action === "added" ? ` (${model.id})` : ""}.`);
+  if (sync.warning) console.log(`Warning: ${terminalSafeText(sync.warning)}`);
+  console.log(`${action === "added" ? "Added" : "Removed"} custom model ${terminalSafeText(routedSlug(model.provider, model.modelId))}${action === "added" ? ` (${terminalSafeText(model.id)})` : ""}.`);
   if (sync.status === "skipped") console.log("Custom model saved; client sync was skipped by the integration policy.");
   else if (!complete && sync.status !== "not-attempted") console.log("Custom model saved; client/catalog sync remains incomplete. Inspect the target before retrying.");
 }
@@ -296,7 +312,7 @@ async function confirmCustomRemoval(model: OcxCustomModel): Promise<boolean> {
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = (await rl.question(`Remove custom model ${routedSlug(model.provider, model.modelId)}? [y/N] `)).trim().toLowerCase();
+    const answer = (await rl.question(`Remove custom model ${terminalSafeText(routedSlug(model.provider, model.modelId))}? [y/N] `)).trim().toLowerCase();
     return answer === "y" || answer === "yes";
   } finally {
     rl.close();
@@ -386,11 +402,11 @@ function customModelCells(model: OcxCustomModel): string[] {
 }
 
 function printCustomModelGroup(provider: string, models: OcxCustomModel[]): void {
-  const rows = models.map(customModelCells);
+  const rows = models.map(model => customModelCells(model).map(terminalSafeText));
   const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES", "EFFORTS", "DEFAULT EFFORT"];
   const widths = headers.map((header, column) => Math.max(header.length, ...rows.map(row => row[column].length)));
   const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column])).join("  ");
-  console.log(`${provider}:`);
+  console.log(`${terminalSafeText(provider)}:`);
   console.log(`  ${line(headers)}`);
   for (const row of rows) console.log(`  ${line(row)}`);
   console.log();
@@ -402,7 +418,7 @@ function handleCustomList(args: string[]): void {
   rejectUnexpectedArgs(rest, LIST_CUSTOM_USAGE);
   const models = loadConfig().customModels ?? [];
   if (wantsJson) {
-    console.log(JSON.stringify(models, null, 2));
+    printJson(models);
     return;
   }
   if (models.length === 0) {
@@ -427,9 +443,9 @@ function handleConfiguredModels(args: string[]): void {
     const shown = redactSecretArgs(restArgs);
     const unknown = shown.filter(a => a.startsWith("-"));
     if (unknown.length > 0) {
-      console.error(`Unknown flag(s): ${unknown.join(", ")}`);
+      console.error(`Unknown flag(s): ${terminalSafeText(unknown.join(", "))}`);
     } else {
-      console.error(`Unexpected argument(s): ${shown.join(", ")}`);
+      console.error(`Unexpected argument(s): ${terminalSafeText(shown.join(", "))}`);
     }
     console.error("Usage: ocx models [--provider <name>] [--json]");
     process.exit(1);
@@ -438,7 +454,7 @@ function handleConfiguredModels(args: string[]): void {
   const config = loadConfig();
 
   if (providerFilter && !hasOwnProvider(config.providers, providerFilter)) {
-    console.error(`Provider "${providerFilter}" is not configured. See: ocx provider list`);
+    console.error(`Provider "${terminalSafeText(providerFilter)}" is not configured. See: ocx provider list`);
     process.exit(1);
   }
 
@@ -446,10 +462,10 @@ function handleConfiguredModels(args: string[]): void {
   const note = "Local saved and router-known IDs include registry seeds, custom models and this process's discovery cache. Use ocx models live for the running catalog.";
 
   if (wantsJson) {
-    console.log(JSON.stringify({
+    printJson({
       models,
       note,
-    }, null, 2));
+    });
     return;
   }
 

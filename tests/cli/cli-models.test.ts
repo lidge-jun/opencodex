@@ -286,6 +286,28 @@ describe("ocx models", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("listing prefers Azure metadata and applies configured-row cap fallback offline", () => {
+    const { dir } = freshConfig({
+      providers: { "custom-azure": { adapter: "openai-chat", baseUrl: "https://resource.openai.azure.com/openai",
+        inferContextWindow: true, models: ["claude-opus-5-5", "unknown-model"] } },
+      providerContextCaps: { "custom-azure": 350000 },
+      customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "custom-azure",
+        modelId: "claude-sonnet-5-5", contextWindow: 190000 }],
+    });
+    writeFileSync(join(dir, "azure-model-metadata-cache.json"), JSON.stringify({
+      version: 1, fetchedAt: Date.now(), models: { "claude-opus-5-5": { contextWindow: 333333 } },
+    }));
+    try {
+      const result = runCli(["models", "--provider", "custom-azure", "--json"], { OPENCODEX_HOME: dir }, true);
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { model: string }) => row.model === "claude-opus-5-5").contextWindow).toBe(333333);
+      expect(rows.find((row: { model: string }) => row.model === "unknown-model").contextWindow).toBe(350000);
+      expect(rows.find((row: { model: string }) => row.model === "claude-sonnet-5-5").contextWindow).toBe(190000);
+      expect(existsSync(join(dir, "network-attempts.log"))).toBe(false);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("human listing renders identifiers safely while JSON preserves their values", () => {
     const modelId = `custom${String.fromCharCode(27)}a${String.fromCharCode(0x9d)}b${String.fromCharCode(0x2028)}c`;
     const { dir } = freshConfig({ providers: { relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] } },
@@ -297,7 +319,16 @@ describe("ocx models", () => {
       expect(human.stdout).toContain("custom\\x1ba\\u009db\\u2028c");
       const json = runCli(["models", "--provider", "relay", "--json"], { OPENCODEX_HOME: dir });
       expect(json.status).toBe(0);
+      for (const code of [27, 0x9d, 0x2028]) expect(json.stdout).not.toContain(String.fromCharCode(code));
       expect(JSON.parse(json.stdout).models[0].model).toBe(modelId);
+      const customHuman = runCli(["models", "list-custom"], { OPENCODEX_HOME: dir });
+      expect(customHuman.status).toBe(0);
+      for (const code of [27, 0x9d, 0x2028]) expect(customHuman.stdout).not.toContain(String.fromCharCode(code));
+      expect(customHuman.stdout).toContain("custom\\x1ba\\u009db\\u2028c");
+      const customJson = runCli(["models", "list-custom", "--json"], { OPENCODEX_HOME: dir });
+      expect(customJson.status).toBe(0);
+      for (const code of [27, 0x9d, 0x2028]) expect(customJson.stdout).not.toContain(String.fromCharCode(code));
+      expect(JSON.parse(customJson.stdout)[0].modelId).toBe(modelId);
     } finally { removeTreeWithRetry(dir); }
   });
 
