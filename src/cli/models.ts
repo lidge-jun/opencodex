@@ -131,9 +131,13 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
         }) : undefined;
       const cap = providerContextCap(config, provName);
       const explicitContext = nativeCustomContext ?? custom?.contextWindow;
-      const configuredContext = configuredContextWindow(effective, model);
       const canInfer = canInferVendorContext(provName, effective);
-      const hintEligible = !custom || canInfer || (prov.models ?? []).includes(model) || prov.defaultModel === model;
+      const modelListEmpty = (effective.models?.length ?? 0) === 0;
+      const seededDefault = effective.defaultModel === model && modelListEmpty
+        && (effective.liveModels === false || (effective.adapter === "google" && effective.googleMode === "vertex"));
+      const hintEligible = !custom || canInfer || (effective.models ?? []).includes(model)
+        || (effective.retainModels ?? []).includes(model) || seededDefault;
+      const configuredContext = hintEligible ? configuredContextWindow(effective, model) : undefined;
       const azureWindow = explicitContext === undefined && configuredContext === undefined && hintEligible
         ? azureVendorModelMetadata(effective.baseUrl, model, getConfigDir())?.contextWindow : undefined;
       const azureContext = Number.isSafeInteger(azureWindow) && azureWindow! > 0 ? azureWindow : undefined;

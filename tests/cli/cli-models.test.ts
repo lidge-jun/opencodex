@@ -308,6 +308,29 @@ describe("ocx models", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test.each([
+    ["xai", "grok-composer-2.5-fast", 350000],
+    ["relay", "custom-only", null],
+  ])("custom context inheritance for %s/%s", (providerName, modelId, expected) => {
+    const { dir } = freshConfig({
+      providers: {
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1" },
+        relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [], contextWindow: 200000 },
+      },
+      providerContextCaps: { xai: 350000, relay: 100000 },
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "xai", modelId: "grok-composer-2.5-fast" },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "relay", modelId: "custom-only" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === providerName && row.model === modelId).contextWindow).toBe(expected);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("human listing renders identifiers safely while JSON preserves their values", () => {
     const modelId = `custom${String.fromCharCode(27)}a${String.fromCharCode(0x9d)}b${String.fromCharCode(0x2028)}c`;
     const { dir } = freshConfig({ providers: { relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] } },
