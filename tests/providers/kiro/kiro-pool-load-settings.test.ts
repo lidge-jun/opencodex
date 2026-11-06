@@ -8,7 +8,7 @@ import { clearGenericFailoverHealth, preferredInitialAccount, rotateGenericOAuth
 import { getAccountSet, replaceProviderAccountSet } from "../../../src/oauth/store";
 import { genericPoolSettingsDto, parseGenericPoolStrategy, parseKiroAccountCap, unifiedPoolSettingsDto } from "../../../src/oauth/pool-settings-capability";
 import type { OcxConfig } from "../../../src/types";
-import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 import { saveConfig, loadConfig } from "../../../src/config";
 import { startServer } from "../../../src/server";
 import { managementFetch } from "../../helpers/management-auth";
@@ -24,7 +24,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_HOME = oldHome;
   if (home) await removeTreeAfterBackgroundWork(home);
   home = "";
-});
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 async function seed(provider = "kiro") {
   home = mkdtempSync(join(tmpdir(), "ocx-load-settings-"));

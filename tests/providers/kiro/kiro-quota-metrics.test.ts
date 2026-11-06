@@ -9,7 +9,7 @@ import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from ".
 import { cachedKiroQuotaMetricRows } from "../../../src/providers/kiro-quota-metrics";
 import { sanitizeKiroQuota } from "../../../src/providers/kiro-account-state-disk";
 import { createRequestMetricsOwner } from "../../../src/server/request-metrics";
-import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
 const realFetch = globalThis.fetch;
@@ -25,7 +25,7 @@ afterEach(async () => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   await removeTreeAfterBackgroundWork(home);
-});
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 async function account(id: string) {
   await saveCredential("kiro", { access: `access-${id}`, refresh: `refresh-${id}`,

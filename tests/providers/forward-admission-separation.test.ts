@@ -6,7 +6,7 @@ import { saveConfig } from "../../src/config";
 import { resolveFirstUsableOpenAiSidecar } from "../../src/providers/openai-sidecar";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
-import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -60,7 +60,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
   if (testHome) await removeTreeAfterBackgroundWork(testHome);
   testHome = "";
-});
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 describe("management credentials never leave data-plane forwarding paths", () => {
   test("the shared OpenAI sidecar refuses a management bearer", async () => {
