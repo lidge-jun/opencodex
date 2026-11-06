@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { closeSync, mkdirSync, openSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { runConfigPreflight } from "../../src/update/config-preflight";
-import { loadConfig } from "../../src/config";
-import { configDiagnosticsFromRaw } from "../../src/config/diagnostics";
+import { configDiagnosticsFromRaw, readConfigDiagnostics } from "../../src/config/diagnostics";
+import { readCliConfigForMutation } from "../../src/cli/config-mutation";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { updateSourceFunction } from "../helpers/update-source-body";
 import { readFileSync } from "node:fs";
@@ -32,6 +32,12 @@ afterEach(() => {
 });
 
 describe("update config pre-flight", () => {
+  test("refuses an alias that passive diagnostics reports as fallback", () => {
+    const cfg = home.path("config.json");
+    writeFileSync(cfg, JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", alias: 42 } } }));
+    expect(readConfigDiagnostics({ passive: true }).source).toBe("fallback");
+    expect(runConfigPreflight(cfg)).toMatchObject({ ok: false, reason: "fallback" });
+  });
   test("passes when config.json is valid", () => {
     const cfg = home.path("config.json");
     writeFileSync(cfg, JSON.stringify({
@@ -44,57 +50,53 @@ describe("update config pre-flight", () => {
     expect(result.ok).toBe(true);
   });
 
-  test("accepts the runtime's degraded provider alias without exposing it or writing backups", () => {
+  test("refuses the runtime's degraded provider alias without exposing it or writing backups", () => {
     const cfg = home.path("config.json");
     const raw = JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", alias: 42 } } });
     writeFileSync(cfg, raw, "utf8");
     const before = readdirSync(home.root);
-    expect(runConfigPreflight(cfg)).toEqual({ ok: true });
+    expect(readConfigDiagnostics({ passive: true }).source).toBe("fallback");
+    expect(() => readCliConfigForMutation({ passive: true })).toThrow();
+    expect(runConfigPreflight(cfg)).toMatchObject({ ok: false, reason: "fallback" });
     expect(readFileSync(cfg, "utf8")).toBe(raw);
     expect(readdirSync(home.root)).toEqual(before);
   });
 
   test("uses runtime sanitizers without logging configuration values", () => {
     const cfg = home.path("config.json");
-    const raw = JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", alias: 42,
-      modelAliases: { "synthetic-secret-model": 42 } } },
-      webSearchSidecar: { backend: "anthropic", anthropicInstance: "bad-instance" } });
+    const raw = JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1",
+      modelCosts: { "synthetic-secret-model": 42 } } } });
     writeFileSync(cfg, raw, "utf8");
     const before = readdirSync(home.root);
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
+      expect(readConfigDiagnostics({ passive: true }).source).toBe("file");
+      expect(warnings.mock.calls.flat().join("\n")).toContain("synthetic-secret-model");
+      warnings.mockClear();
       expect(runConfigPreflight(cfg)).toEqual({ ok: true });
-      expect(warnings.mock.calls.flat().join("\n")).not.toContain("synthetic-secret-model");
+      expect(warnings).not.toHaveBeenCalled();
       expect(readFileSync(cfg, "utf8")).toBe(raw);
       expect(readdirSync(home.root)).toEqual(before);
     } finally { warnings.mockRestore(); }
   });
 
-  test("keeps the runtime sanitizer order in the preflight", () => {
-    const runtime = readFileSync(join(repoRoot, "src/config.ts"), "utf8");
-    const preflight = readFileSync(join(repoRoot, "src/update/config-preflight.ts"), "utf8");
-    const load = runtime.slice(runtime.indexOf("function loadConfigUnobserved()"), runtime.indexOf("const result = configSchema.safeParse(parsed);", runtime.indexOf("function loadConfigUnobserved()")));
-    const check = preflight.slice(preflight.indexOf("function runtimeAcceptsConfig("));
-    const sanitizers = (source: string) => [...source.matchAll(/\b(sanitize\w+ForLoad)\(parsed/g)].map(match => match[1]);
-    expect(sanitizers(check)).toEqual(["sanitizeRemovedOpenCodeFreeForLoad", ...sanitizers(load)]);
-    expect(load).toContain("projectRemovedOpenCodeFreeSnapshot(parsed");
-  });
-
   test.each([
-    { label: "alias", config: { providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", alias: 42 } } } },
-    { label: "sidecar", config: { providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } }, webSearchSidecar: { backend: "anthropic", anthropicInstance: "bad-instance" } } },
-  ])("agrees with actual runtime loading for $label", ({ config }) => {
+    { label: "invalid alias", config: { providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", alias: 42 } } }, source: "fallback" },
+    { label: "invalid schema", config: { port: -1 }, source: "fallback" },
+    { label: "salvageable routing profile", config: { routingProfiles: { bad: { candidates: [] } } }, source: "fallback" },
+    { label: "repaired defaults", config: { providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } }, source: "file" },
+    { label: "degraded hostname", config: { hostname: "" }, source: "file" },
+    { label: "invalid sidecar instance", config: { webSearchSidecar: { backend: "anthropic", anthropicInstance: "bad-instance" } }, source: "file" },
+    { label: "empty defaults", config: {}, source: "file" },
+  ])("matches passive diagnostics for $label", ({ config, source }) => {
     const cfg = home.path("config.json");
     const raw = JSON.stringify(config);
     writeFileSync(cfg, raw);
     const before = readdirSync(home.root);
-    expect(runConfigPreflight(cfg)).toEqual({ ok: true });
+    expect(readConfigDiagnostics({ passive: true }).source).toBe(source);
+    expect(runConfigPreflight(cfg).ok).toBe(source === "file");
     expect(readFileSync(cfg, "utf8")).toBe(raw);
     expect(readdirSync(home.root)).toEqual(before);
-    const warnings = spyOn(console, "warn").mockImplementation(() => {});
-    const errors = spyOn(console, "error").mockImplementation(() => {});
-    try { expect(loadConfig().providers.mock).toBeDefined(); }
-    finally { warnings.mockRestore(); errors.mockRestore(); }
   });
 
   test.each(["null", "[]", '"text"', "42"])("rejects non-object config %s", raw => {
@@ -115,6 +117,14 @@ describe("update config pre-flight", () => {
     writeFileSync(cfg, "{}");
     const missing: typeof openSync = () => { throw Object.assign(new Error("synthetic missing"), { code: "ENOENT" }); };
     expect(runConfigPreflight(cfg, missing)).toMatchObject({ ok: false, reason: "read_error" });
+  });
+
+  test("refuses an occupied config when access is denied", () => {
+    const cfg = home.path("config.json");
+    writeFileSync(cfg, "{}");
+    const denied: typeof openSync = () => { throw Object.assign(new Error("synthetic denial"), { code: "EACCES" }); };
+    expect(runConfigPreflight(cfg, denied)).toMatchObject({ ok: false, reason: "read_error" });
+    expect(readFileSync(cfg, "utf8")).toBe("{}");
   });
 
   test("uses the opened target descriptor when open resolves a simulated link", () => {
@@ -142,6 +152,7 @@ describe("update config pre-flight", () => {
 
   test("passes when config.json does not exist yet (clean install)", () => {
     const cfg = home.path("config.json");
+    expect(readConfigDiagnostics({ passive: true }).source).toBe("default");
     const result = runConfigPreflight(cfg);
     expect(result.ok).toBe(true);
   });
@@ -189,6 +200,7 @@ describe("update config pre-flight", () => {
     writeFileSync(target, "{}", "utf8");
     const link = home.path("config.json");
     symlinkSync(target, link, "file");
+    expect(readConfigDiagnostics({ passive: true }).source).toBe("file");
     expect(runConfigPreflight(link).ok).toBe(true);
   });
 
@@ -274,6 +286,8 @@ describe("update config pre-flight", () => {
       routingProfiles: { bad: { candidates: [] } }, secretMarker: "synthetic-profile-secret" });
     expect(configDiagnosticsFromRaw(raw).source).toBe("fallback");
     writeFileSync(home.path("config.json"), raw, "utf8");
+    expect(readConfigDiagnostics({ passive: true }).source).toBe("fallback");
+    expect(() => readCliConfigForMutation({ passive: true })).toThrow();
     const before = readdirSync(home.root);
     const salvageResult = await runGate({
       getConfigPath: () => home.path("config.json"), runConfigPreflight,
@@ -294,6 +308,22 @@ describe("update config pre-flight", () => {
     expect(readFileSync(home.path("config.json"), "utf8")).toBe(raw);
     expect(readdirSync(home.root)).toEqual(before);
 
+    // The runtime loader repairs this alias, but passive diagnostics and mutation refuse it.
+    writeFileSync(home.path("config.json"), JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", alias: 42 } } }));
+    expect(readConfigDiagnostics({ passive: true }).source).toBe("fallback");
+    expect(() => readCliConfigForMutation({ passive: true })).toThrow();
+    const aliasResult = await runGate({ getConfigPath: () => home.path("config.json"), runConfigPreflight,
+      console: { error: (msg: string) => errors.push(msg), log: () => {} },
+      homePolicy: { serviceAllowed: true, authorizeMutation: () => true },
+      isServiceInstalled: () => false, createSupervisionLatch: () => ({ observe: () => {} }),
+      inspectDesktopSupervision: () => ({ kind: "none" }),
+      resolvedRuntimeOwnership: async () => ({ ownership: null }),
+      planUpdateRuntimeHandling: () => ({ mayReplacePackage: true }),
+      spawnSync: () => { stops.push("stop"); return { status: 0 }; },
+      selfLaunchArgv: (args: string[]) => args, mutation: { controlEnvironment: () => ({}) } });
+    expect(aliasResult).toBe(1);
+    expect(stops).toEqual([]);
+
     // Case B: Preflight passes (positive control)
     writeFileSync(home.path("config.json"), "{}", "utf8");
     const passingResult = await runGate({
@@ -313,6 +343,48 @@ describe("update config pre-flight", () => {
 
     expect(passingResult).toBe(0);
     expect(stops).toEqual(["stop"]);
+
+    const cases = [
+      { raw: JSON.stringify({ port: -1 }), source: "fallback", stop: false },
+      { raw: JSON.stringify({ providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } }), source: "file", stop: true },
+      { raw: JSON.stringify({ hostname: "" }), source: "file", stop: true },
+      { raw: null, source: "default", stop: true },
+    ];
+    for (const item of cases) {
+      const path = home.path("config.json");
+      if (item.raw === null) unlinkSync(path); else writeFileSync(path, item.raw);
+      expect(readConfigDiagnostics({ passive: true }).source).toBe(item.source);
+      stops.length = 0;
+      const code = await runGate({ getConfigPath: () => path, runConfigPreflight,
+        console: { error: (msg: string) => errors.push(msg), log: () => {} },
+        homePolicy: { serviceAllowed: true, authorizeMutation: () => true },
+        isServiceInstalled: () => false, createSupervisionLatch: () => ({ observe: () => {} }),
+        inspectDesktopSupervision: () => ({ kind: "none" }),
+        resolvedRuntimeOwnership: async () => ({ ownership: null }),
+        planUpdateRuntimeHandling: () => ({ mayReplacePackage: true }),
+        spawnSync: () => { stops.push("stop"); return { status: 0 }; },
+        selfLaunchArgv: (args: string[]) => args, mutation: { controlEnvironment: () => ({}) } });
+      expect(code).toBe(item.stop ? 0 : 1);
+      expect(stops).toEqual(item.stop ? ["stop"] : []);
+    }
+    if (canSymlink) {
+      const target = home.path("target.json");
+      writeFileSync(target, "{}");
+      symlinkSync(target, home.path("config.json"), "file");
+      expect(readConfigDiagnostics({ passive: true }).source).toBe("file");
+      stops.length = 0;
+      const code = await runGate({ getConfigPath: () => home.path("config.json"), runConfigPreflight,
+        console: { error: (msg: string) => errors.push(msg), log: () => {} },
+        homePolicy: { serviceAllowed: true, authorizeMutation: () => true },
+        isServiceInstalled: () => false, createSupervisionLatch: () => ({ observe: () => {} }),
+        inspectDesktopSupervision: () => ({ kind: "none" }),
+        resolvedRuntimeOwnership: async () => ({ ownership: null }),
+        planUpdateRuntimeHandling: () => ({ mayReplacePackage: true }),
+        spawnSync: () => { stops.push("stop"); return { status: 0 }; },
+        selfLaunchArgv: (args: string[]) => args, mutation: { controlEnvironment: () => ({}) } });
+      expect(code).toBe(0);
+      expect(stops).toEqual(["stop"]);
+    }
   });
 
   test("update refusal gives recovery guidance for an occupied unreadable path", async () => {
