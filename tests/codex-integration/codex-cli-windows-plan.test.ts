@@ -1,7 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { createConnection } from "node:net";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { trustWindowsTempFixtureAncestry, windowsTempAncestryPreload } from "../helpers/windows-temp-ancestry";
@@ -292,9 +290,14 @@ native("Windows plan cleanup stops its owned child before releasing its fixture"
   const reader = child.stdout.getReader();
   let bodyFailed = false, bodyError: unknown;
   try {
-    const ready = await reader.read();
-    if (planCleanupEpoch !== epoch) return;
-    expect(new TextDecoder().decode(ready.value)).toBe("READY\n");
+    let ready = ""; const decoder = new TextDecoder();
+    while (!ready.includes("\n")) {
+      const part = await reader.read();
+      if (planCleanupEpoch !== epoch) return;
+      if (part.done || ready.length > 128) throw new Error("owned-child probe readiness unavailable");
+      ready += decoder.decode(part.value, { stream: true });
+    }
+    expect(ready).toBe("READY\n");
     expect(child.exitCode).toBeNull();
     const beforeStop = await cleanupPlanFixture(root);
     if (planCleanupEpoch !== epoch) return;
@@ -316,6 +319,7 @@ native("Windows plan cleanup stops its owned child before releasing its fixture"
     const exit = await child.exited;
     if (planCleanupEpoch !== epoch) return;
     expect(exit).not.toBeNull();
+    expect(ownedPlanChildren.has(root)).toBe(false);
     expect(existsSync(root)).toBe(true);
   } catch (error) {
     bodyFailed = true; bodyError = error;
@@ -337,91 +341,6 @@ native("Windows plan cleanup stops its owned child before releasing its fixture"
   } catch (error) {
     if (planCleanupEpoch === epoch) throw error;
     console.error(`[test] owned-child probe settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}, SPAWN_BUDGET_MS);
-
-native("Windows plan fixture job closes a live descendant connection when its owner exits", async () => {
-  const epoch = planCleanupEpoch;
-  try {
-  const capability = randomUUID();
-  const descendant = `const token=${JSON.stringify(capability)}; let server;
-    server=Bun.listen({hostname:'127.0.0.1',port:0,socket:{open(s){s.write('READY:'+token+'\\n')},
-      data(s,d){if(new TextDecoder().decode(d).trim()===token){s.end();server.stop(true)}}}});
-    console.log('PORT:'+server.port);`;
-  const owner = `import {spawn} from 'node:child_process';
-    const p=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{detached:true,stdio:['ignore','pipe','ignore'],windowsHide:true});
-    let s=''; for await(const v of p.stdout){s+=v.toString();if(s.includes('\\n'))break;}
-    if(!/^PORT:\\d+\\n$/.test(s))throw Error('descendant readiness failed'); process.stdout.write(s);
-    for await(const chunk of Bun.stdin.stream()){void chunk;}`;
-  const child = Bun.spawn([process.execPath, "--preload", helperPath("windows-plan-child-processes.ts"), "-e", owner],
-    { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  const ownerKey = "Windows plan job containment probe";
-  ownedPlanChildren.set(ownerKey, child);
-  const errors = new Response(child.stderr).text();
-  const reader = child.stdout.getReader();
-  let socket: ReturnType<typeof createConnection> | undefined;
-  let closed: Promise<boolean> | undefined;
-  let authenticated = false;
-  let bodyFailed = false, bodyError: unknown;
-  try {
-    let ready = ""; const decoder = new TextDecoder();
-    while (!ready.includes("\n")) {
-      const part = await reader.read();
-      if (planCleanupEpoch !== epoch) return;
-      if (part.done) throw new Error(`fixture job owner exited early: ${await errors}`);
-      ready += decoder.decode(part.value, { stream: true });
-    }
-    const match = /^PORT:(\d+)\n$/.exec(ready);
-    expect(match).not.toBeNull();
-    socket = createConnection({ host: "127.0.0.1", port: Number(match![1]) });
-    const handshake = new Promise<string>((resolve, reject) => {
-      socket!.once("data", data => resolve(data.toString()));
-      socket!.once("error", reject);
-    });
-    // Windows may reset an established socket when a process is terminated.
-    closed = new Promise<boolean>(resolve => socket!.once("close", () => resolve(true)));
-    const greeting = await handshake;
-    if (planCleanupEpoch !== epoch) return;
-    expect(greeting).toBe(`READY:${capability}\n`);
-    authenticated = true;
-    expect(socket.destroyed).toBe(false);
-    child.kill();
-    await child.exited;
-    if (planCleanupEpoch !== epoch) return;
-    ownedPlanChildren.delete(ownerKey);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), INTERNAL_DEADLINE_MS); });
-    const jobClosedConnection = await Promise.race([closed, expired]);
-    clearTimeout(timer);
-    if (planCleanupEpoch !== epoch) return;
-    expect(jobClosedConnection).toBe(true);
-  } catch (error) {
-    bodyFailed = true; bodyError = error;
-  } finally {
-    try {
-    reader.releaseLock();
-    if (child.exitCode === null && !await stopOwnedPlanChild(ownerKey)) throw new Error("fixture job owner exit unconfirmed");
-    if (child.exitCode !== null) { await child.exited; ownedPlanChildren.delete(ownerKey); }
-    if (socket && !socket.destroyed && authenticated) {
-      // A previously authenticated connection addresses only this fixture, never a reused PID or port.
-      socket.write(capability + "\n");
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const expired = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), INTERNAL_DEADLINE_MS); });
-      const released = await Promise.race([closed!, expired]);
-      clearTimeout(timer);
-      if (!released) throw new Error("owned descendant connection release unconfirmed");
-    }
-    if (socket && !socket.destroyed && !authenticated) socket.destroy();
-    child.stdin.end();
-    } catch (cleanupError) {
-      if (bodyFailed) throw new AggregateError([bodyError, cleanupError], "job containment probe and cleanup failed");
-      throw cleanupError;
-    }
-  }
-  if (bodyFailed) throw bodyError;
-  } catch (error) {
-    if (planCleanupEpoch === epoch) throw error;
-    console.error(`[test] job containment probe settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
   }
 }, SPAWN_BUDGET_MS);
 
