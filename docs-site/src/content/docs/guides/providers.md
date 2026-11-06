@@ -1848,24 +1848,47 @@ is no live discovery endpoint for a static catalog; it is not a successful infer
 model list also need not validate the key. If discovery fails or no model appears, check the URL,
 credentials, upstream access, and provider configuration before selecting a model.
 
+A gateway can serve completions without a model-list endpoint. If its operator supplies a supported
+raw ID, configure `liveModels: false` and `models: ["vendor/model"]` on the existing provider,
+preserving its other fields and replacing the example ID with the supplied value. See
+[static model catalogs](/reference/configuration/providers/#static-model-allowlists). Save, run
+`ocx sync`, then inspect the live catalog again. Alternatively, test the supplied raw ID directly
+with the cost-confirmed completion command below; that test does not require a catalog row.
+
 In the live catalog inspect the actual `id`, `namespaced`, `disabled`, and
 `initialSelectionPending` fields. Initial selection can leave models off or pending; see
 [initial model selection](/reference/configuration/providers/#initial-model-selection).
-Enable only the intended model using its exact routed `namespaced` value from the list:
+Resolve pending initial selection before enabling a row. For visibility commands, combine the
+provider name with the row's **raw `id`**, preserving any slashes inside that ID:
 
 ```sh
-ocx models enable '<exact-namespaced-id-from-list>'
+ocx models enable 'my-gateway/<raw-upstream-id>'
 ```
 
-The routed ID includes the provider prefix, such as `my-gateway/model-id`; a bare native model ID
-can select a different route. The upstream `id` can itself contain slashes. Use the exact catalog
-value rather than a display name or a guessed reasoning suffix: a suffix may be a distinct upstream
-model ID, while reasoning effort is a separate setting. When needed, run `ocx sync` to update the
-client catalog. Preserve active work; do not make restarting a client or proxy the default recovery
-step. See the [CLI reference](/reference/cli/providers-accounts/) for details.
+For example, a raw `id` of `vendor/model` needs the selector `my-gateway/vendor/model`.
+The client-facing `namespaced` slug may instead be `my-gateway/vendor-model`; substituting that
+encoded slug can leave a raw disabled entry in place. Enabling one model does not disable others.
+If only that model should be visible from this gateway, disable each other enabled gateway row
+using its raw `id` in the same selector format, then inspect the list again:
 
-To verify one actual completion on a supported key-auth remote configuration, use the **raw
-upstream `id`** from the row, not its `my-gateway/` routed prefix:
+```sh
+ocx models disable 'my-gateway/<other-raw-upstream-id>'
+ocx models live --provider my-gateway --json
+```
+
+Check that the intended row has `disabled: false` and the other intended exclusions are disabled.
+A bare native model ID can select a different route. Use exact values rather than display names or
+guessed reasoning suffixes: a suffix may be a distinct upstream model ID, while reasoning effort
+is a separate setting. See the [CLI reference](/reference/cli/providers-accounts/) for details.
+
+When needed, run `ocx sync` to update the client catalog, then confirm the model appears in the
+Codex model picker. A running client can retain an older in-memory list. Preserve active work and,
+if the picker remains stale, follow the
+[client restart guidance](/reference/cli/lifecycle/#ocx-sync---restart-codex---restart-app-server-only).
+Restarting a client or proxy is not the default recovery step.
+
+To verify one actual completion on a supported key-auth remote configuration, pass the **raw
+upstream `id`** from the row or gateway operator unchanged, without adding the provider prefix:
 
 ```sh
 ocx provider test my-gateway --model '<raw-upstream-id>'

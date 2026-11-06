@@ -584,22 +584,44 @@ provider test는 추론이 아닌 모델 목록 조회를 검사합니다. 정�
 증명하지 않을 수 있습니다. 모델 목록 조회가 실패하거나 모델이 없다면 선택 전에 URL, 자격 증명, 업스트림 접근 권한과
 프로바이더 설정을 확인하세요.
 
+게이트웨이는 모델 목록 엔드포인트가 없어도 응답을 생성할 수 있습니다. 운영자가 지원하는 원본 ID를 제공했다면
+기존 프로바이더의 다른 필드는 유지하고 `liveModels: false`, `models: ["vendor/model"]`을 설정하세요.
+예시 ID는 제공받은 정확한 값으로 바꿉니다. [정적 모델 설정](/ko/reference/configuration/providers/)을 참고하세요.
+저장 후 `ocx sync`를 실행하고 live 카탈로그를 다시 확인합니다. 또는 아래 비용 확인을 거치는 응답 생성 명령에
+제공받은 원본 ID를 직접 사용할 수 있습니다. 이 테스트에는 카탈로그 행이 필요하지 않습니다.
+
 live 카탈로그에서 실제 `id`, `namespaced`, `disabled`, `initialSelectionPending`을 확인하세요.
 초기 선택에 따라 모델이 꺼져 있거나 대기 상태일 수 있습니다. [초기 모델 선택](/ko/reference/configuration/providers/)을
-참고하세요. 목록의 정확한 routed `namespaced` 값으로 원하는 모델 하나만 켭니다.
+참고하세요. 행을 켜기 전에 초기 선택의 대기 상태를 해소합니다. 표시 관리 명령의 선택자는 프로바이더 이름과 행의
+**원본 `id`**를 조합하며, ID 내부의 슬래시를 그대로 유지합니다.
 
 ```sh
-ocx models enable '<목록의-정확한-namespaced-ID>'
+ocx models enable 'my-gateway/<원본-업스트림-ID>'
 ```
 
-routed ID에는 `my-gateway/model-id`처럼 프로바이더 접두사가 있습니다. 접두사 없는 네이티브 모델 ID는
-다른 경로를 선택할 수 있고, 업스트림 `id` 자체에도 슬래시가 들어갈 수 있습니다. 표시 이름이나 추측한
-reasoning 접미사 대신 정확한 카탈로그 값을 쓰세요. 접미사는 별도 업스트림 모델 ID일 수 있으며 reasoning
-강도는 별도 설정입니다. 필요하면 `ocx sync`로 클라이언트 카탈로그에 반영합니다. 진행 중인 작업을 보존하고
-클라이언트나 프록시 재시작을 기본 복구 단계로 삼지 마세요. 자세한 내용은 [CLI 레퍼런스](/reference/cli/providers-accounts/)를 참고하세요.
+예를 들어 원본 `id`가 `vendor/model`이면 선택자는 `my-gateway/vendor/model`입니다.
+클라이언트용 `namespaced` 값은 `my-gateway/vendor-model`처럼 인코딩될 수 있습니다. 이를 대신 사용하면
+원본 ID로 저장된 비활성 항목이 해제되지 않을 수 있습니다. 모델 하나를 켜도 다른 모델은 꺼지지 않습니다.
+이 게이트웨이에서 해당 모델만 표시하려면 같은 선택자 형식에 각 행의 원본 `id`를 넣어 다른 활성 모델을 끄고
+목록을 다시 확인하세요.
 
-지원되는 키 인증 원격 설정에서 실제 응답 생성 요청 하나를 검증하려면 `my-gateway/` 접두사를 제외한 행의
-**업스트림 원본 `id`**를 사용합니다.
+```sh
+ocx models disable 'my-gateway/<다른-원본-업스트림-ID>'
+ocx models live --provider my-gateway --json
+```
+
+원하는 행은 `disabled: false`이고 제외하려는 다른 행은 비활성 상태인지 확인하세요. 접두사 없는 네이티브 모델 ID는
+다른 경로를 선택할 수 있습니다. 표시 이름이나 추측한 reasoning 접미사 대신 정확한 값을 쓰세요. 접미사는 별도
+업스트림 모델 ID일 수 있으며 reasoning 강도는 별도 설정입니다. 자세한 내용은
+[CLI 레퍼런스](/reference/cli/providers-accounts/)를 참고하세요.
+
+필요하면 `ocx sync`로 클라이언트 카탈로그에 반영한 뒤 Codex 모델 선택기에 해당 모델이 나타나는지 확인하세요.
+실행 중인 클라이언트는 이전 목록을 메모리에 유지할 수 있습니다. 진행 중인 작업을 보존하고 목록이 계속 오래된 상태라면
+[클라이언트 재시작 안내](/reference/cli/lifecycle/#ocx-sync---restart-codex---restart-app-server-only)를 따르세요.
+클라이언트나 프록시 재시작은 기본 복구 단계가 아닙니다.
+
+지원되는 키 인증 원격 설정에서 실제 응답 생성 요청 하나를 검증하려면 행이나 게이트웨이 운영자로부터 얻은
+**업스트림 원본 `id`**를 프로바이더 접두사를 추가하지 않고 그대로 사용합니다.
 
 ```sh
 ocx provider test my-gateway --model '<원본-업스트림-ID>'
@@ -610,7 +632,6 @@ No인 확인 질문에 동의하세요. 비대화형 또는 JSON 사용에는 `-
 `applicable: false`는 요청을 보내지 않았다는 뜻이며 종료 코드가 0이어도 통과가 아닙니다. 텍스트 생성 성공
 한 번은 도구 호출, 구조화 출력, 연속 호출 또는 모델의 실제 정체를 증명하지 않습니다. 업스트림이 보고한
 모델명은 메타데이터입니다. 이후 호환성 문제는 비식별 fixture로 해당 프로토콜을 따로 재현하세요.
-
 
 ### Antigravity 쿼터 조회 실패 확인
 
