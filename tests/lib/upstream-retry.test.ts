@@ -405,6 +405,44 @@ describe("retryBackoffDelayMs", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  test.each([
+    "Your input does not exceed the context window; the service is unavailable",
+    "Your request doesn't exceed the token limit; retry later",
+    "Your request exceeds neither the context window nor the token limit; the service is temporarily unavailable",
+    "if the input exceeds the context window, shorten it; the server is unavailable",
+    "Failed to load the maximum context length configuration",
+    "Does the input exceed the context window? The server is unavailable",
+  ])("a 5xx without an actual overflow verdict remains retryable: %s", async message => {
+    silenceWarn();
+    const mock = mockDoFetch([Response.json({ error: { message } }, { status: 503 }), new Response("ok")]);
+    expect((await fetchWithTransientRetry(mock.doFetch)).status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a JSON-escaped negation does not stop a transient retry", async () => {
+    silenceWarn();
+    const body = '{"error":{"message":"Your input does not exceed the context \\u0077indow; retry later"}}';
+    const mock = mockDoFetch([new Response(body, { status: 503 }), new Response("ok")]);
+    expect((await fetchWithTransientRetry(mock.doFetch)).status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a definite overflow still stops retries when a later sentence says not to retry", async () => {
+    silenceWarn();
+    const first = new Response("Your input exceeds the context window. Do not retry.", { status: 503 });
+    const mock = mockDoFetch([first, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("a definite overflow stays terminal when its remedy mentions configuration", async () => {
+    silenceWarn();
+    const first = new Response("Your input exceeds the context window; adjust your configuration.", { status: 503 });
+    const mock = mockDoFetch([first, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
+    expect(mock.calls).toHaveLength(1);
+  });
+
   test("an instruction inside the wait deadline is still honoured before retrying (#4546)", async () => {
     silenceWarn();
     const limited = new Response("overloaded", {
