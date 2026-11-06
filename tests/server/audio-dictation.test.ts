@@ -242,7 +242,7 @@ describe("dictation protocol validation", () => {
     }
   });
   test("relay recording and finalization clocks are bounded and cleaned on expiry or cancel", () => {
-    for (const mode of ["recording", "finalizing", "cancel", "complete", "other-transport"] as const) {
+    for (const mode of ["recording", "finalizing", "cancel", "complete", "other-transport", "connect-timeout"] as const) {
       let now = 0;
       let id = 0;
       const timers = new Map<number, { at: number; run: () => void }>();
@@ -268,8 +268,25 @@ describe("dictation protocol validation", () => {
       };
       const ws = { data, readyState: WebSocket.OPEN, close() {} };
       if (mode === "other-transport") data.liveFinalizationMs = undefined;
+      if (mode === "connect-timeout") {
+        data.liveUpstream = undefined;
+        data.liveUpstreamUrl = "ws://fixture.invalid";
+        upstream.readyState = WebSocket.CONNECTING;
+      }
       try {
-        attachLiveSidebandUpstream(ws as never);
+        attachLiveSidebandUpstream(ws as never, () => upstream as unknown as WebSocket);
+        if (mode === "connect-timeout") {
+          expect(data.liveConnectTimer).toBeDefined();
+          advance(9_999);
+          expect(releases).toBe(0);
+          advance(1);
+          expect(releases).toBe(1);
+          expect(outcomes).toEqual(["timeout"]);
+          expect(timers.size).toBe(0);
+          expect(data.liveConnectTimer).toBeUndefined();
+          expect(data.liveSessionTimer).toBeUndefined();
+          continue;
+        }
         expect(data.liveConnectTimer).toBeUndefined();
         advance(599_999);
         expect(releases).toBe(0);
@@ -292,7 +309,7 @@ describe("dictation protocol validation", () => {
           }
         }
         expect(releases).toBe(1);
-        expect(outcomes).toEqual([["cancel", "complete", "other-transport"].includes(mode) ? undefined : "timeout"]);
+        expect(outcomes).toEqual([undefined]);
         expect(timers.size).toBe(0);
         expect(data.liveSessionTimer).toBeUndefined();
         expect(data.liveAbortListener).toBeUndefined();

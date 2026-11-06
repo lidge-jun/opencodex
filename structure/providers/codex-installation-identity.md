@@ -64,6 +64,7 @@ Dictation in `src/server/audio-dictation.ts` has a 600,000 ms recording budget a
 opts into a separate 60,000 ms finalization window after a validated `session.close`.
 `src/server/index/live-sideband.ts` replaces the recording timer on that event;
 expiry and cancellation retain the existing authenticated transport cleanup and lease ownership.
+Recording and finalization budget expiry is neutral for account health; an upstream connection timeout remains a timeout.
 The forwarded session TTL does not shorten the recording budget; other audio transports do not opt in.
 Dictation validation also accepts ScribeTray's bounded identifiers, stop-request capability,
 language, asset mode `none`, minimal server VAD, and nonterminal `audio.flush`.

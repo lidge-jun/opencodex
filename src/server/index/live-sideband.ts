@@ -314,7 +314,6 @@ export function beginAudioFinalization(ws: ServerWebSocket<WsData>, raw: string 
   ws.data.liveFinalizing = true;
   if (ws.data.liveSessionTimer !== undefined) clearTimeout(ws.data.liveSessionTimer);
   ws.data.liveSessionTimer = setTimeout(() => {
-    ws.data.liveOutcome = "timeout";
     closeLiveSideband(ws, 1000, "audio finalization expired");
   }, ws.data.liveFinalizationMs);
 }
@@ -519,7 +518,6 @@ export function attachLiveSidebandUpstream(
       closeLiveSideband(ws, 1011, "audio connection timed out");
     }, 10_000);
     ws.data.liveSessionTimer = setTimeout(() => {
-      if (ws.data.liveFinalizationMs !== undefined) ws.data.liveOutcome = "timeout";
       closeLiveSideband(ws, 1000, "audio session expired");
     }, ws.data.liveMaxSessionMs);
   }
