@@ -262,6 +262,36 @@ describe("ocx models", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("custom reasoning ladders honor credential-scoped learned refusals after native bounds", () => {
+    const provider = { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", apiKey: "fixture-key-a", models: [] };
+    const { dir } = freshConfig({ providers: { test: provider, other: { ...provider, apiKey: "fixture-key-b" } },
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "test", modelId: "gpt-6-luna", reasoningEfforts: ["medium", "high", "ultra"] },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "other", modelId: "gpt-6-luna", reasoningEfforts: ["medium", "high", "ultra"] },
+        { id: "33333333-3333-4333-8333-333333333333", provider: "test", modelId: "only-high", reasoningEfforts: ["high"] },
+        { id: "44444444-4444-4444-8444-444444444444", provider: "test", modelId: "empty", reasoningEfforts: [] },
+      ] });
+    try {
+      const modulePath = join(repoRoot, "src/providers/reasoning-metadata.ts");
+      const setup = spawnSync(process.execPath, ["-e", `
+        import { recordUnsupportedReasoningEffort, flushReasoningSupportCache } from ${JSON.stringify(modulePath)};
+        const provider = ${JSON.stringify(provider)};
+        if (!recordUnsupportedReasoningEffort(provider, "gpt-6-luna", "high")) throw new Error("native refusal not recorded");
+        if (!recordUnsupportedReasoningEffort(provider, "only-high", "high")) throw new Error("sole refusal not recorded");
+        await flushReasoningSupportCache();
+      `], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: dir }, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS });
+      expect(setup.status, setup.stderr).toBe(0);
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      const efforts = (providerName: string, model: string) => rows.find((row: { provider: string; model: string }) => row.provider === providerName && row.model === model).reasoningEfforts;
+      expect(efforts("test", "gpt-6-luna")).toEqual(["medium"]);
+      expect(efforts("other", "gpt-6-luna")).toEqual(["medium", "high"]);
+      expect(efforts("test", "only-high")).toEqual(["high"]);
+      expect(efforts("test", "empty")).toEqual([]);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("sparse canonical native custom rows inherit native metadata without leaking to gateways", () => {
     const { dir } = freshConfig({
       providers: {

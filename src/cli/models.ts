@@ -24,6 +24,7 @@ import { customRowInputModalities } from "../vision/eligibility";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../providers/context-cap";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabilities";
+import { dropLearnedUnsupportedReasoningEfforts } from "../providers/reasoning-metadata";
 import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
 import { canInferVendorContext, vendorContextInference } from "../codex/catalog/vendor-context";
 import { terminalSafeText } from "./runtime-api";
@@ -133,6 +134,7 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
           efforts = surviving.length > 0 ? surviving : [defaultEffort && allowed.includes(defaultEffort) ? defaultEffort : allowed[0]!];
         }
       }
+      if (efforts) efforts = dropLearnedUnsupportedReasoningEfforts(effective, model, efforts);
       const nativeCustomContext = canonicalNativeCustom
         ? nativeOpenAiContextWindow(model, {
           ...nativeContextLimits(config),
