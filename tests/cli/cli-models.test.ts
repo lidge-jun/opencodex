@@ -30,7 +30,10 @@ function runCli(args: string[], env: Record<string, string> = {}, recordAttempts
       const original = await import(path);
       mock.module(path, () => ({ ...original, findLiveProxy: async () => { record("liveness"); return null; } }));
       globalThis.fetch = () => { record("fetch"); throw new Error("fixture network forbidden"); };
-      if (process.env.OCX_TEST_PROBE_NETWORK === "1") { try { await globalThis.fetch("https://fixture.test"); } catch {} }
+      if (process.env.OCX_TEST_PROBE_NETWORK === "1") {
+        try { await globalThis.fetch("https://fixture.test"); }
+        catch (error) { if (!(error instanceof Error) || error.message !== "fixture network forbidden") throw error; }
+      }
     `);
   }
   const result = spawnSync(process.execPath, [...(preload ? ["--preload", preload] : []), cliPath, ...args], {
