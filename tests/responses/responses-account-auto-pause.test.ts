@@ -84,19 +84,19 @@ function configFor(name: string, oauth: boolean): OcxConfig {
   saveConfig(config);
   return config;
 }
-async function send(config: OcxConfig, name: string, sendBudget?: import("../../src/lib/request-execution-budget").RequestExecutionBudget, abortSignal?: AbortSignal) {
-  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `${name}/fixture`, input: "synthetic", stream: false, store: false }) }), config, { model: "fixture", provider: name }, { sendBudget, abortSignal });
+async function send(config: OcxConfig, name: string, sendBudget?: import("../../src/lib/request-execution-budget").RequestExecutionBudget, abortSignal?: AbortSignal, requestSignal?: AbortSignal) {
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `${name}/fixture`, input: "synthetic", stream: false, store: false }), signal: requestSignal }), config, { model: "fixture", provider: name }, { sendBudget, abortSignal });
   const text = await response.text();
   return { status: response.status, text };
 }
-for (const native of [false, true]) for (const outcome of ["known", "unknown", "cancelled"] as const)
+for (const native of [false, true]) for (const outcome of ["known", "unknown", "cancelled", "request-aborted"] as const)
 test(`auto-pause ${native ? "native" : "translated"} recovery settles a ${outcome} refresh failure without another send`, async () => {
   const config = configFor("fixture", false);
   config.providers.fixture!.adapter = native ? "openai-responses" : "openai-chat";
   config.providers.fixture!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
   saveConfig(config);
   const budget = createRequestExecutionBudget(), sends: string[] = [], signals: AbortSignal[] = [];
-  const caller = new AbortController(), sentinel = new Error("original refresh error");
+  const caller = new AbortController(), requestController = new AbortController(), sentinel = new Error("original refresh error");
   globalThis.fetch = (async (_input, init) => {
     sends.push(new Headers(init?.headers).get("authorization")!);
     if (init?.signal) signals.push(init.signal);
@@ -109,22 +109,25 @@ test(`auto-pause ${native ? "native" : "translated"} recovery settles a ${outcom
     if (!(state instanceof Response)) state.recoverAutoPausedSelection = async () => {
       refreshes++;
       if (outcome === "cancelled") caller.abort();
+      if (outcome === "request-aborted") requestController.abort();
       throw outcome === "unknown" ? sentinel : new PolicyCandidateUnavailableError();
     };
     return state;
   });
   try {
-    const result = send(config, "fixture", budget, caller.signal);
+    const result = send(config, "fixture", budget, caller.signal, requestController.signal);
     if (outcome === "unknown") await expect(result).rejects.toBe(sentinel);
     else {
       const response = await result;
       expect(response.status).toBe(outcome === "cancelled" ? 499 : 400);
-      if (outcome === "known") expect(response.text).toContain("mandatory tool_choice cannot be preserved");
+      if (outcome !== "cancelled") expect(response.text).toContain("mandatory tool_choice cannot be preserved");
     }
     expect(refreshes).toBe(1); expect(sends).toEqual(["Bearer synthetic-A"]);
     expect(signals).toHaveLength(1); expect(signals[0]!.aborted).toBe(true);
     expect(config.providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
     expect(budget.used).toBe(1);
+    expect(caller.signal.aborted).toBe(outcome === "cancelled");
+    expect(requestController.signal.aborted).toBe(outcome === "request-aborted");
   } finally { prepared.mockRestore(); }
 });
 for (const oauth of [true, false]) {

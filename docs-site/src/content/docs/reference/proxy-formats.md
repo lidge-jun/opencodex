@@ -54,6 +54,9 @@ Before sending, the proxy rejects a mandatory tool choice that the selected Chat
 represent, such as `computer_use` or a required allowed-tool list containing MCP selections. A direct
 route returns HTTP 400 without an upstream request. A routing profile can continue to another
 originally eligible destination under its configured fallback policy, preserving the original choice.
+If all attempted candidates are locally incompatible, the profile returns the same HTTP 400 diagnostic;
+the Responses API returns HTTP 503 for an exhausted combo, naming the mandatory-tool constraint. Other failures
+retain their existing error handling. Copilot Auto uses the final negotiated model and wire for this check.
 
 A translated OpenAI Chat response must contain a complete selected client tool call when
 `tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream

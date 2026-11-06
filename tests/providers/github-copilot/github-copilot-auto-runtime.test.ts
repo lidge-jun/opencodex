@@ -6,6 +6,7 @@ import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oa
 import type { RequestLogContext } from "../../../src/server/request-log";
 import { handleResponses } from "../../../src/server/responses";
 import { handleChatCompletions } from "../../../src/server/chat-completions";
+import { handleClaudeMessages } from "../../../src/server/claude-messages";
 import { saveConfig } from "../../../src/config";
 import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import { clearCopilotAutoModelsForTests } from "../../../src/providers/github-copilot-auto";
@@ -159,14 +160,16 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
-  test("Chat retains the local mandatory-tool refusal after Copilot OAuth refresh", async () => {
+  test.each(["Chat", "Messages"])("%s retains the local mandatory-tool refusal after Copilot OAuth refresh", async wire => {
     await accounts();
     const f = fixture({ chatRefresh: true, chatOnly: true });
     f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
-    const req = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+    const req = new Request(`http://localhost/v1/${wire === "Chat" ? "chat/completions" : "messages"}`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "github-copilot/auto", messages: [{ role: "user", content: "Use lookup." }], stream: false,
-        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }], tool_choice: "required" }) });
-    const response = await handleChatCompletions(req, f.config, {});
+        ...(wire === "Chat" ? {
+          tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }], tool_choice: "required",
+        } : { max_tokens: 64, tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }], tool_choice: { type: "tool", name: "lookup" } }) }) });
+    const response = await (wire === "Chat" ? handleChatCompletions : handleClaudeMessages)(req, f.config, {});
     const body = await response.json();
     expect(response.status).toBe(400);
     expect(body.error.message).toContain("mandatory tool_choice cannot be preserved");
@@ -243,6 +246,47 @@ describe("Copilot Auto through the Responses pipeline", () => {
       expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
       expect(fallbackBodies).toHaveLength(1);
     }
+  });
+  test.each(["combo", "policy"] as const)("%s exhaustion identifies mandatory tool incompatibility without inference", async mode => {
+    await accounts();
+    const f = fixture();
+    const targets = [{ provider: "github-copilot", model: "auto" }];
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets } };
+    f.config.routingProfiles = { mandatoryAuto: { candidates: targets } };
+    const response = await handleResponses(request("hello", false, {
+      model: `${mode}/mandatoryAuto`, tool_choice: { type: "mcp", server_label: "remote", name: "shell" },
+      tools: [{ type: "mcp", server_label: "remote", server_url: "https://mcp.example.test" }],
+    }), f.config, {});
+    const body = await response.json();
+    expect(response.status).toBe(mode === "combo" ? 503 : 400);
+    expect(body.error.message).toContain("mandatory tool_choice");
+    expect(f.sent.filter(call => call.path === "/models/session/intent")).toHaveLength(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+    expect(isComboTargetInCooldown("mandatoryAuto", targets[0]!)).toBe(false);
+  });
+  test.each([["combo", false], ["combo", true], ["policy", false], ["policy", true]] as const)(
+    "%s mixed exhaustion does not claim all targets refused tools (upstream-first=%s)", async (mode, upstreamFirst) => {
+    await accounts();
+    const f = fixture();
+    let fallbackCalls = 0;
+    f.config.providers.fallback = { adapter: "openai-responses", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://fallback.example.test/v1", transientRetryOn5xx: { attempts: 1 }, fetch: async () => {
+        fallbackCalls++;
+        return Response.json({ error: { type: "upstream_error", message: "synthetic failure" } }, { status: 500 });
+      } };
+    const targets = [{ provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" }];
+    if (upstreamFirst) targets.reverse();
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets } };
+    f.config.routingProfiles = { mandatoryAuto: { candidates: targets } };
+    const response = await handleResponses(request("hello", false, {
+      model: `${mode}/mandatoryAuto`, tool_choice: { type: "mcp", server_label: "remote", name: "shell" },
+      tools: [{ type: "mcp", server_label: "remote", server_url: "https://mcp.example.test" }],
+    }), f.config, {});
+    expect(response.status).toBe(mode === "combo" && upstreamFirst ? 409 : 500);
+    expect(await response.text()).not.toContain("cannot preserve mandatory tool_choice");
+    expect(fallbackCalls).toBe(1);
+    expect(f.sent.filter(call => call.path === "/models/session/intent")).toHaveLength(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
   });
   test.each([false, true])("auto-pause negotiation refusal stays local after native=%s inference", async native => {
     const { a, b } = await accounts();

@@ -8,7 +8,7 @@ import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, PolicyCandidateUnavailableError } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -1464,9 +1464,8 @@ export async function prepareResponsesRequest(
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
     if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId)) {
-      if (policyScope.eligibility) throw new PolicyCandidateUnavailableError();
-      return formatErrorResponse(400, "invalid_request_error",
-        "This mandatory tool_choice cannot be preserved for a translated Chat destination.");
+      if (policyScope.eligibility) throw new MandatoryToolChoiceUnavailableError();
+      return mandatoryToolChoiceUnavailableResponse();
     }
   } catch (error) {
     const policyRefusal = policyCandidateRefusalResponse(error);

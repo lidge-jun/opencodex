@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import { formatErrorResponse } from "../../src/bridge";
+import { isProxyError } from "../../src/lib/client-error-body";
+import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
+import { MandatoryToolChoiceUnavailableError, PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { fetchWithTransientRetry, isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
@@ -61,6 +64,35 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([
+    [["tool", "tool", "tool"], 400],
+    [["tool", "generic", "tool"], 409],
+    [["generic", "tool", "tool"], 409],
+    [["tool", "upstream", "tool"], 500],
+    [["upstream", "tool", "tool"], 500],
+  ] as const)("exhaustion preserves mixed failures and settles discarded local bodies (%s)", async (kinds, status) => {
+    let calls = 0;
+    const released = [0, 0, 0], bodies: Response[] = [];
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        const index = calls++, kind = kinds[index];
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        const source = kind === "upstream" ? formatErrorResponse(500, "upstream_error", "synthetic failure")
+          : policyCandidateRefusalResponse(kind === "tool" ? new MandatoryToolChoiceUnavailableError() : new PolicyCandidateUnavailableError())!;
+        const body = finalizeAccountLease(source, () => { released[index]++; });
+        bodies.push(body);
+        return body;
+      },
+    });
+    expect(calls).toBe(3);
+    expect(response.status).toBe(status);
+    const text = await response.text();
+    expect(text.includes("mandatory tool_choice")).toBe(status === 400);
+    if (status === 400) expect(isProxyError(response)).toBe(true);
+    expect(released).toEqual([1, 1, 1]);
+    expect(bodies.every(body => body.bodyUsed)).toBe(true);
+  });
   test.each([400, 422])("HTTP %s reflected free-tier prose does not authorize a policy fallback", async status => {
     let calls = 0;
     const failure = formatErrorResponse(status, "invalid_request_error", "Invalid value: free tier allows a single request", {

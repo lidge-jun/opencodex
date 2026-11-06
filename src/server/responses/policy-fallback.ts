@@ -13,7 +13,7 @@ import { captureCallerDirectAuth } from "../../providers/caller-authorization";
 import { resolvePolicyProfileId } from "../../routing/profile";
 import { parseSyntheticRowId } from "../fast-row";
 import { routeConcreteModel } from "../../router";
-import { isPolicyCandidateRefusal, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
+import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal, mandatoryToolChoiceUnavailableResponse, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
@@ -247,12 +247,17 @@ export async function handleResponsesWithPolicyFallback(
   }));
   let current = resolvedPolicyTarget(config, initialTrace.selected);
   const policyRoute = `policy/${initialTrace.profile!.id}`;
+  let toolChoiceRefusalsOnly = isMandatoryToolChoiceRefusal(response);
 
   while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
     if (req.signal.aborted) return response;
     const next = rankPolicyFallbackCandidates(initialTrace, tried)
       .find(candidate => staysWithinPolicyAfterRedirect(config, policyEligibility, candidate, policyScope.triedDestinations));
-    if (!next) return response;
+    if (!next) {
+      if (!toolChoiceRefusalsOnly) return response;
+      try { await response.body?.cancel(); } catch { /* the terminal diagnostic replaces this body */ }
+      return mandatoryToolChoiceUnavailableResponse();
+    }
     // OCX-11: the next candidate is a hop; the fallback policy decides before it is sent, on the
     // redirected destination the guard above already validated.
     const nextTarget = resolvedPolicyTarget(config, next);
@@ -282,15 +287,20 @@ export async function handleResponsesWithPolicyFallback(
     try {
       try {
         const nextResponse = await runCore(retryRequest, config, logCtx, { ...coreOptions, policyFallbackCandidate: next });
+        toolChoiceRefusalsOnly &&= isMandatoryToolChoiceRefusal(nextResponse);
         // A locally skipped route owns neither the returned failure nor its usage/settlement.
         // Preparation can replace route metadata and the tracker, or add fields absent before it.
         if (isPolicyCandidateRefusal(nextResponse)) {
+          try { await nextResponse.body?.cancel(); } catch { /* settle the skipped candidate's lifetime owners */ }
           for (const key of Object.keys(logCtx)) {
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);
           }
           Object.assign(logCtx, failureLog);
         } else {
           // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
+          if (isPolicyCandidateRefusal(response)) {
+            try { await response.body?.cancel(); } catch { /* the dispatched candidate replaces the local body */ }
+          }
           hop.commit();
           response = nextResponse;
           current = nextTarget;

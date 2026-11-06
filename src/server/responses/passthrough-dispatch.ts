@@ -1191,7 +1191,7 @@ export async function preparePassthroughExchange(
       if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
-          mapRefreshError: createAutoPauseRefreshErrorMapper(upstreamResponse, upstream, cleanupUpstreamAbort, copilotRefusalResponse, () => options.abortSignal?.aborted === true || req.signal.aborted, clientCancelledResponse),
+          mapRefreshError: createAutoPauseRefreshErrorMapper(upstreamResponse, upstream, cleanupUpstreamAbort, copilotRefusalResponse, () => (options.abortSignal ?? req.signal).aborted, clientCancelledResponse),
           refresh: () => transportState.recoverAutoPausedSelection(parsed), refetch: () => rebuildAndRefetch("oauth-account-429"), setPermit: permit => { sendBudgetState.pendingHopPermit = permit; } });
         if (!recovered) break;
         if ("failed" in recovered) return recovered.failed;

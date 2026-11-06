@@ -51,6 +51,7 @@ hop without inferring authority from its serialized code or text. Non-replayable
 replacement grants still stop before this local-skip branch. A local candidate refusal does not cool
 the target, so later compatible requests can select the healthy target again. `tests/providers/github-copilot/github-copilot-auto-runtime.test.ts`
 and `tests/adapters/translator-budget-lifetime.test.ts` cover negotiation and refusal provenance.
+On exhaustion, a private tool-specific refusal identity yields the existing 503 combo-unavailable diagnostic only while every observed failure has that identity. Any generic local or upstream failure keeps the ordinary exhaustion result; copied error bytes cannot acquire the identity. The diagnostic describes attempted targets, without claiming that budget- or eligibility-skipped targets were tried.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native
