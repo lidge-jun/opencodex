@@ -21,12 +21,14 @@ const modulePath = repoPath("src/lib/config-ownership.ts");
 const BARRIER_MS = 20_000;
 // Exit codes: 0 recorded, 2 not recorded, 3 refused by the uninstall tombstone, 1 anything else.
 // With a gate, the child creates its file, announces it, and records only once the gate opens.
-const childScript = (dir: string, rel: string, gate?: { ready: string; go: string }) => [
+const childScript = (dir: string, rel: string, gate?: { ready: string; go: string }, createPath = true) => [
   "import { existsSync, writeFileSync } from \"node:fs\";",
   "import { ConfigUninstallInProgressError, recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
   "const path = " + JSON.stringify(join(dir, rel)) + ";",
-  gate ? "writeFileSync(path, \"child\"); writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
+  gate && createPath ? "writeFileSync(path, \"child\");" : "",
+  gate ? "writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
   gate ? "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(gate.go) + ") && Date.now() < until) Bun.sleepSync(5);" : "",
+  gate ? "if (!existsSync(" + JSON.stringify(gate.go) + ")) process.exit(1);" : "",
   // A busy ownership lock fails fast; callers retry, and so does this child.
   "let code = 1;",
   "for (let attempt = 0; attempt < 400; attempt++) {",
@@ -420,17 +422,22 @@ describe("teardown scope ends cleanly (#8093)", () => {
 });
 
 describe("concurrent first registrations on an absent home (#8093)", () => {
+  test("a worker whose first-registration barrier expired exits without creating the home", withHome(dir => {
+    const gate = { ready: join(dirname(dir), "expired.ready"), go: join(dirname(dir), "never-go") };
+    const clock = "let tick = 0; Date.now = () => tick++ * " + BARRIER_MS + ";\n";
+    const child = Bun.spawnSync([process.execPath, "-e", clock + childScript(dir, "cold", gate, false)]);
+    expect(existsSync(gate.ready)).toBe(true);
+    expect(child.exitCode).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  }));
+
   test("processes that start together on an absent home all record their paths", withHome(async dir => {
     const names = Array.from({ length: 6 }, (_, i) => "cold-" + i);
     const signals = dirname(dir);
     const go = join(signals, "go-cold");
-    const script = (rel: string) => [
-      "import { existsSync, writeFileSync } from \"node:fs\";",
-      "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
-      "writeFileSync(" + JSON.stringify(join(signals, rel + ".ready")) + ", \"\");",
-      "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(go) + ") && Date.now() < until) Bun.sleepSync(2);",
-      "process.exit(recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, rel)) + ") ? 0 : 2);",
-    ].join("\n");
+    // Use the same bounded busy-lock retry as other registration children, while
+    // leaving the home absent until the synchronized first registration starts.
+    const script = (rel: string) => childScript(dir, rel, { ready: join(signals, rel + ".ready"), go }, false);
     const children = names.map(name => Bun.spawn([process.execPath, "-e", script(name)], { stderr: "inherit" }));
     const deadline = Date.now() + BARRIER_MS;
     while (Date.now() < deadline && !names.every(name => existsSync(join(signals, name + ".ready")))) await Bun.sleep(10);
