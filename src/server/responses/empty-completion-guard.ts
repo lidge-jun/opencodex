@@ -204,6 +204,8 @@ export interface EmptyCompletionGuardOptions {
    * Receives no arguments — the request must not be modified between attempts.
    */
   continuation: () => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
+  /** Preserve locally classified retry failures whose precise status must reach the caller. */
+  preserveRetryError?: (event: AdapterEvent) => boolean;
   /** How many times an empty completion is retried; default 1 (the router's single retry). */
   maxRetries?: number;
 }
@@ -317,7 +319,8 @@ export async function* guardEmptyCompletionEventStream(
           terminalSeen = true;
           break;
         }
-        if (retries > 0 && event.status !== 499 && event.replaySafeBeforeOutput !== true) {
+        if (retries > 0 && event.status !== 499 && event.replaySafeBeforeOutput !== true
+          && !options.preserveRetryError?.(event)) {
           // The retry failed upstream. Its body cannot reach the client (the
           // 200 head went out with the first attempt), so state the failure in
           // the stream's own error framing — same move as the router's

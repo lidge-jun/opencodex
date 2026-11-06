@@ -55,6 +55,8 @@ force jamais d'actualisation en amont.
 
 - Chaque étiquette affiche la fenêtre signalée prioritaire : d'abord hebdomadaire, puis mensuelle,
   puis 5 heures, puis une fenêtre nommée par le fournisseur ou des crédits prépayés.
+- Les crédits prépayés utilisés à 90 % ou plus deviennent prioritaires si la fenêtre habituelle
+  préférée n'est pas critique. Si elle est aussi critique, elle reste affichée en priorité.
 - Une étiquette passe en ambre à 70 % d'utilisation et en rouge à 90 %.
 - Survolez une étiquette ou donnez-lui le focus au clavier pour voir toutes les fenêtres signalées
   avec leur heure de réinitialisation et l'heure de la lecture. Sur un écran tactile, le premier

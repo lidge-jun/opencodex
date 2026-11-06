@@ -125,11 +125,11 @@ A body timeout publishes a typed read failure and cancels only that body's reade
 it does not abort the request-wide signal before the enclosing bridge can emit
 its failure terminal. A caught body failure is classified before signal state, so a
 source cancellation that synchronously aborts the shared signal still reports the
-stall. Buffered initial timeouts return HTTP 504; continuation
-timeouts become an in-stream error with status 504, while caller cancellation
-retains status 499. Normal completion does not abort a shared request.
+stall. Buffered initial and locally marked continuation timeouts return HTTP 504; streamed initial,
+recovery and continuation timeouts emit `upstream_stall_timeout` and retain 504 terminal classification.
+Provider-supplied codes cannot mint the local marker; caller cancellation retains 499. Normal completion does not abort a shared request.
 
-Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts`.
+Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts` and `tests/server/terminal-guard-server.test.ts`.
 
 ### Pre-stream provider input overflow
 

@@ -33,7 +33,7 @@ import {
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
@@ -916,6 +916,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       if (error instanceof LoopError) throw error;
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally { releaseCapture(); }

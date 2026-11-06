@@ -23,13 +23,18 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const passive = new AsyncLocalStorage<true>();
+const passive = new AsyncLocalStorage<{ onDiagnostic?: (message: string) => void }>();
 
 /** Run a management read passively, including everything it awaits or schedules. */
-export function runPassiveRead<T>(run: () => Promise<T>): Promise<T> {
-  return passive.run(true, run);
+export function runPassiveRead<T>(run: () => Promise<T>, options: { onDiagnostic?: (message: string) => void } = {}): Promise<T> {
+  return passive.run(options, run);
 }
 
 export function isPassiveRead(): boolean {
-  return passive.getStore() === true;
+  return passive.getStore() !== undefined;
+}
+
+/** Deliver an optional read-only diagnostic without affecting other passive callers. */
+export function passiveReadDiagnostic(message: string): void {
+  passive.getStore()?.onDiagnostic?.(message);
 }

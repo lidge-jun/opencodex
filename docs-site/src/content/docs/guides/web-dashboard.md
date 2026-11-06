@@ -102,6 +102,8 @@ is visible) and never forces an upstream refresh.
 
 - Each chip shows the preferred reported window: weekly first, then monthly, then 5-hour, then a
   provider-named window or prepaid credits.
+- Critical prepaid credits (90% or more used) take the headline when the preferred regular window
+  is not critical. If that window is also critical, it remains the headline.
 - A chip turns amber at 70% used and red at 90% used.
 - Hover or keyboard-focus a chip to see every reported window with its reset time and the time the
   reading was taken. The details stay open as the pointer moves from the chip into the popover,
