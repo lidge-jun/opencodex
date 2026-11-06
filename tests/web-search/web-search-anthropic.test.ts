@@ -98,6 +98,8 @@ describe("parseAnthropicSidecarSSE", () => {
     ["search tool error", [{ type: "content_block_start", content_block: { type: "web_search_tool_result", content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" } } }, partial, { type: "message_stop" }]],
     ["max_tokens", [partial, delta("max_tokens"), { type: "message_stop" }]],
     ["error stop reason", [partial, delta("error"), { type: "message_stop" }]],
+    ["empty stop reason", [partial, delta(""), { type: "message_stop" }]],
+    ["empty stop reason at EOF", [partial, delta("")]],
     ["content after stop reason", [partial, delta("end_turn"), partial]],
   ])("reports %s without losing partial text", async (_name, frames) => {
     const out = await parseAnthropicSidecarSSE(sseResponse(frames));

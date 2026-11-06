@@ -191,7 +191,7 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
 
   const trimmed = text.trim();
   if (sawToolResultError) failure ??= "anthropic web search returned an error result";
-  if (stopReason && stopReason !== "end_turn" && stopReason !== "stop_sequence") {
+  if (stopReason !== undefined && stopReason !== "end_turn" && stopReason !== "stop_sequence") {
     failure ??= "anthropic sidecar produced an incomplete answer";
   }
   if (!sawMessageStop && !cleanEof) failure ??= "anthropic sidecar stream ended before completion";
