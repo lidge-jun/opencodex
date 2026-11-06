@@ -593,10 +593,14 @@ upstream status but never consumes or resumes a grant.
 
 On a Remote Link Home, a successfully committed current catalog is also synced to eligible linked
 Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fanout/1` result with
-the Home outcome and each Child's state. A skipped Child is identified by its reason. The Home's
-own nonzero exit code is returned unchanged. When the Home exits 0, a failed or timed-out Child or
-an unreadable link store produces exit 6; otherwise the command exits 0, including when Children
-are skipped. An unreadable link store produces a path-free error in human output. Exit 7 is reserved
+the Home outcome and each Child's state. A connected Child skipped during fan-out includes its reason
+and an actionable `hint` in JSON and human output. Update an older Child's OpenCodex Desktop to
+at least 2.93.0; on headless Windows use **Check for Updates** in the signed-in Desktop tray. A link
+mismatch may require re-linking the Child, while an updating Child can be retried after the update.
+The Home's own nonzero exit code is returned unchanged. When the Home exits 0, a connected Child
+skipped during fan-out, a failed or timed-out Child, or an unreadable link store produces exit 6.
+Intentional skips such as client-initiated links and `--local-only` keep their existing exit behavior.
+An unreadable link store produces a path-free error in human output. Exit 7 is reserved
 for an update in flight.
 If the Home sync throws in JSON mode, stdout still contains one result document and stderr gives a
 sanitized failure message.
