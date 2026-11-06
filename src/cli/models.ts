@@ -25,6 +25,8 @@ import { applyProviderContextCap, providerContextCap } from "../providers/contex
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabilities";
 import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
+import { canInferVendorContext, vendorContextInference } from "../codex/catalog/vendor-context";
+import { terminalSafeText } from "./runtime-api";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 import type { RuntimeApiDeps } from "./runtime-api";
@@ -120,8 +122,10 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
           ...nativeContextLimits(config),
           ...(custom.contextWindow ? { modelWindows: { ...nativeContextLimits(config).modelWindows, [model]: custom.contextWindow } } : {}),
         }) : undefined;
+      const inferredContext = canInferVendorContext(provName, effective)
+        ? vendorContextInference(model)?.contextWindow : undefined;
       const contextWindow = nativeCustomContext ?? custom?.contextWindow
-        ?? applyProviderContextCap(configuredContextWindow(effective, model), providerContextCap(config, provName));
+        ?? applyProviderContextCap(configuredContextWindow(effective, model) ?? inferredContext, providerContextCap(config, provName));
 
       entries.push({
         provider: provName,
@@ -465,13 +469,13 @@ function handleConfiguredModels(args: string[]): void {
 
   for (const [provName, provModels] of byProvider) {
     const isDefaultProv = provName === config.defaultProvider ? " (default provider)" : "";
-    console.log(`${provName}${isDefaultProv}:`);
+    console.log(`${terminalSafeText(provName)}${isDefaultProv}:`);
     for (const m of provModels) {
       const marker = m.isDefault ? " *" : "";
       const ctx = m.contextWindow ? ` (${Math.round(m.contextWindow / 1000)}k)` : "";
       const rates = m.price?.cost4;
       const pricing = rates ? ` ~$${rates.input}/$${rates.output} input/output per 1M tokens` : " price unknown";
-      console.log(`  ${m.model}${marker}${ctx}${pricing}`);
+      console.log(`  ${terminalSafeText(m.model)}${marker}${ctx}${pricing}`);
     }
     console.log();
   }

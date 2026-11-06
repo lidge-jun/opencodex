@@ -267,6 +267,40 @@ describe("ocx models", () => {
     }
   });
 
+  test("listing applies opt-in vendor context inference and provider caps", () => {
+    const { dir } = freshConfig({
+      providers: {
+        relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", inferContextWindow: true, models: ["claude-sonnet-5-5"] },
+        plain: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["claude-sonnet-5-5"] },
+      },
+      providerContextCaps: { relay: 350000 },
+      customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "relay", modelId: "claude-opus-5-5" }],
+    });
+    try {
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "relay" && row.model === "claude-opus-5-5").contextWindow).toBe(350000);
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "relay" && row.model === "claude-sonnet-5-5").contextWindow).toBe(350000);
+      expect(rows.find((row: { provider: string; model: string }) => row.provider === "plain" && row.model === "claude-sonnet-5-5").contextWindow).toBeNull();
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("human listing renders identifiers safely while JSON preserves their values", () => {
+    const modelId = `custom${String.fromCharCode(27)}a${String.fromCharCode(0x9d)}b${String.fromCharCode(0x2028)}c`;
+    const { dir } = freshConfig({ providers: { relay: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: [] } },
+      customModels: [{ id: "11111111-1111-4111-8111-111111111111", provider: "relay", modelId }] });
+    try {
+      const human = runCli(["models", "--provider", "relay"], { OPENCODEX_HOME: dir });
+      expect(human.status).toBe(0);
+      for (const code of [27, 0x9d, 0x2028]) expect(human.stdout).not.toContain(String.fromCharCode(code));
+      expect(human.stdout).toContain("custom\\x1ba\\u009db\\u2028c");
+      const json = runCli(["models", "--provider", "relay", "--json"], { OPENCODEX_HOME: dir });
+      expect(json.status).toBe(0);
+      expect(JSON.parse(json.stdout).models[0].model).toBe(modelId);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("listing reads a stale reasoning snapshot without attempting network or liveness", () => {
     const { dir } = freshConfig({ providers: { test: { adapter: "openai-chat",
       baseUrl: "https://opencode.ai/zen/go/v1", models: ["fixture-model"] } } });
