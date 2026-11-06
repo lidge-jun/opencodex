@@ -937,7 +937,7 @@ export function createDevinAdapter(
           if (event.kind === "reasoning_signature") {
             // Carried back out so the next turn can replay it in the prompt's
             // signature field; an unsigned replay is what the service ignores.
-            emit({ type: "thinking_signature", signature: encodeDevinSignature(event.signature, event.signatureType) });
+            emit({ type: "thinking_signature", signature: encodeDevinSignature(event.signature, event.signatureType), afterOutput: true });
             continue;
           }
           if (event.kind === "tool_call_start") {

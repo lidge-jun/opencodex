@@ -460,6 +460,26 @@ export function parseRequest(
           continue;
         }
 
+        // Late turn signatures follow the closed output on the wire. Bind only to the
+        // immediately preceding item named by the carrier, never the following turn.
+        if (envelope?.aft) {
+          const previousItem = inputItems[itemIndex - 1] as { id?: string; type?: string; role?: string; execution?: string } | undefined;
+          const previous = messages[messages.length - 1];
+          const properOutput = previousItem?.type === "function_call" || previousItem?.type === "custom_tool_call"
+            || (previousItem?.type === "tool_search_call" && previousItem.execution === "client")
+            || ((previousItem?.type === "message" || previousItem?.type === undefined) && previousItem?.role === "assistant");
+          if (envelope.sig && properOutput && previous?.role === "assistant"
+            && (previousItem?.id === undefined || previousItem.id === envelope.aft)) {
+            const firstOutput = previous.content.findIndex(part => part.type !== "thinking");
+            previous.content.splice(firstOutput < 0 ? previous.content.length : firstOutput, 0, {
+              type: "thinking", thinking: thinkingText, signature: envelope.sig,
+              ...(envelope.red ? { redacted: envelope.red } : {}),
+              ...(reasoning.id ? { itemId: reasoning.id } : {}),
+            });
+          }
+          continue;
+        }
+
         // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
         // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
         if (thinkingText.length > 0 || envelope?.sig || envelope?.red?.length) {

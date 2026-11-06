@@ -83,6 +83,116 @@ describe("reasoning and tool/result envelopes", () => {
   });
 });
 
+describe("late reasoning signatures keep Responses item indexes unique", () => {
+  const usage = { inputTokens: 1, outputTokens: 1 };
+  const endings: AdapterEvent[] = [
+    { type: "done", usage },
+    { type: "done", usage, stopReason: "max_tokens" },
+    { type: "incomplete", reason: "adapter_eof", usage },
+    { type: "error", code: "upstream_error", message: "Synthetic failure" },
+  ];
+  for (const hidden of [false, true]) {
+    for (const tool of [false, true]) {
+      for (const [index, ending] of endings.entries()) {
+        test(`${hidden ? "hidden" : "visible"} thinking, ${tool ? "tool" : "text"}, terminal ${index}`, async () => {
+          async function* upstream(): AsyncGenerator<AdapterEvent> {
+            yield { type: "thinking_delta", thinking: "A synthetic summary" };
+            if (tool) {
+              yield { type: "tool_call_start", id: "call_fixture", name: "glob" };
+              yield { type: "tool_call_delta", arguments: '{"pattern":"*.py"}' };
+            } else {
+              yield { type: "text_delta", text: "Selam!" };
+            }
+            // Devin seals the reasoning after answer/tool deltas, not after its summary.
+            yield { type: "thinking_signature", signature: "synthetic-old-signature", afterOutput: true };
+            yield { type: "heartbeat" };
+            yield { type: "thinking_signature", signature: "synthetic-latest-signature", afterOutput: true };
+            yield ending;
+          }
+          const wire = await new Response(bridgeToResponsesSSE(
+            upstream(), "swe-2", undefined, undefined, undefined, undefined, 2000,
+            { hideThinkingSummary: hidden },
+          )).text();
+          const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+          const added = events.filter(event => event.type === "response.output_item.added");
+          const done = events.filter(event => event.type === "response.output_item.done");
+          // A client keyed by output_index must never lose an open block to another ID.
+          expect(new Set(added.map(event => event.output_index)).size).toBe(added.length);
+          expect(added.map(event => event.output_index)).toEqual(added.map((_, i) => i));
+          for (const event of added) {
+            const closed = done.filter(end => end.item.id === event.item.id);
+            expect(closed).toHaveLength(1);
+            expect(closed[0].output_index).toBe(event.output_index);
+          }
+          // Model the index-keyed consumer used by pi-ai/DSH. Reusing an index
+          // overwrites its open slot and leaves duplicate text or an unfinished call.
+          const slots = new Map<number, string>();
+          const completed: string[] = [];
+          for (const event of events) {
+            if (event.type === "response.output_item.added") slots.set(event.output_index, event.item.id);
+            if (event.type === "response.output_item.done") {
+              expect(slots.get(event.output_index)).toBe(event.item.id);
+              completed.push(event.item.id);
+              slots.delete(event.output_index);
+            }
+          }
+          expect(slots.size).toBe(0);
+          expect(completed).toHaveLength(added.length);
+          const terminal = events.find(event => ["response.completed", "response.incomplete", "response.failed"].includes(event.type));
+          expect(terminal.response.output.map((item: { id: string }) => item.id)).toEqual(added.map(event => event.item.id));
+          const carriers = done.filter(event => event.item.encrypted_content);
+          expect(carriers).toHaveLength(1);
+          expect(decodeReasoningEnvelope(carriers[0].item.encrypted_content)?.sig).toBe("synthetic-latest-signature");
+          const output = done.filter(event => event.item.type === (tool ? "function_call" : "message"));
+          expect(output).toHaveLength(1);
+          if (tool) {
+            expect(output[0].item.arguments).toBe('{"pattern":"*.py"}');
+            expect(output[0].item.status).toBe(index === 0 ? "completed" : "incomplete");
+          } else {
+            expect(output[0].item.content[0].text).toBe("Selam!");
+            if (index === 0) expect(output[0].item.phase).toBe("final_answer");
+          }
+        });
+      }
+    }
+  }
+});
+
+describe("normal interleaved thinking signatures", () => {
+  for (const hidden of [false, true]) {
+    test(`each block retains its exact text and signature, hidden=${hidden}`, async () => {
+      async function* upstream(): AsyncGenerator<AdapterEvent> {
+        yield { type: "text_delta", text: "before" };
+        yield { type: "thinking_delta", thinking: "thinking A" };
+        yield { type: "thinking_signature", signature: "sig-A" };
+        yield { type: "text_delta", text: "between" };
+        yield { type: "thinking_delta", thinking: "thinking B" };
+        yield { type: "thinking_signature", signature: "sig-B" };
+        yield { type: "tool_call_start", id: "normal_call", name: "read" };
+        yield { type: "tool_call_delta", arguments: "{}" };
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } };
+      }
+      const wire = await new Response(bridgeToResponsesSSE(
+        upstream(), "m", undefined, undefined, undefined, undefined, 2000,
+        { hideThinkingSummary: hidden },
+      )).text();
+      const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      const added = events.filter(event => event.type === "response.output_item.added");
+      const done = events.filter(event => event.type === "response.output_item.done");
+      expect(added.map(event => event.output_index)).toEqual(added.map((_, i) => i));
+      expect(done.map(event => event.output_index)).toEqual(added.map(event => event.output_index));
+      const buffered = buildResponseJSON(await Array.fromAsync(upstream()), "m", { hideThinkingSummary: hidden });
+      for (const items of [done.map(event => event.item), buffered.output as any[]]) {
+        expect(items.map(item => item.type)).toEqual(["message", "reasoning", "message", "reasoning", "function_call"]);
+        const envelopes = items.filter(item => item.type === "reasoning").map(item => decodeReasoningEnvelope(item.encrypted_content));
+        expect(envelopes).toEqual(hidden
+          ? [{ sig: "sig-A", txt: "thinking A" }, { sig: "sig-B", txt: "thinking B" }]
+          : [{ sig: "sig-A" }, { sig: "sig-B" }]);
+      }
+    });
+  }
+});
+
 describe("reasoning allocation admission", () => {
   test.each(["ascii", "\"\\\n\u0000", "한글😀", "\ud800", "\udc00", ""])('sizes JSON strings exactly: %j', value => {
     const data = { sig: value, red: [value, ""], txt: value, krc: value, omitted: undefined };

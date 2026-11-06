@@ -390,13 +390,16 @@ export function bridgeToResponsesSSE(
       // item as an ocxr1 encrypted_content envelope on close. hiddenThinkingText collects the
       // suppressed text under hideThinkingSummary so the signed text still round-trips.
       let pendingSignature: string | undefined;
+      let pendingSignatureAfter: string | undefined;
+      let pendingSignatureAfterOutput = false;
       let pendingSignatureBytes = 0;
       let pendingRedacted: string[] = [];
       let hiddenThinking = emptyChunks();
-      const takeReasoningEnvelope = (hiddenText?: string): string | undefined => {
+      const takeReasoningEnvelope = (hiddenText?: string, after?: string): string | undefined => {
         if (!pendingSignature && pendingRedacted.length === 0) return undefined;
         const envelope: ReasoningEnvelope = {};
         if (pendingSignature) envelope.sig = pendingSignature;
+        if (after ?? pendingSignatureAfter) envelope.aft = after ?? pendingSignatureAfter;
         if (pendingRedacted.length > 0) envelope.red = pendingRedacted;
         if (hiddenText) envelope.txt = hiddenText;
         const previousBytes = pendingSignatureBytes
@@ -405,6 +408,8 @@ export function bridgeToResponsesSSE(
         const encoded = encodeReasoningEnvelope(envelope, budget);
         const reservation = budget?.reserveTransient(bytesOf(encoded), { kind: "reasoning" });
         pendingSignature = undefined;
+        pendingSignatureAfter = undefined;
+        pendingSignatureAfterOutput = false;
         pendingSignatureBytes = 0;
         pendingRedacted = [];
         reservation?.commitRetained();
@@ -413,9 +418,9 @@ export function bridgeToResponsesSSE(
       };
       // hideThinkingSummary path: no visible reasoning item exists, but a signed thinking block
       // must still round-trip — emit an envelope-only reasoning item (empty summary, no text leak).
-      const flushHiddenReasoningEnvelope = () => {
+      const flushHiddenReasoningEnvelope = (after?: string) => {
         const hiddenText = joinChunks(hiddenThinking);
-        const encrypted = takeReasoningEnvelope(hiddenText || undefined);
+        const encrypted = takeReasoningEnvelope(hiddenText || undefined, after);
         hiddenThinking = emptyChunks();
         if (!encrypted) return;
         const itemId = outputItemId("reasoning", "rs");
@@ -544,6 +549,7 @@ export function bridgeToResponsesSSE(
         retainFinishedItem(item as OutputItem, currentMsg.text.bytes + bytesOf(JSON.stringify(annotations)));
         outputIndex++;
         currentMsg = null;
+        if (pendingSignatureAfterOutput) flushHiddenReasoningEnvelope(item.id);
       };
 
       const closeCurrentReasoning = () => {
@@ -643,6 +649,7 @@ export function bridgeToResponsesSSE(
         budget?.closeCall(currentToolCall.callId);
         outputIndex++;
         currentToolCall = null;
+        if (pendingSignatureAfterOutput) flushHiddenReasoningEnvelope(item.id);
       };
 
       // Terminal-error / incomplete path for an open tool call (#765 remainder).
@@ -683,6 +690,7 @@ export function bridgeToResponsesSSE(
         budget?.closeCall(currentToolCall.callId);
         outputIndex++;
         currentToolCall = null;
+        if (pendingSignatureAfterOutput) flushHiddenReasoningEnvelope(item.id);
       };
 
       const abortCurrentToolCallForTranslatorOverflow = () => {
@@ -886,7 +894,14 @@ export function bridgeToResponsesSSE(
           // together; the next semantic event belongs to the following block.
           if (pendingSignature !== undefined && event.type !== "thinking_signature" && event.type !== "heartbeat") {
             if (currentReasoning) closeCurrentReasoning();
-            else flushHiddenReasoningEnvelope();
+            else if (!pendingSignatureAfterOutput) {
+              // A normal hidden thinking block owns its exact text, not the next block.
+              // Close any output first so its index cannot collide with the carrier.
+              closeCurrentMessage("commentary");
+              closeCurrentToolCall();
+              flushHiddenReasoningEnvelope();
+            } else if (!currentMsg && !currentToolCall) flushHiddenReasoningEnvelope();
+            // Explicit late turn signatures wait for the open output's close helper.
           }
           switch (event.type) {
             case "assistant_boundary": {
@@ -974,6 +989,8 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "thinking_delta": {
+              if (currentMsg) closeCurrentMessage("commentary");
+              if (currentToolCall) closeCurrentToolCall();
               if (options?.hideThinkingSummary) {
                 // The hidden branch returns early, so flush any raw reasoning
                 // that preceded the thinking block and clear the replay-cache
@@ -988,11 +1005,9 @@ export function bridgeToResponsesSSE(
                 );
                 break;
               }
-              if (currentMsg) closeCurrentMessage("commentary");
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               if (event.thinking.length > 0) rawReasoningForNextToolCall = "";
-              if (currentToolCall) closeCurrentToolCall();
               if (!currentReasoning) {
                 const itemId = outputItemId("reasoning", "rs");
                 const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
@@ -1017,6 +1032,14 @@ export function bridgeToResponsesSSE(
             case "thinking_signature": {
               pendingSignatureBytes = replaceRetainedString(pendingSignatureBytes, event.signature, "reasoning");
               pendingSignature = event.signature;
+              const lastOutput = finishedItems[finishedItems.length - 1];
+              pendingSignatureAfterOutput = event.afterOutput === true;
+              pendingSignatureAfter = event.afterOutput
+                ? currentMsg?.itemId ?? currentToolCall?.itemId
+                  ?? (!currentReasoning && lastOutput
+                    && (["message", "function_call", "custom_tool_call"].includes(lastOutput.type)
+                      || (lastOutput.type === "tool_search_call" && lastOutput.execution === "client")) ? lastOutput.id : undefined)
+                : undefined;
               // Delay closing until the next semantic event so a signature update cannot
               // create another block or become attached to the following thinking text.
               break;
