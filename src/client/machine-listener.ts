@@ -41,6 +41,7 @@ import { linkRouteAllowed } from "../link/routes";
 import { linkHomeName, linkHomePhrase } from "./link-home";
 import { relayLinkManagementRead } from "./link-management-relay";
 import type { ClientRestartAdmission } from "./runtime-restart";
+import { clientRestartRollbackAction } from "./runtime-restart";
 
 const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
@@ -133,6 +134,7 @@ export function startMachineListener(
     return state.value;
   })();
   const linkMode = isLinkConnection(connection);
+  const connectionChanged = () => clientRestartRollbackAction(connection, readClientConnectionState()) === "recycle";
   if (linkMode && !connection.link) throw new Error("link machine listener requires link transport metadata");
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
   let hubReachability: HubReachability = "unknown";
@@ -196,8 +198,16 @@ export function startMachineListener(
         const identity = { service: "opencodex", version: VERSION, role: "client" } as const;
         const facts = { uptime: process.uptime(), pid: process.pid, port: server.port, protocolVersion: 1 };
         let link: LinkReadiness | null = null;
+        if (linkMode && connectionChanged()) {
+          return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: "client_state_changed" } },
+            { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
+        }
         if (linkMode && deps.linkReadiness) {
           try { link = await deps.linkReadiness(); } catch { link = { ready: false, reason: "link_unverified" }; }
+        }
+        if (linkMode && connectionChanged()) {
+          return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: "client_state_changed" } },
+            { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
         }
         if (link && !link.ready) {
           // The /readyz contract: not ready is 503 with Retry-After and status pending or failed.
@@ -246,6 +256,9 @@ export function startMachineListener(
         if (authError) return authError;
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
           return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
+        }
+        if (linkMode && connectionChanged() && (url.pathname === "/api/machine/status" || url.pathname === "/api/link/status")) {
+          return Response.json({ error: "client_state_changed" }, { status: 503, headers: { "Cache-Control": "no-store" } });
         }
         // A loopback dashboard session proves possession, not user presence: any local
         // process can fetch the dashboard bootstrap and replay its token and CSRF value.
