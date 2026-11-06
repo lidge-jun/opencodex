@@ -35,7 +35,7 @@ Enforcement tier: application runtime branch. Surface: package launcher. Known b
 
 ## Consultation
 
-Terra architect decisions D1-D4 preserve durable connection authority and supported recovery. D5 covers the demonstrated missing-target fallback. Main accepts the narrow refusal change while keeping it distinct from unverified historical causation and Child recovery. Same-architect D5 reflection: ALIGNED, received from Terra on 2026-11-07 (remote mac-studio child mcp:5b53a1ce-eed8-4049-9445-92e0419f98a0, round 3). Accepted amendments: update runtime.md old fallback promise, stale launcher comment and Desktop uninstall guidance. The architect explicitly limits the guarantee to eligible POSIX calls with a settled enabled record. Independent A verdict remains pending; this document is not an audit approval.
+Terra architect decisions D1-D4 preserve durable connection authority and supported recovery. D5 covers the demonstrated missing-target fallback. Main accepts the narrow refusal change while keeping it distinct from unverified historical causation and Child recovery. Same-architect D5 reflection: ALIGNED, received from Terra on 2026-11-07. Accepted amendments: update runtime.md old fallback promise, stale launcher comment and Desktop uninstall guidance. The architect explicitly limits the guarantee to eligible POSIX calls with a settled enabled record. Independent A verdict remains pending; this document is not an audit approval.
 
 ## A disposition
 
