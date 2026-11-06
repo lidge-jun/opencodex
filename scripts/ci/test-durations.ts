@@ -9,17 +9,18 @@
  * header, for the first file of a process) to its own end, so process start and module loading are
  * charged to the file that caused them.
  *
- * Two tables are kept. Linux and macOS shards share `test-durations.tsv`; Windows shards weigh files
- * with `test-durations.windows.tsv`, which the batch runner selects when RUNNER_OS is Windows. Per-file
- * cost on Windows is not a constant multiple of the other two, so one table balanced either Linux and
- * macOS or Windows, never all three (#6982). A file measured in several logs records the mean of its
- * samples, which is why each table reads only its own platforms' logs.
+ * Platform tables keep unlike per-file costs separate: Linux uses `test-durations.linux.tsv`, Windows
+ * uses `test-durations.windows.tsv`, and macOS/default callers retain `test-durations.tsv`. Select each
+ * source job by its actual platform; a file measured in several logs records the mean of its samples.
+ * Refreshing one platform must not replace another platform's observations.
  *
- * Refresh both from one green `lane=all` dispatch on dev. `gh run view --log` refuses a run this
+ * Prefer a green `lane=all` dispatch on dev. `gh run view --log` refuses a run this
  * large, so read one job at a time:
  *
  *   gh run view <run-id> --job <job-id> --log > .tmp/<job>.log            (every suite shard)
- *   bun scripts/ci/test-durations.ts refresh --source "run <run-id>, ..." <test N/4 and macos N/4 logs>
+ *   bun scripts/ci/test-durations.ts refresh --source "run <run-id>, ..." <macos N/4 logs>
+ *   bun scripts/ci/test-durations.ts refresh --table scripts/ci/test-durations.linux.tsv \
+ *     --source "run <run-id>, ..." <Linux test N/4 logs>
  *   bun scripts/ci/test-durations.ts refresh --table scripts/ci/test-durations.windows.tsv \
  *     --source "run <run-id>, ..." <windows N/9 logs>
  *
@@ -36,6 +37,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const DURATIONS_TABLE = join(REPO_ROOT, "scripts", "ci", "test-durations.tsv");
+export const LINUX_DURATIONS_TABLE = join(REPO_ROOT, "scripts", "ci", "test-durations.linux.tsv");
 export const WINDOWS_DURATIONS_TABLE = join(REPO_ROOT, "scripts", "ci", "test-durations.windows.tsv");
 
 const LOG_LINE = /^(?:(.*?)\t[^\t]*\t)?\uFEFF?(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z (.*)$/;

@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { DURATIONS_TABLE, mergeDurations, parseJobLog, parseTable, renderTable, WINDOWS_DURATIONS_TABLE } from "../../scripts/ci/test-durations";
+import { DURATIONS_TABLE, LINUX_DURATIONS_TABLE, mergeDurations, parseJobLog, parseTable, renderTable, WINDOWS_DURATIONS_TABLE } from "../../scripts/ci/test-durations";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -142,14 +142,16 @@ describe.skipIf(process.platform === "win32")("duration-weighted shards, execute
     expect(batches.map(batch => batch.length)).toEqual([3, 3]);
   }, SPAWN_BUDGET_MS);
 
-  test("Windows runners default to their own table, and an explicit table still wins", () => {
+  test("Linux and Windows choose their own tables while explicit overrides and the macOS fallback are preserved", () => {
     const tableUsed = (env: Record<string, string>, defaultTable = true) =>
       /Predicted shard time from recorded durations \(([^)]+)\)/
         .exec(runShardWithOutput("1/1", { defaultTable, env, durations: { "alpha.test.ts": 1 } }).output)?.[1];
     expect(tableUsed({ RUNNER_OS: "Windows" })).toBe("test-durations.windows.tsv");
-    expect(tableUsed({ RUNNER_OS: "Linux" })).toBe("test-durations.tsv");
+    expect(tableUsed({ RUNNER_OS: "Linux" })).toBe("test-durations.linux.tsv");
     expect(tableUsed({ RUNNER_OS: "macOS" })).toBe("test-durations.tsv");
+    expect(tableUsed({})).toBe("test-durations.tsv");
     expect(tableUsed({ RUNNER_OS: "Windows" }, false)).toBe("durations.tsv");
+    expect(tableUsed({ RUNNER_OS: "Linux" }, false)).toBe("durations.tsv");
   }, SPAWN_BUDGET_MS);
 });
 
@@ -228,7 +230,7 @@ describe("the duration table tool", () => {
     expect(parseTable(renderTable(merged, "fixture"))).toEqual(merged);
   });
 
-  for (const table of [DURATIONS_TABLE, WINDOWS_DURATIONS_TABLE]) {
+  for (const table of [DURATIONS_TABLE, LINUX_DURATIONS_TABLE, WINDOWS_DURATIONS_TABLE]) {
     test(`the committed table ${table.split(/[\\/]/).pop()} is well formed`, () => {
       const text = readFileSync(table, "utf8");
       const rows = text.split("\n").filter(line => line !== "" && !line.startsWith("#"));

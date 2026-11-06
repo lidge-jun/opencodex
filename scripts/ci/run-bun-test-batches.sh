@@ -294,12 +294,13 @@ done < <(
 # drops files is the one failure here that stays green. Each shard still runs its files in sorted
 # order. Refresh the table with scripts/ci/test-durations.ts from hosted job logs.
 batch_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Windows runners weigh files with their own table. Per-file cost there is not a constant multiple of
-# Linux or macOS cost (process start and filesystem work dominate different files), and one shared
-# table balanced either Linux and macOS or Windows, never all three (#6982).
+# Platform-specific tables keep measured runner costs separate. The shared table remains the
+# macOS/default fallback; explicit BUN_TEST_DURATIONS_FILE overrides still win below.
 default_durations_file="$batch_script_dir/test-durations.tsv"
 if [[ "${RUNNER_OS:-}" == "Windows" && -f "$batch_script_dir/test-durations.windows.tsv" ]]; then
   default_durations_file="$batch_script_dir/test-durations.windows.tsv"
+elif [[ "${RUNNER_OS:-}" == "Linux" && -f "$batch_script_dir/test-durations.linux.tsv" ]]; then
+  default_durations_file="$batch_script_dir/test-durations.linux.tsv"
 fi
 readonly DURATIONS_FILE="${BUN_TEST_DURATIONS_FILE:-$default_durations_file}"
 durations_source="/dev/null"
