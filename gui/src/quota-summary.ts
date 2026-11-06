@@ -94,10 +94,9 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
 /** Critical credits displace the preferred regular window only when it is not critical. */
 function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undefined {
   const measured = windows.filter(window => window.modelId === undefined && window.percent !== undefined);
-  const byId = new Map(measured.map(window => [window.id, window]));
   let regular: QuotaSummaryWindow | undefined;
-  for (const id of HEADLINE_ORDER) {
-    const hit = byId.get(id);
+  for (const key of HEADLINE_ORDER) {
+    const hit = measured.find(window => window.labelKey === key);
     if (hit) {
       regular = hit;
       break;
