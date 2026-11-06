@@ -28,6 +28,7 @@ const childScript = (dir: string, rel: string, gate?: { ready: string; go: strin
   gate && createPath ? "writeFileSync(path, \"child\");" : "",
   gate ? "writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
   gate ? "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(gate.go) + ") && Date.now() < until) Bun.sleepSync(5);" : "",
+  gate ? "if (!existsSync(" + JSON.stringify(gate.go) + ")) process.exit(1);" : "",
   // A busy ownership lock fails fast; callers retry, and so does this child.
   "let code = 1;",
   "for (let attempt = 0; attempt < 400; attempt++) {",
@@ -402,6 +403,15 @@ describe("teardown scope ends cleanly (#8093)", () => {
 });
 
 describe("concurrent first registrations on an absent home (#8093)", () => {
+  test("a worker whose first-registration barrier expired exits without creating the home", withHome(dir => {
+    const gate = { ready: join(dirname(dir), "expired.ready"), go: join(dirname(dir), "never-go") };
+    const clock = "let tick = 0; Date.now = () => tick++ * " + BARRIER_MS + ";\n";
+    const child = Bun.spawnSync([process.execPath, "-e", clock + childScript(dir, "cold", gate, false)]);
+    expect(existsSync(gate.ready)).toBe(true);
+    expect(child.exitCode).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  }));
+
   test("processes that start together on an absent home all record their paths", withHome(async dir => {
     const names = Array.from({ length: 6 }, (_, i) => "cold-" + i);
     const signals = dirname(dir);
