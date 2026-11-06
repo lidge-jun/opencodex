@@ -6,6 +6,14 @@ import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candid
 import { reportRestartFailure } from "../../src/cli/restart-failure";
 import { updateRestartVeto } from "../../src/update/restart-ownership";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
+import { findLiveProxy } from "../../src/server/proxy-liveness";
+import { isValidRuntimePortState } from "../../src/config/process-state";
+import { runDesktopAwareProxyRestart } from "../../src/cli/desktop-runtime-guidance";
+import { UpdateRestartRequired } from "../../src/cli/update-restart-candidate";
+import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
+import { LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
+import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
+import { discoverStableProxyForRestart } from "../../src/cli/tray-proxy";
 
 const candidate: UpdateRestartCandidate = {
   home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) }, diagnosedHostname: "127.0.0.1" },
@@ -57,6 +65,67 @@ function setup() {
   };
   return { calls, io, live, expire: () => { now = 5000; } };
 }
+
+test.each(["", " \t "])("composed restart reports blank record %j without a stop or start", async hostname => {
+  const runtime = { ...candidate.runtime, hostname, attestationSecret: Buffer.alloc(32, 7).toString("base64url") };
+  expect(isValidRuntimePortState(runtime)).toBe(true);
+  const calls: string[] = [];
+  const challenge = Buffer.alloc(32, 8).toString("base64url");
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${new URL(String(input)).pathname}`);
+    expect(new URL(String(input)).pathname).toBe("/healthz");
+    const nonce = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
+    const proof = nonce ? createLocalAttestationProof(runtime.attestationSecret, nonce, runtime.pid, runtime.port) : null;
+    return Response.json({ service: "opencodex", pid: runtime.pid, version: "2.76.0", restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION },
+      { headers: proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : {} });
+  }) as typeof fetch;
+  const discover = () => findLiveProxy({ readPidFn: () => runtime.pid, readRuntimeFn: () => runtime,
+    verifyPidFn: pid => pid, configFn: () => ({ port: runtime.port }), fetchFn: fetchImpl, nowFn: () => 1000 });
+  const s = setup();
+  const result = await runDesktopAwareProxyRestart({
+    findLive: () => discoverStableProxyForRestart({ findLive: discover, waitBetweenChecks: async () => {} }),
+    requestInPlaceRestart: previous => requestBoundSystemRestart(previous, 5000, {
+      fetchImpl, readRuntime: () => runtime, findLive: discover, createChallenge: () => challenge,
+      now: () => 1000, cliVersion: candidate.cliVersion, readUpdateHome: () => candidate.home,
+    }),
+    startWhenStopped: () => { calls.push("fallback start"); return { status: "started" }; },
+    waitForReplacement: async () => { calls.push("replacement wait"); return null; },
+  }, () => ({ kind: "none" }));
+  expect(result.ok).toBe(false);
+  if (result.ok || result.phase !== "request" || !(result.error instanceof UpdateRestartRequired)) throw new Error("candidate not produced");
+  s.io.runtime = () => runtime;
+  const update = await runUpdateRestart(result.error.candidate(), 5000, s.io);
+  expect(update).toEqual({ ok: false, code: "update_restart_eligibility_failed", reason: "blank_runtime_hostname" });
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    if (!update.ok) reportUpdateRestartFailure(update);
+    expect(errors.mock.calls).toEqual([["❌ The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Run `ocx status` and `ocx service status` to identify its owner. For a service, use the owning installation's `ocx service restart`; for Desktop, use the app; for a foreground proxy, use its terminal. For a detached proxy, ask its owner or administrator to verify the process, home and supervisor and arrange a controlled shutdown; `ocx stop` may refuse. Confirm it is stopped before starting it from the owning installation. Do not edit the runtime record or force a stop. Nothing was stopped by this restart attempt. (update_restart_eligibility_failed)"]]);
+  } finally { errors.mockRestore(); }
+  expect(calls).toEqual(["GET /healthz", "GET /healthz", "GET /healthz"]);
+  expect(s.calls).toEqual(["acquire", "release"]);
+
+  // A record changed after proof cannot become an update candidate.
+  let reads = 0;
+  const drift = await requestBoundSystemRestart(candidate.target, 5000, {
+    fetchImpl, readRuntime: () => ++reads === 1 ? runtime : { ...runtime, hostname: "127.0.0.1" },
+    findLive: discover, createChallenge: () => challenge, now: () => 1000,
+    cliVersion: candidate.cliVersion, readUpdateHome: () => candidate.home,
+  });
+  expect(drift.accepted).toBe(false);
+  if (drift.accepted) throw new Error("drift accepted");
+  expect(drift.uncertain).toBe(false);
+  expect((drift.error as Error).message).toBe("restart_target_changed");
+  const badProof = await requestBoundSystemRestart(candidate.target, 5000, {
+    fetchImpl: (async () => Response.json({ service: "opencodex", pid: runtime.pid },
+      { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: "A".repeat(43) } })) as typeof fetch,
+    readRuntime: () => runtime, findLive: discover, createChallenge: () => challenge,
+    now: () => 1000, cliVersion: candidate.cliVersion, readUpdateHome: () => candidate.home,
+  });
+  expect(badProof.accepted).toBe(false);
+  if (badProof.accepted) throw new Error("bad proof accepted");
+  expect((badProof.error as Error).message).toBe("restart_attestation_failed");
+  expect(s.calls).toEqual(["acquire", "release"]);
+});
 describe("CLI update restart transaction", () => {
   test("an oversized child handoff refuses before stopping", async () => {
     const s = setup();
@@ -97,10 +166,11 @@ describe("CLI update restart transaction", () => {
     const result = await runUpdateRestart(bad, 5000, s.io);
     expect(s.calls).toEqual(["acquire", "release"]);
     expect(result).toEqual({ ok: false, code: "update_restart_eligibility_failed", reason: "blank_runtime_hostname" });
+    if (result.ok) throw new Error("blank hostname accepted");
     const errors = spyOn(console, "error").mockImplementation(() => {});
     try {
-      if (!result.ok) reportUpdateRestartFailure(result);
-      expect(errors.mock.calls).toEqual([["❌ The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Restart the proxy through its owning service, desktop app, or terminal to regenerate the runtime record, then retry. Nothing was stopped by this restart attempt. (update_restart_eligibility_failed)"]]);
+      reportUpdateRestartFailure(result);
+      expect(errors.mock.calls).toEqual([[`❌ ${describeUpdateRestartFailure(result.code, result.reason)} (update_restart_eligibility_failed)`]]);
     } finally { errors.mockRestore(); }
   });
   test("the CLI sends update restart failures to the reporting function", () => {

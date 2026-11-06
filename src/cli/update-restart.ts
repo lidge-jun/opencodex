@@ -173,7 +173,7 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
         case "unverifiable_ancestry": return "The proxy's process ancestry or manager could not be verified. Run `ocx status` to identify its owner before restarting.";
         case "configuration_changed": return "The selected configuration or connection changed. Run `ocx status` to inspect the intended proxy before restarting.";
         case "target_changed": return "The captured proxy identity changed. Run `ocx status` to inspect the intended proxy before restarting.";
-        case "blank_runtime_hostname": return "The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Restart the proxy through its owning service, desktop app, or terminal to regenerate the runtime record, then retry.";
+        case "blank_runtime_hostname": return "The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Run `ocx status` and `ocx service status` to identify its owner. For a service, use the owning installation's `ocx service restart`; for Desktop, use the app; for a foreground proxy, use its terminal. For a detached proxy, ask its owner or administrator to verify the process, home and supervisor and arrange a controlled shutdown; `ocx stop` may refuse. Confirm it is stopped before starting it from the owning installation. Do not edit the runtime record or force a stop.";
       }
     })();
     return `${action} Nothing was stopped by this restart attempt.`;
