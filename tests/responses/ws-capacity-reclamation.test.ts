@@ -10,6 +10,8 @@ import {
 } from "../../src/responses/state";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION } from "../../src/types";
+import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -101,6 +103,11 @@ beforeEach(() => {
   });
   saveConfig({
     port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true,
+    // These socket fixtures exercise current config, not first-upgrade writes or native sync.
+    clientIntegrations: { codex: false },
+    openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
+    subagentModelsVersion: SUBAGENT_MODELS_VERSION,
+    subagentModels: [...DEFAULT_SUBAGENT_MODELS],
     apiKeys: [
       { id: "capacity-replay-owner", key: REPLAY_API_KEY, name: "Replay owner", createdAt: "2026-10-01T00:00:00.000Z" },
       { id: "capacity-other-owner", key: OTHER_REPLAY_API_KEY, name: "Other owner", createdAt: "2026-10-01T00:00:00.000Z" },

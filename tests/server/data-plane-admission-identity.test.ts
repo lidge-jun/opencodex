@@ -19,6 +19,8 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { buildResponsesWsData } from "../../src/server/ws-bridge";
 import type { OcxConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION } from "../../src/types";
+import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // The admission path already knew WHICH key matched and threw it away. These
@@ -342,6 +344,11 @@ describe("the Responses WebSocket handshake", () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-for-ws";
     const config = remoteConfig();
     config.websockets = true;
+    // Keep this real handshake out of unrelated first-upgrade writes and native sync.
+    config.clientIntegrations = { codex: false };
+    config.openaiProviderTierVersion = OPENAI_PROVIDER_TIER_VERSION;
+    config.subagentModelsVersion = SUBAGENT_MODELS_VERSION;
+    config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
     saveConfig(config);
     const server = startServer(0);
     try {
