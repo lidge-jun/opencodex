@@ -464,18 +464,24 @@ function installSharedSession(token: string) {
   expect(installApiSessionFromHtml("shared", html)).toBe(true);
 }
 
-test.each(["switch", "unmount"])("a failed facet cancels its pending inventory before %s and a late 401", async next => {
+test.each([["facet", "switch"], ["facet", "unmount"], ["device", "switch"], ["device", "unmount"]])("a failed %s cancels its sibling before %s and a late 401", async (failed, next) => {
   installSharedSession("ocx_session_sibling_failure");
   let scans = 0;
-  let deviceSignal: AbortSignal | null | undefined;
-  let releaseDevice!: (value: Response) => void;
+  let siblingSignal: AbortSignal | null | undefined;
+  let releaseSibling!: (value: Response) => void;
   const raw = (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === "/api/usage/source-facets") return Promise.resolve(++scans === 1 ? new Response(null, { status: 503 }) : response(facets(url.href)));
+    if (url.pathname === "/api/usage/source-facets") {
+      if (++scans > 1) return Promise.resolve(response(facets(url.href)));
+      if (failed === "facet") return Promise.resolve(new Response(null, { status: 503 }));
+      siblingSignal = init?.signal;
+      return new Promise<Response>(resolve => { releaseSibling = resolve; });
+    }
     if (url.pathname === "/api/usage/devices") {
       if (scans > 1) return Promise.resolve(response({ devices: [] }));
-      deviceSignal = init?.signal;
-      return new Promise<Response>(resolve => { releaseDevice = resolve; });
+      if (failed === "device") return Promise.resolve(new Response(null, { status: 503 }));
+      siblingSignal = init?.signal;
+      return new Promise<Response>(resolve => { releaseSibling = resolve; });
     }
     if (url.pathname === "/api/usage") return Promise.resolve(response(report(url.href)));
     return Promise.resolve(new Response(null, { status: 404 }));
@@ -484,10 +490,10 @@ test.each(["switch", "unmount"])("a failed facet cancels its pending inventory b
   installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
   await mount({}, "http://localhost"); await click(trigger());
   expect(document.body.textContent).toContain("Counts unavailable or incomplete");
-  expect(deviceSignal?.aborted).toBe(true);
+  expect(siblingSignal?.aborted).toBe(true);
   if (next === "switch") await click(radio("Grok"));
   else await act(async () => root.unmount());
-  await act(async () => { releaseDevice(new Response(null, { status: 401 })); await Promise.resolve(); });
+  await act(async () => { releaseSibling(new Response(null, { status: 401 })); await Promise.resolve(); });
   expect(usageSessionSnapshot().blocked).toBe(false);
 });
 
