@@ -24,7 +24,8 @@ import { customRowInputModalities } from "../vision/eligibility";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../providers/context-cap";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabilities";
-import { dropLearnedUnsupportedReasoningEfforts } from "../providers/reasoning-metadata";
+import { dropLearnedUnsupportedReasoningEfforts, providerUsesReasoningMetadata } from "../providers/reasoning-metadata";
+import { isKeychainReference } from "../providers/api-key-resolve";
 import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
 import { canInferVendorContext, vendorContextInference } from "../codex/catalog/vendor-context";
 import { terminalSafeText } from "./runtime-api";
@@ -122,8 +123,12 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
       // match, drops levels Codex does not declare, and re-adds tiers the wire map proves
       // the model emits. Restating two of its five lines here reported a ladder the proxy
       // strips, and unsanitized junk as a supported level.
-      let efforts = reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false
-        ? [] : custom?.reasoningEfforts ?? configuredReasoningEfforts(effective, model, { refreshMetadata: false })
+      const declaredEfforts = custom?.reasoningEfforts ?? modelRecordValue(effective.modelReasoningEfforts, model) ?? effective.reasoningEfforts;
+      // A passive CLI cannot resolve an OS-keychain reference to select account-scoped refusals.
+      // Report unknown rather than opening the keychain or claiming an unverifiable ladder.
+      const unobservedCredential = providerUsesReasoningMetadata(effective) && isKeychainReference(effective.apiKey);
+      let efforts = reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false || declaredEfforts?.length === 0
+        ? [] : unobservedCredential ? null : custom?.reasoningEfforts ?? configuredReasoningEfforts(effective, model, { refreshMetadata: false })
           ?? (canonicalNativeCustom ? nativeReasoningEfforts(model) : null);
       if (nativeMetadata && efforts && efforts.length > 0) {
         const allowed = nativeReasoningEfforts(model);
@@ -468,7 +473,7 @@ function handleConfiguredModels(args: string[]): void {
   }
 
   const models = collectModels(config, providerFilter ?? undefined);
-  const note = "Local saved and router-known IDs include registry seeds, custom models and this process's discovery cache. Use ocx models live for the running catalog.";
+  const note = "Local saved and router-known IDs include registry seeds, custom models and this process's discovery cache. Reasoning may be unknown for keychain credentials. Use ocx models live for the running catalog.";
 
   if (wantsJson) {
     printJson({

@@ -1209,6 +1209,10 @@ catalog entries; `enable`, `disable`, and `provider` control visibility; `select
 provider allowlist; `context` controls provider context caps; and `shadow` manages background
 shadow-call interception.
 
+For destinations with credential-scoped learned reasoning refusals, a local listing reports an
+unknown reasoning ladder for an OS-keychain reference instead of opening the keychain. Use
+`ocx models live` to inspect the running proxy's catalog.
+
 Model prices are estimates in USD per million tokens. `ocx models --json` includes a
 `price` object with `cost4` rates and their source; `ocx models price --json` keeps
 `cost` for the saved override and reports resolved rates in `effectiveCost`.

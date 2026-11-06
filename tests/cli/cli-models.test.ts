@@ -29,6 +29,14 @@ function runCli(args: string[], env: Record<string, string> = {}, recordAttempts
       const path = ${JSON.stringify(join(repoRoot, "src/server/proxy-liveness.ts"))};
       const original = await import(path);
       mock.module(path, () => ({ ...original, findLiveProxy: async () => { record("liveness"); return null; } }));
+      if (process.env.OCX_TEST_TRACK_KEYCHAIN === "1") {
+        const keys = await import(${JSON.stringify(join(repoRoot, "src/providers/api-key-resolve.ts"))});
+        keys.setProviderKeychainEntryFactoryForTests(() => ({
+          getPassword: () => { appendFileSync(${JSON.stringify(join(fixtureHome!, "keychain-attempts.log"))}, "read\\n"); return "fixture-secret"; },
+          setPassword: () => {}, deletePassword: () => true,
+        }));
+        if (process.env.OCX_TEST_PROBE_KEYCHAIN === "1") keys.resolveProviderApiKey("keychain:control");
+      }
       globalThis.fetch = () => { record("fetch"); throw new Error("fixture network forbidden"); };
       if (process.env.OCX_TEST_PROBE_NETWORK === "1") {
         try { await globalThis.fetch("https://fixture.test"); }
@@ -289,6 +297,36 @@ describe("ocx models", () => {
       expect(efforts("other", "gpt-6-luna")).toEqual(["medium", "high"]);
       expect(efforts("test", "only-high")).toEqual(["high"]);
       expect(efforts("test", "empty")).toEqual([]);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("passive custom and configured ladders do not consult the OS keychain", () => {
+    const { dir } = freshConfig({ providers: {
+      eligible: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", apiKey: "keychain:eligible", models: ["configured"], noReasoningModels: ["denied"], modelReasoningEfforts: { configured: ["low", "high"] } },
+      other: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "keychain:other", models: ["configured"], modelReasoningEfforts: { configured: ["low", "high"] } },
+    }, customModels: [
+      { id: "11111111-1111-4111-8111-111111111111", provider: "eligible", modelId: "custom", reasoningEfforts: ["low", "high"] },
+      { id: "22222222-2222-4222-8222-222222222222", provider: "eligible", modelId: "empty", reasoningEfforts: [] },
+      { id: "33333333-3333-4333-8333-333333333333", provider: "other", modelId: "custom", reasoningEfforts: ["low", "high"] },
+      { id: "44444444-4444-4444-8444-444444444444", provider: "eligible", modelId: "denied", reasoningEfforts: ["low", "high"] },
+    ] });
+    try {
+      const marker = join(dir, "keychain-attempts.log");
+      const env = { OPENCODEX_HOME: dir, OCX_TEST_TRACK_KEYCHAIN: "1" };
+      const result = runCli(["models", "--json"], env);
+      expect(result.status).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      const rows = JSON.parse(result.stdout).models;
+      const efforts = (provider: string, model: string) => rows.find((row: { provider: string; model: string }) => row.provider === provider && row.model === model).reasoningEfforts;
+      expect(efforts("eligible", "custom")).toBeNull();
+      expect(efforts("eligible", "configured")).toBeNull();
+      expect(efforts("eligible", "empty")).toEqual([]);
+      expect(efforts("eligible", "denied")).toEqual([]);
+      expect(efforts("other", "custom")).toEqual(["low", "high"]);
+      expect(efforts("other", "configured")).toEqual(["low", "high"]);
+      const control = runCli(["models", "--json"], { ...env, OCX_TEST_PROBE_KEYCHAIN: "1" });
+      expect(control.status).toBe(0);
+      expect(readFileSync(marker, "utf8")).toBe("read\n");
     } finally { removeTreeWithRetry(dir); }
   });
 
