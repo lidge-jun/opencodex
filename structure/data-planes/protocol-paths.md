@@ -182,7 +182,7 @@ covers the source mapping, the cap, the 404 and the parameter bounds.
 ingress parsed. It keeps that body by reference for the request only, scans its features on the
 first `features()` call and caches them, and hands out `freshBody()` copies, each a
 `structuredClone` charged under `request_copies`, so a consumer that rewrites its body cannot
-leak the rewrite into another consumer's input; `releaseBody(copy)` hands that charge back, so combo judging keeps only the dispatched native child's copy charged.
+leak the rewrite into another consumer's input; `releaseBody(copy)` hands that charge back. `readBody()` returns the source itself, uncharged, for read-only checks, so combo judging charges no copy; only a dispatched native child holds one.
 
 `src/protocols/codecs/{chat,messages,responses}.ts` are named entry points over the existing
 translators — `chatToResponsesBody` is `chatCompletionsToResponsesBody`,
@@ -197,7 +197,7 @@ Messages ingresses call the bridge through them.
 hop (the internal Responses body) still does.
 
 Only when `resolveProtocolSettings(config).unrepresentable === "reject"` do the Chat and Messages
-ingresses build an envelope and run the guard, after the route and its wire settle and before the
+ingresses run the guard, and build an envelope for it, after the route and its wire settle and before the
 request is sent: Chat on the native path when the native lane was chosen, otherwise on the
 bridge path to the settled adapter's wire; Messages on the native path when the managed native
 lane was chosen, otherwise on the bridge path. Combo and policy routes
@@ -205,8 +205,8 @@ and an unroutable model are not judged at ingress; with `nativeChatCombos` on, a
 candidates are judged one by one inside the combo loop (below). A refusal answers 400 in the ingress's own
 error shape (Chat `invalid_request_error` / `unsupported_feature`; Anthropic
 `invalid_request_error`) naming feature keys only, marks the trace blocked, and writes the
-final log row with no upstream send. Under the default `legacy` policy nothing is built and the
-would-be loss appears only as the trace's `featureEffects`. The Messages envelope's features are
+final log row with no upstream send. Under the default `legacy` policy the guard does not run and the would-be loss appears only as the trace's
+`featureEffects`; a Messages combo-model request still builds an envelope, as a replay source, when some provider enables `managedMessagesNative`. The Messages envelope's features are
 fixed at the bridge entry mark, before an effort override rewrites `thinking`.
 `tests/responses/protocol-envelope.test.ts`, `tests/responses/protocol-guard.test.ts` and
 `tests/responses/protocol-ingress-guard.test.ts` pin them.

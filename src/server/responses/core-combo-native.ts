@@ -47,7 +47,7 @@ import type { NativeMessagesFinishLog } from "../messages-native";
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
-import { hasNativeOnlyTool } from "../../claude/inbound-content-options";
+import { declaredAnthropicServerTools, hasNativeOnlyTool } from "../../claude/inbound-content-options";
 import { nativeMessagesInlineToolNames } from "../messages-native-tool-guard";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -184,31 +184,29 @@ export function createComboProtocolLanes(input: {
     }
   };
 
-  // Eligibility reads a body, and a body is a charged copy, so the adapter is checked first:
-  // a candidate that can never go native costs no copy at all.
-  const nativeBody = (target: ComboTarget, route: RouteResult | undefined): Rec | undefined => {
-    if (!route || route.provider.adapter !== (inbound === "messages" ? "anthropic" : "openai-chat")) return undefined;
+  // Eligibility only reads the body, so it reads the source in place: judging a candidate charges
+  // no copy and can never refuse the turn on the translator budget. Only a dispatch takes a copy.
+  const nativeEligible = (target: ComboTarget, route: RouteResult | undefined): route is RouteResult => {
+    if (!route || route.provider.adapter !== (inbound === "messages" ? "anthropic" : "openai-chat")) return false;
     if (inbound === "messages") {
       const combo = getCombo(config, comboId);
       // ponytail: exact replay supports no combo effort rewrite; the existing bridge owns those policies.
       if (!combo || combo.strategy !== "failover" || comboDefaultEffort(config, comboId)
         || combo.reasoningEffortMode !== "strict" || !credentialDomainFor(route.provider)?.firstPartyAnthropic
-        || supportedLadderFor({ provider: route.provider, modelId: route.modelId })?.length === 0) return undefined;
+        || supportedLadderFor({ provider: route.provider, modelId: route.modelId })?.length === 0) return false;
     }
-    const body = envelope.freshBody();
     // The concrete selector, as the bridge child's body carries it; the wire model comes from
     // the route either way, and the pinned-effort lookup reads this.
-    body.model = selector(target);
-    if (inbound === "messages"
+    const body = { ...envelope.readBody(), model: selector(target) };
+    return inbound === "messages"
       ? nativeMessagesDeclineReason(route, body, config, { ...(source.inbound === "messages" ? source.selector : undefined), routeSelector: selector(target) }) === undefined
-      : isNativeChatRouteEligible(route, body, config)) return body;
-    envelope.releaseBody(body);
-    return undefined;
+      : isNativeChatRouteEligible(route, body, config);
   };
 
   const verdicts = new Map<string, CandidateVerdict>();
   let skipRecorded = false;
   let nativeOnlyTool: boolean | undefined;
+  let declaresWebFetch: boolean | undefined;
   // The bridge keeps only text from system messages, so an active inline tool_addition definition
   // has no translated equivalent either; fail closed like a top-level native-only tool.
   const declaresNativeOnlyTool = (body: Record<string, unknown>) =>
@@ -228,10 +226,7 @@ export function createComboProtocolLanes(input: {
     }
     if (targetRoute) {
       const settled = settle(target, targetRoute);
-      // Judging needs only the verdict; the dispatched child takes its own copy.
-      const judged = nativeBody(target, settled);
-      if (judged) envelope.releaseBody(judged);
-      const native = judged !== undefined;
+      const native = nativeEligible(target, settled);
       const upstream = native ? inbound : upstreamWireForAdapter((settled ?? targetRoute).provider.adapter);
       const checked = checkRepresentable({
         inbound,
@@ -247,11 +242,15 @@ export function createComboProtocolLanes(input: {
         }
       }
       // Under any policy: the source chose a native-only tool, so a translated child never runs it.
-      if (!native && inbound === "messages" && (nativeOnlyTool ??= (() => {
-        const body = envelope.freshBody();
-        try { return declaresNativeOnlyTool(body); } finally { envelope.releaseBody(body); }
-      })())) {
-        verdict.nativeOnly = true;
+      // web_fetch has no translated equivalent; only a first-party Anthropic child carries it out of body.
+      if (!native && inbound === "messages") {
+        const provider = (settled ?? targetRoute).provider;
+        if ((nativeOnlyTool ??= declaresNativeOnlyTool(envelope.readBody()))
+          || ((declaresWebFetch ??= declaredAnthropicServerTools(envelope.readBody())
+            ?.some(tool => String(tool.type).startsWith("web_fetch_")) === true)
+            && !(provider.adapter === "anthropic" && credentialDomainFor(provider)?.firstPartyAnthropic))) {
+          verdict.nativeOnly = true;
+        }
       }
     }
     verdicts.set(key, verdict);
@@ -286,8 +285,9 @@ export function createComboProtocolLanes(input: {
       // keeps the bridge rather than opening a tracker of its own.
       if (!isRequestExecutionBudget(targetSendBudget)) return undefined;
       const route = settle(target, targetRoute);
-      const body = nativeBody(target, route);
-      if (!route || !body) return undefined;
+      if (!nativeEligible(target, route)) return undefined;
+      const body = envelope.freshBody();
+      body.model = selector(target);
       if (inbound === "messages") return initialDecision ? undefined : { route, body, sendBudget: targetSendBudget };
       applyDroidReasoningDefault(body, droidDefaultEffort, {
         provider: targetRoute.provider,

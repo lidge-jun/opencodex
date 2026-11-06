@@ -1274,6 +1274,7 @@ async function handleClaudeMessagesWithBudget(
     ...(nativeComboSource && envelope && settledRoute?.combo ? {
       protocolSource: (await import("./messages-native")).createNativeMessagesComboSource({
         req, config, logCtx, envelope, requestedModel, translatorBudget, selector: nativeSelector,
+        echoModel: clientFacingModelText(clientModelLabel),
         modelScope: resolveAdmissionModelScope(config, logIds?.admission),
         callerAnthropicBeta: req.headers.get("anthropic-beta"),
         clientIdentity: captureAnthropicClientIdentity(req.headers),

@@ -183,6 +183,8 @@ export interface HandleNativeMessagesOptions {
   body: Rec;
   /** The selector the client sent, echoed on the request log. */
   requestedModel: string;
+  /** The model the answer reports, when it differs from `requestedModel` (a combo the route directive chose). */
+  echoModel?: string;
   translatorBudget: TranslatorBudget;
   /** The facts the ingress judged eligibility with; re-applied if key selection changes. */
   selector?: NativeMessagesSelector;
@@ -992,7 +994,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
     const frames = new MessagesSseFrameContext();
-    const echoed = echoRequestedModel(renamed, requestedModel, frames);
+    const echoed = echoRequestedModel(renamed, options.echoModel ?? requestedModel, frames);
     let toolRefusal: string | undefined;
     const source = clientDeclaredEmptyToolCatalog
       ? guardNativeMessagesEmptyToolCatalog(echoed, translatorBudget, message => {
@@ -1056,7 +1058,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         committed = true;
         tapped = watchFirstOutput(preflight.response.body!);
       }
-      const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget, collectorVerdictSink);
+      const message = await collectAnthropicMessage(tapped, options.echoModel ?? requestedModel, translatorBudget, collectorVerdictSink);
       cleanupAbort();
       if (tapState.closeReason === "client_cancel" || req.signal.aborted) {
         return fail(499, "Client cancelled request", "api_error");
@@ -1154,7 +1156,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     return fail(502, undeclaredToolCallMessage(), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }
   bindUsage(anthropicUsageToOcx(isRec(message.usage) ? message.usage : undefined));
-  onFirstOutput?.();
+  if (Array.isArray(message.content) && message.content.length > 0) onFirstOutput?.();
   try {
     translatorBudget.chargeRetained(Buffer.byteLength(read.text) * 2, { kind: "live_transient" });
   } catch (error) {
@@ -1164,7 +1166,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     throw error;
   }
   // The client's selector, not the wire id, as the translated lane answers.
-  message.model = requestedModel;
+  message.model = options.echoModel ?? requestedModel;
   const serialized = JSON.stringify(message);
   finishLog(200);
   if (requestedStream) {

@@ -90,11 +90,11 @@ function config(on = true): OcxConfig {
   }, combos: { waterfall: { strategy: "failover", targets: [{ provider: "anth", model: "claude-sonnet-4-6" }, { provider: "backup", model: "fallback" }] } },
   protocols: { rollout: { managedMessagesNative: on } } };
 }
-async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown; admission?: DataPlaneAdmission } = {}) {
+async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown; admission?: DataPlaneAdmission; extra?: Rec } = {}) {
   const requestId = `native-combo-${crypto.randomUUID()}`;
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-admission", "x-api-key": "fixture-caller" },
-    body: JSON.stringify({ ...source, stream: options.stream ?? true, ...(options.messages ? { messages: options.messages } : {}), ...(options.tools ? { tools: options.tools } : {}) }),
+    body: JSON.stringify({ ...source, stream: options.stream ?? true, ...(options.messages ? { messages: options.messages } : {}), ...(options.tools ? { tools: options.tools } : {}), ...options.extra }),
   }), options.config ?? config(), { model: "", provider: "" }, { requestId, start: Date.now(), admission: options.admission });
   const text = await response.text();
   return { response, text, rows: getRequestLogEntries().filter(row => row.requestId === requestId) };
@@ -406,6 +406,33 @@ describe("native Messages candidates in a combo", () => {
     expect(translatorBudget.snapshot().currentBytes).toBe(0);
     expect(lanes.nativeChild(targets[0]!, routeConcreteModel(settings, "anth/claude-sonnet-4-6"), createRequestExecutionBudget())).toBeDefined();
     expect(translatorBudget.snapshot().currentBytes).toBe(jsonUtf8Bytes(body));
+    // A budget with no room for one more copy still judges every candidate: judging reads in place.
+    const tight = createTranslatorBudget({ maxTurnBytes: jsonUtf8Bytes(body) - 1 });
+    const tightLanes = createComboProtocolLanes({
+      source: { inbound: "messages", envelope: createProtocolEnvelope({ inbound: "messages", body, translatorBudget: tight }), dispatchNativeChild: async () => new Response() },
+      req: new Request("http://localhost/v1/messages"), config: settings, logCtx: { model: "", provider: "" },
+      admissionScope: undefined, comboId: "waterfall", targets,
+    })!;
+    for (const target of targets) expect(tightLanes.pickable(target)).toBe(true);
+    expect(tight.snapshot().currentBytes).toBe(0);
+  });
+  test("a declared web_fetch never falls back to a translated child that drops it", async () => {
+    answer = () => stream(prelude + refusal);
+    const { text } = await send({ tools: [...source.tools, { type: "web_fetch_20250910", name: "web_fetch" }] });
+    expect(text).not.toContain("fallback reply");
+    expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+  });
+  test("a combo chosen by an ocx-route directive answers with the caller's model", async () => {
+    const system = [...source.system, { type: "text", text: "<!-- ocx-route: combo/waterfall -->" }];
+    const { response, text } = await send({ stream: false, extra: { model: "claude-haiku-4-5", system } });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(text).model).toBe("claude-haiku-4-5");
+  });
+  test("a JSON answer with no content blocks records no first output", async () => {
+    answer = () => Response.json({ ...message, content: [] });
+    const { rows } = await send({ stream: false });
+    expect(rows[0]!.firstOutputMs).toBeUndefined();
+    expect(rows[0]!.attempts![0]!.firstOutputMs).toBeUndefined();
   });
   test("a large body on a combo without a native child is not charged a replay copy", async () => {
     // 7 MiB fits the translated path's budget but not one extra retained copy of the body.
