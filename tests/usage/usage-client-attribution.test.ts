@@ -225,5 +225,8 @@ describe("usage client attribution", () => {
     ]);
     expect(result.legacyUnclassifiedRequests).toBe(1);
     expect(JSON.stringify(result)).not.toContain("former");
+    const claudeSelected = createSourceFacetAccumulator({ client: "claude_code", device: { kind: "all" } }, ["active"], { since: now - 1000, until: now });
+    claudeSelected.add({ ...base, requestId: "legacy" });
+    expect(claudeSelected.snapshot().legacyUnclassifiedRequests).toBe(1);
   });
 });

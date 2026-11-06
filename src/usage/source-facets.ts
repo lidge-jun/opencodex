@@ -21,7 +21,9 @@ export function createSourceFacetAccumulator(filter: UsageSourceFilter, ids: rea
       for (const client of USAGE_SOURCE_CLIENTS) {
         if (matches(entry, client, selectedDevice)) apps[client] += 1;
       }
-      if (matches(entry, filter.client, selectedDevice) && isLegacyCodexUsage(entry)) legacyUnclassifiedRequests += 1;
+      // This is the unclassified subset of the Codex option, independently of the
+      // currently selected app; the app facets all share the selected device scope.
+      if (matches(entry, "codex", selectedDevice) && isLegacyCodexUsage(entry)) legacyUnclassifiedRequests += 1;
       if (!matches(entry, filter.client, { kind: "all" })) return;
       all += 1;
       if (entry.apiKeyId === undefined) noKey += 1;

@@ -442,7 +442,9 @@ key was deleted or which device used it; older rows without admission metadata a
 The dashboard-session-only `/api/usage/source-facets` accepts the same `client` and `device`
 parameters and provides counts for a captured 30-day window, the filter echo and incomplete-read
 status. App counts respect the chosen device; device counts respect the chosen app. Individual key
-counts are limited to configured keys. This endpoint and `unconfigured` reports use `no-store`.
+counts are limited to configured keys. Its `legacyUnclassifiedRequests` is the unclassified subset
+of the Codex option for the chosen device, regardless of the selected app. This endpoint and
+`unconfigured` reports use `no-store`.
 For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
 256 characters, or more than 65,536 total ID characters rather than silently truncating them.
 Client labels are best-effort classifications of inbound headers, not authentication, and raw

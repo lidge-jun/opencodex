@@ -21,6 +21,7 @@ The unconfigured-key filter compares configured-admission rows to a captured sna
 currently configured key IDs; it does not prove historical deletion or device identity. Its
 snapshot is included in filtered-cache identity. `src/usage/source-facets.ts` folds the bounded
 30-day app/device counts in one pass, retaining individual counters only for configured IDs;
+its legacy count is the unclassified subset of the Codex app option for the selected device.
 `src/server/management/usage-source-facets.ts` bounds concurrent scans. The session-only facets
 route rechecks session and inventory after scanning, fails closed on changes and sets no-store.
 Snapshots exceeding 1,024 configured keys, 256 characters per ID or 65,536 total ID characters
