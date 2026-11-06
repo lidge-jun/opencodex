@@ -1,20 +1,46 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { describeUpdateRestartFailure, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
+import { describeUpdateRestartFailure, observeUpdateRestartReplacement, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
 import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
 import { reportRestartFailure } from "../../src/cli/restart-failure";
 import { updateRestartVeto } from "../../src/update/restart-ownership";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const candidate: UpdateRestartCandidate = {
-  home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } },
+  home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) }, diagnosedHostname: "127.0.0.1" },
   target: { pid: 123, port: 10100, hostname: "127.0.0.1", source: "runtime", version: "2.76.0" },
   runtime: { pid: 123, port: 10100, hostname: "127.0.0.1", attestationSecret: "a".repeat(43) },
   cliVersion: "2.77.0",
 };
+test("production replacement verification binds the new record and rejects drift", async () => {
+  const legacy = { ...candidate, runtime: { ...candidate.runtime, hostname: undefined } };
+  const live = { ...candidate.target, pid: 456 };
+  const fresh = { pid: 456, port: 10100, hostname: "127.0.0.1", attestationSecret: "b".repeat(43) };
+  for (const mode of ["valid", "missing", "wildcard", "ipv6", "pid", "port", "sibling", "drift"] as const) {
+    let reads = 0, proofs = 0;
+    const first = mode === "missing" ? { ...fresh, hostname: undefined }
+      : mode === "wildcard" ? { ...fresh, hostname: "0.0.0.0" }
+      : mode === "ipv6" ? { ...fresh, hostname: "::1" }
+      : mode === "pid" ? { ...fresh, pid: 999 }
+      : mode === "port" ? { ...fresh, port: 9999 }
+      : mode === "sibling" ? { ...fresh, siblingOfPort: 10101 } : fresh;
+    const io = {
+      findLive: async () => live,
+      readRuntime: () => { reads++; return mode === "drift" && reads > 1 ? { ...first, attestationSecret: "c".repeat(43) } : first; },
+      attest: async (options: { secret: string }) => { proofs++; expect(options.secret).toBe(fresh.attestationSecret); return { ...live, version: "2.77.0" }; },
+    };
+    if (mode === "valid") {
+      expect(await observeUpdateRestartReplacement(legacy, 5000, 456, io)).toMatchObject({ pid: 456, version: "2.77.0" });
+      expect(reads).toBe(2); expect(proofs).toBe(1);
+    } else {
+      await expect(observeUpdateRestartReplacement(legacy, 5000, 456, io)).rejects.toThrow();
+      expect(proofs).toBe(mode === "drift" ? 1 : 0);
+    }
+  }
+});
 function setup() {
   const calls: string[] = [];
   let now = 1000;
-  const home = { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } };
+  const home = { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) }, diagnosedHostname: "127.0.0.1" };
   const live: LiveProxy = { ...candidate.target, pid: 456, version: "2.77.0" };
   const io: UpdateRestartIo = {
     now: () => now, acquire: () => { calls.push("acquire"); return { release: () => { calls.push("release"); } }; },
@@ -29,6 +55,38 @@ function setup() {
   return { calls, io, live, expire: () => { now = 5000; } };
 }
 describe("CLI update restart transaction", () => {
+  test("an oversized child handoff refuses before stopping", async () => {
+    const s = setup();
+    const bad = { ...candidate, home: { ...candidate.home, config: { ...candidate.home.config, path: "x".repeat(8192) } } };
+    s.io.home = () => bad.home;
+    expect((await runUpdateRestart(bad, 5000, s.io)).ok).toBe(false);
+    expect(s.calls).not.toContain("stop");
+  });
+  test("a malformed or unsupported bind handoff refuses before stopping", async () => {
+    for (const hostname of ["localhost", "invalid host", "a".repeat(256)]) {
+      const s = setup();
+      const bad = { ...candidate, home: { ...candidate.home, diagnosedHostname: hostname } };
+      s.io.home = () => bad.home;
+      expect((await runUpdateRestart(bad, 5000, s.io)).ok).toBe(false);
+      expect(s.calls).not.toContain("stop");
+    }
+  });
+  test("malformed IP bind spellings never reach stop", async () => {
+    for (const hostname of ["[::1", "::1]", ":::", "[:::]"]) {
+      const s = setup();
+      const bad = { ...candidate, target: { ...candidate.target, hostname }, runtime: { ...candidate.runtime, hostname } };
+      s.io.runtime = () => bad.runtime;
+      expect((await runUpdateRestart(bad, 5000, s.io)).ok).toBe(false);
+      expect(s.calls).not.toContain("stop");
+    }
+  });
+  test("a legacy absent hostname hands the verified default bind to the replacement", async () => {
+    const s = setup();
+    const legacy = { ...candidate, runtime: { ...candidate.runtime, hostname: undefined } };
+    s.io.runtime = () => legacy.runtime;
+    expect(await runUpdateRestart(legacy, 5000, s.io)).toEqual({ ok: true, live: s.live });
+    expect(s.calls.filter(call => call === "stop")).toHaveLength(1);
+  });
   test("stops only the captured target, settles, launches once and verifies expected child/version", async () => {
     const s = setup();
     expect(await runUpdateRestart(candidate, 5000, s.io)).toEqual({ ok: true, live: s.live });

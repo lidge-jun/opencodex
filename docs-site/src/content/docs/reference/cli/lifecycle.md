@@ -152,6 +152,12 @@ unreadable command line in the approved proxy's supervision chain (or surviving 
 stopped manager) leaves wrapper ownership unknown, so the guarded stop cannot report success.
 Missing or unreadable evidence blocks the guarded stop.
 
+New runtime records include the bound hostname. For older records that omit it, a guarded
+stop accepts the discovered default loopback address only when the remaining approval and
+ownership checks agree. An omitted hostname cannot independently prove the listener's bind
+scope. When the record contains a hostname, it must match the approved value exactly;
+wildcard and loopback binds remain distinct.
+
 ### `ocx restart`
 
 When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old

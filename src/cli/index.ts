@@ -606,7 +606,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
-        hostname: bound.config.hostname,
+        hostname: bound.server.hostname,
         attestationSecret: bound.localAttestationSecret,
         command: currentServingCommand(),
         ...siblingRuntimeField(),
