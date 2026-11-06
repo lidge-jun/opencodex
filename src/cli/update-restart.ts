@@ -40,7 +40,7 @@ export interface UpdateRestartIo {
   wait(ms: number): Promise<void>;
 }
 const ELIGIBILITY_REASONS = ["windows", "unsupported_platform", "foreground", "service", "shared_or_client",
-  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed", "desktop"] as const;
+  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed", "desktop", "blank_runtime_hostname"] as const;
 export type UpdateRestartEligibilityReason = (typeof ELIGIBILITY_REASONS)[number];
 
 /** Carries only a closed reason code across the eligibility/transport boundary. */
@@ -75,7 +75,10 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     lease = io.acquire();
     const home = candidate.home;
     if (JSON.stringify(io.home()) !== JSON.stringify(home)) throw new Error("home_changed");
-    if (candidate.runtime.hostname !== undefined && !candidate.runtime.hostname.trim()) throw new Error("target");
+    if (candidate.runtime.hostname !== undefined && !candidate.runtime.hostname.trim()) {
+      eligibilityReason = "blank_runtime_hostname";
+      throw new Error("target");
+    }
     const marker = parseUpdateRestartMarker(JSON.stringify({ home, version: candidate.cliVersion, port: candidate.target.port,
       hostname: normalizeBindHostname(candidate.runtime.hostname), deadlineAt }));
     if (normalizeBindHostname(candidate.target.hostname) !== marker.hostname) throw new Error("target");
@@ -170,6 +173,7 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
         case "unverifiable_ancestry": return "The proxy's process ancestry or manager could not be verified. Run `ocx status` to identify its owner before restarting.";
         case "configuration_changed": return "The selected configuration or connection changed. Run `ocx status` to inspect the intended proxy before restarting.";
         case "target_changed": return "The captured proxy identity changed. Run `ocx status` to inspect the intended proxy before restarting.";
+        case "blank_runtime_hostname": return "The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Restart the proxy through its owning service, desktop app, or terminal to regenerate the runtime record, then retry.";
       }
     })();
     return `${action} Nothing was stopped by this restart attempt.`;
@@ -194,6 +198,10 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
     default:
       return "Update restart could not be confirmed; inspect `ocx status` before retrying.";
   }
+}
+
+export function reportUpdateRestartFailure(result: Extract<UpdateRestartResult, { ok: false }>): void {
+  console.error(`❌ ${describeUpdateRestartFailure(result.code, result.reason)} (${result.code})`);
 }
 
 export interface UpdateRestartStandaloneDeps {

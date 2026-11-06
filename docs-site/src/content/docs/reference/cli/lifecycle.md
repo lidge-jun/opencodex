@@ -324,6 +324,9 @@ restart the proxy using the intended current installation; for a background serv
 or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
 change whether requests are allowed.
 
+If an update restart reports a blank hostname in the runtime record, it leaves the proxy running.
+Restart through the owning service, desktop app, or terminal to regenerate that record, then retry.
+
 Identical version strings and the `unknown` / `0.0.0` placeholders suppress the warning, as does
 an absent proxy version. Doctor does not report placeholders as a confirmed match. Different
 strings still produce a neutral warning when they cannot be strictly parsed as SemVer or differ

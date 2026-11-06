@@ -13,7 +13,7 @@ import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
 import { HEALTH_SENTINEL_STANDALONE_ARG, startServiceHealthSentinel } from "../service/health-sentinel-launch";
 import { UpdateRestartRequired } from "./update-restart-candidate";
-import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
+import { reportUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 // Best-effort recovery for runtime execution and spawned children if launched
@@ -984,7 +984,7 @@ async function handleProxyRestart(
     console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
     const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
     if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
-    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
+    else reportUpdateRestartFailure(update);
     process.exitCode = update.ok ? 0 : 1;
     return update.ok;
   }

@@ -1,5 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { describeUpdateRestartFailure, observeUpdateRestartReplacement, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
+import { readFileSync } from "node:fs";
+import { describeUpdateRestartFailure, observeUpdateRestartReplacement, reportUpdateRestartFailure, runUpdateRestart, UpdateRestartEligibilityError, type UpdateRestartIo } from "../../src/cli/update-restart";
+import { repoPath } from "../helpers/repo-root";
 import type { UpdateRestartCandidate } from "../../src/cli/update-restart-candidate";
 import { reportRestartFailure } from "../../src/cli/restart-failure";
 import { updateRestartVeto } from "../../src/update/restart-ownership";
@@ -43,6 +45,7 @@ function setup() {
   const home = { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) }, diagnosedHostname: "127.0.0.1" };
   const live: LiveProxy = { ...candidate.target, pid: 456, version: "2.77.0" };
   const io: UpdateRestartIo = {
+    inspectSupervision: () => ({ kind: "none" }),
     now: () => now, acquire: () => { calls.push("acquire"); return { release: () => { calls.push("release"); } }; },
     home: () => home, checkHome: () => {}, runtime: () => candidate.runtime,
     standalone: () => true, runtimeReady: () => true,
@@ -89,11 +92,20 @@ describe("CLI update restart transaction", () => {
   });
   test.each(["", " \t "])("a present blank runtime hostname %j refuses before stop", async hostname => {
     const s = setup();
-    const bad = { ...candidate, runtime: { ...candidate.runtime, hostname } };
+    const bad = { ...candidate, runtime: { ...candidate.runtime, hostname, attestationSecret: "PRIVATE_CANARY\u001b" } };
     s.io.runtime = () => bad.runtime;
     const result = await runUpdateRestart(bad, 5000, s.io);
     expect(s.calls).toEqual(["acquire", "release"]);
-    expect(result).toEqual({ ok: false, code: "update_restart_eligibility_failed" });
+    expect(result).toEqual({ ok: false, code: "update_restart_eligibility_failed", reason: "blank_runtime_hostname" });
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      if (!result.ok) reportUpdateRestartFailure(result);
+      expect(errors.mock.calls).toEqual([["❌ The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Restart the proxy through its owning service, desktop app, or terminal to regenerate the runtime record, then retry. Nothing was stopped by this restart attempt. (update_restart_eligibility_failed)"]]);
+    } finally { errors.mockRestore(); }
+  });
+  test("the CLI sends update restart failures to the reporting function", () => {
+    const source = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
+    expect(source).toContain("else reportUpdateRestartFailure(update);");
   });
   test.each([["127.0.0.1", "127.0.0.1"], ["localhost", "127.0.0.1"], ["::1", "::1"], ["0.0.0.0", "0.0.0.0"], ["::", "::"], ["[::]", "[::]"], ["*", "*"]])("preserves bind %s in the transaction with injected eligibility", async (hostname, expectedHost) => {
     const s = setup();
