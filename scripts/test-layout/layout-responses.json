@@ -8,5 +8,6 @@
   "passthrough-headers.test.ts": "responses",
   "passthrough-abort.test.ts": "responses",
   "current-turn-tool-catalog-direct.test.ts": "responses",
-  "current-turn-tool-catalog-namespace.test.ts": "responses"
+  "current-turn-tool-catalog-namespace.test.ts": "responses",
+  "responses-native-compact-ocx-envelope.test.ts": "responses"
 }

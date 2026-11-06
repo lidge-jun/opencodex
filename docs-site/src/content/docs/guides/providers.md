@@ -1775,6 +1775,20 @@ dashboard or `custom` in `ocx init` and enter the base URL. See the
 [Configuration reference](/reference/configuration/) for every provider field
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …).
 
+For Claude models reached through the translated Chat adapter, opencodex flattens tool-schema root
+`oneOf`, `anyOf`, and `allOf` into an object. This uses the actual upstream model id whose final
+slash-separated segment starts with `claude-` (case-insensitive), not every model on the gateway.
+Nested schemas retain their existing normalization. Root required fields are retained; `allOf`
+branch required fields are merged, while `oneOf`/`anyOf` branch required fields are not promoted.
+Local root-branch references are followed for at most 64 references across the schema; unresolved,
+cyclic, external, over-budget references or referenced compositions leave the root composition intact
+and may be rejected upstream. Inline nested compositions also stay intact when they contain unread
+properties or references, or exceed 256 inspected entries per tool schema; constraint-only
+nesting still flattens. Property schemas and literal values are not scanned by this guard. Nested
+references are preserved. Flattening is lossy: branch constraints
+disappear and later property definitions win, so tools must validate arguments. Existing Zen and
+Azure schema compatibility rules remain in effect.
+
 ## Approval reviewer per provider
 
 Codex asks a second model to review approval requests, and takes that reviewer from

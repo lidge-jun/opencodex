@@ -207,7 +207,17 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
-`src/lib/upstream-retry.ts` owns the retry constructors.
+`src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
+does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
+bytes from a clone within 250ms or until cancellation, leaving the returned body intact. Event streams
+and bodies without an observed verdict retain the normal retry; a verdict observed before a slow or
+endless body stalls still stops retry. Hypothetical, negated, question-form and configuration-failure
+mentions are excluded per sentence in the unwrapped provider message, so they cannot hide a definite
+overflow in another sentence. A throttle worded only as "too many tokens" is not a verdict, while an
+explicit "prompt is too long" remains a verdict when no throughput signal is present.
+Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
+starve the deadline or cancellation. The retry and cancellation
+contracts are exercised in `tests/lib/upstream-retry.test.ts`.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
@@ -368,10 +378,15 @@ formatter message
 before selecting the fixed incomplete or compaction sentence. Internal overflow decisions and HTTP
 status stay separate
 from this client-message check: a coded raw-collector throughput refusal still answers 400 without
-selecting the compaction sentence. The shared `isContextOverflowError` source and its #8128 suite
-remain unchanged; `tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their
-source bytes. The executable overflow golden compares actual client recovery-phrase recognition,
+selecting the compaction sentence. The shared `isContextOverflowError` adds `upstream_server_error`
+to the generic codes and ignores conditional context-window matches while still checking later matches;
+its remaining source and the #8128 suite stay byte-identical, enforced by
+`tests/claude-integration/messages-overflow-baseline-contract.test.ts`. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
+The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. All other paths keep their baseline comparisons; the fixture data is not regenerated.
+The translated non-2xx plain-text path classifies up to 16,384 characters before selecting the bounded
+400-character display text, so an overflow visible to the retry peek is not lost to display truncation.
+Adapter response-body inactivity emits the guard's bounded duration sentence and `upstream_stall_timeout` code for streamed initial, recovery and continuation errors. Terminal status classification records 504 for that code, while the duration sentence supplies the closed `body_stall` failure detail. A request-local continuation marker survives event spreads and empty-completion retry handling, and selects HTTP 504 for a buffered continuation stall; other buffered failures and provider-supplied codes retain their prior HTTP status. Initial buffered adapter timeouts also return 504 and the same detail sentence. `tests/server/terminal-guard-server.test.ts` covers stream, buffered continuation and marker isolation; `tests/server/error-fidelity.test.ts` distinguishes a stall from a 502.
 The direct encoder retains original adapter fields by terminal identity independently of shared
 classification. Buffered passthrough and count_tokens preserve the upstream status and closed
 type/code. The type chosen
