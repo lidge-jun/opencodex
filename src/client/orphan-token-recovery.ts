@@ -55,6 +55,7 @@ async function runtimeIsSafe(): Promise<boolean> {
   if (observation.kind === "unknown") return false;
   if (observation.kind === "absent") return readAlivePid() === null && everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness);
   const live = observation.live;
+  if (!live) return false;
   if (live.role === "client" || !runtime || runtime.siblingOfPort !== undefined) return false;
   const observed = { ...live, hostname: live.probeHostname ?? live.hostname };
   if (await proveLiveProxyOwnedByHome(observed, START_OWNERSHIP_LIVENESS) !== "proven") return false;
