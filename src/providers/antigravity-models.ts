@@ -236,12 +236,40 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
  * Sending `thinkingLevel` beside such a suffix states the effort twice, and CCA does not reject
  * the contradiction — a `-low` wire id paired with `HIGH` returns 200, so the tier that actually
  * ran becomes unknowable from the response. Membership also makes static resolution
- * byte-identical to the discovery path, which never emits a thinking level.
+ * byte-identical to discovery, except when an opted-in Argon summary needs its matching level.
  *
  * `gemini-3.1-pro` is deliberately absent: its `high` rung is `gemini-pro-agent`, which carries
  * no tier suffix, so there the level is the only thing naming the effort.
  */
 const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set([GEMINI_ARGON, "gemini-3.8-flash", CLAUDE_OPUS_55, CLAUDE_SONNET_55]);
+
+/**
+ * Suffix-tier models that withhold `thought: true` text unless the request ALSO names its tier
+ * in `thinkingConfig.thinkingLevel`.
+ *
+ * Measured against live CCA (2026-10-27): `gemini-4-argon-high` with
+ * `{includeThoughts: true}` alone answers 200 with `thoughtsTokenCount` in the thousands and
+ * zero thought parts — the whole plan arrives as ordinary visible text. Sending
+ * `{thinkingLevel: "high", includeThoughts: true}` on the same wire id returns the thought
+ * parts. `gemini-3.8-flash-high` does not behave this way: its include-only request still
+ * returns thoughts, so it stays out of this set and keeps the one-field shape.
+ */
+const ANTIGRAVITY_THOUGHT_LEVEL_REQUIRED_SUFFIX_MODELS = new Set([GEMINI_ARGON]);
+
+function suffixThoughtLevel(wireModelId: string, includeThoughts: boolean | undefined): string | undefined {
+  if (!includeThoughts) return undefined;
+  for (const base of ANTIGRAVITY_THOUGHT_LEVEL_REQUIRED_SUFFIX_MODELS) {
+    for (const tier of ANTIGRAVITY_DISCOVERY_EFFORTS) {
+      if (wireModelId === `${base}-${tier}`) return tier;
+    }
+  }
+  return undefined;
+}
+
+function suffixThoughtWire(wireModelId: string, includeThoughts: boolean | undefined): { wireModelId: string; thinkingLevel?: string } {
+  const thinkingLevel = suffixThoughtLevel(wireModelId, includeThoughts);
+  return { wireModelId, ...(thinkingLevel ? { thinkingLevel } : {}) };
+}
 
 function completeDiscoveredEffortWireModelIds(
   pickerId: string,
@@ -719,8 +747,8 @@ export function resolveAntigravityWireModelId(modelId: string, baseUrl?: string)
 
 /**
  * Whether the given model ID is a suffix wire ID or compat alias that already encodes
- * an effort level. For these IDs, the caller must NOT send thinkingConfig — the suffix
- * IS the effort, and sending both creates a contradictory request.
+ * an effort level. The suffix names the effort; an opted-in Argon summary additionally
+ * repeats that same level in thinkingConfig.
  */
 export function isAntigravitySuffixModelId(modelId: string): boolean {
   return !ANTIGRAVITY_KNOWN_PICKER_MODELS.includes(modelId);
@@ -735,9 +763,9 @@ export function retiredAntigravityFlashTier(modelId: string): string | undefined
  * Resolve a picker-visible base model + optional reasoning effort to the CCA wire model ID.
  *
  * Precedence (evaluated in order):
- * 1. Suffix wire ID or compat alias → resolve via `resolveAntigravityWireModelId`, no thinkingConfig.
+ * 1. Suffix wire ID or compat alias → resolve via `resolveAntigravityWireModelId`.
  * 2. Mapped Gemini base with effort → return mapped wire ID + thinkingLevel.
- * 3. Mapped Gemini base without effort → return default-effort wire ID, no thinkingConfig.
+ * 3. Mapped Gemini base without effort → return default-effort wire ID.
  * 4. Claude Opus with effort → return identity + thinkingLevel (no suffix variants exist).
  * 5. All other IDs → return `resolveAntigravityWireModelId(modelId)`, no thinkingConfig.
  */
@@ -745,9 +773,12 @@ export function resolveAntigravityEffortWireModel(
   modelId: string,
   effort?: string,
   baseUrl?: string,
+  options?: { includeThoughts?: boolean },
 ): { wireModelId: string; thinkingLevel?: string } {
   const discoveredEffortWireModelId = discoveredAntigravityEffortWireModelId(modelId, effort, baseUrl);
-  if (discoveredEffortWireModelId) return { wireModelId: discoveredEffortWireModelId };
+  if (discoveredEffortWireModelId) {
+    return suffixThoughtWire(discoveredEffortWireModelId, options?.includeThoughts);
+  }
 
   // A collapsed picker row reports ONE representative wire id (whichever tier CCA
   // listed first), so live discovery cannot describe a ladder — it can only name a
@@ -763,11 +794,12 @@ export function resolveAntigravityEffortWireModel(
     : discoveredAntigravityWireModelId(modelId, baseUrl);
   if (discoveredWireModelId && (discoveredWireModelId !== modelId || isAntigravitySuffixModelId(modelId))) {
     const defaultLevel = ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
+    const suffixLevel = suffixThoughtLevel(discoveredWireModelId, options?.includeThoughts);
     return {
       wireModelId: discoveredWireModelId,
       ...(defaultLevel
         ? { thinkingLevel: effort ? resolveAntigravityThinkingLevel(effort) ?? defaultLevel : defaultLevel }
-        : {}),
+        : suffixLevel ? { thinkingLevel: suffixLevel } : {}),
     };
   }
 
@@ -786,7 +818,8 @@ export function resolveAntigravityEffortWireModel(
 
   // Rule 1: suffix/compat alias — suffix IS the effort.
   if (isAntigravitySuffixModelId(modelId)) {
-    return { wireModelId: resolveAntigravityWireModelId(modelId, baseUrl) };
+    const wireModelId = resolveAntigravityWireModelId(modelId, baseUrl);
+    return suffixThoughtWire(wireModelId, options?.includeThoughts);
   }
 
   // Rule 1b: single-wire-id Gemini model whose tiers ride on thinkingLevel. Without
@@ -809,13 +842,13 @@ export function resolveAntigravityEffortWireModel(
     const requested = suffixTiered && effort
       ? resolveAntigravityThinkingLevel(effort) ?? effort
       : effort;
-    if (requested && requested in effortMap) {
+    if (requested && Object.hasOwn(effortMap, requested)) {
       const wireModelId = effortMap[requested]!;
-      // The suffix already names the tier; see ANTIGRAVITY_SUFFIX_TIER_MODELS.
-      return suffixTiered ? { wireModelId } : { wireModelId, thinkingLevel: requested };
+      return suffixTiered ? suffixThoughtWire(wireModelId, options?.includeThoughts)
+        : { wireModelId, thinkingLevel: requested };
     }
     const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]!;
-    return { wireModelId: effortMap[defaultEffort]! };
+    return suffixThoughtWire(effortMap[defaultEffort]!, options?.includeThoughts);
   }
 
   // Rule 4: Claude models — effort via thinkingConfig only (no suffix variants).
