@@ -1227,6 +1227,7 @@ export function bridgeToResponsesSSE(
                 && !toolCallArgumentsUsable(currentToolCall.args)
               ) {
                 failCurrentToolCall();
+                flushHiddenReasoningEnvelope();
                 const failure = responseError(
                   502,
                   "upstream_error",
@@ -1559,6 +1560,7 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) failCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               releasePendingWebSources();
+              flushHiddenReasoningEnvelope();
             })) return;
             // #1926 gap 2 residual: this beat callback is synchronous, so the durability
             // barrier is not awaited on the stall-timeout kill path. The in-memory store is

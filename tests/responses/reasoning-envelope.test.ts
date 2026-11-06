@@ -196,6 +196,53 @@ describe("pending signature terminal safety", () => {
       });
     }
   }
+  for (const afterOutput of [false, true]) {
+    test(`malformed tool termination preserves signature afterOutput=${afterOutput}`, async () => {
+      /** Emit an invalid call followed by a provider signature and explicit call end. */
+      async function* upstream(): AsyncGenerator<AdapterEvent> {
+        yield { type: "tool_call_start", id: "call_malformed", name: "read" };
+        yield { type: "tool_call_delta", arguments: "{" };
+        yield { type: "thinking_signature", signature: "malformed-sig", ...(afterOutput ? { afterOutput: true } : {}) };
+        yield { type: "tool_call_end" };
+        yield { type: "done", usage };
+      }
+      const wire = await new Response(bridgeToResponsesSSE(upstream(), "m")).text();
+      const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      const done = events.filter(event => event.type === "response.output_item.done");
+      const tool = done.find(event => event.item.type === "function_call");
+      const carrier = done.find(event => event.item.encrypted_content);
+      expect(tool.item.status).toBe("incomplete");
+      expect(events.filter(event => event.type === "response.function_call_arguments.done")).toHaveLength(0);
+      expect(decodeReasoningEnvelope(carrier?.item.encrypted_content ?? "")).toEqual({ sig: "malformed-sig", ...(afterOutput ? { aft: tool.item.id } : {}) });
+      expect(events.find(event => event.type === "response.failed").response.output).toEqual(done.map(event => event.item));
+      expect(events.filter(event => event.type === "response.completed")).toHaveLength(0);
+    });
+  }
+  for (const afterOutput of [false, true]) {
+    test(`undeclared tool termination preserves signature afterOutput=${afterOutput}`, async () => {
+      /** Retain a completed allowed call while rejecting a later undeclared call. */
+      async function* upstream(): AsyncGenerator<AdapterEvent> {
+        yield { type: "tool_call_start", id: "call_allowed", name: "read" };
+        yield { type: "tool_call_delta", arguments: "{}" };
+        yield { type: "tool_call_end" };
+        yield { type: "thinking_signature", signature: "undeclared-sig", ...(afterOutput ? { afterOutput: true } : {}) };
+        yield { type: "tool_call_start", id: "call_forbidden", name: "undeclared" };
+      }
+      const wire = await new Response(bridgeToResponsesSSE(
+        upstream(), "m", undefined, undefined, undefined, undefined, 2000,
+        { declaredToolNames: new Set(["read"]), enforceDeclaredToolNames: true },
+      )).text();
+      const events = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      const done = events.filter(event => event.type === "response.output_item.done");
+      const tool = done.find(event => event.item.type === "function_call");
+      const carrier = done.find(event => event.item.encrypted_content);
+      expect(tool.item.status).toBe("completed");
+      expect(done.filter(event => event.item.type === "function_call").map(event => event.item.name)).toEqual(["read"]);
+      expect(decodeReasoningEnvelope(carrier?.item.encrypted_content ?? "")).toEqual({ sig: "undeclared-sig", ...(afterOutput ? { aft: tool.item.id } : {}) });
+      expect(events.find(event => event.type === "response.failed").response.output).toEqual(done.map(event => event.item));
+      expect(events.filter(event => event.type === "response.completed")).toHaveLength(0);
+    });
+  }
   for (const ending of ["eof", "throw"] as const) {
     for (const earlyEnd of [false, true]) {
       test(`late tool signature survives ${ending}, earlyEnd=${earlyEnd}`, async () => {

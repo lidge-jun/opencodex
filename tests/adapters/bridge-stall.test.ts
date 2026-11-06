@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE } from "../../src/bridge";
 import type { AdapterEvent } from "../../src/types";
+import { decodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 
 async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?: string; data: Record<string, unknown> }[]> {
   const reader = stream.getReader();
@@ -49,6 +50,55 @@ const flush = async () => {
 };
 
 describe("bridge stall watchdog budget", () => {
+  for (const hidden of [false, true]) {
+    for (const earlyEnd of [false, true]) {
+      test(`stall preserves late signature, hidden=${hidden}, earlyEnd=${earlyEnd}`, async () => {
+        const { timers, tick } = beatSeam();
+        const stalled = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let cancelled = 0;
+        async function* upstream(): AsyncGenerator<AdapterEvent> {
+          yield { type: "thinking_delta", thinking: "signed thought" };
+          yield { type: "tool_call_start", id: "call_stall", name: "read" };
+          yield { type: "tool_call_delta", arguments: "{}" };
+          if (earlyEnd) yield { type: "tool_call_end" };
+          yield { type: "thinking_signature", signature: "stall-sig", afterOutput: true };
+          stalled.resolve();
+          await release.promise;
+        }
+        const framesPromise = collectSse(bridgeToResponsesSSE(
+          upstream(), "model", undefined, undefined, undefined,
+          () => { cancelled++; release.resolve(); }, 500,
+          { stallTimeoutSec: 1, hideThinkingSummary: hidden, timers },
+        ));
+        try {
+          await stalled.promise;
+          // Clear the last upstream activity, then exhaust the two-tick stall budget.
+          tick(); tick(); tick();
+          const frames = await framesPromise;
+          const added = frames.filter(frame => frame.event === "response.output_item.added").map(frame => frame.data);
+          const done = frames.filter(frame => frame.event === "response.output_item.done").map(frame => frame.data);
+          expect(added.map(event => event.output_index)).toEqual(added.map((_, index) => index));
+          expect(done.map(event => event.output_index)).toEqual(added.map(event => event.output_index));
+          const items = done.map(event => event.item as Record<string, unknown>);
+          const tool = items.find(item => item.type === "function_call")!;
+          expect(tool.status).toBe(earlyEnd ? "completed" : "incomplete");
+          const carriers = items.filter(item => typeof item.encrypted_content === "string");
+          expect(carriers).toHaveLength(1);
+          expect(decodeReasoningEnvelope(carriers[0]!.encrypted_content as string)).toEqual({
+            sig: "stall-sig", aft: tool.id, ...(hidden ? { txt: "signed thought" } : {}),
+          });
+          const terminal = frames.filter(frame => frame.event === "response.incomplete");
+          expect(terminal).toHaveLength(1);
+          expect(stallReason(terminal[0]!)).toBe("upstream_stall_timeout");
+          expect((terminal[0]!.data.response as Record<string, unknown>).output).toEqual(items);
+          expect(frames.some(frame => frame.event === "response.completed" || frame.event === "response.failed")).toBe(false);
+          expect(cancelled).toBe(1);
+        } finally { release.resolve(); }
+      });
+    }
+  }
+
   test("a disabled budget (stallTimeoutSec: 0) does not kill a silent upstream on the first beat", async () => {
     // Regression: resolveStallTimeoutSec(0) used to floor to 1s, and maxStallTicks then rounded to
     // 0, so `++stallTicks >= 0` tripped the watchdog on the very first silent beat — killing a
