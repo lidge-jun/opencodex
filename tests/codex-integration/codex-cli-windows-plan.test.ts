@@ -12,6 +12,10 @@ import { runCodexCliUpdatePlanInWorker } from "../../src/codex/cli-update-job-wo
 import { withWindowsCodexCliPlanToolchain, windowsCodexCliPlanRefusalForTests } from "../../src/codex/cli-windows-plan-provenance";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
+import { createManagementSessionControl, initializeManagementAuthState, issueGuiSession,
+  managementPrincipal, managementSessionIssuance, requireManagementAuth } from "../../src/server/management-auth";
+import { consumeGuiPairingGrant, createGuiPairingGrant } from "../../src/server/gui-session";
+import { assertNotRealHomeUnderTest, isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
 import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
@@ -245,20 +249,57 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
   expect(plan.planId).toMatch(/^[a-f0-9]{32}$/);
   expect(plan).toMatchObject({ applicable: false, refusal: "windows_apply_disabled" });
 
+  expect(isTestHomeGuardArmed()).toBe(true);
+  assertNotRealHomeUnderTest(f.deps.configDir);
   const oldHome = process.env.OPENCODEX_HOME;
+  const oldAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   process.env.OPENCODEX_HOME = f.deps.configDir;
+  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx_admin_windows_plan_fixture";
   try {
-    const request = new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
-      headers: { "content-type": "application/json" },
+    const origin = "http://127.0.0.1:10100";
+    const config = { hostname: "127.0.0.1", port: 10100, providers: {} } as import("../../src/types").OcxConfig;
+    const state = initializeManagementAuthState(config);
+    if (!state.available) throw new Error("fixture management authority unavailable");
+    const baseHeaders = { Host: "127.0.0.1:10100", Origin: origin, "User-Agent": "windows-plan-fixture" };
+    const ordinary = issueGuiSession(new Request(`${origin}/`, { headers: baseHeaders }), config, state);
+    if (!ordinary) throw new Error("ordinary fixture session unavailable");
+    const grant = createGuiPairingGrant(origin, config, state);
+    const exchange = new Request(`${origin}/opencodex-session`, { method: "POST", headers: baseHeaders });
+    const paired = consumeGuiPairingGrant(exchange, { grant: grant.grant }, config, state, Date.now(), {
+      ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: origin,
+    });
+    if (!paired || "allowed" in paired) throw new Error("fixture pairing redemption refused");
+    expect(paired.issuance).toBe("pairing");
+    expect(state.pairingGrants.size).toBe(0);
+    const requestFor = (session: typeof paired) => new Request(`${origin}/api/codex/cli-update/apply`, { method: "POST",
+      headers: { ...baseHeaders, "content-type": "application/json", "X-OpenCodex-API-Key": session.token,
+        "X-OpenCodex-GUI-Origin": origin, "X-OpenCodex-CSRF-Token": session.csrfToken },
       body: JSON.stringify({ requestId: "windows-nonapplicable-plan-001", planId: plan.planId, confirmed: true }) });
-    const ctx: ManagementContext = { req: request, url: new URL(request.url),
-      config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
-      deps: {}, version: "test", principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: null,
-      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
-      syncClaudeAgentDefsBestEffort: async () => {} };
-    const response = await handleCodexCliUpdateRoutes(ctx);
+    const control = createManagementSessionControl(state);
+    const contextFor = (req: Request): ManagementContext => {
+      expect(requireManagementAuth(req, state, config)).toBeNull();
+      const principal = managementPrincipal(req, state, config);
+      expect(principal).toBe("gui-session");
+      return { req, url: new URL(req.url), config, deps: {}, version: "test", principal: principal!,
+        trustedLoopbackIngress: true, guiSessionIssuance: managementSessionIssuance(req, state), sessionControl: control,
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+    };
+    const unpairedRequest = requestFor(ordinary);
+    expect(control.isPaired(unpairedRequest, config)).toBe(false);
+    const denied = await handleCodexCliUpdateRoutes(contextFor(unpairedRequest));
+    expect(denied?.status).toBe(403);
+    expect(await denied?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
+    expect(denied?.headers.get("Retry-After")).toBeNull();
+    expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
+
+    const pairedRequest = requestFor(paired);
+    expect(control.isPaired(pairedRequest, config)).toBe(true);
+    expect(managementSessionIssuance(pairedRequest, state)).toBe("pairing");
+    const response = await handleCodexCliUpdateRoutes(contextFor(pairedRequest));
     expect(response?.status).toBe(503);
     expect(await response?.json()).toEqual({ error: "unsafe_store" });
+    expect(response?.headers.get("Retry-After")).toBeNull();
     expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
 
     let leaseAttempts = 0, installAttempts = 0;
@@ -271,6 +312,7 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     expect(installAttempts).toBe(0);
   } finally {
     if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+    if (oldAdmin === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = oldAdmin;
   }
 });
 
