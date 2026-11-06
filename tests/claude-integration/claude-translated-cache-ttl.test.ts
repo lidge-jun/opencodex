@@ -7,6 +7,7 @@ import { callerCacheRetention } from "../../src/claude/inbound";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 
 // A combo route declines the native Messages lane, so the anthropic adapter places its own
 // breakpoints. Their TTL follows the operator setting, then the caller's explicit TTLs, then the
@@ -161,7 +162,7 @@ describe("callerCacheRetention walks every block container", () => {
 describe("translated Claude lane system breakpoint", () => {
   // Claude Code marks its stable system block and ends with a per-turn env block. The single
   // joined system block put the breakpoint on the env bytes, so no turn could read the cache.
-  async function wireSystem(env: string, markPrefix = true): Promise<unknown[]> {
+  async function wireSystem(env: string, markPrefix = true, stable = "Stable instructions."): Promise<unknown[]> {
     const wires: string[] = [];
     const fetch = (async (_input: unknown, init?: RequestInit) => {
       wires.push(String(init?.body));
@@ -178,7 +179,7 @@ describe("translated Claude lane system breakpoint", () => {
         model: MODEL, max_tokens: 64,
         system: [
           { type: "text", text: "You are Claude Code." },
-          { type: "text", text: "Stable instructions.", ...(markPrefix ? { cache_control: { type: "ephemeral" } } : {}) },
+          { type: "text", text: stable, ...(markPrefix ? { cache_control: { type: "ephemeral" } } : {}) },
           { type: "text", text: env },
         ],
         messages: [{ role: "user", content: "Hi." }],
@@ -207,5 +208,16 @@ describe("translated Claude lane system breakpoint", () => {
     expect(JSON.stringify(system[0])).toContain("Stable instructions.");
     expect(JSON.stringify(system[0])).toContain("<env>turn</env>");
     expect((system[0] as { cache_control?: unknown }).cache_control).toBeDefined();
+  });
+
+  test("identity normalization preserves the marked boundary across changing tails", async () => {
+    const first = await wireSystem("<env>first</env>", true, NEUTRAL_IDENTITY_LINE);
+    const second = await wireSystem("<env>second</env>", true, NEUTRAL_IDENTITY_LINE);
+    const cached = (system: unknown[]) => system.filter(b => (b as { cache_control?: unknown }).cache_control);
+    expect(cached(first)).toHaveLength(1);
+    expect(cached(first)).toEqual(cached(second));
+    expect(JSON.stringify(cached(first))).toContain(MODEL);
+    expect(JSON.stringify(cached(first))).not.toContain("<env>");
+    expect(JSON.stringify(first.at(-1))).toContain("<env>first</env>");
   });
 });

@@ -791,8 +791,9 @@ function messagesToAnthropicFormat(
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
   // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
-  const prefix = parsed._anthropicSystemCachePrefix;
-  const head = systemParts[0];
+  const prefix = parsed._anthropicSystemCachePrefix
+    ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
+  const head = prefix && systemParts[0] ? identifyRoutedModel(systemParts[0], parsed.modelId) : systemParts[0];
   const texts = prefix && head?.startsWith(`${prefix}\n\n`)
     ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
     : [systemParts.join("\n\n")];
