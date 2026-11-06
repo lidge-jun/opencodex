@@ -118,8 +118,8 @@ export async function deliverAdapterResponse(
         }
       } catch (error) {
         if (!(error instanceof ResponseBodyInactivityError)) throw error;
-        yield { type: "error", message: "Upstream recovery response body stalled before completing",
-          status: 504, errorType: "upstream_error" };
+        yield { type: "error", message: error.message,
+          status: 504, errorType: "upstream_error", code: "upstream_stall_timeout" };
       }
     }, () => transportState.activeAdapter.name, !isNonReplayableResponse(upstreamResponse), upstreamResponse);
 
@@ -155,9 +155,10 @@ export async function deliverAdapterResponse(
         if (error instanceof ResponseBodyInactivityError) {
           yield {
             type: "error",
-            message: "Upstream response body stalled before completing",
+            message: error.message,
             status: 504,
             errorType: "upstream_error",
+            code: "upstream_stall_timeout",
           };
           return;
         }
@@ -358,7 +359,7 @@ export async function deliverAdapterResponse(
       }
     } catch (error) {
       if (error instanceof ResponseBodyInactivityError) {
-        return formatErrorResponse(504, "upstream_error", "Upstream response body stalled before completing");
+        return formatErrorResponse(504, "upstream_error", error.message);
       }
       throw error;
     } finally {

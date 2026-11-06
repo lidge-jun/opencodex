@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses";
+import { httpStatusFromTerminalError } from "../../src/lib/errors";
+import { errorDetailFor } from "../../src/usage/error-detail";
+import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -438,9 +441,32 @@ describe("server terminal guard integration", () => {
 
     const text = await response.text();
     expect(text.match(/event: response\.failed/g)?.length).toBe(1);
-    expect(text).toContain("Upstream response body stalled before completing");
+    const failure = JSON.parse(text.split("\n").find(line => line.startsWith("data: ") && line.includes('"type":"response.failed"'))!.slice(6));
+    expect(failure.response.error).toMatchObject({ code: "upstream_stall_timeout", message: "Upstream response body stalled for 1000ms" });
+    expect(httpStatusFromTerminalError(failure.response.error)).toBe(504);
+    const log: RequestLogContext = { model: "fixture-model", provider: "fixture" };
+    inspectResponseLogJson(log, JSON.stringify(failure));
+    expect(log.terminalHttpStatus).toBe(504);
+    expect(errorDetailFor({ status: log.terminalHttpStatus!, upstreamError: log.upstreamError }).failureDetail)
+      .toEqual({ code: "body_stall", value: 1000 });
     expect(text).toContain('"type":"upstream_error"');
     expect(text).not.toContain("proxy_error");
+  });
+
+  test("a stalled buffered body preserves 504 and the bounded stall detail", async () => {
+    takeInheritedSpendHome();
+    const stallConfig = { ...config, stallTimeoutSec: 1 } as unknown as OcxConfig;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({}), {
+      status: 200, headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "se-claude-opus-4.8", input: "Hi", stream: false }),
+    }), stallConfig, { model: "", provider: "" });
+    expect(response.status).toBe(504);
+    const body = await response.json() as { error: { message: string } };
+    expect(errorDetailFor({ status: response.status, upstreamError: body.error.message }).failureDetail)
+      .toEqual({ code: "body_stall", value: 1000 });
   });
 
   test("terminal-guard 429 wait longer than the stall budget still succeeds (heartbeats)", async () => {
