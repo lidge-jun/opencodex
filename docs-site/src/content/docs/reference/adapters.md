@@ -364,7 +364,8 @@ MiMo model Command Code serves.
 - For translated OAuth requests, caller system instructions move to the beginning of the first
   user turn. If the history starts with an assistant message, the adapter adds an initial user
   turn for those instructions. The compatibility identity and OpenCodex tool contract remain in
-  top-level `system`; the relocated instructions retain an explicit prompt-cache breakpoint.
+  top-level `system`. The relocated instructions no longer have system-role precedence.
+  When prompt caching is enabled, the adapter adds an explicit breakpoint to those instructions.
   API-key requests and native Messages passthrough keep their existing instruction placement.
 - Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
   options to preserve their prompt-cache prefix. Summary requests disable search/media
