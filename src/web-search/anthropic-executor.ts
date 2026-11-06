@@ -23,6 +23,8 @@ import { BASE_INSTRUCTION, IMAGE_INSTRUCTION, type SidecarOutcome, type SidecarS
 const ANTHROPIC_MAX_USES = 3;
 /** Answer budget; the injected tool_result is clamped downstream, so this only bounds the sidecar turn. */
 const ANTHROPIC_MAX_TOKENS = 8192;
+/** A terminal exactly at the wire cap must prove EOF without holding a reader indefinitely. */
+const ANTHROPIC_CAP_EOF_PROBE_TIMEOUT_MS = 1_000;
 
 function isRec(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -140,7 +142,7 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
       if (eventValue !== null) eventName = eventValue;
     }
     if (eventName === "ping") return;
-    if (dataLines.length === 0 && rawFrame.split("\n").every(line => !line.trim() || line.startsWith(":"))) return;
+    if (dataLines.length === 0 && (complete || rawFrame.split("\n").every(line => !line.trim() || line.startsWith(":")))) return;
     const dataLine = dataLines.join("\n");
     if (!dataLine || dataLine === "[DONE]") { invalidFrame(); return; }
     let data: unknown;
@@ -160,6 +162,27 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
     }
   };
 
+  const verifyEofAtCap = async (): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expired = false;
+    const timeout = new Promise<null>(resolve => {
+      timer = setTimeout(() => { expired = true; resolve(null); }, ANTHROPIC_CAP_EOF_PROBE_TIMEOUT_MS);
+    });
+    try {
+      for (;;) {
+        if (expired) return false;
+        const next = await Promise.race([reader.read(), timeout]);
+        if (expired || next === null) return false;
+        if (next.done) return true;
+        if (next.value.byteLength > 0) return false;
+        // A source that synchronously produces empty chunks must not starve the probe timer.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      }
+    } catch {
+      return false;
+    } finally { if (timer !== undefined) clearTimeout(timer); }
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -173,10 +196,22 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
       buffer = (buffer + decoder.decode(accepted, { stream: true })).replace(/\r\n/g, "\n").replace(/\r(?!$)/g, "\n");
       processCompleteFrames();
       if (responseBytes >= MAX_SIDECAR_RESPONSE_BYTES) {
-        // Keep the frames already folded above, drop the unterminated tail, and do not wait on
-        // upstream teardown.
+        // A trailing CR can complete a CR-only terminal delimiter at the exact boundary.
+        if (buffer.endsWith("\r")) {
+          buffer = buffer.slice(0, -1) + "\n";
+          processCompleteFrames();
+        }
+        const trailingCommentsOnly = buffer.split("\n").every(line => !line.trim() || line.startsWith(":"));
+        // A complete terminal at the cap needs bounded EOF proof; an oversized chunk or partial
+        // trailing frame is an error. Never await upstream teardown.
+        if (!sawMessageStop || value.byteLength > remaining || !trailingCommentsOnly) {
+          failure ??= "anthropic sidecar response exceeded the byte limit";
+        } else if (!failure && !sawToolResultError
+          && (stopReason === undefined || stopReason === "end_turn" || stopReason === "stop_sequence")
+          && !(await verifyEofAtCap())) {
+          failure = "anthropic sidecar response byte limit reached before EOF";
+        }
         cancelReaderWithoutWaiting(reader, "sidecar response byte limit reached");
-        failure ??= "anthropic sidecar response exceeded the byte limit";
         buffer = "";
         break;
       }
