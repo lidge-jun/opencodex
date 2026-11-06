@@ -234,7 +234,7 @@ and missing, reused-call-id, or backwards call/result pairs are left for the ups
 than guessed.
 
 Codex code mode may record a yield marker and later `notify()`/wait outputs for one `call_id`. `mergeRepeatedResponsesToolOutputs` joins these at the first output in arrival order only when exactly one call precedes all results; strings stay strings and mixed outputs become content parts.
-The Chat route folds adjacent repeats into the first tool reply, including synthetic orphan calls. Later repeats retain text and media together in an identified user carrier; an open tool block closes before its deferred carrier. OpenGateway merges before adjacency projection to avoid tool-role errors.
+The Chat route folds repeats into the first tool reply, including synthetic orphan calls, only while that reply is the last emitted message and no barrier is deferred. An emitted media carrier ends that opportunity even for adjacent input results; later repeats retain text and media together in an identified user carrier, deferred until an open tool block closes. OpenGateway merges before adjacency projection to avoid tool-role errors.
 
 That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider name. Kimi's Code Plan
 Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),
