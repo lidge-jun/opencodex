@@ -1463,7 +1463,7 @@ export async function prepareResponsesRequest(
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
     if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
-      && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId)) {
+      && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
       if (policyScope.eligibility) throw new MandatoryToolChoiceUnavailableError();
       return mandatoryToolChoiceUnavailableResponse();
     }

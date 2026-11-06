@@ -59,11 +59,11 @@ function fixture(nativeOutput: Record<string, unknown>[] = [{ id: "computer_fixt
   return { config, sent };
 }
 
-function request(toolChoice: unknown, tools: unknown[], model = "chat/model"): Request {
+function request(toolChoice: unknown, tools: unknown[], model = "chat/model", input: unknown = "Use the selected tool."): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, input: "Use the selected tool.", stream: false, store: false, tools, tool_choice: toolChoice }),
+    body: JSON.stringify({ model, input, stream: false, store: false, tools, tool_choice: toolChoice }),
   });
 }
 
@@ -74,6 +74,46 @@ test("direct translated Chat rejects an unrepresentable computer_use choice befo
   expect(await response.text()).toContain("mandatory tool_choice cannot be preserved");
   expect(sent).toEqual([]);
 });
+
+test.each(["computer_use", "computer_use_preview", "file_search", "code_interpreter"])(
+  "required with only a dropped %s tool is refused before Chat sends", async type => {
+    const { config, sent } = fixture();
+    const response = await handleResponses(request("required", [{ type }]), config, {});
+    expect(response.status, await response.text()).toBe(400);
+    expect(sent).toEqual([]);
+  },
+);
+
+test("required still accepts a mixed catalog when a declared client tool survives", async () => {
+  const { config, sent } = fixture();
+  const response = await handleResponses(request("required", [{ type: "computer_use" }, clientTool]), config, {});
+  expect(response.status, await response.text()).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.body.tool_choice).toBe("required");
+  expect((sent[0]!.body.tools as Array<{ function: { name: string } }>).map(tool => tool.function.name)).toEqual(["shell"]);
+});
+
+test("a policy skips an empty translated required catalog and retains its native tools", async () => {
+  const { config, sent } = fixture();
+  const tools = [{ type: "computer_use" }];
+  const response = await handleResponses(request("required", tools, "policy/tools"), config, {});
+  expect(response.status, await response.text()).toBe(200);
+  expect(sent.map(row => row.provider)).toEqual(["responses"]);
+  expect(sent[0]!.body.tool_choice).toBe("required");
+  expect(sent[0]!.body.tools).toEqual(tools);
+});
+
+for (const type of ["additional_tools", "tool_search_output"]) for (const model of ["chat/model", "policy/tools"]) {
+  test(`required retains a client tool loaded from ${type} on ${model}`, async () => {
+    const { config, sent } = fixture();
+    const input = [{ type, role: "developer", call_id: "search-fixture", status: "completed", tools: [clientTool] },
+      { role: "user", content: "Use shell." }];
+    const response = await handleResponses(request("required", [{ type: "file_search" }], model, input), config, {});
+    expect(response.status, await response.text()).toBe(200);
+    expect(sent.map(row => row.provider)).toEqual(["chat"]);
+    expect((sent[0]!.body.tools as Array<{ function: { name: string } }>).map(tool => tool.function.name)).toEqual(["shell"]);
+  });
+}
 
 test("native Chat cannot replace a required named MCP tool with a same-named client function", async () => {
   const { config, sent } = fixture();

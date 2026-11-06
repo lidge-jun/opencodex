@@ -260,6 +260,16 @@ describe("Copilot Auto through the Responses pipeline", () => {
       expect(fallbackBodies).toHaveLength(1);
     }
   });
+  test("negotiated Chat refuses required with an empty translated catalog before inference", async () => {
+    await accounts();
+    const f = fixture();
+    const response = await handleResponses(request("hello", false, {
+      tool_choice: "required", tools: [{ type: "computer_use" }],
+    }), f.config, {});
+    expect(response.status, await response.text()).toBe(400);
+    expect(f.sent.filter(call => call.path === "/models/session/intent")).toHaveLength(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
   test("a denied combo send reservation retains the local refusal instead of claiming target exhaustion", async () => {
     await accounts();
     let reservations = 0;

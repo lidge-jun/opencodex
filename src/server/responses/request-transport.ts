@@ -439,7 +439,7 @@ export async function prepareResponsesTransport(
       ? resolveWireProtocolOverride(route.providerName, selected.modelId, selected.provider, inboundWire, staticPolicy)
       : { ...selected.provider, adapter: autoAdapter };
     if (negotiatedWire.adapter === "openai-chat"
-      && !chatCanPreserveMandatoryToolChoice(requestParsed._rawBody, negotiatedWire, selected.modelId)) {
+      && !chatCanPreserveMandatoryToolChoice(requestParsed._rawBody, negotiatedWire, selected.modelId, requestParsed.context.tools ?? [])) {
       throw new MandatoryToolChoiceUnavailableError();
     }
     // Credential admission may persist a refresh or newer manual selection. Publish request-local

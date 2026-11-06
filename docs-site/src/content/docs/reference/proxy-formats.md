@@ -54,6 +54,7 @@ Before sending, the proxy rejects a mandatory tool choice that the selected Chat
 represent, such as `computer_use` or a required allowed-tool list containing MCP selections. A direct
 route returns HTTP 400 without an upstream request. A routing profile can continue to another
 originally eligible destination under its configured fallback policy, preserving the original choice.
+An explicit nonempty catalog with `required` is also refused when no tool survives in the full parsed Chat catalog, including tools supplied through input items. A surviving client tool keeps a mixed catalog eligible; hosted web search retains its later sidecar handling.
 If no eligible target remains and all attempted candidates were locally incompatible, the profile returns the same HTTP 400 diagnostic;
 the Responses API returns HTTP 503 for an exhausted combo, naming the mandatory-tool constraint. Other failures
 retain their existing error handling. Copilot Auto uses the final negotiated model and wire for this check.
