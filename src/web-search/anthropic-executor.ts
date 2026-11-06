@@ -10,7 +10,9 @@ import { sidecarThinkingOff } from "../adapters/anthropic-model-contract";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
+import { estimateTokens } from "../lib/token-estimate";
 import { sseFieldValue } from "../lib/sse-decoder";
 import {
   MAX_SIDECAR_RESPONSE_BYTES,
@@ -251,6 +253,7 @@ export async function runAnthropicWebSearch(
   settings: SidecarSettings,
   abortSignal?: AbortSignal,
   config?: OcxConfig,
+  dispatchSidecarSend?: AuxiliaryModelSend,
 ): Promise<SidecarOutcome> {
   const url = anthropicHelperMessagesUrl(provider.baseUrl);
   let token: string;
@@ -302,17 +305,29 @@ export async function runAnthropicWebSearch(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
   const t0 = Date.now();
+  const serializedBody = JSON.stringify(body);
+  const sendTarget = {
+    poolId: snapshot?.provider ?? providerName,
+    // Anthropic has no durable identity scope; never borrow the routed Codex account.
+    identityId: "",
+    targetKey: `anthropic-web-search:${crypto.randomUUID()}`,
+    // This helper contains only text/tool definitions; include the full wire envelope conservatively.
+    estimate: { inputTokens: Math.max(1, estimateTokens(serializedBody, settings.model)), outputCeilingTokens: body.max_tokens },
+  };
   try {
     const res = await fetchWithResetRetry(
       // The replay needs `keepalive: false` to leave the half-closed pooled socket; Bun has
       // ignored a bare `Connection: close` (oven-sh/bun#20492).
-      recovery => dispatch(url, applyUpstreamRecoveryInit({
-        method: "POST",
-        redirect: "manual",
-        headers,
-        body: JSON.stringify(body),
-        signal: linkedSignal.signal,
-      }, recovery)),
+      recovery => {
+        const run = () => dispatch(url, applyUpstreamRecoveryInit({
+          method: "POST",
+          redirect: "manual",
+          headers,
+          body: serializedBody,
+          signal: linkedSignal.signal,
+        }, recovery));
+        return dispatchSidecarSend ? dispatchSidecarSend(sendTarget, run) : run();
+      },
       { replaySafe: true, abortSignal: linkedSignal.signal, label: "web-search-sidecar-anthropic" },
     );
     // Guard before any branch reads the body: the failure branch's `res.text()` ran ahead of
@@ -337,7 +352,8 @@ export async function runAnthropicWebSearch(
       detachBodyGuard();
     }
   } catch (e) {
-    const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
+    const kind = e instanceof SendBudgetExhaustedError ? "send_budget_exhausted"
+      : e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[web-search] anthropic sidecar ${kind} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
     return { text: "", sources: [], error: `anthropic sidecar ${kind}` };
   } finally {

@@ -17,7 +17,12 @@ export interface RequestSpendSettlement {
   settle(usage: TerminalSpendUsage | undefined): void;
 }
 
-export interface SpendTargetIdentity extends SpendScopes { readonly targetKey?: string }
+export interface SpendTargetIdentity extends SpendScopes {
+  readonly targetKey?: string;
+  /** Helpers preserve other bookings and do not own the routed model's terminal usage. */
+  readonly auxiliary?: boolean;
+  readonly estimate?: { inputTokens: number; outputCeilingTokens: number };
+}
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
   rebindTarget(target: SpendTargetIdentity, ordinal: number): boolean;
@@ -83,7 +88,8 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean }>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const auxiliarySendIds = new Set<string>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
@@ -112,7 +118,7 @@ export function createRequestSpendTracker(
     retryPhysicalReports();
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
-    const terminal = entries.at(-1)?.[1].sendId;
+    const terminal = entries.findLast(([, entry]) => entry.sendId && !auxiliarySendIds.has(entry.sendId))?.[1].sendId;
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
@@ -270,20 +276,21 @@ export function createRequestSpendTracker(
         if (same) return same[1].seed;
       }
       // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay live.
-      for (const [oldKey, state] of seeds) if (!state.started) {
+      for (const [oldKey, state] of seeds) if (!state.started && !target.auxiliary) {
         if (!retireSeed(oldKey, state.seed)) return undefined;
       }
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates(), admissionPolicy }, tracker);
+      const estimate = target.auxiliary ? target.estimate : undefined;
+      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...(estimate ?? estimates()), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
         refusal(decision.denial);
         return undefined;
       }
       seededAccounting = true;
-      seeds.set(key, { seed: decision.seed, started: false, reported: false });
+      seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true, estimate });
       return decision.seed;
     },
     beginReporter() {
@@ -349,7 +356,8 @@ export function createRequestSpendTracker(
       entry.reportPending = true;
       const firstOrdinal = [...physical.entries()].filter(([, send]) => send.seed === seed).map(([order]) => order).sort((a, b) => a - b)[0];
       const sendId = entry.sendId ??= ordinal === firstOrdinal ? seed.sendId : randomUUID();
-      const estimate = entry.estimate ??= estimates();
+      if (state.auxiliary) auxiliarySendIds.add(sendId);
+      const estimate = entry.estimate ??= state.estimate ?? estimates();
       if (sendId !== seed.sendId && !ledger().reserveReportedFromSeed(seed, { sendId, ...estimate })) {
         throw new Error("Already-sent spend could not be persisted");
       }
@@ -362,7 +370,7 @@ export function createRequestSpendTracker(
       finalizeSeeds();
     },
     charge(options?: Parameters<RequestSendObserver["charge"]>[0]): boolean {
-      tracker.startRequest?.();
+      tracker.startRequest?.(options?.scopes);
       // A send that has already left is RECORDED, never refused: the tokens are spent, and a
       // booking the ledger drops is a booking the ceiling can never see. This is the reporting
       // transports' path -- the passthrough ladder reports through `onSendsConsumed` after the
@@ -374,14 +382,15 @@ export function createRequestSpendTracker(
         else if (!claimWorkflowSend()) return false;
       }
       if (!alreadySent && tracker.enforced) {
-        const seed = tracker.ensureSeed({ targetKey: options?.targetKey });
+        const seed = tracker.ensureSeed({ ...options?.scopes, targetKey: options?.targetKey,
+          ...(options?.auxiliary ? { auxiliary: true, estimate: options.estimate } : {}) });
         if (!seed) return false;
         options?.onReserved?.({ ledger: ledger(), sendId: seed.sendId });
         return true;
       }
       const sendId = randomUUID();
       const bookedLedger = ledger();
-      const scopes: SpendScopes = {
+      const scopes: SpendScopes = options?.scopes ? selectedScopes(options.scopes) : {
         ...(rootId !== undefined ? { rootId } : {}),
         // Already the privacy-safe label the request log uses, and the ledger aliases it
         // again on the way to disk. A raw credential never reaches either.
@@ -398,8 +407,7 @@ export function createRequestSpendTracker(
         sendId,
         scopes,
         admissionPolicy,
-        inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
-        outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0,
+        ...(options?.auxiliary && options.estimate ? options.estimate : estimates()),
         ...(alreadySent ? { alreadySent: true } : {}),
       });
       if (!decision.reserved) {
@@ -412,6 +420,7 @@ export function createRequestSpendTracker(
       }
       if (!alreadySent) options?.onReserved?.({ ledger: bookedLedger, sendId });
       live.push(sendId);
+      if (options?.auxiliary) auxiliarySendIds.add(sendId);
       if (options?.deferDispatch) pendingDispatch.add(sendId);
       else confirmOlderSends();
       // It has already left, so the reservation cannot be handed back for free: from here only
@@ -450,18 +459,19 @@ export function createRequestSpendTracker(
       if (seededAccounting) { tracker.requestFinalSettlement(usage); return; }
       try {
         if (!terminalProcessed && live.length > 0) {
-          const terminal = live[live.length - 1] as string;
+          const terminalIndex = live.findLastIndex(sendId => !auxiliarySendIds.has(sendId));
+          const terminal = live[terminalIndex];
           const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
-          if (reported) {
+          if (terminal && reported) {
             ledger().settle(terminal, {
               inputTokens: usage?.inputTokens ?? 0,
               outputTokens: usage?.outputTokens ?? 0,
             });
-          } else {
+          } else if (terminal) {
             // The response never reported usage. It may still have been billed.
             ledger().markLost(terminal);
           }
-          live.pop();
+          if (terminalIndex >= 0) live.splice(terminalIndex, 1);
           terminalProcessed = true;
         }
         while (live.length > 0) {

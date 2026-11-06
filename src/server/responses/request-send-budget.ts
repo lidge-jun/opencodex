@@ -18,6 +18,7 @@ import type {
   RequestExecutionBudget,
   SendClass,
   SingleUseDispatchPermit,
+  AuxiliaryModelSend,
 } from "../../lib/request-execution-budget";
 
 /**
@@ -113,6 +114,27 @@ export function createResponsesSendBudget(
   };
   // Capture at helper creation, before another leg can replace the pending handoff.
   const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) => physicalSendReporter(permit);
+  // A helper owns a fresh booking, never a routed leg's permit or target-local retry counter.
+  const dispatchSidecarSend: AuxiliaryModelSend = async (target, dispatch) => {
+    if (!isRequestExecutionBudget(sendBudget)) {
+      if (!reserveWorkflowSend(workflowRootId, currentWorkflowBudgetPolicy())) throw new SendBudgetExhaustedError();
+      sendBudget.used++;
+      return dispatch();
+    }
+    const decision = sendBudget.reserveDispatch({
+      sendClass: "auxiliary", targetKey: target.targetKey,
+      spendScopes: { poolId: target.poolId, identityId: target.identityId ?? "" },
+      spendEstimate: target.estimate,
+    });
+    if (!decision.allowed) throw new SendBudgetExhaustedError();
+    const permit = decision.permit;
+    const run = () => {
+      if (!permit.use()) throw new SendBudgetExhaustedError();
+      return dispatch();
+    };
+    try { return await (permit.execute ? permit.execute(run) : run()); }
+    finally { permit.release(); }
+  };
   // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
   // dropping the record to make room would hand the fan-out a fresh allowance, which is the
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
@@ -381,6 +403,7 @@ export function createResponsesSendBudget(
      */
     get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
+    dispatchSidecarSend,
     adapterDispatchBudget,
     refundableAdapterDispatchBudget,
     noteAdapterPhysicalSend,

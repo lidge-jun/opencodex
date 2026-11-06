@@ -97,6 +97,18 @@ cleanup releases an unsent hop once, except while an asynchronous runTurn produc
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
 Direct callers retain their prior hop reporting contract.
 
+## Auxiliary search inference
+
+Anthropic web-search helpers in Responses, RunTurn and the passthrough bridge reserve an `auxiliary`
+send before each physical attempt. The shared request's base/total allowance and root count apply in
+both spend modes. A helper cannot consume the final recovery reserve, change routed target history,
+or settle a parent's initial/hop permit. Unsent reservations remain refundable.
+Each query invocation owns a fresh seed; bounded reset retries reuse that seed but book each send.
+Admission uses the helper's text/tool estimate and wire output ceiling, its Anthropic pool, and no
+identity scope inherited from the routed account. Pending parent seeds stay live. Routed terminal usage
+settles only a routed send; helper usage remains conservatively unresolved until independently known.
+Standalone search without a request budget and non-Anthropic search backends retain their existing paths.
+
 ## Credential-hop reservations
 
 A credential rotation inside one provider's roster reserves a hop from the request's shared send

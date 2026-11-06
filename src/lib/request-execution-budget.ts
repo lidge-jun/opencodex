@@ -25,7 +25,14 @@ export type SendClass =
   | "repair"
   | "account-failover"
   | "combo-failover"
+  | "auxiliary"
   | "prewarm";
+
+/** A helper inference owns its admission and never consumes a routed leg's permit. */
+export type AuxiliaryModelSend = <T>(
+  target: Pick<SpendScopes, "identityId"> & { poolId: string; targetKey: string; estimate: { inputTokens: number; outputCeilingTokens: number } },
+  dispatch: () => Promise<T>,
+) => Promise<T>;
 
 export interface RequestExecutionBudgetPolicy {
   /** Every model send of one logical request, including the reserve. */
@@ -68,6 +75,9 @@ export interface DispatchIntent {
    * different thing and must not be folded in here.
    */
   readonly targetKey: string;
+  /** Auxiliary inference uses its own provider scopes without rebasing the routed target. */
+  readonly spendScopes?: Pick<SpendScopes, "identityId" | "poolId">;
+  readonly spendEstimate?: { inputTokens: number; outputCeilingTokens: number };
   /**
    * False refuses the dispatch outright. A request whose execution state upstream is unknown
    * is not replayable just because budget remains (RFC 9110 9.2.2).
@@ -153,14 +163,14 @@ export interface RequestSendObserver {
    * would cross a ceiling never joins the total, the total stays just under, and the ceiling
    * never fires for any later request either.
    */
-  charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; workflowAlreadyCounted?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string }): boolean;
+  charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; workflowAlreadyCounted?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string; scopes?: Pick<SpendScopes, "identityId" | "poolId">; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }): boolean;
   /** Confirm the exact reservation once its dispatch is known. */
   readonly enforced?: boolean;
   readonly policyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   /** Capture request policy at its first admission or actual physical start. */
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
-  ensureSeed?(target: SpendScopes & { targetKey?: string }, proof?: SpendReservationProof): SpendSeed | undefined;
+  ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }, proof?: SpendReservationProof): SpendSeed | undefined;
   beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
   dispatch?(proof: SpendReservationProof): void;
   /** Give back a booking whose send never happened. */
@@ -544,7 +554,9 @@ function createRequestExecutionBudgetWithLedger(
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
       if (counter.spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
 
-      const changesTarget = lastTargetKey !== undefined && lastTargetKey !== intent.targetKey;
+      const auxiliary = intent.sendClass === "auxiliary";
+      const countedExternally = !auxiliary && intent.countedExternally === true;
+      const changesTarget = !auxiliary && lastTargetKey !== undefined && lastTargetKey !== intent.targetKey;
       const isAlternateTarget = changesTarget || intent.sendClass === "account-failover"
         || intent.sendClass === "combo-failover";
       const chargesTransition = changesTarget && intent.rebasedTarget !== true;
@@ -577,9 +589,12 @@ function createRequestExecutionBudgetWithLedger(
       // an earlier seed to turn a request-total exception into a token-ceiling exception.
       const spendTargetKey = recovery
         ? `${recovery.reservationPrefix}:${++recovery.reservationSequence}` : intent.targetKey;
-      budget.startRequest?.({ targetKey: spendTargetKey });
+      const spendTarget = { ...(auxiliary ? { ...intent.spendScopes, estimate: intent.spendEstimate, auxiliary: true } : {}), targetKey: spendTargetKey };
+      budget.startRequest?.(spendTarget);
       let spendProof: SpendReservationProof | undefined;
-      if (observer && !observer.charge({ targetKey: spendTargetKey, deferDispatch: true, onReserved: proof => { spendProof = proof; } })) {
+      if (observer && !observer.charge({ targetKey: spendTargetKey,
+        ...(auxiliary ? { scopes: intent.spendScopes, estimate: intent.spendEstimate, auxiliary: true } : {}),
+        deferDispatch: true, onReserved: proof => { spendProof = proof; } })) {
         return { allowed: false, reason: "spend-exhausted" };
       }
 
@@ -590,19 +605,19 @@ function createRequestExecutionBudgetWithLedger(
       counter.spent += 1;
       if (recovery) recoverySends += 1;
       const receipt = { targetKey: intent.targetKey };
-      targetReservations.push(receipt);
-      if (intent.countedExternally === true) counter.pendingExternalSends.add(receipt);
+      if (!auxiliary) targetReservations.push(receipt);
+      if (countedExternally) counter.pendingExternalSends.add(receipt);
       if (drawsReserve) reserveSpent = true;
       if (chargesAlternateTarget) alternateTargetSends += 1;
       if (chargesTransition) targetTransitions += 1;
-      lastTargetKey = intent.targetKey;
+      if (!auxiliary) lastTargetKey = intent.targetKey;
 
       let producer: ReturnType<NonNullable<RequestSendObserver["beginReporter"]>> | undefined;
       let executing = false;
       let physicalOrdinal: number | undefined;
       const startPhysical = (): boolean => {
         if (observer?.enforced !== true) return budget.claimWorkflowSend!();
-        const seed = observer.ensureSeed?.({ targetKey: spendTargetKey }, spendProof);
+        const seed = observer.ensureSeed?.(spendTarget, spendProof);
         if (!seed) return false;
         const ordinal = budget.claimPhysicalSend?.();
         if (ordinal === undefined) return false;
@@ -629,18 +644,18 @@ function createRequestExecutionBudgetWithLedger(
         },
         use(): boolean {
           if (settled !== "open") return false;
-          if (intent.countedExternally !== true && !startPhysical()) return false;
+          if (!countedExternally && !startPhysical()) return false;
           settled = "used";
-          if (intent.countedExternally !== true && spendProof) observer?.dispatch?.(spendProof);
+          if (!countedExternally && spendProof) observer?.dispatch?.(spendProof);
           return true;
         },
         assumeCharge(): boolean {
-          if (settled !== "open" || (intent.countedExternally === true && !counter.pendingExternalSends.has(receipt))) return false;
+          if (settled !== "open" || (countedExternally && !counter.pendingExternalSends.has(receipt))) return false;
           if (!startPhysical()) return false;
           settled = "used";
           // The booking this reservation made for an external reporter is now owned by the
           // caller. Close only its own receipt so a later reporter cannot spend it again.
-          if (intent.countedExternally === true) counter.pendingExternalSends.delete(receipt);
+          if (countedExternally) counter.pendingExternalSends.delete(receipt);
           if (spendProof) observer?.dispatch?.(spendProof);
           return true;
         },
@@ -649,7 +664,7 @@ function createRequestExecutionBudgetWithLedger(
           settled = "released";
           // An externally counted reservation the reporter already settled paid for a send
           // that physically happened. Refunding it would hand the request a free send back.
-          if (intent.countedExternally === true) {
+          if (countedExternally) {
             if (!counter.pendingExternalSends.delete(receipt)) return;
           }
           counter.spent -= 1;
@@ -658,8 +673,10 @@ function createRequestExecutionBudgetWithLedger(
           if (drawsReserve) reserveSpent = false;
           if (chargesAlternateTarget) alternateTargetSends -= 1;
           if (chargesTransition) targetTransitions -= 1;
-          targetReservations.splice(targetReservations.indexOf(receipt), 1);
-          lastTargetKey = targetReservations.at(-1)?.targetKey;
+          if (!auxiliary) {
+            targetReservations.splice(targetReservations.indexOf(receipt), 1);
+            lastTargetKey = targetReservations.at(-1)?.targetKey;
+          }
         },
       };
       let preflightClaimed = false;
@@ -672,7 +689,7 @@ function createRequestExecutionBudgetWithLedger(
         return true;
       }, claim: () => {
         if (preflightClaimed || settled === "released"
-          || (intent.countedExternally === true ? !counter.pendingExternalSends.has(receipt) : settled !== "open")) return undefined;
+          || (countedExternally ? !counter.pendingExternalSends.has(receipt) : settled !== "open")) return undefined;
         preflightClaimed = true;
         return spendProof;
       } });
