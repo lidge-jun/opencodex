@@ -1824,6 +1824,60 @@ references are preserved. Flattening is lossy: branch constraints
 disappear and later property definitions win, so tools must validate arguments. Existing Zen and
 Azure schema compatibility rules remain in effect.
 
+### Verify a custom remote gateway
+
+Before registering a gateway, obtain its authorized Chat Completions base URL, API key, and
+supported model IDs from its operator. For example, `https://api.example.com/v1` is a placeholder,
+not a working endpoint. Start the proxy if it is not already running, then choose **Custom** in the
+dashboard, name it `my-gateway`, select `openai-chat`, and enter the authorized URL and key in the
+form. Save it without putting the key in commands or shared examples. A saved provider is not yet
+proof that discovery or inference works.
+
+Check the boundaries separately, using the configured local port if it differs from the default:
+
+```sh
+curl -fsS http://127.0.0.1:10100/healthz
+ocx ready
+ocx provider test my-gateway
+ocx models live --provider my-gateway --json
+```
+
+Health and readiness describe the proxy; they do not prove the upstream can generate text. The
+provider test without `--model` checks discovery, not inference. `applicable: false` can mean there
+is no live discovery endpoint for a static catalog; it is not a successful inference test. A public
+model list also need not validate the key. If discovery fails or no model appears, check the URL,
+credentials, upstream access, and provider configuration before selecting a model.
+
+In the live catalog inspect the actual `id`, `namespaced`, `disabled`, and
+`initialSelectionPending` fields. Initial selection can leave models off or pending; see
+[initial model selection](/reference/configuration/providers/#initial-model-selection).
+Enable only the intended model using its exact routed `namespaced` value from the list:
+
+```sh
+ocx models enable '<exact-namespaced-id-from-list>'
+```
+
+The routed ID includes the provider prefix, such as `my-gateway/model-id`; a bare native model ID
+can select a different route. The upstream `id` can itself contain slashes. Use the exact catalog
+value rather than a display name or a guessed reasoning suffix: a suffix may be a distinct upstream
+model ID, while reasoning effort is a separate setting. When needed, run `ocx sync` to update the
+client catalog. Preserve active work; do not make restarting a client or proxy the default recovery
+step. See the [CLI reference](/reference/cli/providers-accounts/) for details.
+
+To verify one actual completion on a supported key-auth remote configuration, use the **raw
+upstream `id`** from the row, not its `my-gateway/` routed prefix:
+
+```sh
+ocx provider test my-gateway --model '<raw-upstream-id>'
+```
+
+This sends one bounded request, consumes quota, and may incur charges. Confirm the default-No prompt
+only after approving that cost; non-interactive or JSON use requires `--yes`. An
+`applicable: false` completion result sends no completion and is not a pass, even if the command
+exits zero. A successful text completion does not establish tool calling, structured output,
+continuation behavior, or the model's actual identity; upstream-reported identity is metadata. For
+later compatibility issues, reproduce the affected protocol separately with a sanitized fixture.
+
 ## Approval reviewer per provider
 
 Codex asks a second model to review approval requests, and takes that reviewer from
