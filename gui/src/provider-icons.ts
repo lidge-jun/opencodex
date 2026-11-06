@@ -1,4 +1,5 @@
 import type { TFn, TKey } from "./i18n/shared";
+import { isOpenAIDecisionProvider } from "./jev-decision-service";
 
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
@@ -52,6 +53,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "ollama-cloud": "ollama-color.svg",
   openai: "openai.svg",
   "openai-apikey": "openai.svg",
+  "openai-decisions": "openai.svg",
   "opencode-free": "opencode.svg",
   "opencode-go": "opencode.svg",
   "opencode-zen": "opencode.svg",
@@ -130,6 +132,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   chatgpt: "ChatGPT",
   openai: "OpenAI (Codex login)",
   "openai-apikey": "OpenAI API",
+  "openai-decisions": "OpenAI Decisions",
   "azure-openai": "Azure OpenAI",
  "cloudflare-ai-gateway": "Cloudflare AI Gateway",
   "cloudflare-workers-ai": "Cloudflare Workers AI",
@@ -365,6 +368,13 @@ export function formatProviderDisplayName(provider: string, t: TFn): string {
 /** True for known registry/preset ids (hide ID/adapter/URL behind Advanced by default). */
 export function isCatalogProviderId(provider: string): boolean {
   return CATALOG_PROVIDER_IDS.has(provider.toLowerCase());
+}
+
+/** Service slug for setup screens; the saved adapter id stays unchanged. */
+export function formatProviderAdapterName(provider: string, adapter: string, baseUrl: string): string {
+  return isOpenAIDecisionProvider({ name: provider, adapter, baseUrl })
+    ? "openai-decisions"
+    : adapter;
 }
 
 /** Distinguishable lowercase-dash slug for a provider id (command-code -> commandcode-auth). */

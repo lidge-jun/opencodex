@@ -23,6 +23,7 @@ let originalFetch: typeof globalThis.fetch;
 
 /** Two presets whose ids resolve a mark, and one that cannot. */
 const PRESETS = [
+  { id: "openai-decisions", label: "OpenAI Decisions", adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions", defaultModel: "gpt-6-luna", auth: "key", dashboardUrl: "https://platform.openai.com/api-keys", note: "Decision service." },
   { id: "cerebras", label: "Cerebras", adapter: "openai-completions", baseUrl: "https://api.cerebras.ai/v1", auth: "key" },
   { id: "together", label: "Together", adapter: "openai-completions", baseUrl: "https://api.together.xyz/v1", auth: "key" },
   // No asset upstream: this row must still draw the fallback tile.
@@ -88,6 +89,22 @@ async function mountCatalog() {
 function catalogRows(): HTMLElement[] {
   return [...host.querySelectorAll<HTMLElement>(".provider-catalog-rows .list-row")];
 }
+
+test("OpenAI Decisions shows its brand and preserves the internal adapter when selected", async () => {
+  await mountCatalog();
+  const row = catalogRows().find(row => row.textContent?.includes("OpenAI Decisions"))!;
+  expect(row.querySelector(".provider-icon")?.innerHTML).toContain("/provider-icons/openai.svg");
+  expect(row.textContent).not.toContain("jev-decision");
+  expect(row.querySelector(".chip")?.textContent).toBe("openai-decisions");
+
+  await act(async () => { row.click(); });
+  const adapter = host.querySelector<HTMLOptionElement>('option[value="jev-decision"]')!;
+  expect(adapter.textContent).toBe("openai-decisions");
+  expect((adapter.parentElement as HTMLSelectElement).value).toBe("jev-decision");
+  expect(host.textContent).toContain("Add the provider, then test its connection.");
+  expect(host.textContent).not.toContain("models are auto-discovered");
+  expect(host.textContent).toContain("Decision model");
+});
 
 /*
  * Every row, including the one whose vendor publishes nothing. A provider with no

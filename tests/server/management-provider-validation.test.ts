@@ -2300,9 +2300,9 @@ describe("provider management validation", () => {
       const openAiIds = presetResponse.providers
         .map(preset => preset.id)
         .filter(id => id === "chatgpt" || id === "openai" || id.startsWith("openai-"));
-      expect(openAiIds).toEqual(["openai", "openai-apikey"]);
+      expect(openAiIds).toEqual(["openai", "openai-apikey", "openai-decisions"]);
       expect(presetResponse.providers.filter(row => !openAiIds.includes(row.id))).toEqual(
-        deriveProviderPresets().filter(row => !["openai", "openai-apikey"].includes(row.id)),
+        deriveProviderPresets().filter(row => !openAiIds.includes(row.id)),
       );
     } finally {
       await server.stop(true);

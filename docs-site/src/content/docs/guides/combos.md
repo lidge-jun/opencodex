@@ -350,6 +350,26 @@ A pin makes provider cache reuse possible; whether the provider actually serves 
 depends on the provider, the account and a stable prompt prefix. `--session-pin -` (API `null`)
 turns it off, switching away from JEV removes it, and saves from the dashboard editor keep it.
 
+### OpenAI Decisions
+
+The **OpenAI Decisions** preset sends routing decisions directly to OpenAI using your API key.
+It uses the same Combo routing path as the other decision services; the selected model still
+runs through its existing provider connection.
+
+1. In **Providers → Add provider**, select **OpenAI Decisions**. Keep the endpoint
+   `https://api.openai.com/v1/decisions` and decision model `gpt-6-luna`.
+2. Add your OpenAI API key. A restricted key with **Decisions → Write** is sufficient;
+   model listing and Responses permissions are not needed for the decision service.
+3. Select **Test connection**, then **Create OpenAI router**. Review the allowed target models
+   and reasoning efforts, and save the Combo.
+4. Select the saved Combo in your client. Its routing decisions use OpenAI; its target requests
+   use the providers you selected in the Combo.
+
+You can also select this provider in an existing JEV Combo's **Decision method** section.
+The saved configuration keeps `strategy: "jev"` and names the provider in `decisionProvider`.
+The preset uses the shared `jev-decision` adapter internally. The decision model remains editable
+in provider Settings; use a model supported by [OpenAI's Decisions API](https://developers.openai.com/api/docs/guides/decisions).
+
 ### Decision method
 
 `strategy: "jev"` asks a decision backend to choose the first eligible target and a compatible

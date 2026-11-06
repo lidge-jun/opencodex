@@ -130,6 +130,22 @@ import {
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
+    // Verified 2026-11-06: developers.openai.com/api/docs/guides/decisions documents the endpoint,
+    // Bearer auth, and gpt-6-luna; openai.com/policies/services-agreement permits API integration.
+    id: "openai-decisions",
+    label: "OpenAI Decisions",
+    baseUrl: "https://api.openai.com/v1/decisions",
+    adapter: "jev-decision",
+    authKind: "key",
+    credentialOnly: true,
+    dashboardUrl: "https://platform.openai.com/api-keys",
+    defaultModel: "gpt-6-luna",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    note: "Use your OpenAI API key with Decisions write permission for automatic model routing. Decision requests go directly to OpenAI; selected models use their existing provider connections.",
+  },
+  {
     // Verified 2026-09-21: docs.typesafe.ai/introduction/quickstart and /api document the fixed
     // endpoint, Bearer auth, jev-latest, and TYPESAFE_API_KEY; typesafe.ai/legal/mca permits API integration.
     id: "jev",

@@ -1031,7 +1031,10 @@ describe("JEV configurable decision provider", () => {
     }).questions.route.criteria)).toHaveLength(26);
   });
 
-  test("Decisions endpoint permits more than 26 choices up to 255", async () => {
+  test.each([
+    ["https://ai-gateway.vercel.sh/v1/systemone", "https://ai-gateway.vercel.sh/v1/decisions", "openai/gpt-6-luna"],
+    ["https://api.openai.com/v1/decisions", "https://api.openai.com/v1/decisions", "gpt-6-luna"],
+  ])("Decisions endpoint %s uses the Decisions format and enforces 2..255 choices", async (baseUrl, endpoint, model) => {
     const calls: Call[] = [];
     const post = recordingPost(calls, () => Response.json({
       answers: { route: { choice: "p/m-0:low" } },
@@ -1044,12 +1047,12 @@ describe("JEV configurable decision provider", () => {
       modelProfile: `profile for m-${index}`,
     }));
     const manyFallback = { targetKey: many[0]!.key, effort: "low" as const };
-    const vercelConfig: OcxConfig = {
+    const decisionConfig: OcxConfig = {
       providers: {
-        "vercel-decider": {
+        decider: {
           adapter: "jev-decision",
-          baseUrl: "https://ai-gateway.vercel.sh/v1/systemone",
-          defaultModel: "tev1:4b",
+          baseUrl,
+          defaultModel: model,
           apiKey: "fixture-key",
         },
       },
@@ -1058,20 +1061,41 @@ describe("JEV configurable decision provider", () => {
       body: { ...decisionBody, input: [{ role: "user", content: "hello" }, { type: "function_call_output", output: "ok" }] },
       candidates: many,
       fallback: manyFallback,
-      config: vercelConfig,
-      decisionProvider: "vercel-decider",
+      config: decisionConfig,
+      decisionProvider: "decider",
       post,
     });
     expect(decision.gate).toBe("apply");
     expect(decision.targetKey).toBe("p/m-0");
     expect(decision.effort).toBe("low");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+    expect(calls[0]!.url).toBe(endpoint);
+    expect(String(calls[0]!.init.body)).not.toContain("JEV");
     const parsed = JSON.parse(String(calls[0]!.init.body));
     expect(parsed.questions[0].choices).toHaveLength(27);
     expect(parsed.input).toContain("Task: hello");
     expect(parsed.input).toContain("Signals: tool_history");
     expect(parsed.questions[0].choices[0].description).toContain("profile for m-0");
+
+    for (const [optionCount, expectedGate] of [[1, "no_choices"], [2, "apply"], [255, "apply"], [256, "invalid"]] as const) {
+      const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
+      const boundedCandidates: JevCandidate[] = Array.from({ length: Math.ceil(optionCount / efforts.length) }, (_, index) => ({
+        key: `p/m-${index}`,
+        provider: "p",
+        model: `m-${index}`,
+        reasoningEfforts: efforts.slice(0, Math.min(efforts.length, optionCount - index * efforts.length)),
+      }));
+      calls.length = 0;
+      const result = await resolveJevDecision({
+        body: decisionBody, candidates: boundedCandidates, fallback: manyFallback,
+        config: decisionConfig, decisionProvider: "decider", post,
+      });
+      expect(result.gate).toBe(expectedGate);
+      expect(calls).toHaveLength(expectedGate === "apply" ? 1 : 0);
+      if (expectedGate === "apply") {
+        expect(JSON.parse(String(calls[0]!.init.body)).questions[0].choices).toHaveLength(optionCount);
+      }
+    }
   });
 
   test("a self-hosted row sends only its own key and never a TypeSafe credential", async () => {

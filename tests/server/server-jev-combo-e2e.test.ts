@@ -573,6 +573,39 @@ describe("JEV Combo runtime", () => {
     expect(childBodies[0]).not.toHaveProperty("thinking");
   });
 
+  test("OpenAI Decisions selects a target and effort through the existing provider connection", async () => {
+    const config = makeConfig({ jevFetch: (async () => { throw new Error("TypeSafe must not be called"); }) as typeof fetch });
+    const calls: Array<{ url: string; authorization: string | null; body: Record<string, unknown> }> = [];
+    config.providers["openai-decisions"] = {
+      adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions", authMode: "key",
+      apiKey: "decision-test-key", defaultModel: "gpt-6-luna", liveModels: false,
+      fetch: (async (input, init) => {
+        const body = JSON.parse(String(init?.body));
+        calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), body });
+        expect(body.questions[0].choices.some((choice: { value: string }) => choice.value === "sol/gpt-5.6-sol:high")).toBe(true);
+        return Response.json({ answers: [{ name: "route", choice: "sol/gpt-5.6-sol:high", confidence: 0.9 }] });
+      }) as typeof fetch,
+    };
+    config.combos!.auto!.decisionProvider = "openai-decisions";
+    const parentLogCtx: RequestLogContext = { model: "", provider: "" };
+    const children: Record<string, unknown>[] = [];
+    const response = await execute(config, body => {
+      children.push(body);
+      return success(String(body.model));
+    }, { input: "Use the selected model for this request." }, undefined, parentLogCtx);
+    expect(response.status).toBe(200);
+    expect(children).toEqual([expect.objectContaining({
+      model: "sol/gpt-5.6-sol", input: "Use the selected model for this request.",
+      reasoning: expect.objectContaining({ effort: "high" }),
+    })]);
+    expect(parentLogCtx.jevDecision).toMatchObject({ gate: "apply", selected: { provider: "sol", model: "gpt-5.6-sol", effort: "high" } });
+    expect(calls).toEqual([expect.objectContaining({
+      url: "https://api.openai.com/v1/decisions", authorization: "Bearer decision-test-key",
+      body: expect.objectContaining({ model: "gpt-6-luna", input: expect.any(String), questions: expect.any(Array) }),
+    })]);
+    expect(config.providers.sol.apiKey).toBe("key-gpt-5.6-sol");
+  });
+
   test("routes through a self-hosted decision service on loopback without any TypeSafe credential", async () => {
     process.env.TYPESAFE_API_KEY = "env-typesafe-secret";
     process.env.JEV_API_KEY = "env-jev-secret";

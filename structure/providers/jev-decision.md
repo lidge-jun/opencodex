@@ -26,12 +26,18 @@ env reference or foreign keychain entry makes it unusable). The row's `authMode`
 Destinations targeting Vercel AI Gateway (`ai-gateway.vercel.sh`) normalize automatically to `/decisions`
 via `jevDecisionEndpointUrl` in `src/combos/jev-decision-contract.ts` and `systemOneEndpoint` in
 `src/server/management/decision-discovery.ts` (stripping trailing `/systemone` or slashes).
+The `openai-decisions` preset selects the same Decisions wire format for the exact endpoint
+`https://api.openai.com/v1/decisions`, using the configured model and only that row's own key.
+Other origins, ports and paths retain the existing System One behavior. Connection tests use
+this decision endpoint without model discovery or inference calls; the native Settings allow an
+editable decision model instead of an inference-model picker. The native OpenAI setup is
+[documented in the Combo guide](../../docs-site/src/content/docs/guides/combos.md#openai-decisions).
 Shared validation rejects public HTTP hosts; the local-literal check is tested against the transport allowlist. `allowLocalCleartextPost` in
 `src/lib/provider-outbound.ts` admits `http:` only with the row's explicit `allowPrivateNetwork`, a
 `localhost`/loopback/RFC 1918/ULA host whose answers stay in that set, and no proxy. Options go out as
 strings (Ollama requires them); under 2 fail open locally (`no_choices`). For option ceilings, Ollama
 System One endpoints allow 2..26 options (`SELF_HOSTED_MIN_OPTIONS = 2`, `SELF_HOSTED_MAX_OPTIONS = 26`),
-while Vercel Decisions endpoints admit 2..255 options (`DECISIONS_MIN_OPTIONS = 2`, `DECISIONS_MAX_OPTIONS = 255`).
+while OpenAI and Vercel Decisions endpoints admit 2..255 options (`DECISIONS_MIN_OPTIONS = 2`, `DECISIONS_MAX_OPTIONS = 255`).
 Option counts exceeding the endpoint's maximum fail open locally (`invalid`), unusable rows reuse `missing_key`,
 and `decisionTimeoutMs` (1000..120000) replaces the 4 s default.
 

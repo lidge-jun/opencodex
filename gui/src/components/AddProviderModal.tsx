@@ -395,6 +395,7 @@ export default function AddProviderModal({
         providerId={notePreset.id}
         label={notePreset.label}
         adapter={notePreset.adapter}
+        baseUrl={notePreset.baseUrl}
         note={notePreset.note}
         onClose={() => setNotePreset(null)}
       />

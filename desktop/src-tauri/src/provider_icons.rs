@@ -66,6 +66,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("ollama-cloud", "ollama-color.svg"),
     ("openai", "openai.svg"),
     ("openai-apikey", "openai.svg"),
+    ("openai-decisions", "openai.svg"),
     ("opencode-free", "opencode.svg"),
     ("opencode-go", "opencode.svg"),
     ("opencode-zen", "opencode.svg"),

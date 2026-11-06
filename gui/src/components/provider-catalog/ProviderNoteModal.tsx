@@ -16,17 +16,20 @@ import { useCallback, useEffect, useId, useRef } from "react";
 import { useT } from "../../i18n/shared";
 import { IconX } from "../../icons";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
+import { formatProviderAdapterName } from "../../provider-icons";
 
 export default function ProviderNoteModal({
   providerId,
   label,
   adapter,
+  baseUrl,
   note,
   onClose,
 }: {
   providerId: string;
   label: string;
   adapter: string;
+  baseUrl: string;
   note: string;
   onClose: () => void;
 }) {
@@ -64,7 +67,7 @@ export default function ProviderNoteModal({
       <div className="modal-card provider-note-card" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <h3 id={titleId} className="provider-note-title">
-            <ProviderIcon name={providerId} adapter={adapter} cls="provider-icon provider-icon-sm" />
+            <ProviderIcon name={providerId} adapter={adapter} baseUrl={baseUrl} cls="provider-icon provider-icon-sm" />
             {label}
           </h3>
           <button type="button" className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}>
@@ -72,7 +75,7 @@ export default function ProviderNoteModal({
           </button>
         </div>
         <div id={bodyId} className="provider-note-body">
-          <code className="chip">{adapter}</code>
+          <code className="chip">{formatProviderAdapterName(providerId, adapter, baseUrl)}</code>
           <p className="modal-desc provider-note-text">{note}</p>
         </div>
         <div className="modal-actions">

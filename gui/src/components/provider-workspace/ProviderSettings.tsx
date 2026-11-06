@@ -15,10 +15,11 @@ import { readJsonIfOk } from "../../fetch-json";
 import { confirmAction } from "../../action-dialogs";
 import { createBoundedFetch } from "../../bounded-fetch";
 import { startVisibilityPoll } from "../../visibility-poll";
+import { isOpenAIDecisionProvider } from "../../jev-decision-service";
 import { useT } from "../../i18n/shared";
 import { IconLock } from "../../icons";
 import { Select } from "../../ui";
-import { isCatalogProviderId } from "../../provider-icons";
+import { formatProviderAdapterName, isCatalogProviderId } from "../../provider-icons";
 import { openAiAccountProviderState } from "../../provider-payload";
 import { canConfigureResponsesReasoningReplay } from "../../responses-reasoning-replay";
 import { ResponsesReasoningReplayControl } from "../responses-reasoning-replay-control";
@@ -312,6 +313,7 @@ function ProviderSettingsForm({
   const vertexSettings = isVertexProvider(item) && (item.name === "google-vertex" || adapter.trim() === "google");
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
 
+  const openaiDecision = isOpenAIDecisionProvider({ name: item.name, adapter, baseUrl });
   const modelOptions = useMemo(() => {
     const set = new Set(availableModels);
     if (defaultModel.trim()) set.add(defaultModel.trim());
@@ -524,18 +526,18 @@ function ProviderSettingsForm({
       </label>
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("modal.adapter")}</span>
-        {isPreset ? <input className="input" value={adapter} readOnly disabled /> : (
+        {isPreset ? <input className="input" value={formatProviderAdapterName(item.name, adapter, baseUrl)} readOnly disabled /> : (
           <Select fullWidth label={t("modal.adapter")} value={adapter} onChange={setAdapter}
-            options={adapterOptions.map(a => ({ value: a, label: a }))} />
+            options={adapterOptions.map(a => ({ value: a, label: formatProviderAdapterName(item.name, a, baseUrl) }))} />
         )}
       </label>
-      <ProviderProtocolPanel
+      {!openaiDecision && <ProviderProtocolPanel
         apiBase={apiBase}
         providerName={item.name}
         savedAdapter={item.adapter}
         draftAdapter={adapter.trim()}
         refreshKey={`${item.baseUrl}|${item.authMode ?? ""}`}
-      />
+      />}
       {hasEndpointPicker ? (
         <>
           <label className="pwi-settings-field">
@@ -591,8 +593,8 @@ function ProviderSettingsForm({
         </label>
       )}
       <label className="pwi-settings-field">
-        <span className="pwi-settings-label">{t("pws.cell.defaultModel")}</span>
-        {modelOptions.length > 0 ? (
+        <span className="pwi-settings-label">{t(openaiDecision ? "cws.jev.decisionModel" : "pws.cell.defaultModel")}</span>
+        {!openaiDecision && modelOptions.length > 0 ? (
           <Select fullWidth label={t("pws.cell.defaultModel")} value={defaultModel} onChange={setDefaultModel}
             options={[{ value: "", label: t("pws.defaultModelNone") }, ...modelOptions.map(m => ({ value: m, label: m }))]} />
         ) : (
@@ -662,7 +664,7 @@ function ProviderSettingsForm({
         <span className="pwi-settings-label">{t("pws.allowPrivateNetwork")}</span>
       </label>
       {supportsReasoningReplay && <ResponsesReasoningReplayControl checked={preserveReasoningReplay} onChange={setPreserveReasoningReplay} />}
-      <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+      {!openaiDecision && <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
         <input
           type="checkbox"
           checked={liveModels}
@@ -673,7 +675,7 @@ function ProviderSettingsForm({
           <span className="pwi-settings-label">{t("pws.liveModels")}</span>
           <span className="muted text-label" style={{ display: "block", marginTop: 2 }}>{t("pws.liveModelsDesc")}</span>
         </span>
-      </label>
+      </label>}
       <section className="pwi-pacing-card" aria-labelledby="pwi-pacing-title">
         <div className="pwi-pacing-head">
           <div><h3 id="pwi-pacing-title">{t("pws.pacingTitle")}</h3><p>{t("pws.pacingDesc")}</p></div>

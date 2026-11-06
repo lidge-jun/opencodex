@@ -21,6 +21,7 @@ import { type CatalogLoginHint } from "./login-hint-visibility";
 import CatalogAccountRow from "./CatalogAccountRow";
 import type { AccountLoginRow, AccountLoginStatus } from "./account-row-types";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
+import { formatProviderAdapterName } from "../../provider-icons";
 import { isSubscriptionCliProvider } from "../../provider-workspace/subscription-cli";
 
 export type { AccountLoginRow, AccountLoginStatus };
@@ -356,7 +357,7 @@ export default function ProviderCatalog({
               <ProviderIcon name={p.id} adapter={p.adapter} cls="provider-icon provider-icon-sm" />
               <div>
                 <div className="title">{p.label}</div>
-                <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
+                <div className="sub"><code className="chip">{formatProviderAdapterName(p.id, p.adapter, p.baseUrl)}</code>{p.note ? ` · ${p.note}` : ""}</div>
               </div>
               <div className="provider-catalog-badges">{badges(p)}</div>
             </button>

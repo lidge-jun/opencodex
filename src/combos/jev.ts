@@ -3,6 +3,7 @@ import type { JevQuotaTiers, JevQuotaDecisionSummary } from "./jev-quota-config"
 import { boundedJevQuotaPayload, jevQuotaCandidates, withJevQuotaSummary } from "./jev-quota-route";
 import { JEV_MAX_REQUEST_BYTES as REQUEST_LIMIT } from "./jev-service-exchange";
 import type { providerOutboundPost } from "../lib/provider-outbound";
+import { registryEntryForProviderDestination } from "../providers/registry";
 import type { OcxComboDefaultEffort, OcxConfig } from "../types";
 import {
   JEV_MAX_CANDIDATE_FIELD_CHARS,
@@ -772,13 +773,15 @@ export async function probeJevDecisionProvider(
   options: Pick<ResolveJevDecisionOptions, "signal" | "post"> = {},
 ): Promise<JevDecisionProbeResult> {
   const canonical = name === JEV_PROVIDER_ID;
-  const label = canonical ? "TypeSafe JEV" : "JEV decision service";
+  const provider = config.providers[name];
+  const openaiDecision = provider && registryEntryForProviderDestination(provider)?.id === "openai-decisions";
+  const label = canonical ? "TypeSafe JEV" : openaiDecision ? "OpenAI Decisions" : "JEV decision service";
   const probe = { targetKey: "jev/probe", effort: null } as const;
   const decision = await resolveJevDecision({
     body: {
       input: canonical
         ? "Verify the configured TypeSafe JEV decision service."
-        : "Verify the configured JEV decision service.",
+        : `Verify the configured ${label}.`,
     },
     candidates: [{
       key: probe.targetKey,
@@ -799,7 +802,7 @@ export async function probeJevDecisionProvider(
     ok: false,
     latencyMs: decision.latencyMs,
     error: decision.gate === "missing_key"
-      ? (canonical ? "TypeSafe JEV API key is not configured" : "JEV decision service is disabled or not configured")
-      : `${canonical ? "TypeSafe JEV decision probe" : "JEV decision service probe"} failed (${decision.gate})`,
+      ? (canonical ? "TypeSafe JEV API key is not configured" : `${label} is disabled or not configured`)
+      : `${canonical ? "TypeSafe JEV decision probe" : `${label} probe`} failed (${decision.gate})`,
   };
 }

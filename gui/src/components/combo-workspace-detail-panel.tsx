@@ -332,6 +332,7 @@ export function DetailPanel({
               <span className="field-label">{t("cws.strategy")}</span>
               <StrategySeg
                 value={draft.strategy}
+                decisionProvider={providers.find(provider => provider.name === draft.decisionProvider)}
                 disabled={busy}
                 onChange={(strategy) => updateDraft((d) => ({ ...d, strategy }))}
               />

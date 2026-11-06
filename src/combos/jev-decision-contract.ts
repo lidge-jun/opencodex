@@ -57,7 +57,8 @@ export function jevDecisionEndpointUrl(baseUrl: string): string {
 export function isDecisionsEndpoint(url: string): boolean {
   try {
     const parsed = new URL(url.trim());
-    return parsed.hostname === "ai-gateway.vercel.sh";
+    return parsed.hostname === "ai-gateway.vercel.sh"
+      || parsed.origin === "https://api.openai.com" && parsed.pathname === "/v1/decisions";
   } catch {
     return false;
   }

@@ -8,6 +8,9 @@ import {
 } from "../../src/adapters/registry";
 import { resetMimoJwtCache } from "../../src/adapters/mimo-free";
 import { bridgeToResponsesSSE } from "../../src/bridge";
+import { captureGatherFlight } from "../../src/codex/catalog/gather-capture";
+import { refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
+import { providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { parseRequest } from "../../src/responses/parser";
 import { buildToolBridgeMaps } from "../../src/server/responses";
@@ -417,7 +420,12 @@ describe("registry-derived routed tool conformance", () => {
         expect(getAdapterDefinition(provider.adapter), provider.id).toBeUndefined();
         expect(provider.liveModels, provider.id).toBe(false);
         expect(provider.models, provider.id).toBeUndefined();
-        expect(provider.defaultModel, provider.id).toBeUndefined();
+        // A decision engine may need a defaultModel, but must never enter an inference gather.
+        const captured = captureGatherFlight({
+          port: 0,
+          providers: { [provider.id]: providerConfigSeed(provider) },
+        }, () => refreshingModelsAuthResolver);
+        expect(captured.providers, provider.id).toEqual([]);
         continue;
       }
       expect(getAdapterDefinition(provider.adapter), provider.id).toBeDefined();

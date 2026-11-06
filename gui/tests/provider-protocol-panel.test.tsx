@@ -150,3 +150,36 @@ test("provider settings without an API target fetch nothing for the panel", asyn
   expect(container.querySelector('[data-testid="provider-protocol-panel"]')).toBeNull();
   await act(async () => { root.unmount(); });
 });
+
+
+test.each(["openai-decisions", "my-decider"])("OpenAI decision model can be changed to an unlisted model for %s", async name => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  const patches: unknown[] = [];
+  let save: (() => Promise<boolean>) | null = null;
+  try {
+    await act(async () => {
+      root.render(<LanguageProvider><ProviderSettings
+        item={{ name, adapter: "jev-decision", baseUrl: "https://api.openai.com/v1/decisions", defaultModel: "gpt-6-luna", authMode: "key" }}
+        availableModels={["gpt-6-luna"]}
+        onUpdateProvider={async (_name, patch) => { patches.push(patch); return { ok: true }; }}
+        onRegisterSave={handler => { save = handler; }}
+      /></LanguageProvider>);
+    });
+    const label = [...container.querySelectorAll("label")].find(row => row.textContent?.startsWith("Decision model"));
+    const input = label?.querySelector("input");
+    expect(input).toBeDefined();
+    expect(input).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, "future-decision-model");
+      input!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => { expect(await save!()).toBe(true); });
+    expect(patches).toEqual([expect.objectContaining({ defaultModel: "future-decision-model", adapter: "jev-decision" })]);
+    expect(calls).toEqual([]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

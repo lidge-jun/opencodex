@@ -17,6 +17,34 @@ import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/d
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 
 describe("provider dashboard payload", () => {
+  test("OpenAI Decisions saves its own API-key row from the dedicated preset", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "openai-decisions");
+    expect(preset).toMatchObject({
+      label: "OpenAI Decisions",
+      adapter: "jev-decision",
+      auth: "key",
+      baseUrl: "https://api.openai.com/v1/decisions",
+      defaultModel: "gpt-6-luna",
+    });
+    expect(buildProviderPostBody(preset!, {
+      name: preset!.id,
+      adapter: preset!.adapter,
+      authMode: preset!.auth,
+      baseUrl: preset!.baseUrl,
+      defaultModel: preset!.defaultModel!,
+      apiKey: "decision-test-key",
+    })).toEqual({
+      name: "openai-decisions",
+      provider: {
+        adapter: "jev-decision",
+        authMode: "key",
+        baseUrl: "https://api.openai.com/v1/decisions",
+        defaultModel: "gpt-6-luna",
+        apiKey: "decision-test-key",
+      },
+    });
+  });
+
   test("keeps OpenAI in the account entry even when its provider is absent", () => {
     expect(codexAccountProviderNames({
       custom: { authMode: "forward" },

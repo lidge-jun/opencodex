@@ -538,6 +538,62 @@ describe("bounded JEV service exchange", () => {
     });
 
     test.each([
+      "https://api.openai.com/v1/decisions",
+      "  https://API.OPENAI.COM:443/v1/decisions  ",
+    ])("direct OpenAI endpoint %j sends a Decisions request and applies its typed answer", async (baseUrl) => {
+      const sent: Array<{ url: string; body: string; authorization: string | null }> = [];
+      const decision = await resolveJevDecision({
+        ...options({
+          config: config("decider", { ...row, baseUrl, defaultModel: "gpt-6-luna" }),
+          post: async (_name, _provider, url, init) => {
+            sent.push({ url, body: String(init.body), authorization: new Headers(init.headers).get("authorization") });
+            return Response.json({
+              model: "gpt-6-luna",
+              answers: [{
+                type: "choice", name: "route", choice: "a/m2:low", confidence: 0.8,
+                probabilities: [
+                  { value: "a/m1:low", probability: 0.1 },
+                  { value: "a/m2:low", probability: 0.9 },
+                ],
+              }],
+              usage: { input_tokens: 40, output_tokens: 0, total_tokens: 40 },
+            });
+          },
+        }),
+        body: { input: "Choose a target." }, candidates, fallback,
+      });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.url).toBe(baseUrl.trim());
+      expect(sent[0]!.authorization).toBe("Bearer fixture-own-key");
+      const body = JSON.parse(sent[0]!.body);
+      expect(body).toMatchObject({
+        model: "gpt-6-luna",
+        input: "Task: Choose a target.",
+        questions: [{ name: "route", type: "choice" }],
+      });
+      expect(body.state).toBeUndefined();
+      expect(body.questions[0].choices.map((choice: { value: string }) => choice.value)).toEqual(["a/m1:low", "a/m2:low"]);
+      for (const choice of body.questions[0].choices) {
+        expect(typeof choice.description).toBe("string");
+        expect(choice.description.length).toBeGreaterThan(0);
+      }
+      expect(decision).toMatchObject({ gate: "apply", targetKey: "a/m2", effort: "low", confidence: 0.8, chosenProbability: 0.9 });
+    });
+
+    test.each([
+      "https://api.openai.com.example/v1/decisions", "https://example.com/v1/decisions",
+      "https://api.openai.com/v1/systemone", "https://api.openai.com/v1/responses",
+      "https://api.openai.com/v1/decisions/other", "https://api.openai.com:8443/v1/decisions",
+    ])("%j retains the System One request format", async baseUrl => {
+      const { sent, route } = await sendTo(baseUrl);
+      const body = JSON.parse(sent[1]!.body);
+      expect(body.input).toBeUndefined();
+      expect(body.state.task).toBe("Choose a target.");
+      expect(body.questions.route.type).toBe("choice");
+      expect(route.gate).toBe("apply");
+    });
+
+    test.each([
       "https://decider.example/v1/systemone?mode=x", "https://decider.example/v1/decisions?",
       "https://decider.example/v1/systemone#part", "https://decider.example/v1/decisions#",
       "https://user:pass@example.test/v1/systemone", "https://@decider.example/v1/decisions",

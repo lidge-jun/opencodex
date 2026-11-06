@@ -69,6 +69,64 @@ describe("decision-method management routes", () => {
     expect(await response.json()).toMatchObject({ ok: true, backend: "typesafe", gate: "apply", effort: "low" });
   });
 
+  test.each([
+    ["/api/providers/test?name=openai-decisions", undefined, "jev/probe:high"],
+    ["/api/combos/decision-test", { decisionProvider: "openai-decisions" }, "probe/decision:high"],
+  ] as const)("%s probes OpenAI using only POST /v1/decisions", async (path, body, choice) => {
+    const config = makeConfig();
+    const calls: Array<{
+      url: string;
+      method: string | undefined;
+      authorization: string | null;
+      body: Record<string, unknown>;
+    }> = [];
+    config.providers["openai-decisions"] = {
+      adapter: "jev-decision",
+      baseUrl: "https://api.openai.com/v1/decisions",
+      authMode: "key",
+      apiKey: "decision-test-key",
+      defaultModel: "gpt-6-luna",
+      liveModels: false,
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body ?? "{}"));
+        calls.push({
+          url: String(input),
+          method: init?.method,
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: request,
+        });
+        // Reject other calls to catch probes that need more than Decisions write access.
+        if (String(input) !== "https://api.openai.com/v1/decisions" || init?.method !== "POST"
+          || !Array.isArray(request.questions) || typeof request.input !== "string") {
+          return Response.json({ error: "unsupported endpoint or request format" }, { status: 403 });
+        }
+        return Response.json({
+          model: "gpt-6-luna",
+          answers: [{
+            type: "choice", name: "route", choice, confidence: 0.9,
+            probabilities: [
+              { value: choice.replace(":high", ":low"), probability: 0.05 },
+              { value: choice, probability: 0.95 },
+            ],
+          }],
+          usage: { input_tokens: 40, output_tokens: 0, total_tokens: 40 },
+        });
+      }) as typeof fetch,
+    };
+    const response = await call(config, "POST", path, body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject(body
+      ? { ok: true, backend: "systemone" }
+      : { ok: true, message: "Connected. OpenAI Decisions answered a decision probe." });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: "https://api.openai.com/v1/decisions",
+      method: "POST",
+      authorization: "Bearer decision-test-key",
+      body: { model: "gpt-6-luna", questions: [{ name: "route", type: "choice" }] },
+    });
+  });
+
   test("decision-test runs an opencodex model on its own row credential", async () => {
     const judgeSeen: Array<{ url: string; body: Record<string, unknown>; authorization: string | null }> = [];
     const response = await call(makeConfig({ judgeSeen }), "POST", "/api/combos/decision-test", {

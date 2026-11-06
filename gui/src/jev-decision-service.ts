@@ -6,12 +6,14 @@
  */
 import {
   CANONICAL_JEV_DECISION_PROVIDER,
+  isDecisionsEndpoint,
   isSystemOneEndpoint,
 } from "../../src/combos/jev-decision-contract";
 import type { TKey } from "./i18n/shared";
 
 export {
   CANONICAL_JEV_DECISION_PROVIDER,
+  isDecisionsEndpoint,
   JEV_DECISION_TIMEOUT_DEFAULT_MS,
   JEV_DECISION_TIMEOUT_MAX_MS,
   JEV_DECISION_TIMEOUT_MIN_MS,
@@ -23,6 +25,15 @@ export interface JevDecisionRow {
   disabled?: boolean;
   defaultModel?: string;
   models?: readonly string[];
+}
+
+/** Match the destination, so renaming a provider does not change its service identity. */
+export function isOpenAIDecisionProvider(row: (JevDecisionRow & { name?: string }) | undefined): boolean {
+  const baseUrl = row?.baseUrl ?? "";
+  return row?.name !== CANONICAL_JEV_DECISION_PROVIDER
+    && row?.adapter === "jev-decision"
+    && isDecisionsEndpoint(baseUrl)
+    && new URL(baseUrl).hostname === "api.openai.com";
 }
 
 /**
@@ -57,7 +68,7 @@ export type JevDecisionMethod = "typesafe" | "systemone" | "model";
 /** Stats rows and Test results name the backend that answered; unknown covers rows older than backends. */
 export const JEV_BACKEND_LABEL_KEYS: Readonly<Record<string, TKey>> = {
   typesafe: "cws.jev.backend.typesafe",
-  systemone: "cws.jev.backend.systemone",
+  systemone: "cws.jev.decisionService",
   model: "cws.jev.backend.model",
   unknown: "cws.jev.backend.unknown",
 };

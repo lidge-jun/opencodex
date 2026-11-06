@@ -12,6 +12,7 @@ import { navigateHash } from "../hash-routing";
 import { useT } from "../i18n/shared";
 import { Select, Switch } from "../ui";
 import { formatProviderDisplayName } from "../provider-icons";
+import { isOpenAIDecisionProvider } from "../jev-decision-service";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { clampedNumberInput, enabledProviders, modelsForProvider } from "./combo-workspace-utils";
 
@@ -21,10 +22,12 @@ export function StrategySeg({
   value,
   onChange,
   disabled,
+  decisionProvider,
 }: {
   value: ComboStrategy;
   onChange: (next: ComboStrategy) => void;
   disabled?: boolean;
+  decisionProvider?: ProviderOption;
 }) {
   const t = useT();
   return (
@@ -39,7 +42,9 @@ export function StrategySeg({
           disabled={disabled}
           onClick={() => onChange(id)}
         >
-          {t(COMBO_STRATEGY_LABEL_KEYS[id])}
+          {id === "jev" && isOpenAIDecisionProvider(decisionProvider)
+            ? formatProviderDisplayName("openai-decisions", t)
+            : t(COMBO_STRATEGY_LABEL_KEYS[id])}
         </button>
       ))}
     </div>

@@ -35,7 +35,7 @@ const METHODS: readonly JevDecisionMethod[] = ["typesafe", "systemone", "model"]
 
 const METHOD_LABEL_KEYS: Record<JevDecisionMethod, TKey> = {
   typesafe: "cws.jev.method.typesafe",
-  systemone: "cws.jev.method.systemone",
+  systemone: "cws.jev.decisionService",
   model: "cws.jev.method.model",
 };
 

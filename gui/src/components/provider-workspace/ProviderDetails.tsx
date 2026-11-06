@@ -2,6 +2,7 @@
  * ProviderDetails — the detail header + tab shell (WP090+091). Owns tab state
  * and composes the Overview/Models/Usage/Settings panels.
  */
+import { isOpenAIDecisionProvider } from "../../jev-decision-service";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
@@ -167,6 +168,8 @@ export default function ProviderDetails({
     settingsSaveRef.current = save;
   }, []);
   const isDisabled = item.disabled === true;
+  const openaiDecision = isOpenAIDecisionProvider(item);
+  if (openaiDecision && tab === "models") setTab("overview");
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
   const authSurface = useMemo(() => providerAuthSurface(item), [item]);
@@ -252,11 +255,11 @@ export default function ProviderDetails({
   }, [authHandlers]);
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
-    { id: "models", label: t("pws.tab.models") },
+    ...(!openaiDecision ? [{ id: "models" as const, label: t("pws.tab.models") }] : []),
     { id: "usage", label: t("pws.tab.usage") },
     ...(authSurface ? [{ id: "accounts" as const, label: authSurface === "api-keys" ? t("pws.apiKeys") : t("pws.tab.accounts") }] : []),
     { id: "settings", label: t("pws.tab.settings") },
-  ], [authSurface, t]);
+  ], [authSurface, openaiDecision, t]);
 
   const switchTab = useCallback((next: Tab) => {
     if (settingsDirty && tab === "settings" && next !== "settings") {
@@ -339,7 +342,7 @@ export default function ProviderDetails({
           </h2>
         </div>
         <div className="pws-detail-actions">
-          {!isDefault && !isDisabled && onSetDefault && (
+          {!openaiDecision && !isDefault && !isDisabled && onSetDefault && (
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSetDefault(item.name)}>
               {t("prov.setDefault")}
             </button>

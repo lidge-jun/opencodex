@@ -733,6 +733,7 @@ export function jevAutoDraft(
   models: readonly { provider: string; id: string }[],
   eligibleProviders?: ReadonlySet<string>,
   decisionProvider?: string | null,
+  id = "jev-auto",
 ): ComboItem {
   const targets = JEV_AUTO_MODEL_IDS.flatMap((id) => {
     const model = models.find((candidate) => candidate.id === id
@@ -740,9 +741,9 @@ export function jevAutoDraft(
     return model ? [newComboTarget({ provider: model.provider, model: model.id })] : [];
   });
   return {
-    id: "jev-auto",
-    model: "jev-auto",
-    alias: "jev-auto",
+    id,
+    model: id,
+    alias: id,
     nativeAlias: false,
     displayName: null,
     strategy: "jev",

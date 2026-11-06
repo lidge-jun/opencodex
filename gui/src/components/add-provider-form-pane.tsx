@@ -1,9 +1,11 @@
+import { isOpenAIDecisionProvider } from "../jev-decision-service";
 import { IconExternal, IconKey } from "../icons";
 import { useT } from "../i18n/shared";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { ProviderPayloadForm } from "../provider-payload";
+import { formatProviderAdapterName } from "../provider-icons";
 import { AddProviderField } from "./add-provider-modal-field";
 import { baseUrlForChoice } from "../base-url-choice";
 import { canConfigureResponsesReasoningReplay } from "../responses-reasoning-replay";
@@ -67,7 +69,7 @@ export function AddProviderFormPane({
               {t("modal.setupStep1Suffix")}
             </li>
             <li>{t("modal.setupStep2")}</li>
-            <li>{t("modal.setupStep3")}</li>
+            <li>{t(isOpenAIDecisionProvider(form) ? "modal.setupDecisionStep3" : "modal.setupStep3")}</li>
           </ol>
           {preset.note && <div className="text-label" style={{ color: "var(--muted)", marginTop: 6, fontStyle: "italic" }}>{preset.note}</div>}
           {/\{[^}]*\}/.test(form.baseUrl) && (<div className="text-label" style={{ color: "var(--amber)", marginTop: 6 }}>{t("modal.baseUrlPlaceholderHint")}</div>)}
@@ -81,7 +83,7 @@ export function AddProviderFormPane({
         <AddProviderField label={t("modal.adapter")}>
           <Select fullWidth label={t("modal.adapter")} value={form.adapter}
             onChange={adapter => onFormChange({ ...form, adapter })}
-            options={adapterOptions(form.adapter).map(a => ({ value: a, label: a }))} />
+            options={adapterOptions(form.adapter).map(a => ({ value: a, label: formatProviderAdapterName(form.name, a, form.baseUrl) }))} />
         </AddProviderField>
         {preset.baseUrlChoices && preset.baseUrlChoices.length > 0 ? (
           <>
@@ -193,7 +195,7 @@ export function AddProviderFormPane({
           <input className="input" aria-label={t("modal.vertexLocation")} value={form.location ?? ""} onChange={e => onFormChange({ ...form, location: e.target.value })} placeholder="us-central1" />
         </AddProviderField>
       </>}
-      {!isReservedForward && <AddProviderField label={t("modal.defaultModel")}>
+      {!isReservedForward && <AddProviderField label={t(isOpenAIDecisionProvider(form) ? "cws.jev.decisionModel" : "modal.defaultModel")}>
         <input className="input" value={form.defaultModel} onChange={e => onFormChange({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
       </AddProviderField>}
       {error && <div className="text-control" role="alert" style={{ color: "var(--red)" }}>{error}</div>}

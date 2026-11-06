@@ -16,7 +16,7 @@ import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./co
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
 import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
-import type { JevDecisionRow } from "../jev-decision-service";
+import { isOpenAIDecisionProvider, type JevDecisionRow } from "../jev-decision-service";
 
 /** Stable default so an omitted combo list does not change identity every render. */
 const NO_COMBOS: readonly ComboItem[] = [];
@@ -69,6 +69,8 @@ export function AddComboModal({
   );
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
   const isJevPreset = initialDraft?.strategy === "jev";
+  const decisionProvider = providers.find(provider => provider.name === draft.decisionProvider);
+  const openaiDecision = draft.strategy === "jev" && !draft.decisionModel && isOpenAIDecisionProvider(decisionProvider);
   const jevCollision = isJevPreset && (
     existingIds.includes(draft.id.trim())
     || (!!draft.alias?.trim() && existingAliases.includes(draft.alias.trim()))
@@ -132,10 +134,10 @@ export function AddComboModal({
           </button>
         </div>
         <p className="muted" style={{ marginTop: 0, maxWidth: "62ch", overflowWrap: "anywhere" }}>
-          {isJevPreset ? t("cws.jev.setupHint") : t("cws.addSubtitle")}
+          {isJevPreset ? t(openaiDecision ? "cws.openaiDecisions.setupHint" : "cws.jev.setupHint") : t("cws.addSubtitle")}
         </p>
         {error && <Notice tone="err">{error}</Notice>}
-        {jevCollision && <Notice tone="err">{t("cws.jev.exists")}</Notice>}
+        {jevCollision && <Notice tone="err">{t(openaiDecision ? (existingIds.includes(draft.id.trim()) ? "cws.err.duplicateId" : "cws.err.duplicateAlias") : "cws.jev.exists")}</Notice>}
         {allTargetsExhausted && (
           <div className="cwi-quota-banner" role="status" aria-live="polite">
             {t("cws.quota.allExhausted")}
@@ -186,6 +188,7 @@ export function AddComboModal({
             <span className="field-label">{t("cws.strategy")}</span>
             <StrategySeg
               value={draft.strategy}
+              decisionProvider={decisionProvider}
               disabled={busy}
               onChange={(strategy) => setDraft((d) => ({ ...d, strategy }))}
             />

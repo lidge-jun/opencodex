@@ -1502,7 +1502,7 @@ describe("provider registry parity", () => {
 
     const presets = deriveProviderPresets();
     expect(presets.filter(p => p.id === "chatgpt" || p.id === "openai" || p.id.startsWith("openai-")).map(p => p.id))
-      .toEqual(["openai", "openai-apikey"]);
+      .toEqual(["openai", "openai-apikey", "openai-decisions"]);
     expect(presets.find(p => p.id === "openai")).toMatchObject({ label: "OpenAI (Codex login)", codexAccountMode: "pool" });
     expect(presets.find(p => p.id === "openai-multi")).toBeUndefined();
     expect(presets.find(p => p.id === "openai-apikey")?.label).toBe("OpenAI API");
