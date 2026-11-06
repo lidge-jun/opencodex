@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { callerCacheRetention } from "../../src/claude/inbound";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
+import { createAnthropicAdapter } from "../../src/adapters/anthropic";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 // A combo route declines the native Messages lane, so the anthropic adapter places its own
 // breakpoints. Their TTL follows the operator setting, then the caller's explicit TTLs, then the
@@ -197,7 +199,7 @@ describe("translated Claude lane system breakpoint", () => {
     const cached = (system: unknown[]) => system.filter(b => (b as { cache_control?: unknown }).cache_control);
     expect(cached(first)).toHaveLength(1);
     expect(cached(first)).toEqual(cached(second));
-    expect(JSON.stringify(cached(first))).toContain("Stable instructions.");
+    expect((cached(first)[0] as { text: string }).text).toBe("You are Claude Code.\n\nStable instructions.");
     expect(JSON.stringify(cached(first))).not.toContain("<env>");
     expect(JSON.stringify(first.at(-1))).toContain("2026-11-03");
   });
@@ -208,6 +210,18 @@ describe("translated Claude lane system breakpoint", () => {
     expect(JSON.stringify(system[0])).toContain("Stable instructions.");
     expect(JSON.stringify(system[0])).toContain("<env>turn</env>");
     expect((system[0] as { cache_control?: unknown }).cache_control).toBeDefined();
+  });
+
+  test("a mismatched prefix keeps multiple translated system parts in one cached block", async () => {
+    const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", apiKey: "sk-ant-fixture" } as OcxProviderConfig;
+    const parsed = { modelId: MODEL, stream: false, options: {},
+      context: { systemPrompt: ["Changed instructions.\n\nTail.", "Additional instructions."], messages: [{ role: "user", content: "Hi." }] },
+      _anthropicSystemCachePrefix: "Original instructions." } as OcxParsedRequest;
+    const adapter = withTestTranslatorBudget(createAnthropicAdapter(provider));
+    const { body } = await adapter.buildRequest(parsed);
+    const system = JSON.parse(typeof body === "string" ? body : JSON.stringify(body)).system;
+    expect(system).toEqual([{ type: "text", text: "Changed instructions.\n\nTail.\n\nAdditional instructions.",
+      cache_control: { type: "ephemeral", ttl: "1h" } }]);
   });
 
   test("identity normalization preserves the marked boundary across changing tails", async () => {
