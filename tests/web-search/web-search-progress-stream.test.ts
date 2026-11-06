@@ -13,6 +13,7 @@ import {
 } from "../../src/web-search/passthrough-bridge";
 import type { AdapterEvent } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { repoPath } from "../helpers/repo-root";
 
 type ParseStream = ProviderAdapter["parseStream"];
 
@@ -93,6 +94,42 @@ describe("web-search streamed-body progress collector", () => {
     expect(error).toBeInstanceOf(RoutedModelInactivityError);
     expect(cancelled).toBe(true);
   });
+
+  test("synchronous empty chunks cannot starve the inactivity deadline", async () => {
+    const script = `
+      import { parseStreamWithProgress } from ${JSON.stringify(repoPath("src/web-search/progress-stream.ts"))};
+      import { createTranslatorBudget } from ${JSON.stringify(repoPath("src/lib/translator-budget.ts"))};
+      const body = new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(0)); } }, { highWaterMark: 0 });
+      const parse = async function* (response) {
+        const reader = response.body.getReader();
+        try { while (!(await reader.read()).done) {} } finally { reader.releaseLock(); }
+        yield { type: "done" };
+      };
+      const budget = createTranslatorBudget();
+      try {
+        for await (const _event of parseStreamWithProgress(new Response(body), parse, { inactivityTimeoutMs: 100, translatorBudget: budget })) {}
+        process.exitCode = 1;
+      } catch (error) {
+        process.stdout.write(error.name);
+      } finally { budget.dispose(); }
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; child.kill(); }, 5_000);
+    try {
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect({ timedOut, status, stdout, stderr }).toEqual({
+        timedOut: false,
+        status: 0,
+        stdout: "RoutedModelInactivityError",
+        stderr: "",
+      });
+    } finally { clearTimeout(watchdog); }
+  }, 10_000);
 
   test("a parent abort interrupts a blocked semantic handoff", async () => {
     const parent = new AbortController();

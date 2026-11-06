@@ -287,7 +287,11 @@ export async function* parseStreamWithProgress(
             controller.close();
             return;
           }
-          if (result.value.byteLength === 0) continue;
+          if (result.value.byteLength === 0) {
+            // A synchronous empty-chunk producer can otherwise starve the timer in microtasks.
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            continue;
+          }
           resetInactivity();
           handoff.offerProgress();
           controller.enqueue(result.value);
