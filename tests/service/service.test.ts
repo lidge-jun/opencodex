@@ -1387,15 +1387,17 @@ describe("launchd service plist", () => {
     const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+    const codexHome = process.platform === "win32" ? "C:\\ocx-test\\codex-home" : "/tmp/codex-home";
+    const openCodexHome = process.platform === "win32" ? "C:\\ocx-test\\opencodex-home" : "/tmp/opencodex-home";
     try {
-      process.env.CODEX_HOME = "/tmp/codex-home";
+      process.env.CODEX_HOME = codexHome;
       process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
-      process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
+      process.env.OPENCODEX_HOME = openCodexHome;
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const plist = buildPlist();
-      expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
+      expect(plist).toContain(`<key>CODEX_HOME</key><string>${codexHome}</string>`);
       expect(plist).toContain("<key>CODEX_SQLITE_HOME</key><string>/tmp/codex-sqlite-home</string>");
-      expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
+      expect(plist).toContain(`<key>OPENCODEX_HOME</key><string>${openCodexHome}</string>`);
       expectTextToContainPath(plist, serviceApiTokenFilePath());
       expect(plist).not.toContain("local-secret");
       expect(plist).not.toContain("<key>OPENCODEX_API_AUTH_TOKEN</key>");
