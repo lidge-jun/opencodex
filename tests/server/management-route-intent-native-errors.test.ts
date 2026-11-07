@@ -4,6 +4,8 @@ import * as os from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getDefaultConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import * as desiredState from "../../src/codex/desired-state";
+import * as configPaths from "../../src/config/paths";
+import { handleManagementAPI } from "../../src/server/management-api";
 import { ConfigWritePublishedError } from "../../src/config/persist-unlocked";
 import { withConfigMutationLockSync } from "../../src/config/mutation-lock";
 import { createIntegrationStateStore } from "../../src/integrations/store";
@@ -181,4 +183,30 @@ test("real contention during post-decision Claude reconcile never claims nothing
     expect(result.body.message).toMatch(/retry|recover/i);
     expect(JSON.parse(readFileSync(home.path("config.json"), "utf8")).claudeCode.enabled).toBe(false);
   } finally { if (acquired) holder.exec("ROLLBACK"); holder.close(); }
+});
+
+test("Claude native OFF recomputes its decision after a competing ON during ACL admission", async () => {
+  config.claudeCode = { enabled: false };
+  saveConfig(config);
+  const settle = configPaths.withConfigDirHardeningSettled;
+  let calls = 0, competing = false;
+  const hook = spyOn(configPaths, "withConfigDirHardeningSettled").mockImplementation(async (root, mutate) => {
+    if (++calls === 2) {
+      const url = new URL("http://localhost/api/claude-code");
+      const response = await handleManagementAPI(new Request(url, { method: "PUT", headers: { "content-type": "application/json", Host: url.host },
+        body: JSON.stringify({ enabled: true }) }), url, config, {}, "admin-token", undefined, { trustedLoopback: true });
+      expect(response?.status).toBe(200);
+      expect(config.claudeCode?.enabled).toBe(true);
+      competing = true;
+    }
+    return settle(root, mutate);
+  });
+  restores.push(() => hook.mockRestore());
+  const result = await toggle("claude");
+  expect(competing).toBe(true);
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({ changed: true, state: "absent", desiredEnabled: false });
+  expect(config.claudeCode?.enabled).toBe(false);
+  expect(JSON.parse(readFileSync(home.path("config.json"), "utf8")).claudeCode.enabled).toBe(false);
+  expect(readRouteIntentState().devices.home?.claude?.enabled).toBe(false);
 });

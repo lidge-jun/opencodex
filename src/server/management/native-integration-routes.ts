@@ -1017,8 +1017,9 @@ async function handleNativeIntegrationRoutesUnlocked(ctx: NativeDecisionContext)
     }
 
     const enabled = body.enabled;
-    const changed = claudeCodeEnabled(config) !== enabled;
+    let changed = false;
     const decisionRefusal = await commitNativeDecision(ctx, "claude", enabled, () => {
+      changed = claudeCodeEnabled(config) !== enabled;
       if (!changed) return true;
 
       /*
