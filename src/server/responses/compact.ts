@@ -237,6 +237,7 @@ import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } 
 import { linkRequestSessionLane, sessionLaneIdFromRequest, reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { codexToolCatalogReloadResponse } from "./codex-tool-catalog";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -690,6 +691,8 @@ export async function handleResponsesCompact(
   }
   const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(options.compactionRoutingOverride?.sourceModel ?? (body as { model?: unknown }).model);
   options = { ...options, clientModelLabel };
+  const catalogReload = codexToolCatalogReloadResponse(body, req.headers, "compact");
+  if (catalogReload) return catalogReload;
   // Compaction forwards client history upstream too; keep local artifact paths out of it.
   redactHostedImageDisplayPaths(body);
   if (!options.compactionRoutingOverride) {

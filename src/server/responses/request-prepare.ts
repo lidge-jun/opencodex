@@ -181,6 +181,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { codexToolCatalogReloadResponse } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -248,6 +249,15 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  const isCompactionTrigger = body !== null && typeof body === "object" && !Array.isArray(body)
+    && Array.isArray((body as { input?: unknown }).input)
+    && ((body as { input: unknown[] }).input).some((item: unknown) =>
+      typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
+  if (inboundWire === "responses" && !concreteSelection) {
+    const surface = options.compactionRecoveryKind === "compaction-v1" || isCompactionTrigger ? "compact" : "responses";
+    const catalogReload = codexToolCatalogReloadResponse(body, req.headers, surface);
+    if (catalogReload) return catalogReload;
+  }
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel
     ?? (options.comboAttempt || options.policyFallbackCandidate || options.internalDecisionCall || options.memoryModelPhase
@@ -314,10 +324,6 @@ export async function prepareResponsesRequest(
       effort: comboEffortRow.effort,
     };
   }
-  const isCompactionTrigger = body !== null && typeof body === "object" && !Array.isArray(body)
-    && Array.isArray((body as { input?: unknown }).input)
-    && ((body as { input: unknown[] }).input).some((item: unknown) =>
-      typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
   if (!concreteSelection && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
