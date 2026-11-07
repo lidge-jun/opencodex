@@ -131,6 +131,55 @@ try {
   const unicodeExact = Buffer.concat([unicodeRelease, Buffer.alloc(1048576 - unicodeRelease.length, 32)]);
   assert.equal(parseUpdateDocument(unicodeExact, "ocx.update.release/1").releaseNotes[0].title, "é");
   assert.throws(() => parseUpdateDocument(Buffer.concat([unicodeExact, Buffer.from(" ")]), "ocx.update.release/1"));
+
+  // These are decoded field bounds, independent of the document caps above.
+  // Only release notes and inventory paths permit Unicode in these fixtures;
+  // all other selected identifier, hash, token and envelope fields are ASCII.
+  const checkField = (schema, value) => parseUpdateDocument(Buffer.from(JSON.stringify(value)), schema);
+  const rootValue = JSON.parse(before.toString());
+  const rootKeyBox = Buffer.from(rootValue.rootKeys[0].publicKey, "base64").toString("utf8").replace(/\n$/, "");
+  const padFirstLine = (text, size) => {
+    const split = text.indexOf("\n");
+    return text.slice(0, split) + "x".repeat(size - Buffer.byteLength(text)) + text.slice(split);
+  };
+  const rootWithBox = (size) => ({ ...rootValue, rootKeys: [{ ...rootValue.rootKeys[0], publicKey: Buffer.from(padFirstLine(rootKeyBox, size)).toString("base64") }, rootValue.rootKeys[1]] });
+  assert.ok(checkField("ocx.update.root/1", rootWithBox(4096)));
+  assert.throws(() => checkField("ocx.update.root/1", rootWithBox(4097)));
+  assert.throws(() => checkField("ocx.update.root/1", { ...rootValue, rootKeys: [{ ...rootValue.rootKeys[0], keyId: "é" }, rootValue.rootKeys[1]] }));
+  for (const schema of ["ocx.update.signatures/1", transitionSchema]) {
+    const withBox = (size) => ({ schema, signatures: [{ keyFingerprint: "a".repeat(64), signatureBox: Buffer.from(padFirstLine(fixture.signatureBox, size)).toString("base64") }] });
+    assert.ok(checkField(schema, withBox(4096)));
+    assert.throws(() => checkField(schema, withBox(4097)));
+    assert.throws(() => checkField(schema, { schema, signatures: [{ keyFingerprint: "é", signatureBox: signature }] }));
+  }
+  const releaseValue = JSON.parse(release.toString());
+  const withTitle = (title) => ({ ...releaseValue, releaseNotes: [{ title, body: "" }] });
+  assert.ok(checkField("ocx.update.release/1", withTitle("é".repeat(8192))));
+  assert.throws(() => checkField("ocx.update.release/1", withTitle(`${"é".repeat(8192)}a`)));
+  const receiptValue = JSON.parse(receipt.toString());
+  const withAssetName = (name) => ({ ...receiptValue, assets: [{ name, ...digest(artifact) }] });
+  assert.ok(checkField("ocx.update.verification/1", withAssetName("a".repeat(255))));
+  assert.throws(() => checkField("ocx.update.verification/1", withAssetName("a".repeat(256))));
+  assert.throws(() => checkField("ocx.update.verification/1", withAssetName("é")));
+  const treeValue = JSON.parse(tree.toString());
+  const withPath = (path) => ({ ...treeValue, entries: [{ path, type: "directory", mode: 0 }] });
+  assert.ok(checkField("ocx.update.tree/1", withPath("é".repeat(512))));
+  assert.throws(() => checkField("ocx.update.tree/1", withPath(`${"é".repeat(512)}a`)));
+  const capabilityValue = JSON.parse(capability.toString());
+  const withCapabilityId = (id) => ({ ...capabilityValue, homeProvides: [{ id, version: 1 }] });
+  assert.ok(checkField("ocx.link-capabilities/1", withCapabilityId("a".repeat(128))));
+  assert.throws(() => checkField("ocx.link-capabilities/1", withCapabilityId("a".repeat(129))));
+  assert.throws(() => checkField("ocx.link-capabilities/1", withCapabilityId("é")));
+  const policyValue = JSON.parse(policy.toString());
+  assert.ok(checkField("ocx.update.policy/1", { ...policyValue, revision: Number.MAX_SAFE_INTEGER }));
+  assert.throws(() => checkField("ocx.update.policy/1", { ...policyValue, revision: Number.MAX_SAFE_INTEGER + 1 }));
+  assert.throws(() => checkField("ocx.update.policy/1", { ...policyValue, channel: "é" }));
+  for (const [schema, bytes, field] of [["ocx.update.prepared/1", prepared, "installationId"], ["ocx.update.activation/1", activation, "runtimeInstance"]]) {
+    const value = JSON.parse(bytes.toString());
+    assert.ok(checkField(schema, { ...value, [field]: "a".repeat(128) }));
+    assert.throws(() => checkField(schema, { ...value, [field]: "a".repeat(129) }));
+    assert.throws(() => checkField(schema, { ...value, [field]: "é" }));
+  }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
