@@ -26,6 +26,16 @@ import type {
 
 const DEFAULT_MAX_CHART_SERIES = 6;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export function buildDailyProviderChart(
   dailyByProvider: TelemetryStatsV1["dailyByProvider"] | null | undefined,
   daily: TelemetryStatsV1["daily"] | null | undefined,
@@ -106,15 +116,51 @@ export function buildDailyProviderChart(
   return { days, metric, total, series };
 }
 
+export interface DailyChartAccessibleRow {
+  day: string;
+  providerKind: string;
+  value: number;
+  valueCompact: string;
+  valueExact: string;
+}
+
+export function buildDailyChartAccessibleTable(
+  model: StackedDailyChartModel,
+  locale = "en-US",
+): DailyChartAccessibleRow[] {
+  const rows: DailyChartAccessibleRow[] = [];
+  for (let dayIdx = 0; dayIdx < model.days.length; dayIdx++) {
+    const day = model.days[dayIdx]!;
+    for (const s of model.series) {
+      const val = finiteNonNegativeInt(s.values[dayIdx]);
+      if (val <= 0) continue;
+      rows.push({
+        day,
+        providerKind: s.providerKind,
+        value: val,
+        valueCompact: formatCompactNumber(val),
+        valueExact: formatExactNumber(val, locale),
+      });
+    }
+  }
+  return rows;
+}
+
 export function buildProviderShareRows(
   providers: TelemetryStatsV1["providers"] | null | undefined,
   locale = "en-US",
 ): ShareRow[] {
-  const rows = (providers ?? []).map((p) => ({
-    key: p.providerKind,
-    requests: finiteNonNegativeInt(p.requests),
-    tokens: finiteNonNegativeInt(p.tokens),
-  }));
+  const rows: Array<{ key: string; requests: number; tokens: number }> = [];
+  for (const p of providers ?? []) {
+    if (!isRecord(p)) continue;
+    const key = nonEmptyKey(p.providerKind);
+    if (!key) continue;
+    rows.push({
+      key,
+      requests: finiteNonNegativeInt(p.requests),
+      tokens: finiteNonNegativeInt(p.tokens),
+    });
+  }
   rows.sort((a, b) => {
     if (b.tokens !== a.tokens) return b.tokens - a.tokens;
     if (b.requests !== a.requests) return b.requests - a.requests;
@@ -148,11 +194,17 @@ export function buildModelShareRows(
   models: TelemetryStatsV1["models"] | null | undefined,
   locale = "en-US",
 ): ShareRow[] {
-  const rows = (models ?? []).map((m) => ({
-    key: m.modelFamily,
-    requests: finiteNonNegativeInt(m.requests),
-    tokens: finiteNonNegativeInt(m.tokens),
-  }));
+  const rows: Array<{ key: string; requests: number; tokens: number }> = [];
+  for (const m of models ?? []) {
+    if (!isRecord(m)) continue;
+    const key = nonEmptyKey(m.modelFamily);
+    if (!key) continue;
+    rows.push({
+      key,
+      requests: finiteNonNegativeInt(m.requests),
+      tokens: finiteNonNegativeInt(m.tokens),
+    });
+  }
   rows.sort((a, b) => {
     if (b.tokens !== a.tokens) return b.tokens - a.tokens;
     if (b.requests !== a.requests) return b.requests - a.requests;
@@ -186,11 +238,17 @@ export function buildVersionRows(
   versions: TelemetryStatsV1["versions"] | null | undefined,
   locale = "en-US",
 ): InstallRow[] {
-  const rows = (versions ?? []).map((v) => ({
-    version: v.version,
-    installs: finiteNonNegativeInt(v.installs),
-    newInstalls: finiteNonNegativeInt(v.newInstalls),
-  }));
+  const rows: Array<{ version: string; installs: number; newInstalls: number }> = [];
+  for (const v of versions ?? []) {
+    if (!isRecord(v)) continue;
+    const version = nonEmptyKey(v.version);
+    if (!version) continue;
+    rows.push({
+      version,
+      installs: finiteNonNegativeInt(v.installs),
+      newInstalls: finiteNonNegativeInt(v.newInstalls),
+    });
+  }
   rows.sort((a, b) => {
     if (b.installs !== a.installs) return b.installs - a.installs;
     return b.version.localeCompare(a.version);
@@ -214,10 +272,17 @@ export function buildPlatformRows(
   platforms: TelemetryStatsV1["platforms"] | null | undefined,
   locale = "en-US",
 ): InstallRow[] {
-  const rows = (platforms ?? []).map((p) => ({
-    key: `${p.os}/${p.arch}`,
-    installs: finiteNonNegativeInt(p.installs),
-  }));
+  const rows: Array<{ key: string; installs: number }> = [];
+  for (const p of platforms ?? []) {
+    if (!isRecord(p)) continue;
+    const os = nonEmptyKey(p.os);
+    const arch = nonEmptyKey(p.arch);
+    if (!os || !arch) continue;
+    rows.push({
+      key: `${os}/${arch}`,
+      installs: finiteNonNegativeInt(p.installs),
+    });
+  }
   rows.sort((a, b) => {
     if (b.installs !== a.installs) return b.installs - a.installs;
     return a.key.localeCompare(b.key);
@@ -238,11 +303,17 @@ export function buildChannelRows(
   channels: TelemetryStatsV1["channels"] | null | undefined,
   locale = "en-US",
 ): InstallRow[] {
-  const rows = (channels ?? []).map((c) => ({
-    channel: c.installChannel,
-    installs: finiteNonNegativeInt(c.installs),
-    newInstalls: finiteNonNegativeInt(c.newInstalls),
-  }));
+  const rows: Array<{ channel: string; installs: number; newInstalls: number }> = [];
+  for (const c of channels ?? []) {
+    if (!isRecord(c)) continue;
+    const channel = nonEmptyKey(c.installChannel);
+    if (!channel) continue;
+    rows.push({
+      channel,
+      installs: finiteNonNegativeInt(c.installs),
+      newInstalls: finiteNonNegativeInt(c.newInstalls),
+    });
+  }
   rows.sort((a, b) => {
     if (b.installs !== a.installs) return b.installs - a.installs;
     return a.channel.localeCompare(b.channel);
@@ -297,16 +368,19 @@ export function buildReliabilitySummary(
     color: OUTCOME_COLORS[key],
   }));
 
-  const rawErrors = (errors ?? [])
-    .map((e) => ({
-      cause: e.cause,
-      count: finiteNonNegativeInt(e.count),
-    }))
-    .filter((e) => e.count > 0)
-    .sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      return a.cause.localeCompare(b.cause);
-    });
+  const rawErrors: Array<{ cause: string; count: number }> = [];
+  for (const e of errors ?? []) {
+    if (!isRecord(e)) continue;
+    const cause = nonEmptyKey(e.cause);
+    if (!cause) continue;
+    const count = finiteNonNegativeInt(e.count);
+    if (count <= 0) continue;
+    rawErrors.push({ cause, count });
+  }
+  rawErrors.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return a.cause.localeCompare(b.cause);
+  });
 
   const totalErrors = rawErrors.reduce((acc, e) => safeAddInt(acc, e.count), 0);
   const errorRows: ErrorCauseRow[] = rawErrors.map((e) => ({

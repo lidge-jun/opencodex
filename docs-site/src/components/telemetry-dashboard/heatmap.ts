@@ -24,6 +24,43 @@ const SHORT_MONTHS = [
   "Dec",
 ] as const;
 
+export function formatLocalizedMonthShort(
+  monthIndex: number,
+  locale = "en-US",
+): string {
+  const safeMonth = Math.max(0, Math.min(11, Math.floor(monthIndex)));
+  try {
+    const d = new Date(Date.UTC(2026, safeMonth, 15));
+    return new Intl.DateTimeFormat(locale, {
+      month: "short",
+      timeZone: "UTC",
+    }).format(d);
+  } catch {
+    return SHORT_MONTHS[safeMonth] ?? "Jan";
+  }
+}
+
+export function getLocalizedWeekdayLabels(locale = "en-US"): {
+  mon: string;
+  wed: string;
+  fri: string;
+} {
+  try {
+    const fmt = new Intl.DateTimeFormat(locale, {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+    // 2026-01-05 is Monday, 2026-01-07 is Wednesday, 2026-01-09 is Friday (UTC)
+    return {
+      mon: fmt.format(new Date(Date.UTC(2026, 0, 5))),
+      wed: fmt.format(new Date(Date.UTC(2026, 0, 7))),
+      fri: fmt.format(new Date(Date.UTC(2026, 0, 9))),
+    };
+  } catch {
+    return { mon: "Mon", wed: "Wed", fri: "Fri" };
+  }
+}
+
 export function parseUtcDayMs(day: string): number | null {
   const match = DAY_KEY_RE.exec(day);
   if (!match) return null;
@@ -65,6 +102,7 @@ export function computeHeatmapGrade(
 
 export function buildHeatmapCalendar(
   heatmap: TelemetryStatsV1["heatmap"] | null | undefined,
+  locale = "en-US",
 ): HeatmapCalendar {
   const byDayMs = new Map<number, { date: string; activeInstalls: number }>();
   for (const row of heatmap ?? []) {
@@ -155,7 +193,7 @@ export function buildHeatmapCalendar(
     const weekIndex = Math.floor((cursorMs - calendarStartMs) / (DAY_MS * 7));
     if (!seenWeeks.has(weekIndex)) {
       const marker: HeatmapMonthMarker = {
-        label: SHORT_MONTHS[monthIndex] ?? "Jan",
+        label: formatLocalizedMonthShort(monthIndex, locale),
         monthIndex,
         weekIndex,
       };
@@ -221,7 +259,11 @@ export function navigateHeatmapDate(
 export function formatHeatmapCellAriaLabel(
   cell: Pick<HeatmapCell, "date" | "activeInstalls" | "grade">,
   locale = "en-US",
+  unitLabel = "active installs",
 ): string {
   const count = formatExactNumber(cell.activeInstalls, locale);
-  return `${cell.date}: ${count} active installs (grade ${cell.grade})`;
+  if (locale.toLowerCase().startsWith("en") && unitLabel === "active installs") {
+    return `${cell.date}: ${count} active installs (grade ${cell.grade})`;
+  }
+  return `${cell.date}: ${count} ${unitLabel} (${cell.grade}/4)`;
 }

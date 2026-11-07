@@ -18,12 +18,12 @@ import {
   HEATMAP_GRADE_COLORS,
   NPM_DOWNLOADS_WEEKLY_URL,
   NPM_PACKAGE_NAME,
-  TELEMETRY_GUIDE_LINK_ENABLED,
   TELEMETRY_GUIDE_PATH,
   TELEMETRY_RANGES,
   TELEMETRY_STATS_ENDPOINT,
   TOKSCALE_REPO_URL,
   buildChannelRows,
+  buildDailyChartAccessibleTable,
   buildDailyProviderChart,
   buildHeatmapCalendar,
   buildKpiStrip,
@@ -36,10 +36,15 @@ import {
   buildVersionRows,
   classifyStatsResponse,
   computeHeatmapGrade,
+  createEmptyStatsSnapshot,
+  createStatsRequestSequencer,
+  fetchJsonWithTimeout,
   formatActiveHours,
   formatCompactNumber,
   formatHeatmapCellAriaLabel,
+  formatLocalizedMonthShort,
   getHeatmapGradeColor,
+  getLocalizedWeekdayLabels,
   isStatsSnapshotEmpty,
   isValidTelemetryStatsV1,
   navigateHeatmapDate,
@@ -191,6 +196,8 @@ describe("docs telemetry dashboard route and navigation", () => {
     expect(existsSync(mdxPath)).toBe(true);
     const mdx = readFileSync(mdxPath, "utf8");
     expect(mdx).toContain("template: splash");
+    expect(mdx).toContain("editUrl: false");
+    expect(mdx).toContain("lastUpdated: false");
     expect(mdx).toContain("import TelemetryDashboard from '../../components/TelemetryDashboard.astro'");
     expect(mdx).toContain("<TelemetryDashboard />");
   });
@@ -202,9 +209,10 @@ describe("docs telemetry dashboard route and navigation", () => {
     expect(desktopMatches.length).toBeGreaterThanOrEqual(2);
     expect(header).toContain('<a class="nav-link" href={dashboard.href}>{dashboard.label}</a>');
     expect(header).toContain('<a class="lp-menu-contrib" href={dashboard.href}>{dashboard.label}</a>');
+    expect(header).toContain("flex-shrink: 0;");
   });
 
-  test("constants match collector endpoint, root package.json name, GitHub repo, and tokscale credit", () => {
+  test("constants match collector endpoint, root package.json name, GitHub repo, guide link, and tokscale credit", () => {
     expect(TELEMETRY_STATS_ENDPOINT).toBe("https://telemetry.opencodex.me/v1/stats");
     expect(TELEMETRY_RANGES).toEqual(["7d", "30d", "90d", "365d"]);
     expect(DEFAULT_TELEMETRY_RANGE).toBe("30d");
@@ -214,12 +222,18 @@ describe("docs telemetry dashboard route and navigation", () => {
     expect(GITHUB_RELEASES_URL).toContain("lidge-jun/opencodex");
     expect(TOKSCALE_REPO_URL).toBe("https://github.com/junhoyeo/tokscale");
     expect(TELEMETRY_GUIDE_PATH).toBe("guides/telemetry/");
-    expect(typeof TELEMETRY_GUIDE_LINK_ENABLED).toBe("boolean");
 
-    const guideExists = existsSync(repoPath("docs-site/src/content/docs/guides/telemetry.md"));
-    if (!guideExists) {
-      expect(TELEMETRY_GUIDE_LINK_ENABLED).toBe(false);
-    }
+    const guidePath = repoPath("docs-site/src/content/docs/guides/telemetry.md");
+    expect(existsSync(guidePath)).toBe(true);
+    const guideMd = readFileSync(guidePath, "utf8");
+    expect(guideMd).toContain("(/dashboard/)");
+
+    const astroSource = readFileSync(
+      repoPath("docs-site/src/components/TelemetryDashboard.astro"),
+      "utf8",
+    );
+    expect(astroSource).toContain('import.meta.glob("../content/docs/guides/telemetry.{md,mdx}")');
+    expect(astroSource).not.toContain("TELEMETRY_GUIDE_LINK_ENABLED");
   });
 });
 
@@ -327,6 +341,15 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     expect(formatHeatmapCellAriaLabel(peakCell, "en-US")).toBe(
       "2026-11-08: 400 active installs (grade 4)",
     );
+    expect(formatHeatmapCellAriaLabel(peakCell, "ko", "활성 설치")).toBe(
+      "2026-11-08: 400 활성 설치 (4/4)",
+    );
+    expect(formatLocalizedMonthShort(0, "en-US")).toBe("Jan");
+    expect(getLocalizedWeekdayLabels("en-US")).toEqual({
+      mon: "Mon",
+      wed: "Wed",
+      fri: "Fri",
+    });
 
     // Keyboard navigation across selectable days
     expect(navigateHeatmapDate(calendar.cells, "2026-11-08", "Home")).toBe("2025-11-09");
@@ -353,6 +376,16 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     ]);
     expect(chartTokens.series[0]?.values).toEqual([38_000_000, 46_000_000, 60_000_000]);
     expect(chartTokens.series[2]?.values).toEqual([10_000_000, 12_000_000, 18_000_000]);
+
+    const srTable = buildDailyChartAccessibleTable(chartTokens, "en-US");
+    expect(srTable.length).toBe(9);
+    expect(srTable[0]).toEqual({
+      day: "2026-11-06",
+      providerKind: "anthropic",
+      value: 38_000_000,
+      valueCompact: "38.0M",
+      valueExact: "38,000,000",
+    });
 
     const providerRows = buildProviderShareRows(fixture.providers);
     expect(providerRows[0]).toMatchObject({
@@ -399,6 +432,107 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       compact: "6.2K",
       shareLabel: "49.6%",
     });
+  });
+
+  test("table and state helpers filter out partial or malformed array entries without throwing", () => {
+    const malformedStats = makeFixtureStats({
+      heatmap: [
+        null as unknown as DashboardStatsV1["heatmap"][number],
+        {} as unknown as DashboardStatsV1["heatmap"][number],
+        { day: "2026-11-08", activeInstalls: 12 },
+      ],
+      providers: [
+        null as unknown as DashboardStatsV1["providers"][number],
+        { providerKind: null as unknown as string, requests: 100, tokens: 500 },
+        { providerKind: "   ", requests: 100, tokens: 500 },
+        { providerKind: "anthropic", requests: 50, tokens: 1_000 },
+      ],
+      models: [
+        undefined as unknown as DashboardStatsV1["models"][number],
+        { modelFamily: 123 as unknown as string, requests: 10, tokens: 100 },
+        { modelFamily: "claude-opus", requests: 25, tokens: 2_000 },
+      ],
+      versions: [
+        null as unknown as DashboardStatsV1["versions"][number],
+        { version: undefined as unknown as string, installs: 10, newInstalls: 1 },
+        { version: "2.99.0", installs: 40, newInstalls: 5 },
+      ],
+      platforms: [
+        null as unknown as DashboardStatsV1["platforms"][number],
+        { os: "darwin", arch: null as unknown as string, installs: 10 },
+        { os: null as unknown as string, arch: "arm64", installs: 10 },
+        { os: "darwin", arch: "arm64", installs: 30 },
+      ],
+      channels: [
+        {} as unknown as DashboardStatsV1["channels"][number],
+        { installChannel: "", installs: 5, newInstalls: 1 },
+        { installChannel: "npm-global", installs: 20, newInstalls: 3 },
+      ],
+      errors: [
+        null as unknown as DashboardStatsV1["errors"][number],
+        { cause: null as unknown as string, count: 10 },
+        { cause: "   ", count: 10 },
+        { cause: "rate-limit", count: 4 },
+      ],
+    });
+
+    expect(isStatsSnapshotEmpty(malformedStats)).toBe(false);
+    expect(buildProviderShareRows(malformedStats.providers).map((r) => r.key)).toEqual(["anthropic"]);
+    expect(buildModelShareRows(malformedStats.models).map((r) => r.key)).toEqual(["claude-opus"]);
+    expect(buildVersionRows(malformedStats.versions).map((r) => r.key)).toEqual(["2.99.0"]);
+    expect(buildPlatformRows(malformedStats.platforms).map((r) => r.key)).toEqual(["darwin/arm64"]);
+    expect(buildChannelRows(malformedStats.channels).map((r) => r.key)).toEqual(["npm-global"]);
+    expect(buildReliabilitySummary(malformedStats.outcomes, malformedStats.errors).errors.map((e) => e.cause)).toEqual([
+      "rate-limit",
+    ]);
+  });
+
+  test("createStatsRequestSequencer, fetchJsonWithTimeout, and createEmptyStatsSnapshot guard range switches and timeouts", async () => {
+    const sequencer = createStatsRequestSequencer(5_000);
+    const t1 = sequencer.begin("30d");
+    expect(t1.requestId).toBe(1);
+    expect(t1.isCurrent()).toBe(true);
+    expect(t1.signal.aborted).toBe(false);
+
+    // Switching range to 7d aborts in-flight 30d request and invalidates its ticket
+    const t2 = sequencer.begin("7d");
+    expect(t1.signal.aborted).toBe(true);
+    expect(t1.isCurrent()).toBe(false);
+    expect(t2.requestId).toBe(2);
+    expect(t2.isCurrent()).toBe(true);
+    expect(t2.signal.aborted).toBe(false);
+
+    // Finishing stale t1 does not disturb active t2
+    t1.finish();
+    expect(t2.isCurrent()).toBe(true);
+    t2.finish();
+
+    // Timeout aborts active request and marks didTimeout()
+    const tTimeout = sequencer.begin("90d", 15);
+    await new Promise((r) => setTimeout(r, 35));
+    expect(tTimeout.signal.aborted).toBe(true);
+    expect(tTimeout.didTimeout()).toBe(true);
+    tTimeout.finish();
+
+    // fetchJsonWithTimeout aborts hanging download request and returns null
+    const hangingFetch = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      })) as typeof fetch;
+    const timedOutResult = await fetchJsonWithTimeout(
+      "https://api.npmjs.org/downloads/point/last-week/@bitkyc08/opencodex",
+      15,
+      hangingFetch,
+    );
+    expect(timedOutResult).toBeNull();
+
+    // Empty snapshot resets stale range metrics cleanly
+    const emptySnap = createEmptyStatsSnapshot("7d");
+    expect(emptySnap.range).toBe("7d");
+    expect(isValidTelemetryStatsV1(emptySnap)).toBe(true);
+    expect(isStatsSnapshotEmpty(emptySnap)).toBe(true);
   });
 
   test("classifyStatsResponse and parseDownloadsPayload handle ready, empty, error, and download fallbacks", () => {
@@ -510,14 +644,25 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       "tr",
     ]);
     const enKeys = Object.keys(TELEMETRY_DASHBOARD_STRINGS.en).sort();
+    const optInPattern = /\bopt(?:ed)?[-\s]?in\b|オプトイン|참여에\s*동의한/i;
+    const hangulPattern = /[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/;
     for (const locale of TELEMETRY_DASHBOARD_LOCALES) {
       const copy = getTelemetryDashboardCopy(locale);
       expect(Object.keys(copy).sort()).toEqual(enKeys);
       for (const [k, v] of Object.entries(copy)) {
         expect(typeof v, `${locale}.${k}`).toBe("string");
         expect(v.trim().length, `${locale}.${k} non-empty`).toBeGreaterThan(0);
+        expect(optInPattern.test(v), `${locale}.${k} must not claim opt-in`).toBe(false);
+        if (locale !== "ko") {
+          expect(hangulPattern.test(v), `${locale}.${k} must not contain Hangul`).toBe(false);
+        }
+      }
+      if (locale !== "en") {
+        expect(copy.stateEmptyTitle).not.toContain("Collector not deployed yet");
       }
     }
+    expect(TELEMETRY_DASHBOARD_STRINGS.en.subtitle).toContain("on by default");
+    expect(TELEMETRY_DASHBOARD_STRINGS.en.subtitle).toContain("privacy notice");
     expect(resolveTelemetryDashboardLocale("KO")).toBe("ko");
     expect(resolveTelemetryDashboardLocale("unknown")).toBe("en");
 
@@ -528,7 +673,15 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     expect(astroSource).toContain('data-state-panel="loading"');
     expect(astroSource).toContain('data-state-panel="empty"');
     expect(astroSource).toContain('data-state-panel="error"');
+    expect(astroSource).toContain("data-daily-chart-table");
+    expect(astroSource).toContain("var(--sl-color-gray-3)");
     expect(astroSource).toContain("junhoyeo/tokscale");
+
+    const clientSource = readFileSync(
+      repoPath("docs-site/src/components/telemetry-dashboard/client.ts"),
+      "utf8",
+    );
+    expect(clientSource).toContain('aria-describedby", "td-heatmap-tooltip"');
 
     const helperDir = repoPath("docs-site/src/components/telemetry-dashboard");
     const scannedFiles = [

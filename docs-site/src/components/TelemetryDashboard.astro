@@ -1,6 +1,4 @@
 ---
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import {
   getTelemetryDashboardCopy,
   resolveTelemetryDashboardLocale,
@@ -16,12 +14,12 @@ import {
   NPM_DOWNLOADS_YEARLY_URL,
   NPM_PACKAGE_NAME,
   OUTCOME_COLORS,
-  TELEMETRY_GUIDE_LINK_ENABLED,
   TELEMETRY_GUIDE_PATH,
   TELEMETRY_RANGES,
   TELEMETRY_STATS_ENDPOINT,
   TOKEN_MIX_COLORS,
   TOKSCALE_REPO_URL,
+  getLocalizedWeekdayLabels,
 } from "./telemetry-dashboard/index";
 
 interface Props {
@@ -35,10 +33,10 @@ const copy = getTelemetryDashboardCopy(locale);
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 const prefix = locale === "en" ? base : `${base}${locale}/`;
 
-const guideFileUrl = new URL("../content/docs/guides/telemetry.md", import.meta.url);
 const showGuideLink =
-  TELEMETRY_GUIDE_LINK_ENABLED || existsSync(fileURLToPath(guideFileUrl));
+  Object.keys(import.meta.glob("../content/docs/guides/telemetry.{md,mdx}")).length > 0;
 const guideHref = `${prefix}${TELEMETRY_GUIDE_PATH}`;
+const weekdayLabels = getLocalizedWeekdayLabels(locale);
 
 const rangeLabels: Record<(typeof TELEMETRY_RANGES)[number], string> = {
   "7d": copy.range7d,
@@ -101,6 +99,16 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
           </span>
           <span class="td-meta-sep" aria-hidden="true">·</span>
           <span class="td-meta-item td-mono">GET /v1/stats</span>
+          <span
+            class="td-loading-inline"
+            data-state-panel="loading"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="td-spinner" aria-hidden="true"></span>
+            <strong data-loading-title>{copy.stateLoadingTitle}</strong>
+            <span class="td-sr-only" data-loading-body>{copy.stateLoadingBody}</span>
+          </span>
         </div>
       </div>
 
@@ -135,21 +143,8 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
       </p>
     </div>
 
-    <!-- Explicit state banners: loading, empty ("Collector not deployed yet"), error -->
+    <!-- Explicit state banners: empty ("Collector not deployed yet"), error -->
     <div class="td-state-region" data-state-region>
-      <div
-        class="td-state-banner td-state-loading"
-        data-state-panel="loading"
-        role="status"
-        aria-live="polite"
-      >
-        <span class="td-spinner" aria-hidden="true"></span>
-        <div class="td-state-copy">
-          <strong data-loading-title>{copy.stateLoadingTitle}</strong>
-          <span data-loading-body>{copy.stateLoadingBody}</span>
-        </div>
-      </div>
-
       <div
         class="td-state-banner td-state-empty"
         data-state-panel="empty"
@@ -287,9 +282,9 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
           ></div>
           <div class="td-heatmap-calendar-row">
             <div class="td-heatmap-day-labels" aria-hidden="true">
-              <span style="grid-row: 2;">Mon</span>
-              <span style="grid-row: 4;">Wed</span>
-              <span style="grid-row: 6;">Fri</span>
+              <span style="grid-row: 2;">{weekdayLabels.mon}</span>
+              <span style="grid-row: 4;">{weekdayLabels.wed}</span>
+              <span style="grid-row: 6;">{weekdayLabels.fri}</span>
             </div>
             <div
               class="td-heatmap-grid"
@@ -317,9 +312,12 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
           id="td-heatmap-tooltip"
           class="td-heatmap-tooltip"
           data-heatmap-tooltip
+          data-active="false"
           role="tooltip"
-          hidden
-        ></div>
+          aria-hidden="true"
+        >
+          &nbsp;
+        </div>
 
         <footer class="td-heatmap-footer">
           <span class="td-heatmap-range-text" data-heatmap-range-label>
@@ -380,6 +378,21 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
           role="img"
           aria-label={copy.dailyChartTitle}
         ></div>
+        <table class="td-sr-only" data-daily-chart-table>
+          <caption>{copy.dailyChartTitle}</caption>
+          <thead>
+            <tr>
+              <th scope="col">UTC</th>
+              <th scope="col">{copy.colProvider}</th>
+              <th scope="col" data-daily-chart-metric-col>{copy.metricTokens}</th>
+            </tr>
+          </thead>
+          <tbody data-daily-chart-tbody>
+            <tr>
+              <td colspan="3">{copy.noDataInTable}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
   </div>
@@ -714,6 +727,9 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
   :global(main:has(.td-root) .content-panel:first-child) {
     padding-block: 0;
   }
+  :global(main:has(.td-root) footer.sl-flex) {
+    display: none;
+  }
 
   .td-root {
     --td-grade-0: #191f2b;
@@ -810,10 +826,27 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
     flex-wrap: wrap;
     align-items: center;
     gap: 0.4rem;
+    min-height: 1.5rem;
     margin-top: 0.5rem !important;
     font-size: 0.78rem;
     color: var(--sl-color-gray-3);
     font-variant-numeric: tabular-nums;
+  }
+
+  .td-loading-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-inline-start: 0.25rem;
+    color: var(--sl-color-gray-2);
+  }
+
+  .td-loading-inline[hidden] {
+    display: none !important;
+  }
+
+  .td-loading-inline strong {
+    font-weight: 500;
   }
 
   :global(.td-mono) {
@@ -1292,14 +1325,25 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
   }
 
   .td-heatmap-tooltip {
+    display: flex;
+    align-items: center;
+    min-height: 1.85rem;
     margin-top: 0.5rem;
-    padding: 0.4rem 0.65rem;
+    padding: 0.25rem 0.65rem;
     border-radius: var(--ocx-radius-sm, 8px);
     border: 1px solid var(--sl-color-gray-5);
     background-color: var(--ocx-raised, #303030);
     color: var(--sl-color-white);
     font-size: 0.78rem;
     font-variant-numeric: tabular-nums;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .td-heatmap-tooltip[data-active="true"] {
+    visibility: visible;
+    opacity: 1;
   }
 
   .td-heatmap-footer {
@@ -1435,7 +1479,7 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
   }
 
   .td-download-source {
-    color: var(--sl-color-gray-4);
+    color: var(--sl-color-gray-3);
   }
 
   .td-download-links {

@@ -7,8 +7,11 @@ import {
 import type {
   DashboardFetchState,
   DownloadStats,
+  TelemetryStatsRange,
   TelemetryStatsV1,
 } from "./types";
+
+export const DEFAULT_STATS_REQUEST_TIMEOUT_MS = 15_000;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -40,8 +43,9 @@ export function isValidTelemetryStatsV1(value: unknown): value is TelemetryStats
 
 export function isStatsSnapshotEmpty(stats: TelemetryStatsV1): boolean {
   const totalTokens = sumDisjointTokens(stats.totals.tokens);
-  const hasHeatmapActivity = stats.heatmap.some(
-    (d) => finiteNonNegativeInt(d.activeInstalls) > 0,
+  const heatmap = Array.isArray(stats.heatmap) ? stats.heatmap : [];
+  const hasHeatmapActivity = heatmap.some(
+    (d) => isPlainObject(d) && finiteNonNegativeInt(d.activeInstalls) > 0,
   );
   return (
     finiteNonNegativeInt(stats.totals.activeInstalls) === 0 &&
@@ -50,6 +54,143 @@ export function isStatsSnapshotEmpty(stats: TelemetryStatsV1): boolean {
     totalTokens === 0 &&
     !hasHeatmapActivity
   );
+}
+
+export function createEmptyStatsSnapshot(
+  range: TelemetryStatsRange = "30d",
+): TelemetryStatsV1 {
+  return {
+    schemaVersion: 1,
+    generatedAt: "",
+    range,
+    totals: {
+      activeInstalls: 0,
+      newInstalls: 0,
+      activeMinutes: 0,
+      requests: 0,
+      tokens: {
+        input: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        output: 0,
+        reasoning: 0,
+      },
+    },
+    daily: [],
+    dailyByProvider: [],
+    heatmap: [],
+    providers: [],
+    models: [],
+    versions: [],
+    platforms: [],
+    channels: [],
+    outcomes: {
+      completed: 0,
+      failed: 0,
+      incomplete: 0,
+      aborted: 0,
+    },
+    errors: [],
+  };
+}
+
+export interface StatsRequestTicket {
+  readonly requestId: number;
+  readonly range: TelemetryStatsRange;
+  readonly signal: AbortSignal;
+  isCurrent(): boolean;
+  didTimeout(): boolean;
+  finish(): void;
+}
+
+export interface StatsRequestSequencer {
+  begin(range: TelemetryStatsRange, timeoutMs?: number): StatsRequestTicket;
+  abortActive(): void;
+  getCurrentRequestId(): number;
+}
+
+export function createStatsRequestSequencer(
+  defaultTimeoutMs = DEFAULT_STATS_REQUEST_TIMEOUT_MS,
+): StatsRequestSequencer {
+  let currentRequestId = 0;
+  let activeController: AbortController | null = null;
+  let activeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearActiveTimer = () => {
+    if (activeTimer !== null) {
+      clearTimeout(activeTimer);
+      activeTimer = null;
+    }
+  };
+
+  const abortActive = () => {
+    clearActiveTimer();
+    if (activeController) {
+      activeController.abort();
+      activeController = null;
+    }
+  };
+
+  return {
+    begin(range: TelemetryStatsRange, timeoutMs = defaultTimeoutMs): StatsRequestTicket {
+      abortActive();
+      currentRequestId += 1;
+      const myRequestId = currentRequestId;
+      const controller = new AbortController();
+      activeController = controller;
+      let timedOut = false;
+
+      if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+        activeTimer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs);
+      }
+
+      return {
+        requestId: myRequestId,
+        range,
+        signal: controller.signal,
+        isCurrent: () => myRequestId === currentRequestId,
+        didTimeout: () => timedOut,
+        finish: () => {
+          if (myRequestId === currentRequestId) {
+            clearActiveTimer();
+            if (activeController === controller) {
+              activeController = null;
+            }
+          }
+        },
+      };
+    },
+    abortActive,
+    getCurrentRequestId: () => currentRequestId,
+  };
+}
+
+export async function fetchJsonWithTimeout(
+  url: string | undefined,
+  timeoutMs = DEFAULT_STATS_REQUEST_TIMEOUT_MS,
+  fetchImpl: typeof fetch = fetch,
+): Promise<unknown> {
+  if (!url) return null;
+  const controller = new AbortController();
+  const timer =
+    timeoutMs > 0 && Number.isFinite(timeoutMs)
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+  try {
+    const res = await fetchImpl(url, {
+      headers: { accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 export interface ClassifyStatsInput {

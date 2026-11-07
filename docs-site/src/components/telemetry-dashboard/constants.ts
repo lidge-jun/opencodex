@@ -33,13 +33,8 @@ export const TOKSCALE_REPO_URL = "https://github.com/junhoyeo/tokscale";
 /**
  * Relative docs path for the telemetry privacy guide added by stack layer 5
  * (`docs-site/src/content/docs/guides/telemetry.md`).
- *
- * Keep `TELEMETRY_GUIDE_LINK_ENABLED = false` until layer 5 is present in the
- * tree (or let `TelemetryDashboard.astro` auto-detect the file at build time)
- * so `internal-links.mjs` never sees a dangling `/guides/telemetry/` link.
  */
 export const TELEMETRY_GUIDE_PATH = "guides/telemetry/";
-export const TELEMETRY_GUIDE_LINK_ENABLED = false;
 
 /**
  * Disjoint token mix palette adapted from junhoyeo/tokscale `TokenBreakdown.tsx` (MIT).

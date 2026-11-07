@@ -108,7 +108,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   en: {
     title: "Usage Dashboard",
     subtitle:
-      "Project-wide anonymous daily aggregates from opt-in opencodex installs.",
+      "Project-wide anonymous daily aggregates from opencodex installs (on by default after a person has seen the privacy notice, unless declined or turned off).",
     rangeAria: "Reporting window",
     range7d: "7d",
     range30d: "30d",
@@ -118,7 +118,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "Awaiting snapshot",
     privacyBadge: "Anonymous aggregates only",
     privacyBody:
-      "Reports carry closed-vocabulary daily counts with a rotating daily install hash — never prompts, model outputs, API keys, account identifiers, file paths, or IP addresses.",
+      "Telemetry is on by default and sends nothing until a person has seen the notice. Reports carry closed-vocabulary daily counts with a rotating daily install hash — never prompts, model outputs, API keys, account identifiers, file paths, or IP addresses.",
     privacyOptOutHint:
       "Disable anytime with ocx telemetry disable, OCX_TELEMETRY=0, or DO_NOT_TRACK=1.",
     privacyGuideLink: "Telemetry & privacy guide",
@@ -214,7 +214,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   fr: {
     title: "Tableau de bord d’utilisation",
     subtitle:
-      "Agrégats quotidiens anonymes à l’échelle du projet provenant des installations opencodex participantes.",
+      "Agrégats quotidiens anonymes à l’échelle du projet provenant des installations opencodex (activé par défaut après affichage de l’avis de confidentialité à une personne, sauf refus ou désactivation).",
     rangeAria: "Période d’analyse",
     range7d: "7j",
     range30d: "30j",
@@ -224,7 +224,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "En attente d’instantané",
     privacyBadge: "Agrégats anonymes uniquement",
     privacyBody:
-      "Les rapports ne contiennent que des compteurs quotidiens à vocabulaire fermé avec un hachage journalier rotatif — jamais de prompts, de réponses, de clés API, d’identifiants de compte, de chemins ou d’adresses IP.",
+      "La télémétrie est activée par défaut et n’envoie rien tant qu’une personne n’a pas vu l’avis. Les rapports ne contiennent que des compteurs quotidiens à vocabulaire fermé avec un hachage journalier rotatif — jamais de prompts, de réponses, de clés API, d’identifiants de compte, de chemins ou d’adresses IP.",
     privacyOptOutHint:
       "Désactivez à tout moment avec ocx telemetry disable, OCX_TELEMETRY=0 ou DO_NOT_TRACK=1.",
     privacyGuideLink: "Guide de télémétrie et confidentialité",
@@ -318,7 +318,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   ko: {
     title: "사용량 대시보드",
     subtitle:
-      "참여에 동의한 opencodex 설치에서 집계된 프로젝트 전체 익명 일일 통계입니다.",
+      "개인정보 안내를 확인한 뒤 기본으로 활성화되는 opencodex 설치(거부하거나 끈 경우 제외)에서 집계된 프로젝트 전체 익명 일일 통계입니다.",
     rangeAria: "집계 기간",
     range7d: "7일",
     range30d: "30일",
@@ -328,14 +328,14 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "스냅샷 대기 중",
     privacyBadge: "익명 집계 전용",
     privacyBody:
-      "보고서에는 매일 회전하는 설치 해시와 고정 어휘 일일 카운터만 포함되며 프롬프트, 모델 출력, API 키, 계정 식별자, 파일 경로, IP 주소는 절대 전송되지 않습니다.",
+      "텔레메트리는 기본으로 켜져 있으며 사람이 안내를 확인하기 전에는 아무것도 전송하지 않습니다. 보고서에는 매일 회전하는 설치 해시와 고정 어휘 일일 카운터만 포함되며 프롬프트, 모델 출력, API 키, 계정 식별자, 파일 경로, IP 주소는 절대 전송되지 않습니다.",
     privacyOptOutHint:
       "언제든 ocx telemetry disable, OCX_TELEMETRY=0 또는 DO_NOT_TRACK=1로 끌 수 있습니다.",
     privacyGuideLink: "텔레메트리 및 개인정보 가이드",
     stateLoadingTitle: "프로젝트 텔레메트리 불러오는 중…",
     stateLoadingBody:
       "telemetry.opencodex.me에서 집계 스냅샷을 가져오고 있습니다.",
-    stateEmptyTitle: "수집기가 아직 배포되지 않았습니다 (Collector not deployed yet)",
+    stateEmptyTitle: "수집기가 아직 배포되지 않았습니다",
     stateEmptyBody:
       "telemetry.opencodex.me 공개 수집기가 아직 배포되지 않았거나 선택한 기간에 기록된 일일 집계가 없습니다.",
     stateErrorTitle: "실시간 텔레메트리를 불러오지 못했습니다",
@@ -421,7 +421,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   "zh-cn": {
     title: "使用量仪表盘",
     subtitle:
-      "来自参与遥测的 opencodex 安装实例的全项目匿名每日汇总。",
+      "来自 opencodex 安装实例的全项目匿名每日汇总（在用户查看隐私提示后默认开启，除非拒绝或关闭）。",
     rangeAria: "统计时间范围",
     range7d: "7天",
     range30d: "30天",
@@ -431,13 +431,13 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "等待快照",
     privacyBadge: "仅匿名汇总数据",
     privacyBody:
-      "上报数据仅包含固定词汇的每日计数与每日轮换的安装哈希——绝不包含提示词、模型输出、API 密钥、账户标识、文件路径或 IP 地址。",
+      "遥测默认开启，但在人工查看隐私提示前不会发送任何数据。上报数据仅包含固定词汇的每日计数与每日轮换的安装哈希——绝不包含提示词、模型输出、API 密钥、账户标识、文件路径或 IP 地址。",
     privacyOptOutHint:
       "可随时通过 ocx telemetry disable、OCX_TELEMETRY=0 或 DO_NOT_TRACK=1 关闭。",
     privacyGuideLink: "遥测与隐私指南",
     stateLoadingTitle: "正在加载项目遥测数据…",
     stateLoadingBody: "正在从 telemetry.opencodex.me 获取汇总快照。",
-    stateEmptyTitle: "收集器尚未部署 (Collector not deployed yet)",
+    stateEmptyTitle: "收集器尚未部署",
     stateEmptyBody:
       "位于 telemetry.opencodex.me 的公共收集器尚未部署，或该时间范围内尚无每日汇总记录。",
     stateErrorTitle: "无法加载实时遥测数据",
@@ -519,7 +519,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   "zh-tw": {
     title: "使用量儀表板",
     subtitle:
-      "來自參與遙測的 opencodex 安裝實例之全專案匿名每日彙總。",
+      "來自 opencodex 安裝實例之全專案匿名每日彙總（於使用者查看隱私提示後預設開啟，除非拒絕或關閉）。",
     rangeAria: "統計時間範圍",
     range7d: "7天",
     range30d: "30天",
@@ -529,13 +529,13 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "等待快照",
     privacyBadge: "僅限匿名彙總資料",
     privacyBody:
-      "回報資料僅包含固定詞彙的每日計數與每日輪替的安裝雜湊——絕不包含提示詞、模型輸出、API 金鑰、帳號識別碼、檔案路徑或 IP 位址。",
+      "遙測預設開啟，但在人工查看隱私提示前不會傳送任何資料。回報資料僅包含固定詞彙的每日計數與每日輪替的安裝雜湊——絕不包含提示詞、模型輸出、API 金鑰、帳號識別碼、檔案路徑或 IP 位址。",
     privacyOptOutHint:
       "可隨時透過 ocx telemetry disable、OCX_TELEMETRY=0 或 DO_NOT_TRACK=1 關閉。",
     privacyGuideLink: "遙測與隱私指南",
     stateLoadingTitle: "正在載入專案遙測資料…",
     stateLoadingBody: "正在從 telemetry.opencodex.me 取得彙總快照。",
-    stateEmptyTitle: "收集器尚未部署 (Collector not deployed yet)",
+    stateEmptyTitle: "收集器尚未部署",
     stateEmptyBody:
       "位於 telemetry.opencodex.me 的公開收集器尚未部署，或此時間範圍內尚無每日彙總紀錄。",
     stateErrorTitle: "無法載入即時遙測資料",
@@ -617,7 +617,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   ru: {
     title: "Дашборд использования",
     subtitle:
-      "Анонимные ежедневные сводки по всему проекту от установок opencodex с включённой телеметрией.",
+      "Анонимные ежедневные сводки по всему проекту от установок opencodex (включено по умолчанию после показа уведомления человеку, если не отклонено и не отключено).",
     rangeAria: "Период отчёта",
     range7d: "7д",
     range30d: "30д",
@@ -627,14 +627,14 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "Ожидание снимка",
     privacyBadge: "Только анонимные сводки",
     privacyBody:
-      "Отчёты содержат только суточные счётчики фиксированного словаря и ежедневно меняющийся хеш установки — без промптов, ответов моделей, API-ключей, аккаунтов, путей или IP-адресов.",
+      "Телеметрия включена по умолчанию и ничего не отправляет, пока человек не увидит уведомление. Отчёты содержат только суточные счётчики фиксированного словаря и ежедневно меняющийся хеш установки — без промптов, ответов моделей, API-ключей, аккаунтов, путей или IP-адресов.",
     privacyOptOutHint:
       "Отключить можно в любой момент через ocx telemetry disable, OCX_TELEMETRY=0 или DO_NOT_TRACK=1.",
     privacyGuideLink: "Руководство по телеметрии и приватности",
     stateLoadingTitle: "Загрузка телеметрии проекта…",
     stateLoadingBody:
       "Получение сводного снимка использования с telemetry.opencodex.me.",
-    stateEmptyTitle: "Коллектор ещё не развёрнут (Collector not deployed yet)",
+    stateEmptyTitle: "Коллектор ещё не развёрнут",
     stateEmptyBody:
       "Публичный коллектор telemetry.opencodex.me ещё не развёрнут или не содержит записей за выбранный период.",
     stateErrorTitle: "Не удалось загрузить телеметрию",
@@ -721,7 +721,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   ja: {
     title: "利用統計ダッシュボード",
     subtitle:
-      "オプトインした opencodex インストールから集計されたプロジェクト全体の匿名日次統計です。",
+      "opencodex インストールから集計されたプロジェクト全体の匿名日次統計です（プライバシー通知の表示後にデフォルトで有効になり、拒否または無効化されている場合を除きます）。",
     rangeAria: "集計期間",
     range7d: "7日",
     range30d: "30日",
@@ -731,14 +731,14 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "スナップショット待機中",
     privacyBadge: "匿名集計のみ",
     privacyBody:
-      "レポートには日替わりインストールハッシュと固定語彙の日次カウンタのみが含まれ、プロンプト、モデル出力、APIキー、アカウント識別子、ファイルパス、IPアドレスは一切含まれません。",
+      "テレメトリはデフォルトでオンですが、人が通知を確認するまでは何も送信されません。レポートには日替わりインストールハッシュと固定語彙の日次カウンタのみが含まれ、プロンプト、モデル出力、APIキー、アカウント識別子、ファイルパス、IPアドレスは一切含まれません。",
     privacyOptOutHint:
       "ocx telemetry disable、OCX_TELEMETRY=0、または DO_NOT_TRACK=1 でいつでも無効化できます。",
     privacyGuideLink: "テレメトリとプライバシーガイド",
     stateLoadingTitle: "プロジェクトテレメトリを読み込み中…",
     stateLoadingBody:
       "telemetry.opencodex.me から集計スナップショットを取得しています。",
-    stateEmptyTitle: "コレクターはまだデプロイされていません (Collector not deployed yet)",
+    stateEmptyTitle: "コレクターはまだデプロイされていません",
     stateEmptyBody:
       "telemetry.opencodex.me の公開コレクターがまだデプロイされていないか、この期間の日次集計がまだ記録されていません。",
     stateErrorTitle: "ライブテレメトリを読み込めませんでした",
@@ -823,7 +823,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   tr: {
     title: "Kullanım Paneli",
     subtitle:
-      "Katılımcı opencodex kurulumlarından toplanan proje genelinde anonim günlük istatistikler.",
+      "opencodex kurulumlarından toplanan proje genelinde anonim günlük istatistikler (bir kişi gizlilik bildirimini gördükten sonra, reddedilmediği veya kapatılmadığı sürece varsayılan olarak açıktır).",
     rangeAria: "Raporlama aralığı",
     range7d: "7g",
     range30d: "30g",
@@ -833,14 +833,14 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPending: "Anlık görüntü bekleniyor",
     privacyBadge: "Yalnızca anonim toplamlar",
     privacyBody:
-      "Raporlar yalnızca günlük dönen kurulum karması ve kapalı sözlük sayaçları içerir; istemler, model çıktıları, API anahtarları, hesap kimlikleri, dosya yolları veya IP adresleri asla gönderilmez.",
+      "Telemetri varsayılan olarak açıktır ve bir kişi bildirimi görene kadar hiçbir şey göndermez. Raporlar yalnızca günlük dönen kurulum karması ve kapalı sözlük sayaçları içerir; istemler, model çıktıları, API anahtarları, hesap kimlikleri, dosya yolları veya IP adresleri asla gönderilmez.",
     privacyOptOutHint:
       "İstediğiniz zaman ocx telemetry disable, OCX_TELEMETRY=0 veya DO_NOT_TRACK=1 ile kapatabilirsiniz.",
     privacyGuideLink: "Telemetri ve gizlilik kılavuzu",
     stateLoadingTitle: "Proje telemetrisi yükleniyor…",
     stateLoadingBody:
       "telemetry.opencodex.me adresinden toplu kullanım verileri alınıyor.",
-    stateEmptyTitle: "Toplayıcı henüz devreye alınmadı (Collector not deployed yet)",
+    stateEmptyTitle: "Toplayıcı henüz devreye alınmadı",
     stateEmptyBody:
       "telemetry.opencodex.me üzerindeki genel toplayıcı henüz dağıtılmadı veya bu aralık için günlük veri kaydedilmedi.",
     stateErrorTitle: "Canlı telemetri yüklenemedi",
@@ -863,7 +863,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     tokenReasoning: "Akıl yürütme",
     heatmapTitle: "365 günlük etkinlik ısı haritası",
     heatmapSubtitle:
-      "Son 52주 boyunca günlük rapor veren etkin kurulumlar (UTC).".replace("52주", "52 hafta"),
+      "Son 52 hafta boyunca günlük rapor veren etkin kurulumlar (UTC).",
     heatmapActiveDays: "{count} etkin gün",
     heatmapPeakDay: "Zirve: {date} ({count})",
     heatmapLess: "Düşük",

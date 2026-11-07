@@ -1,7 +1,9 @@
 import * as echarts from "echarts";
 import type { TelemetryDashboardCopy } from "../../data/telemetry-dashboard-i18n";
 import {
+  DEFAULT_STATS_REQUEST_TIMEOUT_MS,
   buildChannelRows,
+  buildDailyChartAccessibleTable,
   buildDailyProviderChart,
   buildHeatmapCalendar,
   buildKpiStrip,
@@ -13,6 +15,9 @@ import {
   buildTokenMix,
   buildVersionRows,
   classifyStatsResponse,
+  createEmptyStatsSnapshot,
+  createStatsRequestSequencer,
+  fetchJsonWithTimeout,
   formatCompactNumber,
   formatExactNumber,
   formatGeneratedTimestamp,
@@ -46,6 +51,7 @@ export function mountTelemetryDashboard(
   let chartInstance: echarts.ECharts | null = null;
   let currentHeatmapCells: HeatmapCell[] = [];
   let focusedHeatmapDate: string | null = null;
+  const statsSequencer = createStatsRequestSequencer(DEFAULT_STATS_REQUEST_TIMEOUT_MS);
 
   const setDashboardState = (
     state: "loading" | "ready" | "empty" | "error",
@@ -91,6 +97,43 @@ export function mountTelemetryDashboard(
       latestStats?.daily,
       activeChartMetric,
     );
+    const metricLabel =
+      activeChartMetric === "requests" ? copy.metricRequests : copy.metricTokens;
+    chartEl.setAttribute(
+      "aria-label",
+      `${copy.dailyChartTitle} (${metricLabel}): ${formatCompactNumber(model.total)}`,
+    );
+
+    const metricHeaderEl = root.querySelector<HTMLElement>(
+      "[data-daily-chart-metric-col]",
+    );
+    if (metricHeaderEl) {
+      metricHeaderEl.textContent = metricLabel;
+    }
+    const chartTbody = root.querySelector<HTMLTableSectionElement>(
+      "[data-daily-chart-tbody]",
+    );
+    if (chartTbody) {
+      const srRows = buildDailyChartAccessibleTable(model, locale);
+      if (srRows.length === 0) {
+        chartTbody.replaceChildren(makeEmptyRow(3, copy.noDataInTable));
+      } else {
+        chartTbody.replaceChildren(
+          ...srRows.map((row) => {
+            const tr = document.createElement("tr");
+            const tdDay = document.createElement("td");
+            tdDay.textContent = row.day;
+            const tdProv = document.createElement("td");
+            tdProv.textContent = row.providerKind;
+            const tdVal = document.createElement("td");
+            tdVal.textContent = `${row.valueExact} (${row.valueCompact})`;
+            tr.append(tdDay, tdProv, tdVal);
+            return tr;
+          }),
+        );
+      }
+    }
+
     if (!chartInstance) {
       chartInstance = echarts.init(chartEl);
     }
@@ -143,7 +186,7 @@ export function mountTelemetryDashboard(
     const tooltipEl = root.querySelector<HTMLElement>("[data-heatmap-tooltip]");
     if (!gridEl || !monthsEl) return;
 
-    const calendar = buildHeatmapCalendar(stats?.heatmap);
+    const calendar = buildHeatmapCalendar(stats?.heatmap, locale);
     currentHeatmapCells = calendar.cells;
 
     if (activeDaysEl) {
@@ -166,7 +209,14 @@ export function mountTelemetryDashboard(
       rangeLabelEl.textContent = `${calendar.startDate} → ${calendar.endDate} (UTC)`;
     }
 
-    if (calendar.weekCount === 0) return;
+    if (calendar.weekCount === 0) {
+      monthsEl.replaceChildren();
+      if (tooltipEl) {
+        tooltipEl.dataset.active = "false";
+        tooltipEl.setAttribute("aria-hidden", "true");
+      }
+      return;
+    }
 
     const weeks = String(calendar.weekCount);
     gridEl.style.setProperty("--heatmap-weeks", weeks);
@@ -187,12 +237,15 @@ export function mountTelemetryDashboard(
 
     const showCellTooltip = (cell: HeatmapCell) => {
       if (!tooltipEl || !cell.selectable) return;
-      tooltipEl.hidden = false;
+      tooltipEl.dataset.active = "true";
+      tooltipEl.setAttribute("aria-hidden", "false");
       tooltipEl.textContent = `${cell.date} · ${formatExactNumber(cell.activeInstalls, locale)} ${copy.heatmapTooltipUnit}`;
     };
 
     const hideCellTooltip = () => {
-      if (tooltipEl) tooltipEl.hidden = true;
+      if (!tooltipEl) return;
+      tooltipEl.dataset.active = "false";
+      tooltipEl.setAttribute("aria-hidden", "true");
     };
 
     const buttons = calendar.cells.map((cell) => {
@@ -203,7 +256,11 @@ export function mountTelemetryDashboard(
       if (cell.selectable) {
         btn.dataset.date = cell.date;
         btn.tabIndex = cell.date === focusedHeatmapDate ? 0 : -1;
-        btn.setAttribute("aria-label", formatHeatmapCellAriaLabel(cell, locale));
+        btn.setAttribute(
+          "aria-label",
+          formatHeatmapCellAriaLabel(cell, locale, copy.heatmapTooltipUnit),
+        );
+        btn.setAttribute("aria-describedby", "td-heatmap-tooltip");
         btn.addEventListener("mouseenter", () => showCellTooltip(cell));
         btn.addEventListener("mouseleave", hideCellTooltip);
         btn.addEventListener("focus", () => {
@@ -364,6 +421,8 @@ export function mountTelemetryDashboard(
     const formattedTime = formatGeneratedTimestamp(stats.generatedAt, locale);
     if (updatedEl && formattedTime) {
       updatedEl.textContent = `${copy.updatedPrefix}: ${formattedTime}`;
+    } else if (updatedEl) {
+      updatedEl.textContent = `${copy.updatedPrefix}: ${copy.updatedPending}`;
     }
 
     for (const kpi of buildKpiStrip(stats, locale)) {
@@ -473,18 +532,22 @@ export function mountTelemetryDashboard(
   const loadTelemetryStats = async (range: TelemetryStatsRange) => {
     activeRange = range;
     syncRangePills();
+    const ticket = statsSequencer.begin(range, DEFAULT_STATS_REQUEST_TIMEOUT_MS);
     setDashboardState("loading");
     try {
       const url = buildStatsUrl(range, statsEndpoint);
       const response = await fetch(url, {
         headers: { accept: "application/json" },
+        signal: ticket.signal,
       });
+      if (!ticket.isCurrent()) return;
       let body: unknown = null;
       try {
         body = await response.json();
       } catch {
         body = null;
       }
+      if (!ticket.isCurrent()) return;
       const classified = classifyStatsResponse({
         ok: response.ok,
         status: response.status,
@@ -492,34 +555,37 @@ export function mountTelemetryDashboard(
       });
       if (classified.stats) {
         applyStatsSnapshot(classified.stats);
+      } else {
+        applyStatsSnapshot(createEmptyStatsSnapshot(range));
       }
       setDashboardState(classified.state, classified.detail);
     } catch (error) {
+      if (!ticket.isCurrent()) return;
+      const isAbort =
+        error instanceof Error && error.name === "AbortError";
+      const detailMessage =
+        ticket.didTimeout() || isAbort
+          ? "Request timed out"
+          : error instanceof Error
+            ? error.message
+            : String(error);
       const classified = classifyStatsResponse({
         networkError: true,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: detailMessage,
       });
+      applyStatsSnapshot(createEmptyStatsSnapshot(range));
       setDashboardState(classified.state, classified.detail);
+    } finally {
+      ticket.finish();
     }
   };
 
   const loadDownloads = async () => {
-    const fetchJsonSafe = async (url: string | undefined): Promise<unknown> => {
-      if (!url) return null;
-      try {
-        const res = await fetch(url, { headers: { accept: "application/json" } });
-        if (!res.ok) return null;
-        return await res.json();
-      } catch {
-        return null;
-      }
-    };
-
     const [npmWeekly, npmMonthly, npmYearly, githubReleases] = await Promise.all([
-      fetchJsonSafe(root.dataset.npmWeeklyUrl),
-      fetchJsonSafe(root.dataset.npmMonthlyUrl),
-      fetchJsonSafe(root.dataset.npmYearlyUrl),
-      fetchJsonSafe(root.dataset.githubReleasesUrl),
+      fetchJsonWithTimeout(root.dataset.npmWeeklyUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
+      fetchJsonWithTimeout(root.dataset.npmMonthlyUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
+      fetchJsonWithTimeout(root.dataset.npmYearlyUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
+      fetchJsonWithTimeout(root.dataset.githubReleasesUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
     ]);
 
     const dl = parseDownloadsPayload({
