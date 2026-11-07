@@ -147,6 +147,10 @@ function openSource(path: string, name: string): OpenSource | null {
   let entry;
   try { entry = lstatSync(path); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  if (entry.isFile() && !entry.isSymbolicLink() && entry.nlink > 1) {
+    // An interrupted Windows recovery leaves its identity pin linked to the original.
+    throw new Error(`orphan recovery refused: unsafe token file (another hard link exists; if an earlier recovery was interrupted, remove the leftover .${name}.identity pin from its orphaned-token-* backup folder and retry)`);
+  }
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size > 4096
     || (process.platform !== "win32" && entry.uid !== process.getuid?.())) throw new Error("orphan recovery refused: unsafe token file");
   const fd = openSync(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
@@ -194,9 +198,17 @@ function verifyPinnedFile(path: string, source: OpenSource): void {
   } finally { closeSync(fd); }
 }
 
+/** Best effort: drop a pin only while another name still holds the original token. */
+function releasePins(pins: Map<string, string>): void {
+  for (const pin of pins.values()) {
+    try { if (lstatSync(pin).nlink > 1) unlinkSync(pin); } catch { /* the refusal below still names the folder */ }
+  }
+}
+
 function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): { backupDir: string; files: string[] } {
   const home = getConfigDir();
   let backupDir: string | undefined;
+  const pins = new Map<string, string>();
   try {
     const homeStat = lstatSync(home);
     if (home !== sources.home || !homeStat.isDirectory() || homeStat.isSymbolicLink()
@@ -216,7 +228,6 @@ function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): {
     if (process.platform === "win32") hardenSecretDir(backupDir, { required: true });
     else chmodSync(backupDir, 0o700);
     const windowsMove = process.platform === "win32" || deps.windowsMoveForTest === true;
-    const pins = new Map<string, string>();
     if (windowsMove) {
       // A private hard link keeps each original file identity allocated after its Windows handle
       // closes. Thus the rename cannot substitute a recycled file ID without detection.
@@ -224,6 +235,7 @@ function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): {
         if (!source || source.fd === null) continue;
         const pin = join(backupDir, `.${source.name}.identity`);
         linkSync(source.path, pin);
+        pins.set(source.name, pin);
         if (process.platform === "win32") hardenSecretPath(pin, { required: true });
         const pinned = lstatSync(pin);
         const original = fstatSync(source.fd);
@@ -232,7 +244,6 @@ function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): {
           throw new Error("orphan recovery refused: token file changed before move");
         }
         verifyPinnedFile(pin, source);
-        pins.set(source.name, pin);
       }
       const closed: number[] = [];
       for (const { source } of sources.entries) {
@@ -262,6 +273,7 @@ function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): {
         }
         verifyPinnedFile(destination, source);
         unlinkSync(pin);
+        pins.delete(source.name);
       }
       if (process.platform === "win32") hardenSecretPath(destination, { required: true });
       const verified = openSource(destination, source.name);
@@ -273,7 +285,10 @@ function moveToPrivateBackup(sources: Sources, deps: OrphanTokenRecoveryDeps): {
     }
     return { backupDir, files: sources.entries.filter(entry => entry.source).map(entry => entry.name) };
   } catch (error) {
-    if (backupDir) throw new Error(`orphan recovery incomplete; inspect private backup at ${JSON.stringify(backupDir)} before retrying`, { cause: error });
+    if (backupDir) {
+      releasePins(pins);
+      throw new Error(`orphan recovery incomplete; inspect private backup at ${JSON.stringify(backupDir)} before retrying`, { cause: error });
+    }
     throw error;
   }
 }

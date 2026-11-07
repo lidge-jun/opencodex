@@ -3826,6 +3826,7 @@ export const zhTW: Record<TKey, string> = {
   "models.aliasStale": "過期",
   "connection.discovering": "正在探索本機與共享目標…",
   "connection.machineUnavailable": "本機機器平面無法使用。共享請求未改用本機資料。",
+  "connection.clientStateChanged": "此 Child 儲存的 Remote Link 連線已遺失，或現在指向其他擁有者或連結，與正在執行的 Child 不再一致。重新連結前，請停止或重新啟動此 Child 並檢查其連線。",
   "connection.linkManaged": "由 Home {home} 透過 Remote Link（{linkId}）管理。此儀表板以唯讀方式顯示 Home 的設定與配額；請在 Home 上進行變更。",
   "connection.linkManagedUnnamed": "由其 Home 透過 Remote Link（{linkId}）管理。此儀表板以唯讀方式顯示 Home 的設定與配額；請在 Home 上進行變更。",
   "connection.disconnect": "中斷 Hub 連線",

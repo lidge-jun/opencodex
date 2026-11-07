@@ -200,6 +200,23 @@ export function apiBaseForPlane(plane: ApiPlane, targets: ApiTargets): string {
   return targets[plane].baseUrl;
 }
 
+/**
+ * A Remote Link Child whose saved connection is missing or names another owner or link answers
+ * its machine and link status with `503 { error: "client_state_changed" }` (docs: Remote Link).
+ */
+export class ClientStateChangedError extends Error {
+  constructor() {
+    super("client_state_changed");
+    this.name = "ClientStateChangedError";
+  }
+}
+
+export async function isClientStateChangedResponse(response: Response): Promise<boolean> {
+  if (response.status !== 503 || response.bodyUsed) return false;
+  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  return body?.error === "client_state_changed";
+}
+
 export async function discoverApiTargets(initialBase: string, signal?: AbortSignal): Promise<ApiTargets> {
   const standalone = standaloneApiTargets(initialBase);
   // Standalone asks nothing.
@@ -219,7 +236,10 @@ export async function discoverApiTargets(initialBase: string, signal?: AbortSign
     throw new Error("local machine plane unavailable", { cause: error });
   }
   if (response.status === 404) return standalone;
-  if (!response.ok) throw new Error(`local machine plane refused discovery (${response.status})`);
+  if (!response.ok) {
+    if (await isClientStateChangedResponse(response)) throw new ClientStateChangedError();
+    throw new Error(`local machine plane refused discovery (${response.status})`);
+  }
   const body = await response.json().catch(() => null);
   if (!validStatus(body)) throw new Error("local machine plane returned invalid status");
   return targetsFromMachineStatus(initialBase, body);
