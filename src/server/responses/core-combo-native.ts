@@ -430,6 +430,8 @@ export async function dispatchNativeComboChild(input: {
         callbacks.onTerminal("incomplete");
         return;
       }
+      // A 200 stream whose terminal was an upstream error event did not complete.
+      if (childLog.streamErrorStatus !== undefined && status < 400) return finishLog(childLog.streamErrorStatus, message, "terminal");
       finishLog(status, message, meta?.closeReason === "client_cancel" ? "client_cancel"
         : meta?.closeReason && meta.closeReason !== "non_stream" ? "terminal" : "non_stream");
     } })

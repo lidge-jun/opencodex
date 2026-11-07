@@ -28,6 +28,7 @@ import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { estimateTokens } from "../lib/token-estimate";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { httpStatusFromTerminalError } from "../lib/errors";
 import { AnthropicRequestError, isRec, type Rec } from "../claude/inbound-records";
 import type { RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
@@ -178,6 +179,11 @@ export function tapAnthropicSseForLog(
     }
     if (named(event, data, "message_stop") || named(event, data, "error")) {
       terminalSeen = true;
+      if (data.type === "error") {
+        const error = isRec(data.error) ? data.error : {};
+        logCtx.streamErrorStatus = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
+          code: typeof error.code === "string" ? error.code : undefined, message: typeof error.message === "string" ? error.message : undefined });
+      }
     } else if (delivered && !named(event, data, "ping")) {
       const delta = isRec(data.delta) ? data.delta : undefined;
       lastDeliveredStop = named(event, data, "message_delta") && typeof delta?.stop_reason === "string"
@@ -312,6 +318,7 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
+    recordUsage();
     finalize(499, { closeReason: "client_cancel" });
     clientFilter?.dispose();
     try { tapController?.close(); } catch { /* downstream already torn down */ }
@@ -457,6 +464,7 @@ export function tapAnthropicSseForLog(
         settled = true;
         idle.cancel();
         detachAbort();
+        recordUsage();
         finalize(499, { closeReason: "client_cancel" });
       }
       reader.cancel(reason).catch(() => {});

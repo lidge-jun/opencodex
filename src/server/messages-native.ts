@@ -667,7 +667,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           modelId: route.modelId,
           onPhysicalDispatch: options.sendBudget && options.comboDispatchPermit ? () => {
             if (!physicalBudget.spendEnforced) {
-              reportDispatchSends(options.sendBudget!, 1, options.comboDispatchPermit);
+              // As native Chat: an observe-only start was already claimed before the send.
+              reportDispatchSends(options.sendBudget!, 1, options.comboDispatchPermit, true);
               initialSendStarted = true;
             }
           } : undefined,
@@ -1052,6 +1053,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           delivered = new Response(watchFirstOutput(preflight.response.body!), { status: preflight.response.status, headers: preflight.response.headers });
         } catch (error) {
           cleanupAbort(); releaseStreamTurn(); upstream.abort();
+          // A content frame the tap already saw ran upstream: the failure must not replay.
+          if (logCtx.generationStartedAt !== undefined) committed = true;
           if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
           if (isTranslatorBudgetExceededError(error)) return fail(502, "upstream translation buffer exceeded the safe limit", "api_error", "translation_buffer_limit");
           return fail(502, "upstream Messages stream failed before output", "api_error");
@@ -1079,10 +1082,10 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       }
       const message = await collectAnthropicMessage(tapped, options.echoModel ?? requestedModel, translatorBudget, collectorVerdictSink);
       cleanupAbort();
+      bindUsage(logCtx.usage);
       if (tapState.closeReason === "client_cancel" || req.signal.aborted) {
         return fail(499, "Client cancelled request", "api_error");
       }
-      bindUsage(logCtx.usage);
       if (message.type === "error") {
         const error = isRec(message.error) ? message.error : {};
         const text = typeof error.message === "string" ? error.message : "upstream stream failed";
@@ -1125,10 +1128,14 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         overflow: messagesRelayedOverflowPresentation(JSON.stringify(collected), collected),
         evidence: { status: 200, message: typeof originalError.message === "string" ? originalError.message : undefined },
       }) : message;
-      return retainUpstreamMessagesRequestId(Response.json(clientMessage, { status: finalStatus }), response.headers);
+      const collectedResponse = retainUpstreamMessagesRequestId(Response.json(clientMessage, { status: finalStatus }), response.headers);
+      if (committed && finalStatus >= 400) markResponseNonReplayable(collectedResponse);
+      return collectedResponse;
     } catch (error) {
       cleanupAbort();
       upstream.abort();
+      bindUsage(logCtx.usage);
+      if (logCtx.generationStartedAt !== undefined) committed = true;
       if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
       if (isTranslatorBudgetExceededError(error)) {
         return fail(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");

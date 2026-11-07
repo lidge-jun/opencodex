@@ -476,6 +476,64 @@ describe("native Messages candidates in a combo", () => {
       expect(response.status).toBe(200);
     }
   });
+  for (const folded of ["event: error\ndata: {oops\n\n", `event: error\ndata: ${JSON.stringify({ type: "ping" })}\n\n`]) {
+    test(`a fold committed by a malformed error event never replays (${folded.includes("oops") ? "bad JSON" : "type mismatch"})`, async () => {
+      answer = () => stream(prelude + folded + frame("message_stop"));
+      const { response } = await send({ stream: false });
+      expect(response.status).not.toBe(200);
+      expect(seen).toHaveLength(1);
+    });
+  }
+  test("a preflight buffer failure after a content frame never replays", async () => {
+    const budgets = await import("../../src/lib/translator-budget");
+    const create = budgets.createTranslatorBudget;
+    // The prelude's chunk is retained; the content chunk the tap already read overflows.
+    let charges = 0;
+    const spy = spyOn(budgets, "createTranslatorBudget").mockImplementation(options => {
+      const budget = create(options);
+      const charge = budget.chargeRetained.bind(budget);
+      budget.chargeRetained = (delta, scope) => {
+        if (scope.kind === "retained_collectors" && ++charges === 2) throw new budgets.TranslatorBudgetExceededError(scope.kind, 1);
+        charge(delta, scope);
+      };
+      return budget;
+    });
+    try {
+      answer = () => stream(prelude + textStart + textDelta + terminal);
+      const { response } = await send();
+      expect(charges).toBeGreaterThanOrEqual(2);
+      expect(response.status).not.toBe(200);
+      expect(seen).toHaveLength(1);
+    } finally { spy.mockRestore(); }
+  });
+  test("a streamed error after content is a failed child, not a completion", async () => {
+    answer = () => stream(prelude + textStart + textDelta + refusal);
+    const { text, rows } = await send();
+    expect(text).toContain("overloaded_error");
+    expect(rows[0]!.status).toBe(503);
+    expect(rows[0]!.terminalStatus).toBe("failed");
+  });
+  test("an observe-only workflow root counts one native send once", async () => {
+    const { resetWorkflowBudgetsForTest, workflowBudgetSnapshot } = await import("../../src/lib/workflow-budget");
+    const { bindWorkflowBudgetConfig } = await import("../../src/lib/workflow-budget-config");
+    resetWorkflowBudgetsForTest();
+    const settings = config();
+    settings.workflowBudget = { maxPhysicalSends: 2 };
+    bindWorkflowBudgetConfig(settings);
+    const headers = { "content-type": "application/json", "x-codex-parent-thread-id": "native-messages-root" };
+    // The HTTP ingress opens the root turn; this direct call opens it the same way.
+    expect((await import("../../src/server/workflow-refusal")).admitHttpWorkflowTurn(new Headers(headers))?.admitted).toBe(true);
+    try {
+      answer = () => Response.json({ type: "error", error: { type: "api_error", message: "fixture" } }, { status: 503, headers: { "retry-after": "0" } });
+      const requestId = `native-combo-${crypto.randomUUID()}`;
+      await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+        method: "POST", headers, body: JSON.stringify({ ...source, stream: false }),
+      }), settings, { model: "", provider: "" }, { requestId, start: Date.now() });
+      // Counted twice, the native send would leave the two-send root no room for the fallback.
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com", "backup.fixture.invalid"]);
+      expect(workflowBudgetSnapshot("native-messages-root")?.sends).toBe(2);
+    } finally { bindWorkflowBudgetConfig(null); resetWorkflowBudgetsForTest(); }
+  });
   test("native disabled keeps existing translated path", async () => {
     const { response } = await send({ config: config(false) });
     expect(response.status).toBe(200);
