@@ -502,7 +502,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 - Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
 - Approvers: [lidge-jun](https://github.com/lidge-jun)
-- Privacy: OpenCodex sends one anonymous daily usage summary (version, platform, counts; never prompts, outputs, keys, accounts, hosts or paths) to `telemetry.opencodex.me` only after the person installing or operating it has seen the notice (dashboard popup or interactive CLI prompt) and has not declined; it can be turned off at install time in that prompt and anytime with `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` or Proxy details; project-wide aggregates are public; otherwise data goes only where the user configures.
+- Privacy: opencodex sends one anonymous daily usage summary (version, platform and counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that prompt, in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Project-wide aggregates are public. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/ru/guides/telemetry/).
 
 ## Отказ от ответственности
 

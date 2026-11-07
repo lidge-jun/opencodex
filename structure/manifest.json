@@ -1431,12 +1431,13 @@
       "path": "telemetry.md",
       "tier": 5,
       "title": "Telemetry",
-      "scope": "Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, and CLI.",
+      "scope": "Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, CLI, and Cloudflare Worker collector.",
       "documents": [
         "src/telemetry/",
         "src/types/telemetry.ts",
         "src/server/management/telemetry-routes.ts",
-        "src/cli/telemetry.ts"
+        "src/cli/telemetry.ts",
+        "services/telemetry-collector/"
       ]
     }
   ],

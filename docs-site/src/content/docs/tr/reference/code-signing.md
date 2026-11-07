@@ -31,17 +31,7 @@ imzalanmasını yasaklar.
 
 ### Gizlilik
 
-OpenCodex, yalnızca programı kuran veya çalıştıran kişi bildirimi (kontrol paneli
-açılır penceresi veya etkileşimli CLI istemi) gördükten ve reddetmedikten sonra
-`telemetry.opencodex.me` adresine günde bir anonim kullanım özeti (sürüm, platform,
-sayımlar; istemler, çıktılar, anahtarlar, hesaplar, ana bilgisayar adları veya dosya
-yolları asla dahil edilmez) gönderir; kurulum sırasında bu istemden ve istediğiniz
-zaman `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` veya Proxy
-details üzerinden kapatılabilir; proje genelindeki toplamlar herkese açıktır; bunun
-dışında veriler yalnızca kullanıcının yapılandırdığı yerlere gider. Uygulamada
-OpenCodex, istekleri yapılandırdığınız sağlayıcılara iletir. Yeni sürümler için
-GitHub ve npm kayıt deposundan yayın meta verilerini de okur; bu güncelleme
-kontrolleri istemlerinizi, kimlik bilgilerinizi veya kullanım verilerinizi taşımaz.
+opencodex, yalnızca kuran veya çalıştıran kişi kontrol panelinde ya da etkileşimli bir CLI isteminde bildirimi gördükten ve reddetmedikten sonra `telemetry.opencodex.me` adresine günde bir kez anonim kullanım özeti (sürüm, platform ve sayaçlar; istemler, model çıktıları, anahtarlar, hesaplar, ana bilgisayar adları veya dosya yolları asla gönderilmez) gönderir. Bu özellik kurulum sırasındaki istemde, Proxy ayrıntılarında veya `ocx telemetry disable`, `OCX_TELEMETRY=0` ya da `DO_NOT_TRACK=1` ile kapatılabilir. Proje genelindeki toplu veriler herkese açıktır. Bunun dışındaki tüm veriler yalnızca yapılandırdığınız sağlayıcılara ve hizmetlere gider. Yeni sürümleri kontrol etmek için GitHub ve npm kayıt deposundan yayın meta verilerini de okur; bu sürüm kontrolleri istemlerinizi veya kimlik bilgilerinizi taşımaz. Bkz. [Telemetri ve Gizlilik](/tr/guides/telemetry/).
 
 ## İndirmeyi doğrulama
 
