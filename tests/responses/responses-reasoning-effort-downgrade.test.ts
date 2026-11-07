@@ -277,5 +277,47 @@ describe("rejected reasoning rungs", () => {
         { host: "fallback.example", effort: "max" },
       ]);
     });
+
+    test(`unfunded downgrade stops walking and hops to fallback when send budget exhausts (${adapter})`, async () => {
+      // With 4+ rungs (minimal, low, medium, high, max), walking the full ladder would need 5 sends.
+      // With COMBO_TARGET_BASE_SENDS = 3, per-target sends exhaust after 3 sends to opencode.ai.
+      // The unfunded downgrade returns the 400, and the combo hops to the fallback target.
+      writeSnapshot(["minimal", "low", "medium", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return url.host === "fallback.example"
+          ? chatSuccess("fallback served the turn", MODEL)
+          : new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(result).toContain("fallback served the turn");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "high" },
+        { host: "opencode.ai", effort: "medium" },
+        { host: "opencode.ai", effort: "low" },
+        { host: "fallback.example", effort: "max" },
+      ]);
+    });
   }
 });
