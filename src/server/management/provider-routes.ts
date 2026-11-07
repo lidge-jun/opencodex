@@ -153,6 +153,20 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
+/** Fields that can change the destination or account owning a passive observation. */
+function passiveProviderOwnership(provider: OcxProviderConfig | undefined): unknown {
+  if (!provider) return null;
+  return structuredClone({
+    adapter: provider.adapter, baseUrl: provider.baseUrl, authMode: provider.authMode ?? "key",
+    disabled: provider.disabled === true, apiKey: provider.apiKey,
+    apiKeyPool: provider.apiKeyPool?.map(({ id, key, disabled }) => ({ id, key, disabled: disabled === true }))
+      .sort((a, b) => a.id.localeCompare(b.id) || a.key.localeCompare(b.key)),
+    apiKeyTransport: provider.apiKeyTransport, headers: provider.headers,
+    responsesPath: provider.responsesPath, chatCompletionsPath: provider.chatCompletionsPath,
+    modelAdapters: provider.modelAdapters,
+  });
+}
+
 const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
@@ -1589,12 +1603,20 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
-      commitProviderPatch(config, () => {
-        config.providers[name] = candidate;
-      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      const previousOwnership = passiveProviderOwnership(config.providers[name]);
+      try {
+        commitProviderPatch(config, () => {
+          config.providers[name] = candidate;
+        }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      } finally {
+        // Persistence may rebase the row or publish before throwing. Compare the resulting
+        // live owner under the lock, after rollback when the save did not publish.
+        if (!isDeepStrictEqual(previousOwnership, passiveProviderOwnership(config.providers[name]))) {
+          clearPassiveKeyLimits(name);
+        }
+      }
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
-    clearPassiveKeyLimits(name);
     reconcileLiveStateStores();
     if (applied.editorTouched && !pacingOnly) {
       const { clearModelCache } = await import("../../codex/model-cache");

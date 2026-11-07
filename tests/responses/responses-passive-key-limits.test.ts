@@ -1,5 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
-import { getDefaultConfig } from "../../src/config";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getDefaultConfig, saveConfig } from "../../src/config";
+import { startServer } from "../../src/server";
+import * as destinationPolicy from "../../src/lib/destination-policy";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleResponsesCompact } from "../../src/server/responses/compact";
 import { handleChatCompletions } from "../../src/server/chat-completions";
@@ -11,6 +16,7 @@ import { ManagementRequest } from "../helpers/management-auth";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -207,3 +213,126 @@ test("an in-flight response stays attributed to its key after another key become
   await (await pending).text();
   expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "rotating-fixture", keyId: "first", model: "wire-model", windows: [{ remaining: 42 }, { dimension: "tokens", window: "minute" }] }]);
 });
+
+for (const scenario of [
+  { name: "pacing", patches: [{ requestPacing: { enabled: true, requestsPerMinute: 30 } }] },
+  { name: "note", patches: [{ note: "operator note" }, { baseUrl: "https://api.groq.com/openai/v1", disabled: false, authMode: "key" }] },
+  { name: "disabled ABA", patches: [{ disabled: true }, { disabled: false }], retire: true },
+  { name: "destination ABA", patches: [{ baseUrl: "https://api.x.ai/v1" }, { baseUrl: "https://api.groq.com/openai/v1" }], retire: true },
+  { name: "auth ABA", patches: [{ authMode: "local" }, { authMode: "key" }], retire: true },
+  { name: "account headers ABA", patches: [{ headers: { "OpenAI-Organization": "other-account" } }, { headers: null }], retire: true },
+  { name: "rebased destination ABA", patches: [{ requestPacing: { enabled: true, requestsPerMinute: 30 } }, { baseUrl: "https://api.groq.com/openai/v1" }], retire: true, rebase: true },
+  { name: "rebased account label", patches: [{ requestPacing: { enabled: true, requestsPerMinute: 30 } }], rebaseLabel: true },
+  { name: "provider replacement", patches: [], retire: true, replace: true },
+] as const) {
+  test(`authenticated provider PATCH ${scenario.name} preserves or retires cached and pending observations`, async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-passive-patch-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.OPENCODEX_HOME = join(home, "ocx");
+    process.env.CODEX_HOME = join(home, "codex");
+    const config = getDefaultConfig();
+    config.defaultProvider = "fallback";
+    config.providers = {
+      fallback: { adapter: "openai-chat", baseUrl: "https://example.com/v1", models: ["fallback"], liveModels: false },
+      observed: { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authMode: "key",
+        apiKey: "synthetic-patch-key", models: ["cached", "pending"], liveModels: false },
+    };
+    if ("rebaseLabel" in scenario) config.providers.observed!.apiKeyPool = [{ id: "account", key: "synthetic-patch-key", label: "before" }];
+    saveConfig(config);
+    const resolved = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const sent = new Promise<void>(resolve => { started = resolve; });
+    const networkFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname !== "api.groq.com") return networkFetch(input, init);
+      const model = JSON.parse(String(init?.body)).model;
+      if (model === "pending") { started(); await gate; }
+      return Response.json({ id: "synthetic", object: "chat.completion", model,
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] },
+      { headers: { "x-ratelimit-remaining-requests": model === "cached" ? "42" : "17" } });
+    }) as typeof fetch;
+    const previousAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "synthetic-patch-admin";
+    const server = startServer(0);
+    const auth = { "x-opencodex-api-key": "synthetic-patch-admin" };
+    const request = (path: string, init?: RequestInit) => networkFetch(new URL(path, server.url), init);
+    const send = (model: string) => request("/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: `observed/${model}`, input: "hi", stream: false, store: false }) });
+    const rows = async () => {
+      const response = await request("/api/provider-quotas", { headers: auth });
+      const body = await response.json();
+      expect(response.status).toBe(200);
+      expect(Array.isArray(body.passiveKeyLimits)).toBe(true);
+      return body.passiveKeyLimits.filter((row: { provider: string }) => row.provider === "observed")
+        .map((row: { model: string; windows: Array<{ remaining?: number }> }) => ({ model: row.model, remaining: row.windows[0]?.remaining }));
+    };
+    let pending: Promise<Response> | undefined;
+    try {
+      expect((await send("cached")).status).toBe(200);
+      pending = send("pending");
+      await sent;
+      expect(await rows()).toEqual([{ model: "cached", remaining: 42 }]);
+      if (scenario.name === "pacing") {
+        const denied = await request("/api/providers?name=observed", { method: "PATCH",
+          headers: { "content-type": "application/json" }, body: JSON.stringify({ disabled: true }) });
+        expect(denied.status).toBe(401);
+        const invalid = await request("/api/providers?name=observed", { method: "PATCH",
+          headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ disabled: "yes" }) });
+        expect(invalid.status).toBe(400);
+        expect(await rows()).toEqual([{ model: "cached", remaining: 42 }]);
+      }
+      if ("rebase" in scenario) {
+        const path = join(process.env.OPENCODEX_HOME!, "config.json");
+        const disk = JSON.parse(readFileSync(path, "utf8"));
+        disk.providers.observed.baseUrl = "https://api.x.ai/v1";
+        writeFileSync(path, JSON.stringify(disk));
+      }
+      if ("rebaseLabel" in scenario) {
+        const path = join(process.env.OPENCODEX_HOME!, "config.json");
+        const disk = JSON.parse(readFileSync(path, "utf8"));
+        disk.providers.observed.apiKeyPool[0].label = "after";
+        writeFileSync(path, JSON.stringify(disk));
+      }
+      for (const body of scenario.patches) {
+        const response = await request("/api/providers?name=observed", { method: "PATCH",
+          headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(body) });
+        expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+        if ("rebase" in scenario && "requestPacing" in body) {
+          const disk = JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME!, "config.json"), "utf8"));
+          expect(disk.providers.observed.baseUrl).toBe("https://api.x.ai/v1");
+        }
+      }
+      if ("rebaseLabel" in scenario) {
+        const disk = JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME!, "config.json"), "utf8"));
+        expect(disk.providers.observed.apiKeyPool[0].label).toBe("after");
+      }
+      if ("replace" in scenario) {
+        const response = await request("/api/providers", { method: "POST", headers: { ...auth, "content-type": "application/json" },
+          body: JSON.stringify({ name: "observed", provider: config.providers.observed }) });
+        expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+      }
+      if (!("retire" in scenario)) expect(await rows()).toEqual([{ model: "cached", remaining: 42 }]);
+      release();
+      expect((await pending).status).toBe(200);
+      const result = await rows();
+      if ("retire" in scenario) expect(result).toEqual([]);
+      else expect(result).toEqual(expect.arrayContaining([{ model: "cached", remaining: 42 }, { model: "pending", remaining: 17 }]));
+    } finally {
+      release();
+      if (pending) await pending.catch(() => {});
+      await server.stop(true);
+      if (previousAdmin === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdmin;
+      resolved.mockRestore();
+      observations.clearPassiveKeyLimits("observed");
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      removeTreeWithRetry(home);
+    }
+  }, 60_000);
+}
