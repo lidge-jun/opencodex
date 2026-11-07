@@ -81,10 +81,12 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
 }
 
 /** Provisioning runs under Home authority, before the read-only Child starts. */
-export function seedRouteDeviceClients(config: OcxConfig, version: string, deviceId: string, selected: readonly RouteClientId[] = ["codex", "claude"], activeDeviceIds?: readonly string[]): void {
+export function seedRouteDeviceClients(config: OcxConfig, version: string, deviceId: string, selected?: readonly RouteClientId[], activeDeviceIds?: readonly string[]): void {
   withConfigMutationLockSync(() => {
     if (activeDeviceIds) reconcileHomeRouteDevices(activeDeviceIds);
     initializeHomeRouteIntentDefaults(config, version);
+    // Absence means inherit, not an implicit device selection that masks Home changes.
+    if (selected === undefined) return;
     updateRouteIntentState(state => {
       const overrides = (state.devices[deviceId] ??= {});
       const revisions = ((state.revisions ??= {})[deviceId] ??= {});

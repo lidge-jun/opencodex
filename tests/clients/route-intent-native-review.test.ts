@@ -62,6 +62,17 @@ function scenario(body: string) {
   } finally { removeTreeWithRetry(home); }
 }
 
+test("Desktop off refuses first-party routing without changing its intent or files", () => scenario(`
+  const c=loadConfig(); delete c.clientIntegrations;
+  c.claudeCode={...c.claudeCode,desktopMode:'first-party'};saveConfig(c);
+  const before=readFileSync(join(library,'_meta.json'),'utf8');
+  const result=await reconcile(false);
+  expect(result.outcome).toBe('conflict');
+  expect(loadConfig().clientIntegrations?.['claude-desktop']).toBeUndefined();
+  expect(loadConfig().claudeCode.desktopMode).toBe('first-party');
+  expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(before);
+`), SPAWN_BUDGET_MS);
+
 test("unrelated Home routing change preserves default-on Grok and first-party Desktop", () => scenario(`
   const {injectGrokConfig}=await import('./src/grok/inject');
   const {syncHomeRouteTo}=await import('./src/routing/route-to-local');

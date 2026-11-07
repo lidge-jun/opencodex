@@ -56,9 +56,18 @@ async function applyNative(
   const guard = input.beforeWrite!;
   const home = input.home ?? homedir();
   const env = input.env ?? process.env;
+  const desktopMode = client === "claude-desktop" ? await import("../claude/desktop-first-party") : undefined;
   // The committed flag reaches the caller's working snapshot too. The management owner mirrors
   // these individual flags onto its live config; a copied request config cannot do that for it.
-  const committedConfig = withClientLifecycleSync(() => persistNativeRouteIntent(client, intent.enabled, guard, input.config), options.lifecycleLockDeps);
+  const committedConfig = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    guard();
+    if (desktopMode) {
+      const current = loadConfig();
+      if (desktopMode.resolveClaudeDesktopMode(current, desktopMode.observeClaudeDesktopMode(current)) === "first-party") return null;
+    }
+    return persistNativeRouteIntent(client, intent.enabled, guard, input.config);
+  }), options.lifecycleLockDeps);
+  if (committedConfig === null) return { client, outcome: "conflict", message: "Claude Desktop first-party mode needs its existing mode-switch transaction" };
   if (client === "codex") {
     const { getCodexHome, CODEX_CONFIG_PATH, DEFAULT_CATALOG_PATH } = await import("../codex/paths");
     const { injectCodexConfig, restoreNativeCodexAsync, currentExternalCodexModelProvider, isCodexRoutingInjected } = await import("../codex/inject");
@@ -128,8 +137,7 @@ async function applyNative(
     const result = desktop.removeDesktop3pStandardPivot({ lifecycleLockDeps: options.lifecycleLockDeps });
     return { client, target, outcome: result.ok ? "current" : result.reason === "conflict" ? "conflict" : "failed" };
   }
-  const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../claude/desktop-first-party");
-  const firstParty = (config: OcxConfig) => resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) === "first-party";
+  const firstParty = (config: OcxConfig) => desktopMode!.resolveClaudeDesktopMode(config, desktopMode!.observeClaudeDesktopMode(config)) === "first-party";
   const modeConflict: RouteClientOutcome = { client, target, outcome: "conflict", message: "Claude Desktop first-party mode needs its existing mode-switch transaction" };
   if (intent.enabled && state.kind === "connected") {
     const { applyRemoteDesktopStore } = await import("../claude/desktop-remote-store");

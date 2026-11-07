@@ -6,7 +6,7 @@ import { applyIntegration } from "../../src/integrations/writer";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { projectHomeRouteIntent } from "../../src/link/route-intent";
-import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState } from "../../src/routing/home-route-intent";
+import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState, seedRouteDeviceClients } from "../../src/routing/home-route-intent";
 import { clearRouteClientIntent, routeIntentStatePath, setRouteClientIntent } from "../../src/routing/route-intent-state";
 import { integrationEnabled } from "../../src/codex/desired-state";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
@@ -74,6 +74,31 @@ test.each(["grok", "claude-desktop"] as const)("a no-op enable does not invent a
   persistNativeRouteIntent(client, true, () => {}, snapshot);
   expect(snapshot.clientIntegrations?.[client]).toBeUndefined();
   expect(loadConfig().clientIntegrations?.[client]).toBeUndefined();
+});
+
+test("an enrollment without a client selection inherits current and later Home defaults", () => {
+  const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
+  const id = "lnk_0123456789abcdef";
+  setRouteClientIntent("codex", { enabled: false });
+  setRouteClientIntent("claude", { enabled: false });
+  seedRouteDeviceClients(config, "1", id);
+  let state = readHomeRouteIntentState(config);
+  expect(state.devices[id]).toBeUndefined();
+  expect(projectHomeRouteIntent(config, "1", id, state).clients.codex.enabled).toBe(false);
+  expect(projectHomeRouteIntent(config, "1", id, state).clients.claude.enabled).toBe(false);
+  setRouteClientIntent("codex", { enabled: true });
+  state = readHomeRouteIntentState(config);
+  expect(projectHomeRouteIntent(config, "1", id, state).clients.codex.enabled).toBe(true);
+});
+
+test("an explicit enrollment selection remains a device override", () => {
+  const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
+  const id = "lnk_0123456789abcdef";
+  setRouteClientIntent("codex", { enabled: false });
+  seedRouteDeviceClients(config, "1", id, ["codex"]);
+  const state = readHomeRouteIntentState(config);
+  expect(projectHomeRouteIntent(config, "1", id, state).clients.codex.enabled).toBe(true);
+  expect(projectHomeRouteIntent(config, "1", id, state).clients.claude.enabled).toBe(false);
 });
 
 test("a passive Home read preserves old owned intent; local overrides cannot rewrite migrated defaults", () => {

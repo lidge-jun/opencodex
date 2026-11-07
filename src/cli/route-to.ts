@@ -152,8 +152,12 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
   if (sync && status.deferred) {
     throw new RuntimeApiError("Local route sync is deferred; not all client configurations were reconciled. Retry when the Home and Child catalog are available.", 503, null);
   }
-  if (!read && status.devices.some(row => row.clients.some(client => client.applied === "failed" || client.applied === "conflict"))) {
+  const failedClients = status.devices.flatMap(row => row.clients.filter(entry => entry.applied === "failed" || entry.applied === "conflict"));
+  if (!read && failedClients.some(entry => client === undefined || entry.client === client)) {
     throw new RuntimeApiError("Route intent returned unresolved client failures or conflicts. Read status before retrying.", 409, null);
+  }
+  if (!read && client !== undefined && failedClients.length > 0) {
+    console.error("Route status includes unresolved failures or conflicts for other clients; review their status.");
   }
 }
 

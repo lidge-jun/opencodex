@@ -41,6 +41,14 @@ function fixture(response: unknown = status, code = 200) {
 }
 
 describe("Home route-to wire contract", () => {
+  test("a client decision reports unrelated conflicts without treating them as its own failure", async () => {
+    const result = structuredClone(status);
+    result.devices[0]!.clients.find(row => row.client === "claude-desktop")!.applied = "conflict";
+    expect(await command(["opencode", "on"], fixture(result).deps)).toBe(0);
+    expect(err.mock.calls.flat().join("\n")).toContain("other clients");
+    expect(await command(["claude-desktop", "on"], fixture(result).deps)).toBe(5);
+    expect(await command(["sync"], fixture(result).deps)).toBe(5);
+  });
   test("an empty device matrix cannot confirm a mutation", async () => {
     expect(await command(["aside", "on"], fixture({ schema: "ocx.route-to/1", devices: [] }).deps)).toBe(1);
     expect(err.mock.calls.flat().join("\n")).toContain("unverified");
