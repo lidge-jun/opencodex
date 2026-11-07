@@ -1182,6 +1182,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ? storeProviderKeyInKeychain(config, name)
       : restoreProviderKeyFromKeychain(config, name);
     if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
@@ -1192,8 +1193,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (typeof body.name !== "string" || typeof body.id !== "string" || typeof body.paused !== "boolean") return jsonResponse({ error: "name, id and paused required" }, 400);
     if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
     const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
-    return setProviderApiKeyPaused(config, body.name, body.id, body.paused)
-      ? jsonResponse({ ok: true }) : jsonResponse({ error: "key not found" }, 404);
+    if (!setProviderApiKeyPaused(config, body.name, body.id, body.paused)) return jsonResponse({ error: "key not found" }, 404);
+    return jsonResponse({ ok: true });
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };

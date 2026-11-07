@@ -8,6 +8,7 @@ import { isRec } from "../../claude/inbound-records";
 import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
+import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -957,7 +958,7 @@ export async function prepareResponsesTransport(
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
             // provider reselected above was not, so it takes the HTTP fallback under its own route.
             const physicalFetch = ((input, physicalInit) => ws?.provider === route.provider ? execute(input, physicalInit) : sendWithConnectionPolicy(
-              distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
+              passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
                 ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined) },

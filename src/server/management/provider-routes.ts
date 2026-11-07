@@ -74,6 +74,7 @@ import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studi
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
+import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { probeJevDecisionProvider } from "../../combos/jev";
@@ -889,6 +890,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const now = Date.now();
     return jsonResponse({
       ...snapshot,
+      passiveKeyLimits: listPassiveKeyLimits(config),
       reports: snapshot.reports.map(report => ({
         ...report,
         routingQuota: providerRoutingQuota(config, report.provider, now),
@@ -1007,6 +1009,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (sourceChanged || currentDiskConfig === null) {
       return jsonResponse({ error: "provider reload source changed" }, 409);
     }
+    clearPassiveKeyLimits(name);
     reconcileLiveStateStores();
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
@@ -1114,6 +1117,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     cleanupRemovedGcpCredentials(removedCredentials);
     adoptProviderEditorCandidate(config, outcome.value.config);
+    clearPassiveKeyLimits();
     reconcileLiveStateStores();
     refreshConfigDerivedRegistries(outcome.value.config);
     clearGatherRoutedModelsInflight();
@@ -1393,6 +1397,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
     });
     if (validationError !== undefined) return jsonResponse({ error: validationError }, 400);
+    clearPassiveKeyLimits(name);
     cleanupRemovedGcpCredentials(removedCredentials);
     reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
@@ -1584,9 +1589,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
-      commitProviderPatch(config, () => {
-        config.providers[name] = candidate;
-      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      const previousOwnership = passiveProviderOwnership(config.providers[name]);
+      try {
+        commitProviderPatch(config, () => {
+          config.providers[name] = candidate;
+        }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      } finally {
+        // Persistence may rebase the row or publish before throwing. Compare the resulting
+        // live owner under the lock, after rollback when the save did not publish.
+        if (!isDeepStrictEqual(previousOwnership, passiveProviderOwnership(config.providers[name]))) {
+          clearPassiveKeyLimits(name);
+        }
+      }
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();

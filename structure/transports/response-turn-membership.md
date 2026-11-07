@@ -53,7 +53,7 @@ The trusted `completedToolBlocks` build metadata is set only for authenticated o
 streaming Responses requests with durable membership and without compaction. It reaches initial,
 retry and queued rebuilds through `src/server/responses/adapter-dispatch.ts` and
 `src/server/responses/request-transport.ts`; missing metadata keeps earlier tool delivery off.
-This structural mechanism does not alter supplier bodies, reasoning effort, retry policy,
+`src/server/responses/request-transport.ts` also records eligible key rate-limit headers through the process-local passive observation owner, without changing routing. This structural mechanism does not alter supplier bodies, reasoning effort, retry policy,
 settlement or provider-opaque replay scope.
 
 The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).

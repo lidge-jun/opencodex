@@ -68,6 +68,7 @@ import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
@@ -570,8 +571,8 @@ export async function runNativeChatAttempt(
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
                 const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                  distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
-                    route.providerName, activeProvider, request.url),
+                  passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
+                    route.providerName, activeProvider, request.url), config, route.providerName, activeProvider),
                   String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
                 )) as typeof fetch;
                 localUpstream = isLocalUpstream(request.url);

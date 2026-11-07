@@ -11,6 +11,7 @@ import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { GCP_CREDENTIAL_MARKER_PREFIX, isGcpCredentialMaterial, parseGcpCredentialJson } from "../lib/gcp-adc";
 import { invalidateResolvedProviderKeyCache, probeProviderKeychain, providerKeychainEntry } from "./api-key-resolve";
+import { clearPassiveKeyAccount } from "./passive-key-observation";
 import type { AccountQuotaFields } from "./quota-types";
 import { commitProviderApiKeySelection } from "./api-key-selection";
 import { cleanupRemovedGcpCredentials } from "./gcp-credential-cleanup";
@@ -280,7 +281,8 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
           return { changed: true, selectionChanged: true, value: stored[0]!.id };
         });
         if (committed.status === "committed") {
-          invalidateResolvedProviderKeyCache();
+          for (const entry of stored) clearPassiveKeyAccount(name, entry.id);
+          invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
           return { id: committed.value };
         }
         cleanupRemovedGcpCredentials(created);
@@ -308,6 +310,7 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
     return { changed: true, selectionChanged: true, value: id };
   });
   if (committed.status !== "committed") return { error: "provider selection unavailable" };
+  clearPassiveKeyAccount(name, id);
   return { id };
 }
 
@@ -356,7 +359,8 @@ export function removeProviderApiKey(config: OcxConfig, name: string, id: string
     return { changed: true, value: true };
   });
   if (committed.status !== "committed" || !committed.value) return false;
+  clearPassiveKeyAccount(name, id);
   if (removed?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) cleanupRemovedGcpCredentials([removed]);
-  invalidateResolvedProviderKeyCache();
+  invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
   return true;
 }
