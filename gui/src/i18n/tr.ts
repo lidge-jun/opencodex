@@ -3863,6 +3863,7 @@ export const tr: Record<TKey, string> = {
   "models.aliasStale": "eski",
   "connection.discovering": "Yerel ve paylaşılan hedefler aranıyor…",
   "connection.machineUnavailable": "Yerel makine bağlantısı kullanılamıyor. Paylaşılan istekler yerele yönlendirilmedi.",
+  "connection.clientStateChanged": "Bu Child'ın kayıtlı Remote Link bağlantısı eksik veya artık başka bir sahibi ya da bağlantıyı gösteriyor, bu yüzden çalışan Child ile eşleşmiyor. Yeniden bağlamadan önce bu Child'ı durdurun veya yeniden başlatın ve bağlantısını kontrol edin.",
   "connection.linkManaged": "Remote Link ({linkId}) üzerinden Home {home} tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.linkManagedUnnamed": "Remote Link ({linkId}) üzerinden Home tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.disconnect": "Merkez bağlantısını kes",
