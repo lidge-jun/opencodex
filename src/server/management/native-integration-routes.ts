@@ -1052,9 +1052,10 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     return handleNativeIntegrationRoutesUnlocked(ctx);
   }
   if (ctx.config.runtimeRole === "client") return jsonResponse({ error: "Route decisions are owned by the Home", code: "link_child_read_only" }, 403);
-  try { return await withLinkApply(() => handleNativeIntegrationRoutesUnlocked(ctx)); }
+  try { return await settleConfigRoot(configRoot(), () => withLinkApply(() => handleNativeIntegrationRoutesUnlocked(ctx))); }
   catch (error) {
     if (error instanceof LinkApplyBusyError) return refusal(409, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "config_busy", "Another Home apply is running. Nothing was written; retry in a moment.");
+    if (error instanceof WindowsSecretAclSettleTimeoutError) return refusal(500, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "write_failed", "Config ACL settlement timed out. Nothing was written; retry after it settles.");
     throw error;
   }
 }

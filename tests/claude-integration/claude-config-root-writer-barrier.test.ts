@@ -243,6 +243,7 @@ test.each([["CLI release", false, false], ["CLI timeout", true, false], ["native
   try {
     await parent.reached; await turn();
     expect(parent.descendants).toEqual([]);
+    if (native) expect(existsSync(join(root, "link", "apply-lock.sqlite"))).toBe(false);
     expect(readFileSync(file, "utf8")).toBe(original);
     expect(settled).toBe(false);
     if (timeout) {
