@@ -22,6 +22,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Checks for a nonempty image URL string in either supported shape, not URL syntax or reachability. */
 function hasUsableImageUrl(part: Record<string, unknown>): boolean {
   if (part.type !== "image_url") return false;
   const imageUrl = part.image_url;
