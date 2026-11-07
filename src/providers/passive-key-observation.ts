@@ -20,6 +20,20 @@ const seenResponses = new WeakSet<Response>();
 const incarnations = new Map<string, { name: string; owner: string }>();
 const MAX_INCARNATIONS = 512;
 
+/** Fields that can change the destination or account owning a passive observation. */
+export function passiveProviderOwnership(provider: OcxProviderConfig | undefined): unknown {
+  if (!provider) return null;
+  return structuredClone({
+    adapter: provider.adapter, baseUrl: provider.baseUrl, authMode: provider.authMode ?? "key",
+    disabled: provider.disabled === true, apiKey: provider.apiKey,
+    apiKeyPool: provider.apiKeyPool?.map(({ id, key, disabled }) => ({ id, key, disabled: disabled === true }))
+      .sort((a, b) => a.id.localeCompare(b.id) || a.key.localeCompare(b.key)),
+    apiKeyTransport: provider.apiKeyTransport, headers: provider.headers,
+    responsesPath: provider.responsesPath, chatCompletionsPath: provider.chatCompletionsPath,
+    modelAdapters: provider.modelAdapters,
+  });
+}
+
 /** Invalidate both stored and in-flight observations after key-store mutation. */
 export function clearPassiveKeyLimits(name?: string): void {
   passiveKeyLimits.clear(name);

@@ -74,7 +74,7 @@ import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studi
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
-import { clearPassiveKeyLimits, listPassiveKeyLimits } from "../../providers/passive-key-observation";
+import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { probeJevDecisionProvider } from "../../combos/jev";
@@ -152,20 +152,6 @@ type ProviderPatchApplication =
       enablingOpenAi: boolean;
       headersTouched: boolean;
     };
-
-/** Fields that can change the destination or account owning a passive observation. */
-function passiveProviderOwnership(provider: OcxProviderConfig | undefined): unknown {
-  if (!provider) return null;
-  return structuredClone({
-    adapter: provider.adapter, baseUrl: provider.baseUrl, authMode: provider.authMode ?? "key",
-    disabled: provider.disabled === true, apiKey: provider.apiKey,
-    apiKeyPool: provider.apiKeyPool?.map(({ id, key, disabled }) => ({ id, key, disabled: disabled === true }))
-      .sort((a, b) => a.id.localeCompare(b.id) || a.key.localeCompare(b.key)),
-    apiKeyTransport: provider.apiKeyTransport, headers: provider.headers,
-    responsesPath: provider.responsesPath, chatCompletionsPath: provider.chatCompletionsPath,
-    modelAdapters: provider.modelAdapters,
-  });
-}
 
 const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
