@@ -15,6 +15,10 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 // envelopes verbatim, and the upstream refused them as invalid_encrypted_content. Only the custom
 // gateway send lowered them; ordinary turns always do.
 const fetchBefore = globalThis.fetch; const homeBefore = process.env.OPENCODEX_HOME;
+const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"] as const;
+let proxyBefore: Array<string | undefined> = [];
+beforeEach(() => { proxyBefore = proxyKeys.map(key => process.env[key]); for (const key of proxyKeys) delete process.env[key]; });
+afterEach(() => { for (const [index, key] of proxyKeys.entries()) { if (proxyBefore[index] === undefined) delete process.env[key]; else process.env[key] = proxyBefore[index]; } });
 let home: string; let release: (() => void) | undefined;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ocx-native-compact-ocx-envelope-")); process.env.OPENCODEX_HOME = home; release = acquireOwnedSpendHome(); clearCompactHandoffRoutesForTests(); });
 afterEach(() => { globalThis.fetch = fetchBefore; release?.(); clearCompactHandoffRoutesForTests(); if (homeBefore === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = homeBefore; removeTreeWithRetry(home); });
