@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS daily_models (
   day TEXT NOT NULL,
   provider_kind TEXT NOT NULL,
   model_family TEXT NOT NULL,
+  installs INTEGER NOT NULL DEFAULT 0,
   requests INTEGER NOT NULL DEFAULT 0,
   input INTEGER NOT NULL DEFAULT 0,
   cache_read INTEGER NOT NULL DEFAULT 0,
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS daily_models (
 CREATE TABLE IF NOT EXISTS daily_errors (
   day TEXT NOT NULL,
   cause TEXT NOT NULL,
+  installs INTEGER NOT NULL DEFAULT 0,
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (day, cause)
 );
