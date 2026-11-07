@@ -1,3 +1,4 @@
+import { isPlainObject } from "../../lib/plain-data";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
@@ -1860,6 +1861,17 @@ export async function preparePassthroughExchange(
         sendBudgetState.pendingHopPermit = allowance.permit;
         reasoningEffortDowngradeGuard.attempted = true;
         parsed.options.reasoning = downgrade.effort;
+        if (isPlainObject(parsed._rawBody)) {
+          const rawBody = parsed._rawBody as Record<string, unknown>;
+          const rawReasoning = isPlainObject(rawBody.reasoning)
+            ? { ...(rawBody.reasoning as Record<string, unknown>), effort: downgrade.effort }
+            : { effort: downgrade.effort };
+          parsed._rawBody = {
+            ...rawBody,
+            reasoning: rawReasoning,
+            ...("reasoning_effort" in rawBody ? { reasoning_effort: downgrade.effort } : {}),
+          };
+        }
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
           const result = await rebuildAndRefetch("reasoning-effort-downgrade");

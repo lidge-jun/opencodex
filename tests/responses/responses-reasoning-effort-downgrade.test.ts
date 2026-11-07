@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
-import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import { resetReasoningMetadataCachesForTests } from "../../src/providers/reasoning-metadata";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -311,6 +311,7 @@ describe("rejected reasoning rungs", () => {
 
       expect(response.status).toBe(200);
       expect(result).toContain("fallback served the turn");
+      expect(isComboTargetInCooldown("effort", { provider: "first", model: MODEL })).toBe(false);
       expect(attempts).toEqual([
         { host: "opencode.ai", effort: "max" },
         { host: "opencode.ai", effort: "high" },
@@ -320,4 +321,63 @@ describe("rejected reasoning rungs", () => {
       ]);
     });
   }
+
+  test("passthrough retry applies downgraded effort for custom destination outside metadata list", async () => {
+    const CUSTOM_MODEL = "custom-external-reasoner";
+    const attempts: Array<{ host: string; effort: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      attempts.push({ host: url.host, effort: effortOf(body) });
+      return attempts.length === 1
+        ? new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } })
+        : chatSuccess("custom destination served high effort", CUSTOM_MODEL);
+    }) as typeof fetch;
+    const comboConfig = {
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://custom.example/v1",
+          authMode: "key",
+          apiKey: "custom-key",
+          reasoningEfforts: ["low", "high", "max"],
+        },
+        fallback: {
+          adapter: "openai-chat",
+          baseUrl: "https://fallback.example/v1",
+          authMode: "key",
+          apiKey: "fallback-key",
+        },
+      },
+      combos: {
+        custom_effort: {
+          strategy: "failover",
+          targets: [{ provider: "custom", model: CUSTOM_MODEL }, { provider: "fallback", model: CUSTOM_MODEL }],
+        },
+      },
+    } as OcxConfig;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/custom_effort",
+        store: false,
+        reasoning: { effort: "max" },
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "go" }] }],
+      }),
+    });
+
+    const response = await handleResponses(req, comboConfig, logCtx);
+    const result = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(result).toContain("custom destination served high effort");
+    expect(attempts).toEqual([
+      { host: "custom.example", effort: "max" },
+      { host: "custom.example", effort: "high" },
+    ]);
+    expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
+  });
 });
