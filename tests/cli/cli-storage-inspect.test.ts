@@ -270,9 +270,13 @@ describe("ocx integration native", () => {
   });
 
   test("a native toggle updates Home route intent", async () => {
-    const { calls, deps } = harness(() => ({ json: { ok: true } }));
+    const { calls, deps } = harness(() => ({ json: { schema: "ocx.route-to/1", devices: [{ id: "home", clients: [
+      { client: "claude-desktop", intent: "off", source: "default", applied: "current" },
+    ] }] } }));
     const cap = capture();
-    try { await handleIntegrationCommand(["native", "claude-desktop", "off"], deps); } finally { cap.restore(); }
+    let code: number;
+    try { code = await handleIntegrationCommand(["native", "claude-desktop", "off"], deps); } finally { cap.restore(); }
+    expect(code!).toBe(0);
     expect(calls[0]).toMatchObject({
       method: "PUT",
       path: "/api/route-to",

@@ -171,6 +171,9 @@ export async function recycleStandalone(
   const replacementEnv = port && process.env.OCX_SERVICE !== "1"
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
+  activeReporter?.stop(); activeReporter = null;
+  activeRouteWatch?.stop(); activeRouteWatch = null;
+  activeRouteSync?.stop(); activeRouteSync = null;
   try {
     await activeSupervisor?.stop();
   } catch (error) {
