@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Window } from "../../gui/node_modules/happy-dom";
 import { createElement } from "../../gui/node_modules/react";
 import { renderToStaticMarkup } from "../../gui/node_modules/react-dom/server";
 import { DICTS, I18nContext, type TFn } from "../../gui/src/i18n/shared";
@@ -9,6 +10,7 @@ import { StartupHeroSection } from "../../gui/src/pages/startup-sections";
 import { DashboardOverviewHead } from "../../gui/src/pages/dashboard-overview-head";
 import type { StartupHealthData } from "../../gui/src/pages/startup-shared";
 import { diagnoseMacDesktopStartup } from "../../src/service/desktop-startup";
+import { repoPath } from "../helpers/repo-root";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   beginPollEpochs,
@@ -24,8 +26,27 @@ import {
   startupRiskDetailKey,
 } from "../../gui/src/startup-health-ui";
 
+// Classic is a partial overlay: resolve its relative imports as Vite's classic overlay does.
+const classicRoot = repoPath("gui/classic/src");
+const sharedRoot = repoPath("gui/src");
+Bun.plugin({ name: "classic-test-overlay", setup(build) {
+  build.onLoad({ filter: /gui[\\/]classic[\\/]src[\\/].*\.tsx$/ }, ({ path }) => {
+    const contents = readFileSync(path, "utf8").replace(/(from\s+["'])(\.[^"']+)(["'])/g, (_match, prefix, specifier, quote) => {
+      const shared = join(sharedRoot, path.slice(classicRoot.length + 1), "..", specifier);
+      for (const suffix of [".ts", ".tsx", "/index.ts", "/index.tsx"]) {
+        const candidate = shared + suffix;
+        const classic = join(classicRoot, candidate.slice(sharedRoot.length + 1));
+        if (existsSync(classic)) return prefix + classic.replaceAll("\\", "/") + quote;
+        if (existsSync(candidate)) return prefix + candidate.replaceAll("\\", "/") + quote;
+      }
+      throw new Error(`Cannot resolve Classic import ${specifier} from ${path}`);
+    });
+    return { contents, loader: "tsx" };
+  });
+} });
+
 describe("startup health UI decisions", () => {
-  test("confirmed absent supervision reaches both dashboard editions and their recovery guidance", () => {
+  test("confirmed absent supervision reaches both dashboard editions and their recovery guidance", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-startup-ui-"));
     try {
       const id = join(home, "Library/Application Support/com.opencodex.desktop/install-id");
@@ -36,6 +57,8 @@ describe("startup health UI decisions", () => {
         readPid: () => 100, readRuntimePortPid: () => null,
         run: (_command, args) => args[1] === "100" ? `200 ${process.execPath}` : `1 ${process.execPath}`,
       })!;
+      expect(desktop).toMatchObject({ owned: true, running: false, viable: false, loginState: "unknown" });
+      expect(desktop.supervisionUnknown).not.toBe(true);
       const data = { status: "at-risk", routingKind: "opencodex-local", desktop, diagnosticStale: false,
         protection: "none", shimCoverage: "none", autostartEnabled: false } as StartupHealthData;
       const status = mapStartupHealthProbe(data);
@@ -51,13 +74,37 @@ describe("startup health UI decisions", () => {
       const main = wrap(createElement(DashboardOverviewHead, headProps));
       expect(main).toContain(DICTS.en["startup.summary.atRisk"]);
       expect(main).not.toContain(DICTS.en["startup.unverified"]);
-      // Classic's overlay uses the same mapper, then renders its own head and hero.
-      const classicHead = readFileSync(new URL("../../gui/classic/src/pages/dashboard-overview-head.tsx", import.meta.url), "utf8");
-      const classicHero = readFileSync(new URL("../../gui/classic/src/pages/startup-sections.tsx", import.meta.url), "utf8");
-      expect(classicHead).toContain('startupHealth === "at-risk"');
-      expect(classicHead).toContain('"startup.summary.atRisk"');
-      expect(classicHero).toContain("startupPresentation(data, failed)");
-      expect(classicHero).toContain("startupRiskDetailKey(data)");
+      const { DashboardOverviewHead: ClassicHead } = await import("../../gui/classic/src/pages/dashboard-overview-head");
+      const { StartupHeroSection: ClassicHero } = await import("../../gui/classic/src/pages/startup-sections");
+      const window = new Window();
+      const renderClassic = (health: StartupHealthData) => {
+        const head = wrap(createElement(ClassicHead, { ...headProps, startupHealth: mapStartupHealthProbe(health),
+          maMode: "default", maBusy: false, maHelpTriggerRef: { current: null }, maHelpOpen: false,
+          setMaHelpOpen: () => {}, switchMaMode: async () => {}, maError: null }));
+        const hero = wrap(createElement(ClassicHero, { failed: false, data: health }));
+        const headNode = window.document.createElement("div");
+        const heroNode = window.document.createElement("div");
+        headNode.innerHTML = head;
+        heroNode.innerHTML = hero;
+        return { head: headNode.textContent ?? "", hero: heroNode.textContent ?? "" };
+      };
+      const risk = renderClassic(data);
+      expect(risk.head).toContain(DICTS.en["startup.summary.atRisk"]);
+      expect(risk.head).not.toContain(DICTS.en["startup.unverified"]);
+      expect(risk.hero).toContain(DICTS.en["startup.status.atRisk"]);
+      expect(risk.hero).toContain(DICTS.en["startup.desktopRecovery"]);
+
+      const runningDesktop = { ...desktop, running: true, loginState: "unknown", loginEnabled: false, viable: false } as const;
+      const unknown = renderClassic({ ...data, desktop: runningDesktop });
+      expect(unknown.head).toContain(DICTS.en["startup.unverified"]);
+      expect(unknown.hero).toContain(DICTS.en["startup.loginUnverifiedTitle"]);
+      expect(unknown.hero).not.toContain(DICTS.en["startup.status.atRisk"]);
+
+      const enabled = renderClassic({ ...data, status: "protected", protection: "desktop", rebootSafe: true,
+        desktop: { ...runningDesktop, loginState: "enabled", loginEnabled: true, viable: true } });
+      expect(enabled.head).toContain(DICTS.en["startup.summary.protected"]);
+      expect(enabled.hero).toContain(DICTS.en["startup.safeDetail"]);
+      expect(enabled.hero).not.toContain(DICTS.en["startup.status.atRisk"]);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
   test("desktop login evidence distinguishes unverified, disabled and protected presentation", () => {
