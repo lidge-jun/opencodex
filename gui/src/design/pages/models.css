@@ -420,10 +420,13 @@
 /* the full-bleed container drops its padding; give the title back its top air */
 .main-inner.main-inner--combos > .page-head { padding-top: 28px; }
 #models-panel-combos .combos-workspace-rail { background: transparent; border-right: 1px solid var(--ocx-line); }
-#models-panel-combos .combos-workspace-rail-header { padding: 16px 16px 10px; border-bottom: 0; }
+#models-panel-combos .combos-workspace-rail-header { padding: 16px 16px 10px 36px; border-bottom: 0; flex-wrap: wrap; }
+#models-panel-combos .combos-workspace-rail-heading { flex-wrap: wrap; overflow-wrap: anywhere; }
+#models-panel-combos .combos-workspace-rail-header .btn { max-width: 100%; min-width: 0; height: auto; white-space: normal; overflow-wrap: anywhere; }
 #models-panel-combos .combos-workspace-rail-header .combos-workspace-rail-title { font-size: 15px; letter-spacing: -0.01em; }
 #models-panel-combos .combos-workspace-rail-count { color: var(--ocx-fg-subtle); font-family: var(--font-ui); font-size: 12px; font-variant-numeric: tabular-nums; }
-#models-panel-combos .cwi-jev-quick-action { padding: 0 12px 8px; }
+#models-panel-combos .cwi-jev-quick-action { padding: 0 12px 8px 36px; }
+#models-panel-combos .combos-workspace-rail-empty { padding-left: 36px; }
 #models-panel-combos .cwi-search-row { padding: 4px 12px 10px; border-bottom: 0; }
 #models-panel-combos .cwi-search-input { height: 32px; min-height: 0; font-size: 13px; }
 #models-panel-combos .combos-workspace-rail-group + .combos-workspace-rail-group { margin-top: 6px; }

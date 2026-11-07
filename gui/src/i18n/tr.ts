@@ -3495,7 +3495,7 @@ export const tr: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Model kataloğunda eksik — üye yetenekleri eksik veya uyumsuz (eksik bağlam penceresi / meta veri veya boş modalite kesişimi). Takma ada göre yönlendirme hâlâ çalışır",
   "cws.attention.allTargetsExhausted": "Etkin hedeflerin tüm kotaları tükendi",
   "cws.emptyTitle": "İlk kombonuzu oluşturun",
-  "cws.empty.createDesc": "Sanal bir model adlandırın ve iki veya daha fazla arka ucu bağlayın.",
+  "cws.empty.createDesc": "En az bir hedef ekleyin; yük devretme için iki veya daha fazla hedef kullanın.",
   "cws.backToAll": "Tüm kombolara dön",
   "cws.allCombos": "Tüm kombolar",
   "cws.copyModel": "ID kopyala",
