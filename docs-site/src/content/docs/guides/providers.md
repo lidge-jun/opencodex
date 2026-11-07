@@ -182,7 +182,8 @@ for a model replaces its row.
 On native Chat Completions, for a model with reasoning enabled, a caller's `ultra` is sent as `max`, or as the model's highest
 declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
 unless the model's declared ladder lists `ultra` itself. A `reasoningEffortMap` alias for `max`
-applies to the folded value, and `__omit__` drops the field. Models with reasoning disabled (for
+applies to the folded value, and `__omit__` drops the field, except on thinking-toggle models,
+where the fold skips the alias map ([#8266](https://github.com/lidge-jun/opencodex/issues/8266)). Models with reasoning disabled (for
 example `noReasoningModels`) drop `reasoning_effort` entirely. Other caller values are forwarded
 as sent unless an effort pin or a qualifying effort cap rewrites them; rewritten values also go
 through the provider's wire mapping.
