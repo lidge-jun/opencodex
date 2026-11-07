@@ -21,6 +21,8 @@ import type { ProviderQuota, ProviderRoutingQuota } from "../quota-types";
 export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
+/** Probe-bound reset identity, held only in memory and never part of the report DTO. */
+export const accountReportObservationKeys = new WeakMap<ProviderQuotaReport, string>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
 /** Credential identity captured by the probe; never serialized with the report. */
 export const keyReportCredentialIds = new WeakMap<ProviderQuotaReport, string>();
@@ -60,6 +62,8 @@ export function validateJoinedReports(response: ProviderQuotaResponse, config: O
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
 export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();
 export let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
+export let providerQuotaBeforeObservationForTests: (() => void | Promise<void>) | null = null;
+export function setProviderQuotaBeforeObservationForTests(hook: (() => void | Promise<void>) | null): void { providerQuotaBeforeObservationForTests = hook; }
 
 /** Test-only seam for identity/config invalidation after probes but before publication. */
 export function setProviderQuotaBeforePublishForTests(

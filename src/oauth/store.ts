@@ -21,6 +21,7 @@ import { publishCredentialSync } from "../local-credentials/generation";
  *   both append distinct identified accounts under multiauth.
  */
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
+import { observeAntigravityReportStore } from "./antigravity-quota-owner";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
@@ -365,17 +366,17 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) { notifyAuthStoreLoaded({}); return { store: {}, hadLegacy: false }; }
+  if (!existsSync(path)) { observeAntigravityReportStore({}); notifyAuthStoreLoaded({}); return { store: {}, hadLegacy: false }; }
   let result: { store: AuthStore; hadLegacy: boolean };
   try {
     result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
     backupInvalidConfig(path);
-    notifyAuthStoreLoaded({});
+    observeAntigravityReportStore({}); notifyAuthStoreLoaded({});
     return { store: {}, hadLegacy: false };
   }
   // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
-  notifyAuthStoreLoaded(result.store);
+  observeAntigravityReportStore(result.store); notifyAuthStoreLoaded(result.store);
   return result;
 }
 
@@ -426,7 +427,7 @@ function persist(store: AuthStore): void {
   }
   hardenConfigDir();
   publishCredentialSync(() => atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n"));
-  notifyAuthStoreLoaded(store);
+  observeAntigravityReportStore(store); notifyAuthStoreLoaded(store);
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }
