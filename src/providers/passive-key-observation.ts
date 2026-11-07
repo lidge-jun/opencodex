@@ -69,20 +69,23 @@ export function passiveKeyPhysicalFetch(
     let destination: URL;
     try { destination = new URL(url); } catch { return physicalFetch(input, init); }
     const vendor = destinations.get(destination.origin);
-    const model = extractPassiveWireModel(init?.body);
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     const key = snapshot.apiKey!;
-    const expectedAuth = vendor === "anthropic" && snapshot.apiKeyTransport !== "bearer"
-      ? headers.get("x-api-key") === key && !headers.has("authorization")
-      : headers.get("authorization") === `Bearer ${key}` && !headers.has("x-api-key");
     let owned = false;
     try {
-      owned = !!vendor && !!model && new URL(snapshot.baseUrl).origin === destination.origin
+      owned = !!vendor && new URL(snapshot.baseUrl).origin === destination.origin
         && destination.protocol === "https:" && !destination.username && !destination.password
         && paths[vendor].includes(destination.pathname) && !destination.search && !destination.hash
-        && (vendor !== "openai" || key.startsWith("sk-"))
-        && !headers.has("api-key") && expectedAuth && stillConfigured(config, name, snapshot);
+        && (vendor !== "openai" || key.startsWith("sk-"));
     } catch { /* An unprovable owner cannot receive a passive observation. */ }
+    if (owned) {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const expectedAuth = vendor === "anthropic" && snapshot.apiKeyTransport !== "bearer"
+        ? headers.get("x-api-key") === key && !headers.has("authorization")
+        : headers.get("authorization") === `Bearer ${key}` && !headers.has("x-api-key");
+      try { owned = !headers.has("api-key") && expectedAuth && stillConfigured(config, name, snapshot); }
+      catch { owned = false; /* An unprovable owner cannot receive a passive observation. */ }
+    }
+    const model = owned ? extractPassiveWireModel(init?.body) : undefined;
     const attempt = ++sequence;
     const generation = epoch;
     const providerGeneration = generationFor(name);

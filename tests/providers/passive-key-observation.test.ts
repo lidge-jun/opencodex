@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as wireModel from "../../src/providers/quota/passive-wire-model";
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
 import * as observations from "../../src/providers/passive-key-observation";
@@ -17,6 +18,42 @@ function fixture(name: string): OcxConfig {
 const init = { method: "POST", headers: { authorization: "Bearer synthetic-key" }, body: JSON.stringify({ model: "model" }) };
 const response = () => new Response(null, { headers: { "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "5" } });
 const trusted = (fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) => markPassiveKeyTransparent(fetcher as typeof globalThis.fetch);
+
+test("ineligible destinations and credentials never invoke the wire model parser", async () => {
+  const config = fixture("parser-gate");
+  let sends = 0;
+  const send = passiveKeyPhysicalFetch(trusted(async (_input, request) => {
+    sends++;
+    expect(request?.body).toBe(init.body);
+    return response();
+  }), config, "parser-gate", routedProviderConfig("parser-gate", config.providers["parser-gate"]!));
+  const parser = spyOn(wireModel, "extractPassiveWireModel");
+  try {
+    const target = "https://api.groq.com/openai/v1/chat/completions";
+    const withUserInfo = new URL(target);
+    withUserInfo.username = "fixture";
+    for (const [url, headers] of [
+      ["https://unsupported.example/v1/chat/completions", init.headers],
+      ["https://api.x.ai/v1/chat/completions", init.headers],
+      ["http://api.groq.com/openai/v1/chat/completions", init.headers],
+      ["https://api.groq.com:8443/openai/v1/chat/completions", init.headers],
+      [withUserInfo.href, init.headers],
+      ["https://api.groq.com/openai/v1/models", init.headers],
+      [`${target}?query=1`, init.headers],
+      [`${target}#fragment`, init.headers],
+      [target, { authorization: "Bearer wrong-key" }],
+      [target, { ...init.headers, "api-key": "other" }],
+      [target, { ...init.headers, "x-api-key": "other" }],
+    ] as const) {
+      await send(url, { ...init, headers });
+      expect(parser).not.toHaveBeenCalled();
+    }
+    await send(target, init);
+    expect(parser).toHaveBeenCalledTimes(1);
+    expect(sends).toBe(12);
+    expect(getPassiveKeyLimits(config, "parser-gate", "model")).toMatchObject([{ remaining: 5 }]);
+  } finally { parser.mockRestore(); observations.clearPassiveKeyLimits("parser-gate"); }
+});
 
 test("a same-origin non-inference target cannot publish passive limits", async () => {
   const config = fixture("wrong-path");
