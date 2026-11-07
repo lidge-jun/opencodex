@@ -42,7 +42,8 @@ every caller, and reads only caches other paths filled:
   destination and credential to match the owner of the report. Literal and environment keys are
   checked without publishing routing observations; keychain-backed reports are omitted because a
   passive read cannot establish currentness without consulting the OS keychain. The same rule
-  applies to passive provider quota reads.
+  applies to passive provider quota reads. Pool assembly selects enabled providers and validates
+  held reports after the Codex snapshot yields, against the configuration used for projection.
 
 Display-only `ProviderQuota` readings are excluded from both account and pooled decision windows.
 The rows remain present; without other evidence their quota is unknown. Account pause and reauth

@@ -306,10 +306,12 @@ function enabled(provider: OcxProviderConfig | undefined): provider is OcxProvid
 
 async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: QuotaPoolDeps): Promise<QuotaPool> {
   const now = (deps.now ?? Date.now)();
+  const codex = hasCodexPoolProvider(config) ? (await listCodexAuthAccountsSnapshot(config)).accounts : [];
+  // The snapshot yields; select providers and validate held reports against the same current
+  // configuration used below, with no further await between validation and projection.
   const names = Object.keys(config.providers).filter(name => enabled(config.providers[name])).sort();
   const reports = new Map(heldProviderQuotaReports(config).reports.map(report => [report.provider, report]));
   const codexPool = hasCodexPoolProvider(config);
-  const codex = codexPool ? (await listCodexAuthAccountsSnapshot(config)).accounts : [];
   const providers: QuotaPoolProvider[] = [];
   for (const name of names) {
     const provider = config.providers[name]!;

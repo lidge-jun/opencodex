@@ -95,6 +95,7 @@ afterEach(() => {
   setQuotaPoolIdentityHooksForTests();
   setProviderQuotaReportCache(null);
   clearAccountQuotaCache("xai");
+  clearAccountQuotaCache("kimi");
   resetQuotaPoolIdentityMemoForTests();
   if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = priorHome;
@@ -168,6 +169,60 @@ for (const reader of ["provider", "pool"] as const) {
 }
 
 describe("ocx.quota-pool/1 producer", () => {
+  for (const mutation of ["auth", "membership"] as const) test(`revalidates ${mutation} after the passive Codex snapshot yields`, async () => {
+    ensureQuotaPoolIdentity();
+    const oauth = { adapter: "openai-chat", baseUrl: "https://api.kimi.example/v1", authMode: "oauth" } as const;
+    const key = { adapter: "openai-chat", baseUrl: "https://key.example/v1", apiKey: "fixture-key" } as const;
+    const providers = {
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      kimi: { ...oauth }, removed: { ...key }, disabled: { ...key }, destination: { ...key },
+      unchanged: { ...key }, oauthControl: { ...oauth },
+    } as OcxConfig["providers"];
+    const current = { port: 0, defaultProvider: "kimi", providers } as OcxConfig;
+    const exhausted = { weeklyPercent: 100, updatedAt: NOW };
+    const inference = { weeklyPercent: 23, updatedAt: NOW };
+    await saveCredential("kimi", { access: "synthetic-kimi-access", refresh: "synthetic-kimi-refresh", expires: Date.now() + HOUR, accountId: "synthetic-kimi-account" } as never);
+    const kimiId = getAccountSet("kimi")!.accounts[0]!.id;
+    setCachedProviderAccountQuotaForTests("kimi", kimiId, { weeklyPercent: 56, updatedAt: NOW });
+    const reports = [
+      await bindProviderReportProbe(Promise.resolve(report("kimi", "oauth", exhausted)!), "kimi", providers.kimi!),
+      await bindProviderReportProbe(Promise.resolve(report("oauthControl", "oauth", exhausted)!), "oauthControl", providers.oauthControl!),
+      ...["removed", "disabled", "destination", "unchanged"].map(name => keyReport(name, "key", exhausted, providers[name]!, "fixture-key", inference)!),
+    ];
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports } });
+    const originalFetch = globalThis.fetch;
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; throw new Error("unexpected upstream call"); }) as typeof fetch;
+    try {
+      let settled = false;
+      const pending = readQuotaPool(current, { now: () => NOW }).then(result => { settled = true; return result; });
+      expect(settled).toBe(false);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      providers.kimi!.authMode = "key";
+      providers.kimi!.apiKey = "fixture-key";
+      if (mutation === "membership") {
+        delete providers.removed;
+        providers.disabled!.disabled = true;
+        providers.destination!.baseUrl = "https://other.example/v1";
+      }
+      const result = await pending;
+      if (!result.ok) throw new Error(result.error);
+      expect(QuotaPoolSchema.parse(result.pool)).toEqual(result.pool);
+      const byName = Object.fromEntries(result.pool.providers.map(row => [row.provider, row]));
+      expect(byName.kimi?.pooled.windows).toEqual([]);
+      expect(byName.kimi?.accounts.map(row => row.windows.map(w => w.usedPercent))).toEqual([[56]]);
+      if (mutation === "membership") {
+        expect(byName.removed).toBeUndefined();
+        expect(byName.disabled).toBeUndefined();
+        expect(byName.destination).toBeUndefined();
+      }
+      expect(byName.unchanged?.pooled.windows.map(w => [w.usedPercent, w.exhausted])).toEqual([[23, false]]);
+      expect(byName.oauthControl?.pooled.windows.map(w => [w.usedPercent, w.exhausted])).toEqual([[100, true]]);
+      expect(fetches).toBe(0);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test("uses key inference projections in the real assembled pool", async () => {
     ensureQuotaPoolIdentity();
     const providers = {
