@@ -437,12 +437,11 @@ export function isOpenRouterOpaque400Envelope(message: string): boolean {
   return isOpenRouterOpaque400Record(http400ErrorRecord(message));
 }
 
-/** Check for an uncoded generic 400 that may safely advance without cooling its target. */
+/** Check whether an uncoded numeric 400 is an opaque OpenRouter failure that may safely advance without cooling. */
 function isUncodedUpstream400(
   status: number,
   message: string,
   code?: string | null,
-  upstreamType?: string | null,
   options?: {
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
@@ -453,10 +452,9 @@ function isUncodedUpstream400(
     ? options.malformedResponseFormat
     : isMalformedResponseFormatRequest(status, message);
   if (malformed) return false;
-  const opaqueOpenRouter = options?.openRouterOpaque400 !== undefined
+  return options?.openRouterOpaque400 !== undefined
     ? options.openRouterOpaque400
     : isOpenRouterOpaque400Envelope(message);
-  return normalizedFailureCode(upstreamType) === "upstream_error" || opaqueOpenRouter;
 }
 
 /**
@@ -754,10 +752,10 @@ export function comboFailureCooldownScope(
   // through the same provider row carries the same key and will fail identically.
   if (status === 401 || status === 402 || status === 403) return "provider";
   if (PROVIDER_SCOPED_FAILURE_CODES.has(code)) return "provider";
-  // An explicitly generic provider error, or OpenRouter's opaque numeric-code wrapper, may be
-  // target-specific (for example a gateway rejecting a model's translated payload). It may
-  // advance the combo, but says nothing about target health and must not quarantine the target.
-  if (isUncodedUpstream400(status, message, options?.code, options?.upstreamType, options)) return "none";
+  // OpenRouter's opaque numeric-code wrapper may be target-specific (for example a gateway
+  // rejecting a model's translated payload). It may advance the combo, but says nothing about
+  // target health and must not quarantine the target.
+  if (isUncodedUpstream400(status, message, options?.code, options)) return "none";
   return "target";
 }
 
@@ -981,12 +979,10 @@ export function comboFailureDecision(
   // 400 / invalid_request_error envelope, so it must precede that stop. Exhaustion prose alone
   // never reaches this arm: a validation error can quote quota wording back (#7625).
   if (hasAccountExhaustionCode(options?.code)) return "hop";
-  // A response explicitly typed as `upstream_error` is the provider's generic failure envelope,
-  // not an assertion that the caller sent malformed input. OpenRouter can also wrap the same
-  // opaque failure as a numeric 400 with `metadata.raw: "ERROR"` and no type. Let a heterogeneous
-  // combo try another target in either case, while keeping malformed response_format diagnostics
-  // terminal and preserving any structured code.
-  if (isUncodedUpstream400(status, message, options?.code, options?.upstreamType, options)) return "hop";
+  // OpenRouter can wrap an opaque provider failure as a numeric 400 with `metadata.raw: "ERROR"`
+  // and no type. Let a heterogeneous combo try another target in this case, while keeping
+  // malformed response_format diagnostics terminal and preserving any structured code.
+  if (isUncodedUpstream400(status, message, options?.code, options)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

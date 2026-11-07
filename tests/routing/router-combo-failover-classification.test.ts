@@ -85,12 +85,7 @@ describe("combo failure cooldown scope", () => {
     )).toBe("none");
   });
 
-  test("an explicitly generic upstream 400 hops without cooling the failed target", () => {
-    const message = "Provider error 400: Provider returned error";
-    const genericUpstream = { upstreamType: "upstream_error" };
-    expect(comboFailureDecision(400, message, genericUpstream)).toBe("hop");
-    expect(comboFailureCooldownScope(400, message, genericUpstream)).toBe("none");
-
+  test("an opaque OpenRouter numeric-400 hops without cooling the failed target", () => {
     // OpenRouter's Stealth wrapper drops the type and reports the HTTP status as a numeric code;
     // this is still an opaque upstream failure, not a caller validation verdict.
     const openRouterOpaque400 = JSON.stringify({
@@ -104,7 +99,7 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureDecision(400, openRouterOpaque400)).toBe("hop");
     expect(comboFailureCooldownScope(400, openRouterOpaque400)).toBe("none");
 
-    // A generic upstream envelope must not turn known malformed response_format requests into
+    // An opaque envelope must not turn known malformed response_format requests into
     // retries of the same invalid payload.
     for (const malformed of [
       "Invalid schema for response_format 'reply': 'type' is a required property.",
@@ -112,25 +107,28 @@ describe("combo failure cooldown scope", () => {
       "response_format must be a valid JSON schema.",
       "response_format.json_schema.schema must be a valid JSON schema.",
     ]) {
-      expect(comboFailureDecision(400, malformed, genericUpstream)).toBe("stop");
+      expect(comboFailureDecision(400, malformed, { openRouterOpaque400: true })).toBe("stop");
     }
 
     const envelopeWithDetail = JSON.stringify({
       error: {
-        message: "Upstream request failed",
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
         detail: "response_format.json_schema.schema must be a valid JSON schema.",
-        type: "upstream_error",
       },
     });
-    expect(comboFailureDecision(400, envelopeWithDetail, genericUpstream)).toBe("stop");
+    expect(comboFailureDecision(400, envelopeWithDetail)).toBe("stop");
+  });
 
-    // Without the explicit provider type, and with a real structured validation code, a 400
-    // remains terminal instead of treating any opaque client error as target-specific.
-    expect(comboFailureDecision(400, message)).toBe("stop");
-    expect(comboFailureDecision(400, message, {
-      ...genericUpstream,
-      code: "invalid_request_error",
-    })).toBe("stop");
+  test("a wrapped invalid_request_error 400 with upstreamType upstream_error still stops and cools the target", () => {
+    const wrapped = 'Provider error 400: {"type":"error","error":{"type":"invalid_request_error","message":"tools.0.custom.name: String should match pattern ..."}}';
+    expect(comboFailureDecision(400, wrapped, { upstreamType: "upstream_error" })).toBe("stop");
+    expect(comboFailureCooldownScope(400, wrapped, { upstreamType: "upstream_error" })).toBe("target");
+
+    const plain = "Invalid 'input[3].content': expected a string, got null.";
+    expect(comboFailureDecision(400, plain, { upstreamType: "upstream_error" })).toBe("stop");
+    expect(comboFailureCooldownScope(400, plain, { upstreamType: "upstream_error" })).toBe("target");
   });
 
   test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {
