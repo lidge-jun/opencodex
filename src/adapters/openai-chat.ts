@@ -1,5 +1,11 @@
 import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
-import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
+import {
+  hasShrinkableOpenAIChatImages,
+  hasUndersizedOpenAIChatImages,
+  normalizeOpenAIChatImages,
+  upscaleUndersizedOpenAIChatImages,
+} from "./openai-chat-images";
+import { registryEntryForProviderDestination } from "../providers/registry";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningEffort } from "./openai-chat/reasoning-wire";
@@ -266,9 +272,16 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           ...(tierLog ? { tierLog } : {}),
         };
       };
-      if (hasShrinkableOpenAIChatImages(messages)) {
-        const imageOptions = { tierBias: incoming?.imageTierBias, abortSignal: incoming?.abortSignal };
-        return normalizeOpenAIChatImages(messages, imageOptions).then(finish, error => {
+      const minImageEdge = registryEntryForProviderDestination(provider)?.minImageEdge;
+      const shrink = hasShrinkableOpenAIChatImages(messages);
+      if (shrink || (minImageEdge !== undefined && hasUndersizedOpenAIChatImages(messages, minImageEdge))) {
+        const abortSignal = incoming?.abortSignal;
+        const prepareImages = async (): Promise<void> => {
+          if (shrink) await normalizeOpenAIChatImages(messages, { tierBias: incoming?.imageTierBias, abortSignal });
+          // Budget normalization can floor a wide screenshot below the upstream minimum.
+          if (minImageEdge !== undefined) await upscaleUndersizedOpenAIChatImages(messages, minImageEdge, { abortSignal });
+        };
+        return prepareImages().then(finish, error => {
           if (incoming?.abortSignal?.aborted) throw error;
           return finish();
         });

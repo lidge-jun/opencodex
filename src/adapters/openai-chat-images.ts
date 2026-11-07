@@ -1,4 +1,6 @@
 import { parseDataUrl } from "./image";
+import { sniffImageDimensions } from "./anthropic-image-guard";
+import { MAX_INPUT_PIXELS } from "./anthropic-image-codec";
 import {
   normalizeImageTargets,
   type NormalizeOptions,
@@ -11,6 +13,18 @@ import {
  * limit. Remote URLs are never fetched by request construction.
  */
 export const OPENAI_CHAT_IMAGE_BASE64_BUDGET = 3_670_016; // 3.5MiB
+
+/** Longest edge an undersized image may be stretched to while reaching the minimum edge. */
+export const OPENAI_CHAT_UPSCALE_MAX_EDGE = 4096;
+
+/** Resizes decoded image bytes to exactly `width` x `height` and returns base64 plus media type. */
+export type UpscaleFn = (input: Buffer, width: number, height: number) => Promise<{ data: string; mediaType: string }>;
+
+/** Default upscaler: Bun.Image resize, re-encoded as PNG so small text strips stay sharp. */
+export const bunImageUpscale: UpscaleFn = async (input, width, height) => {
+  const out = await new Bun.Image(input).resize(width, height).png().toBuffer();
+  return { data: Buffer.from(out).toString("base64"), mediaType: "image/png" };
+};
 
 export interface NormalizeOpenAIChatImagesOptions
   extends Pick<NormalizeOptions, "encode" | "tierBias" | "validate"> {
@@ -59,6 +73,62 @@ export function hasShrinkableOpenAIChatImages(messages: unknown): boolean {
     }
   });
   return found;
+}
+
+/**
+ * Target size for an image whose short edge is below `minEdge`, or null when it already
+ * fits or cannot be handled safely. Aspect ratio is kept; the long edge is clamped to
+ * OPENAI_CHAT_UPSCALE_MAX_EDGE, which only distorts extreme strips.
+ */
+export function upscaledImageSize(width: number, height: number, minEdge: number): { width: number; height: number } | null {
+  if (!(width > 0 && height > 0) || Math.min(width, height) >= minEdge) return null;
+  if (width * height > MAX_INPUT_PIXELS) return null;
+  const scale = minEdge / Math.min(width, height);
+  const clamp = (edge: number): number => Math.min(OPENAI_CHAT_UPSCALE_MAX_EDGE, Math.max(minEdge, Math.ceil(edge * scale)));
+  return { width: clamp(width), height: clamp(height) };
+}
+
+/** Whether any inline image has a sniffable short edge below `minEdge`. */
+export function hasUndersizedOpenAIChatImages(messages: unknown, minEdge: number): boolean {
+  let found = false;
+  forEachImagePart(messages, (_imageUrl, url) => {
+    const source = parseDataUrl(url);
+    const dims = source ? sniffImageDimensions(source.base64) : null;
+    if (dims && upscaledImageSize(dims.width, dims.height, minEdge)) {
+      found = true;
+      return false;
+    }
+  });
+  return found;
+}
+
+/**
+ * Upscale inline images below `minEdge` in already-built Chat Completions messages, in place.
+ * Runs after budget normalization, because that step can itself floor a wide screenshot
+ * under the minimum. An image that cannot be decoded keeps its original URL.
+ */
+export async function upscaleUndersizedOpenAIChatImages(
+  messages: unknown,
+  minEdge: number,
+  options: { upscale?: UpscaleFn; abortSignal?: AbortSignal } = {},
+): Promise<void> {
+  const upscale = options.upscale ?? bunImageUpscale;
+  const jobs: Array<{ imageUrl: Record<string, unknown>; base64: string; width: number; height: number }> = [];
+  forEachImagePart(messages, (imageUrl, url) => {
+    const source = parseDataUrl(url);
+    const dims = source ? sniffImageDimensions(source.base64) : null;
+    const target = dims ? upscaledImageSize(dims.width, dims.height, minEdge) : null;
+    if (source && target) jobs.push({ imageUrl, base64: source.base64, ...target });
+  });
+  for (const job of jobs) {
+    if (options.abortSignal?.aborted) throw options.abortSignal.reason ?? new DOMException("Aborted", "AbortError");
+    try {
+      const out = await upscale(Buffer.from(job.base64, "base64"), job.width, job.height);
+      job.imageUrl.url = `data:${out.mediaType};base64,${out.data}`;
+    } catch {
+      // Keep the original image; the upstream reports its own validation error.
+    }
+  }
 }
 
 /**
