@@ -90,7 +90,7 @@ export function verifyReleaseEvidence(bytes, envelopeBytes, rootBasis, expectedC
   if (release.channel !== expectedChannel) throw new Error("Signed release channel mismatch");
   const digest = createHash("sha256").update(releaseBytes).digest("hex");
   const handle = Object.freeze(Object.create(null));
-  RELEASES.set(handle, { release, root: rootBasis, digest });
+  RELEASES.set(handle, { release, root: rootBasis, digest, bytes: releaseBytes, envelopeBytes: signatureBytes });
   return handle;
 }
 
@@ -202,7 +202,7 @@ export function verifyExternalMetadataEvidence(targetEvidence, input, basis, now
       if (proofs.length !== 1) throw new Error("Missing or ambiguous architecture proof");
     }
     const handle = Object.freeze(Object.create(null));
-    RECEIPTS.set(handle, { receipt, target: targetEvidence, basis });
+    RECEIPTS.set(handle, { receipt, bytes, target: targetEvidence, basis });
     return handle;
   }
   const receiptState = RECEIPTS.get(data.receiptEvidence);
@@ -218,7 +218,7 @@ export function verifyExternalMetadataEvidence(targetEvidence, input, basis, now
     const tree = parseUpdateDocument(treeBytes, "ocx.update.tree/1");
     if (tree.version !== release.version || tree.target !== target.id) throw new Error("Tree target mismatch");
     const handle = Object.freeze(Object.create(null));
-    TREES.set(handle, { tree, target: targetEvidence, basis, receipt: data.receiptEvidence });
+    TREES.set(handle, { tree, bytes: treeBytes, envelopeBytes: signatureBytes, target: targetEvidence, basis, receipt: data.receiptEvidence });
     return handle;
   }
   const bytes = checkedBytes(data.bytes, target.capabilities, 1048576);
@@ -228,6 +228,62 @@ export function verifyExternalMetadataEvidence(targetEvidence, input, basis, now
     throw new Error("Capability target mismatch");
   }
   const handle = Object.freeze(Object.create(null));
-  CAPABILITIES.set(handle, { capability, target: targetEvidence, basis, receipt: data.receiptEvidence });
+  CAPABILITIES.set(handle, { capability, bytes, target: targetEvidence, basis, receipt: data.receiptEvidence });
   return handle;
+}
+
+const evidenceRecord = (kind, fields) => Object.freeze(Object.assign(Object.create(null), { kind }, fields));
+const copyEvidenceBytes = (bytes, cap) => snapshotUpdateBytes(bytes, cap);
+const evidenceDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+function evidenceBasis(handle) {
+  const state = ROOTS.get(handle) || TRANSITIONS.get(handle);
+  return { basisDigest: state.digest, basisRevision: state.root.revision };
+}
+
+function targetSnapshotFields(handle) {
+  const candidate = CANDIDATES.get(handle);
+  const release = RELEASES.get(candidate.release);
+  return { releaseDigest: release.digest, targetId: candidate.target.id,
+    candidateId: deriveCandidateId(release.digest, candidate.target.id), ...evidenceBasis(candidate.root) };
+}
+
+/** Return detached evidence data only; snapshots confer no update authority. */
+export function snapshotEvidence(handle) {
+  let state = ROOTS.get(handle);
+  if (state) return evidenceRecord("root", { rootBytes: copyEvidenceBytes(state.bytes, 65536),
+    rootDigest: state.digest, rootRevision: state.root.revision, anchorDigest: EMBEDDED_ROOT_SHA256 });
+  state = TRANSITIONS.get(handle);
+  if (state) return evidenceRecord("transition", { rootBytes: copyEvidenceBytes(state.bytes, 65536),
+    envelopeBytes: copyEvidenceBytes(state.envelopeBytes, 262144), rootDigest: state.digest,
+    rootRevision: state.root.revision, predecessorDigest: state.predecessorDigest, predecessorRevision: state.predecessorRevision });
+  state = RELEASES.get(handle);
+  if (state) return evidenceRecord("release", { releaseBytes: copyEvidenceBytes(state.bytes, 1048576),
+    envelopeBytes: copyEvidenceBytes(state.envelopeBytes, 65536), releaseDigest: state.digest,
+    channel: state.release.channel, ...evidenceBasis(state.root) });
+  state = CANDIDATES.get(handle);
+  if (state) {
+    const { platform, arch, owner, artifactKind, bundleKind } = state.target;
+    return evidenceRecord("target", { ...targetSnapshotFields(handle),
+      selection: Object.freeze({ platform, arch, owner, artifactKind, bundleKind }) });
+  }
+  state = ARTIFACTS.get(handle);
+  if (state) {
+    const target = CANDIDATES.get(state.target).target;
+    return evidenceRecord("artifact", { ...targetSnapshotFields(state.target), artifactDigest: state.digest,
+      artifactSize: state.size, signatureBox: target.artifact.signatureBox, signerFingerprint: target.artifact.signerFingerprint });
+  }
+  state = RECEIPTS.get(handle);
+  if (state) return evidenceRecord("receipt", { receiptBytes: copyEvidenceBytes(state.bytes, 1048576),
+    receiptDigest: evidenceDigest(state.bytes), receiptSize: state.bytes.byteLength, ...targetSnapshotFields(state.target) });
+  state = TREES.get(handle);
+  if (state) return evidenceRecord("tree", { treeBytes: copyEvidenceBytes(state.bytes, 16777216),
+    envelopeBytes: copyEvidenceBytes(state.envelopeBytes, 65536), treeDigest: evidenceDigest(state.bytes),
+    treeSize: state.bytes.byteLength, envelopeDigest: evidenceDigest(state.envelopeBytes), envelopeSize: state.envelopeBytes.byteLength,
+    receiptDigest: evidenceDigest(RECEIPTS.get(state.receipt).bytes), ...targetSnapshotFields(state.target) });
+  state = CAPABILITIES.get(handle);
+  if (state) return evidenceRecord("capability", { capabilityBytes: copyEvidenceBytes(state.bytes, 1048576),
+    capabilityDigest: evidenceDigest(state.bytes), capabilitySize: state.bytes.byteLength,
+    receiptDigest: evidenceDigest(RECEIPTS.get(state.receipt).bytes), ...targetSnapshotFields(state.target) });
+  throw new Error("Invalid update evidence");
 }

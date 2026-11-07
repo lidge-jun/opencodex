@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { repoPath } from "../helpers/repo-root";
-import { bootstrapEmbeddedRoot, selectTargetEvidence, verifyArtifactEvidence, verifyReleaseEvidence, verifyRootTransition } from "../../src/update/signed-supply.mjs";
+import { bootstrapEmbeddedRoot, selectTargetEvidence, snapshotEvidence, verifyArtifactEvidence, verifyReleaseEvidence, verifyRootTransition } from "../../src/update/signed-supply.mjs";
 import { deriveCandidateId } from "../../src/update/update-candidate-id.mjs";
 
 describe("embedded update trust root", () => {
@@ -16,6 +16,12 @@ describe("embedded update trust root", () => {
     const trusted = bootstrapEmbeddedRoot(root, expiry - 1);
     expect(Object.isFrozen(trusted)).toBe(true);
     expect(Object.keys(trusted)).toEqual([]);
+    const diagnostic = snapshotEvidence(trusted);
+    expect(diagnostic.kind).toBe("root");
+    if (false) {
+      // @ts-expect-error A diagnostic snapshot is not an opaque evidence handle.
+      snapshotEvidence(diagnostic);
+    }
     expect(() => bootstrapEmbeddedRoot(root, expiry)).toThrow();
     expect(() => bootstrapEmbeddedRoot(root, expiry + 1)).toThrow();
   });

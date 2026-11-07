@@ -92,7 +92,8 @@ try {
   const signed = keys.map(key => signEntry(after, key));
   const envelope = (entries) => Buffer.from(JSON.stringify({ schema: transitionSchema, signatures: entries }));
   const now = Date.parse("2027-01-01T00:00:00Z");
-  const successor = supply.verifyRootTransition(basis, after, envelope(signed), now);
+  const transitionEnvelope = envelope(signed);
+  const successor = supply.verifyRootTransition(basis, after, transitionEnvelope, now);
   assert.equal(supply.inspectTransition(successor).successorRevision, 2);
   assert.throws(() => supply.verifyRootTransition(basis, after, envelope(signed.slice(1)), now));
   assert.throws(() => supply.verifyRootTransition({}, after, envelope(signed), now));
@@ -143,12 +144,16 @@ try {
   const assets = [[`${prefix}.tar.gz`, artifact], [`${prefix}.tree.json`, tree], [`${prefix}.tree.json.signatures.json`, treeEnvelope], [`${prefix}.capabilities.json`, capability]].map(([name, bytes]) => ({ name, ...digest(bytes) })).sort((a, b) => a.name < b.name ? -1 : 1);
   const receipt = Buffer.from(JSON.stringify({ schema: "ocx.update.verification/1", sourceCommit: "c".repeat(40), version: "1.2.3", channel: "latest", workflowRunId: 1, workflowAttempt: 1, versionSources: ["package.json", "desktop/src-tauri/tauri.conf.json", "desktop/src-tauri/Cargo.toml", "desktop/src-tauri/Cargo.lock"].map(path => ({ path, sha256: "d".repeat(64) })), assets, universalProofs: [], architectureProofs: [] }));
   const release = Buffer.from(JSON.stringify({ schema: "ocx.update.release/1", version: "1.2.3", channel: "latest", sequence: 1, sourceCommit: "c".repeat(40), rolloutNotBefore: "2026-01-01T00:00:00Z", receipt: digest(receipt), releaseNotes: [], targets: [{ id: target, platform: "linux", arch: "x64", owner: "npm", artifactKind: "tree", bundleKind: "tar-gz", assetName: `${prefix}.tar.gz`, artifact: { ...digest(artifact), signatureBox: signEntry(artifact, keys[2]).signatureBox, signerFingerprint: keys[2].key.keyId }, tree: digest(tree), capabilities: digest(capability) }] }));
-  const releaseEvidence = supply.verifyReleaseEvidence(release, metadataEnvelope(release), successor, "latest", now);
+  const releaseEnvelope = metadataEnvelope(release);
+  const releaseEvidence = supply.verifyReleaseEvidence(release, releaseEnvelope, successor, "latest", now);
   const candidate = supply.selectTargetEvidence(releaseEvidence, { platform: "linux", arch: "x64", owner: "npm", artifactKind: "tree", bundleKind: "tar-gz" });
-  assert.ok(Object.isFrozen(supply.verifyArtifactEvidence(candidate, artifact, successor, now)));
+  const artifactEvidence = supply.verifyArtifactEvidence(candidate, artifact, successor, now);
+  assert.ok(Object.isFrozen(artifactEvidence));
   const receiptEvidence = supply.verifyExternalMetadataEvidence(candidate, { kind: "receipt", bytes: receipt }, successor, now);
-  assert.ok(Object.isFrozen(supply.verifyExternalMetadataEvidence(candidate, { kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence }, successor, now)));
-  assert.ok(Object.isFrozen(supply.verifyExternalMetadataEvidence(candidate, { kind: "capability", bytes: capability, receiptEvidence }, successor, now)));
+  const treeEvidence = supply.verifyExternalMetadataEvidence(candidate, { kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence }, successor, now);
+  const capabilityEvidence = supply.verifyExternalMetadataEvidence(candidate, { kind: "capability", bytes: capability, receiptEvidence }, successor, now);
+  assert.ok(Object.isFrozen(treeEvidence));
+  assert.ok(Object.isFrozen(capabilityEvidence));
   assert.throws(() => supply.verifyArtifactEvidence(candidate, Buffer.from("wrong"), successor, now));
   assert.throws(() => supply.verifyExternalMetadataEvidence(candidate, { kind: "tree", bytes: tree, signatureEnvelopeBytes: metadataEnvelope(Buffer.from("wrong")), receiptEvidence }, successor, now));
   assert.throws(() => supply.verifyReleaseEvidence(release, metadataEnvelope(release), successor, "preview", now));
@@ -252,6 +257,77 @@ try {
     assert.throws(() => checkField(schema, { ...value, [field]: "a".repeat(129) }));
     assert.throws(() => checkField(schema, { ...value, [field]: "é" }));
   }
+
+  // Evidence snapshots are detached diagnostic data, never authority handles.
+  const selection = { platform: "linux", arch: "x64", owner: "npm", artifactKind: "tree", bundleKind: "tar-gz" };
+  const expected = [
+    [basis, "root", ["rootBytes", "rootDigest", "rootRevision", "anchorDigest"]],
+    [successor, "transition", ["rootBytes", "envelopeBytes", "rootDigest", "rootRevision", "predecessorDigest", "predecessorRevision"]],
+    [releaseEvidence, "release", ["releaseBytes", "envelopeBytes", "releaseDigest", "channel", "basisDigest", "basisRevision"]],
+    [candidate, "target", ["releaseDigest", "targetId", "candidateId", "selection", "basisDigest", "basisRevision"]],
+    [artifactEvidence, "artifact", ["releaseDigest", "targetId", "candidateId", "artifactDigest", "artifactSize", "signatureBox", "signerFingerprint", "basisDigest", "basisRevision"]],
+    [receiptEvidence, "receipt", ["receiptBytes", "receiptDigest", "receiptSize", "releaseDigest", "targetId", "candidateId", "basisDigest", "basisRevision"]],
+    [treeEvidence, "tree", ["treeBytes", "envelopeBytes", "treeDigest", "treeSize", "envelopeDigest", "envelopeSize", "receiptDigest", "releaseDigest", "targetId", "candidateId", "basisDigest", "basisRevision"]],
+    [capabilityEvidence, "capability", ["capabilityBytes", "capabilityDigest", "capabilitySize", "receiptDigest", "releaseDigest", "targetId", "candidateId", "basisDigest", "basisRevision"]],
+  ];
+  const originals = new Map([["root", {rootBytes: before}], ["transition", {rootBytes: after, envelopeBytes: transitionEnvelope}], ["release", {releaseBytes: release, envelopeBytes: releaseEnvelope}], ["receipt", {receiptBytes: receipt}], ["tree", {treeBytes: tree, envelopeBytes: treeEnvelope}], ["capability", {capabilityBytes: capability}]]);
+  for (const [handle, kind, fields] of expected) {
+    const first = supply.snapshotEvidence(handle), second = supply.snapshotEvidence(handle);
+    assert.equal(first.kind, kind);
+    assert.equal(Object.getPrototypeOf(first), null);
+    assert.ok(Object.isFrozen(first));
+    assert.deepEqual(Object.keys(first).sort(), ["kind", ...fields].sort());
+    for (const [field, value] of Object.entries(originals.get(kind) ?? {})) {
+      assert.deepEqual(Buffer.from(first[field]), value);
+      assert.notEqual(first[field].buffer, second[field].buffer);
+      first[field].fill(0);
+      assert.deepEqual(Buffer.from(supply.snapshotEvidence(handle)[field]), value);
+    }
+    if (kind !== "root" && kind !== "transition") {
+      assert.equal(first.basisDigest, digest(after).sha256);
+      assert.equal(first.basisRevision, 2);
+    }
+    if (["target", "artifact", "receipt", "tree", "capability"].includes(kind)) {
+      assert.equal(first.targetId, target);
+      assert.equal(first.candidateId, candidate.candidateId);
+    }
+  }
+  const targetSnapshot = supply.snapshotEvidence(candidate);
+  assert.deepEqual({ ...targetSnapshot.selection }, selection);
+  assert.ok(Object.isFrozen(targetSnapshot.selection));
+  assert.equal(supply.snapshotEvidence(basis).anchorDigest, digest(before).sha256);
+  assert.equal(supply.snapshotEvidence(successor).predecessorDigest, digest(before).sha256);
+  assert.equal(supply.snapshotEvidence(treeEvidence).envelopeDigest, digest(treeEnvelope).sha256);
+  assert.equal(supply.snapshotEvidence(receiptEvidence).receiptDigest, digest(receipt).sha256);
+  assert.equal(supply.snapshotEvidence(artifactEvidence).artifactDigest, digest(artifact).sha256);
+  assert.equal("artifactBytes" in supply.snapshotEvidence(artifactEvidence), false);
+  assert.throws(() => supply.snapshotEvidence({}));
+  assert.throws(() => supply.snapshotEvidence({ ...candidate }));
+  assert.throws(() => supply.snapshotEvidence(targetSnapshot));
+  assert.throws(() => supply.verifyArtifactEvidence(targetSnapshot, artifact, successor, now));
+  assert.throws(() => supply.verifyArtifactEvidence(receiptEvidence, artifact, successor, now));
+  const sameBasis = supply.bootstrapEmbeddedRoot(before, now);
+  const sameSuccessor = supply.verifyRootTransition(sameBasis, after, transitionEnvelope, now);
+  assert.equal(supply.snapshotEvidence(sameSuccessor).rootDigest, supply.snapshotEvidence(successor).rootDigest);
+  assert.throws(() => supply.verifyArtifactEvidence(candidate, artifact, sameSuccessor, now));
+  const sameRelease = supply.verifyReleaseEvidence(release, releaseEnvelope, successor, "latest", now);
+  assert.equal(supply.snapshotEvidence(sameRelease).releaseDigest, supply.snapshotEvidence(releaseEvidence).releaseDigest);
+  const sameTarget = supply.selectTargetEvidence(sameRelease, selection);
+  assert.equal(sameTarget.candidateId, candidate.candidateId);
+  const sameReceipt = supply.verifyExternalMetadataEvidence(candidate, {kind: "receipt", bytes: receipt}, successor, now);
+  assert.ok(supply.verifyExternalMetadataEvidence(candidate, {kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence: sameReceipt}, successor, now));
+  assert.throws(() => supply.verifyExternalMetadataEvidence(sameTarget, {kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence}, successor, now));
+  const production = await import("../../src/update/signed-supply.mjs");
+  assert.throws(() => production.snapshotEvidence(candidate));
+  assert.throws(() => supply.snapshotEvidence(production.bootstrapEmbeddedRoot(readFileSync(new URL("../../src/update/trust-root.json", import.meta.url)), now)));
+  assert.ok(supply.snapshotEvidence(successor));
+  assert.throws(() => supply.verifyReleaseEvidence(release, releaseEnvelope, successor, "latest", rootExpiry));
+  const saved = expected.map(([handle]) => supply.snapshotEvidence(handle));
+  for (const bytes of [before, after, transitionEnvelope, release, releaseEnvelope, receipt, tree, treeEnvelope, capability, artifact]) bytes.fill(0);
+  expected.forEach(([handle], index) => {
+    const again = supply.snapshotEvidence(handle);
+    for (const field of Object.keys(again)) if (again[field] instanceof Uint8Array) assert.deepEqual(again[field], saved[index][field]);
+  });
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
