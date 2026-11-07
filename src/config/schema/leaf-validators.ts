@@ -1189,3 +1189,14 @@ export const spendSchema = z.object({
 export const skillsConfigSchema = z.object({
   catalog_refresh: z.enum(["per_session", "per_turn"]).optional(),
 }).strict();
+
+/**
+ * Anonymous telemetry consent state.
+ *
+ * No endpoint is accepted here: the collector URL is a constant in src/telemetry/sender.ts.
+ */
+export const telemetryConfigSchema = z.object({
+  decision: z.enum(["accepted", "declined"]).optional(),
+  decidedAt: clientTimestampSchema.optional(),
+  noticeShownAt: clientTimestampSchema.optional(),
+}).strict();
