@@ -38,7 +38,7 @@ const baseHelperControlContracts: readonly Contract[] = [
   ["src/update/transactional-install.mjs","npmUpdateTransaction","mkdirSync(backupRoot, { recursive: true })",1,"empty backup container; live swap separately guarded"],
   ["src/lib/bun-path-runtime.mjs","findPathBun","spawn(path, args,",1,"read-only bounded process/registration/registry probe"],
   ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","spawnChild(plan.target,",1,"ordinary CLI handoff excludes update before child selection"],
-  ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","child.kill(signal)",1,"ordinary handoff signal relay to its exact child"],
+  ["src/lib/launcher-signal-forwarding.mjs","forwardLauncherSignals","child.kill(signal)",1,"ordinary launcher signal relay to its exact attached child"],
   ["src/lib/desktop-cli-record.mjs","noMacAcl","spawnSync(\"/bin/ls\",",1,"read-only bounded process/registration/registry probe"],
   ["src/service/desktop-supervision.mjs","run","execFileSync(command, args,",1,"read-only bounded process/registration/registry probe"],
   ["src/service/ownership-mutation-lease.mjs","processAlive","process.kill(pid, 0)",1,"read-only bounded process/registration/registry probe"],
