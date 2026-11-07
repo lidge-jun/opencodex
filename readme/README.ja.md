@@ -83,8 +83,6 @@ Sol がセッションを進め、Kimi K3 のサブエージェントを呼び�
 
 opencodex は、コーディングツールとモデルプロバイダーをつなぐ軽量なローカルゲートウェイです。Responses、Chat Completions、Anthropic Messages API のリクエストを受け取り、プロバイダーのプロトコルに変換します。クライアント、モデル、プロバイダーが対応する場合は、ストリーミング、ツール呼び出し、推論、画像を中継します。Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama などのプロバイダーを、Codex、Claude Code、Claude Desktop、Grok Build や[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載のツールで使えます。
 
-> **商用利用：** GOAT の有料サービスは、プロバイダーの公式 API と正式な契約のみを使用します。
-
 ## クイックスタート
 
 ### 個人向けインストール（CLI）

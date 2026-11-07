@@ -89,8 +89,6 @@ model and provider support them. Use Claude, Gemini, Grok, GLM, DeepSeek, Kimi, 
 providers with Codex, Claude Code, Claude Desktop, Grok Build and the tools listed on the
 [client support page](https://opencodex.me/reference/client-support/).
 
-> **Commercial use:** GOAT's paid offerings use official provider APIs and agreements only.
-
 ## Quick start
 
 ### Personal install (CLI)

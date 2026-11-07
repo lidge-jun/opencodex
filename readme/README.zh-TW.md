@@ -83,8 +83,6 @@ Sol 主導會話，並呼叫 Kimi K3 子代理。
 
 opencodex 是連接程式開發工具與模型供應商的輕量級本機閘道。它接收 Responses、Chat Completions 和 Anthropic Messages API 請求，並轉換成供應商使用的協定；在用戶端、模型和供應商支援的情況下，傳遞串流、工具呼叫、推理和影像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[用戶端支援頁面](https://opencodex.me/zh-tw/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等供應商。
 
-> **商業使用：** GOAT 的付費產品只使用供應商的官方 API 與正式協議。
-
 ## 快速開始
 
 ### 個人安裝（CLI）

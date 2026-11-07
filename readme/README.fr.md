@@ -83,8 +83,6 @@ Sol pilote la session et appelle un sous-agent Kimi K3.
 
 opencodex est une passerelle locale légère entre vos outils de programmation et vos fournisseurs de modèles. Elle accepte les API Responses, Chat Completions et Anthropic Messages et traduit chaque requête pour votre fournisseur, en prenant en charge le streaming, les appels d’outils, le raisonnement et les images lorsque le client, le modèle et le fournisseur le permettent. Utilisez Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama et d’autres fournisseurs avec Codex, Claude Code, Claude Desktop, Grok Build et les outils de la [page des clients pris en charge](https://opencodex.me/fr/reference/client-support/).
 
-> **Usage commercial :** les offres payantes de GOAT utilisent uniquement les API et les accords officiels des fournisseurs.
-
 ## Démarrage rapide
 
 ### Installation personnelle (CLI)

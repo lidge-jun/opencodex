@@ -83,8 +83,6 @@ Sol oturumu yürütüyor ve bir Kimi K3 alt ajanını çağırıyor.
 
 opencodex, kodlama araçlarınızla model sağlayıcılarınız arasında çalışan hafif bir yerel ağ geçididir. Responses, Chat Completions ve Anthropic Messages API isteklerini kabul edip sağlayıcınızın protokolüne çevirir; istemci, model ve sağlayıcı desteklediğinde akış, araç çağrıları, akıl yürütme ve görselleri aktarır. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ve diğer sağlayıcıları Codex, Claude Code, Claude Desktop, Grok Build ve [istemci desteği sayfasındaki](https://opencodex.me/tr/reference/client-support/) araçlarla kullanın.
 
-> **Ticari kullanım:** GOAT'un ücretli teklifleri yalnızca resmi sağlayıcı API'lerini ve anlaşmalarını kullanır.
-
 ## Hızlı başlangıç
 
 ### Kişisel kurulum (CLI)
