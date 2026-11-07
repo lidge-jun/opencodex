@@ -1,34 +1,47 @@
-/** Run against isolated Vite/proxy; no reload action is invoked. */
+/** WebKit against an isolated GUI; both the restart and status responses are synthetic. */
 import { pathToFileURL } from "node:url";
 const modulePath = process.env.PLAYWRIGHT_MODULE_PATH;
 if (!modulePath?.startsWith("/")) throw new Error("PLAYWRIGHT_MODULE_PATH must be an absolute path");
 const { webkit } = await import(pathToFileURL(modulePath).href);
 const browser = await webkit.launch({ headless: true });
 const base = process.env.GUI_TEST_BASE ?? "http://127.0.0.1:15174";
-let failures = 0;
 try {
   for (const state of ["stale", "fresh", "not_running", "unknown", "error"]) {
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, colorScheme: "dark" });
-    await page.route("**/api/system/codex-app-server", route => route.fulfill(
-      state === "error" ? { status: 500, body: "error" }
-        : { status: 200, json: { state, runningCount: state === "not_running" ? 0 : 1 } },
-    ));
-    const response = page.waitForResponse("**/api/system/codex-app-server");
-    await page.goto(`${base}/#models`, { waitUntil: "domcontentloaded" });
-    await response;
-    await page.locator(".models-workspace-rail-row").first().waitFor();
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    if (state === "stale") await page.locator(".codex-stale-banner").waitFor();
-    else await page.waitForFunction(() => !document.querySelector(".codex-stale-banner"));
-    const head = await page.locator(".page-head-actions").getByRole("button", { name: "Reload Codex models" }).count();
-    const banner = await page.locator(".codex-stale-banner").getByRole("button", { name: "Reload Codex models" }).count();
-    const total = await page.locator(".main-inner").getByRole("button", { name: "Reload Codex models" }).count();
-    if (head !== (state === "stale" ? 0 : 1) || banner !== (state === "stale" ? 1 : 0) || total !== 1) {
-      failures++;
-      console.error(`FAIL ${state}: head=${head} banner=${banner} total=${total}`);
+    let reads = 0;
+    await page.route("**/api/system/codex-app-server", route => {
+      const next = reads++ === 0 ? "stale" : state;
+      return route.fulfill(next === "error" ? { status: 500, body: "error" }
+        : { status: 200, json: { state: next, runningCount: next === "not_running" ? 0 : 1 } });
+    });
+    await page.route("**/api/system/codex-restart", route => route.fulfill({ json: {
+      success: true, stateBefore: "stale", synced: false, code: "nothing_running",
+      requested: [], stopped: [], surviving: [], failed: [],
+    } }));
+    await page.goto(`${base}/tests/models-reload-focus.html`, { waitUntil: "domcontentloaded" });
+    const head = page.locator(".page-head-actions").getByRole("button", { name: "Reload Codex models" });
+    const banner = page.locator(".codex-stale-banner");
+    // A visible stale banner proves the first response was consumed, unlike an
+    // initially absent banner. Refresh without resetting state via the real action.
+    await banner.waitFor();
+    if (state !== "stale") {
+      await banner.getByRole("button", { name: "Reload Codex models" }).click();
+      const dialog = page.locator("dialog.modal-overlay");
+      await dialog.waitFor();
+      const secondRead = page.waitForRequest("**/api/system/codex-app-server");
+      await dialog.getByRole("button", { name: "Reload Codex models" }).click();
+      await secondRead;
+      // This cannot succeed until the controlled response replaces stale state.
+      await banner.waitFor({ state: "detached" });
+      await head.waitFor();
     }
+    const headCount = await head.count();
+    const bannerCount = await banner.getByRole("button", { name: "Reload Codex models" }).count();
+    const total = await page.locator("#root").getByRole("button", { name: "Reload Codex models" }).count();
+    if (headCount !== (state === "stale" ? 0 : 1) || bannerCount !== (state === "stale" ? 1 : 0) || total !== 1) {
+      throw new Error(`${state}: head=${headCount} banner=${bannerCount} total=${total}`);
+    }
+    console.log(`PASS ${state}: one reload action after controlled status transition`);
     await page.close();
   }
-  console.log(`${failures ? "FAIL" : "PASS"}: one reload action for each app-server state, ${failures} failures`);
 } finally { await browser.close(); }
-if (failures) process.exitCode = 1;
