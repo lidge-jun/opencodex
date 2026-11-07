@@ -85,7 +85,10 @@ describe("Mistral reasoning effort ladders (#8254)", () => {
     });
     expect(wireEffort(gateway({ max: "high" }), "any", "ultra")).toBe("high");
     expect(wireEffort(gateway({ max: "__omit__" }), "any", "ultra")).toBeUndefined();
-    // An operator alias wins before the ladder clamp, even when it names `ultra` itself.
+    // The alias wins before the ladder clamp: clamp-first would turn `max` into `high` and keep the field.
+    const ladderedOmit = { ...gateway({ max: "__omit__" }), reasoningEfforts: ["low", "high"] };
+    expect(wireEffort(ladderedOmit, "any", "ultra")).toBeUndefined();
+    // A `max` → `ultra` alias heals `ultra` into the ladder, so the caller's `ultra` is kept.
     const aliasedUltra = { ...gateway({ max: "ultra" }), reasoningEfforts: ["low", "high", "max"] };
     expect(wireEffort(aliasedUltra, "any", "ultra")).toBe("ultra");
     // Caller values the proxy did not rewrite keep their spelling.
