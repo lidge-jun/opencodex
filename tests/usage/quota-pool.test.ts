@@ -22,8 +22,12 @@ import {
 } from "../../src/quota-pool/identity";
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
-import { setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
+import { clearAccountQuotaCache, fetchProviderQuotaReports, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { getProviderQuotaReportCache, keyReport, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
+import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
+import { clearCachedProviderQuotas, getCachedProviderQuota, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
+import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
+import { runPassiveRead } from "../../src/lib/passive-read";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
@@ -93,6 +97,70 @@ afterEach(() => {
 });
 
 const read = () => readQuotaPool(config(), { now: () => NOW, claudeUsageStatePath: admissionPath });
+
+for (const reader of ["provider", "pool"] as const) {
+  test(`${reader} passive read checks held key ownership without side effects`, async () => {
+    ensureQuotaPoolIdentity();
+    const key = "fixture-original-key";
+    const base = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: key } as const;
+    const names = ["changed", "envchanged", "missing", "local", "oauth", "forward", "removed", "destination", "adapter", "disabled", "keychain", "coldkeychain", "unchanged", "envsame"];
+    const providers: OcxConfig["providers"] = Object.fromEntries(names.map(name => [name, { ...base }]));
+    providers.envchanged!.apiKey = "${OCX_TEST_PASSIVE_KEY}";
+    providers.envsame!.apiKey = "${OCX_TEST_PASSIVE_SAME}";
+    providers.keychain!.apiKey = "keychain:keychain";
+    providers.coldkeychain!.apiKey = "keychain:coldkeychain";
+    process.env.OCX_TEST_PASSIVE_KEY = key;
+    process.env.OCX_TEST_PASSIVE_SAME = key;
+    let keychainReads = 0;
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { keychainReads++; return key; }, setPassword: () => {}, deletePassword: () => true }));
+    expect(resolveProviderApiKey(providers.keychain!.apiKey)).toBe(key);
+    const quota = { weeklyPercent: 42, updatedAt: NOW };
+    const reports = names.map(name => keyReport(name, "fixture", quota, providers[name]!, key)!);
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports } });
+    const held = getProviderQuotaReportCache();
+    providers.changed!.apiKey = "fixture-replacement-key";
+    delete providers.missing!.apiKey;
+    process.env.OCX_TEST_PASSIVE_KEY = "fixture-replacement-key";
+    providers.local!.authMode = "local";
+    providers.oauth!.authMode = "oauth";
+    providers.forward!.authMode = "forward";
+    delete providers.removed;
+    providers.destination!.baseUrl = "https://other.example.test/v1";
+    providers.adapter!.adapter = "openai-responses";
+    providers.disabled!.disabled = true;
+    const current = { port: 0, defaultProvider: "unchanged", providers } as OcxConfig;
+    const sentinel = { weeklyPercent: 19, updatedAt: NOW };
+    setCachedProviderQuotaForTests("passive-sentinel", sentinel);
+    let observations = 0;
+    const detach = registerDecisionQuotaSink(new Proxy({} as DecisionQuotaSink, { get: () => () => { observations++; } }));
+    const originalFetch = globalThis.fetch;
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; throw new Error("unexpected upstream call"); }) as typeof fetch;
+    try {
+      let found: string[];
+      if (reader === "provider") {
+        found = (await runPassiveRead(() => fetchProviderQuotaReports(current, true))).reports.map(row => row.provider).sort();
+      } else {
+        const result = await readQuotaPool(current, { now: () => NOW, claudeUsageStatePath: admissionPath });
+        if (!result.ok) throw new Error(result.error);
+        found = result.pool.providers.filter(row => row.pooled.windows.length > 0).map(row => row.provider).sort();
+      }
+      expect(found).toEqual(["envsame", "unchanged"]);
+      expect(fetches).toBe(0);
+      expect(keychainReads).toBe(1);
+      expect(observations).toBe(0);
+      expect(getCachedProviderQuota("passive-sentinel", NOW)).toEqual(sentinel);
+      expect(getProviderQuotaReportCache()).toBe(held);
+    } finally {
+      globalThis.fetch = originalFetch;
+      detach();
+      clearCachedProviderQuotas();
+      setProviderKeychainEntryFactoryForTests(null);
+      delete process.env.OCX_TEST_PASSIVE_KEY;
+      delete process.env.OCX_TEST_PASSIVE_SAME;
+    }
+  });
+}
 
 describe("ocx.quota-pool/1 producer", () => {
   test("reports the identity as unavailable instead of minting one on the read path", async () => {
