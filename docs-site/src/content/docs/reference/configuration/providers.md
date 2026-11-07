@@ -442,6 +442,8 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+For native Responses, the same opt-in also covers a clean EOF after only lifecycle events. The self-contained-request and replacement limits still apply. While inspection holds the stream, SSE comments keep the connection alive without counting as model output.
+
 Command Code's shipped per-model effort defaults include live API measurements. DeepSeek
 v4/v4.1 Flash (including v4 Flash Vision), GLM-5.3 and GLM-5.3-Flash, Qwen3.8-Flash,
 and Gemini-3.7-Flash support `low`, `medium`, `high`, `xhigh`, and `max`. Ladders remain

@@ -153,6 +153,8 @@ ocx models provider openrouter on
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 舊版布林值，僅在較新欄位未設定時等同於 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本機執行政策。`off` 為預設；`codex-sandbox` 目前像 `off` 般 fail closed。 |
 
+對原生 Responses 而言，相同開關也涵蓋只收到生命週期事件後正常結束的 EOF。自包含請求與替換次數限制仍然適用。檢查期間，SSE 註解會維持連線，且不算作模型輸出。
+
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 
 

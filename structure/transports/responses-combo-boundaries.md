@@ -136,7 +136,10 @@ about the same bytes. With `replayReadErrors`, the preflight reports the stage i
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
 resend gate decides. A `response.created` whose snapshot already carries output items is not a
-prelude.
+prelude. A clean EOF before output or a terminal is offered only to the native reset recovery
+owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
+The deferred native hold emits bounded SSE comment heartbeats without counting them as output,
+and downstream cancellation aborts the hold or an in-flight replacement.
 
 - a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
