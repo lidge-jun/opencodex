@@ -479,14 +479,14 @@ fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> st
             403,
             "Forbidden",
             &[],
-            br#"{"error":{"message":"cross-origin data-plane request blocked","type":"invalid_request_error","code":"origin_rejected"}}"#, 
+            br#"{"error":{"message":"cross-origin data-plane request blocked","type":"invalid_request_error","code":"origin_rejected"}}"#,
         ),
         RouteDecision::Reject426Websocket => write_json_response(
             &mut writer,
             426,
             "Upgrade Required",
             &[],
-            br#"{"error":{"message":"Responses WebSocket transport is disabled; use HTTP","type":"invalid_request_error","code":"upgrade_required"}}"#, 
+            br#"{"error":{"message":"Responses WebSocket transport is disabled; use HTTP","type":"invalid_request_error","code":"upgrade_required"}}"#,
         ),
         RouteDecision::Reject404 => {
             write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#)
@@ -709,7 +709,7 @@ fn relay_request(
                     ("Retry-After", "1"),
                     ("x-opencodex-link-request-id", &req_id),
                 ],
-                br#"{"error":"Home is unreachable over Remote Link","code":"home_unreachable","message":"Home is unreachable over Remote Link"}"#, 
+                br#"{"error":"Home is unreachable over Remote Link","code":"home_unreachable","message":"Home is unreachable over Remote Link"}"#,
             );
         }
     };
@@ -772,7 +772,7 @@ fn relay_request(
                 ("Retry-After", "1"),
                 ("x-opencodex-link-request-id", &req_id),
             ],
-            br#"{"error":"Home is unreachable over Remote Link","code":"home_unreachable","message":"Home is unreachable over Remote Link"}"#, 
+            br#"{"error":"Home is unreachable over Remote Link","code":"home_unreachable","message":"Home is unreachable over Remote Link"}"#,
         );
     }
 
@@ -796,7 +796,7 @@ fn relay_request(
                     ("Retry-After", "1"),
                     ("x-opencodex-link-request-id", &req_id),
                 ],
-                br#"{"error":"Home is unreachable over Remote Link","code":"home_unreachable","message":"Home is unreachable over Remote Link"}"#, 
+                br#"{"error":"Home is unreachable over Remote Link","code":"home_unreachable","message":"Home is unreachable over Remote Link"}"#,
             );
         }
     };
