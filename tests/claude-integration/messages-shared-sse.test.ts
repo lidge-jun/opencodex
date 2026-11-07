@@ -122,3 +122,14 @@ test("client cancellation still settles once and cancels the source", async () =
   expect(result.calls).toEqual([{ status: 499, meta: { closeReason: "client_cancel" } }]);
   expect(result.cancelled()).toBe(true);
 });
+
+for (const how of ["reader cancel", "signal abort"] as const) test(`a ${how} keeps the usage already received`, async () => {
+  const abort = new AbortController();
+  const result = tap(encoder.encode(`${start}\n\n`), 4096, "stall", { stallMs: 0, maxBytes: 0, reqSignal: abort.signal });
+  const reader = result.stream.getReader();
+  await reader.read();
+  if (how === "reader cancel") await reader.cancel();
+  else { abort.abort(); await new Promise(resolve => setTimeout(resolve, 0)); }
+  expect(result.calls).toEqual([{ status: 499, meta: { closeReason: "client_cancel" } }]);
+  expect(result.log.usage).toMatchObject({ inputTokens: 12 });
+});
