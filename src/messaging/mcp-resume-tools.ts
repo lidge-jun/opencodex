@@ -17,7 +17,7 @@ export async function queueMcpResume(options: QueueMcpOptions, raw: { threadId: 
   let rpc: LocalMessageRpc | undefined;
   try {
     rpc = await LocalMessageRpc.connectForResume(`ws+unix://${options.resumeSocket}:/`, budget, options.codexHome);
-    const thread = await rpc.readThread(parsed.data.threadId);
+    const thread = await rpc.readThread(parsed.data.threadId.toLowerCase());
     if (thread.status === "systemError") return failure("resume_target_unhealthy");
     if (thread.status !== "notLoaded") return { status: "already_loaded" as const, threadId: thread.id,
       observedStatus: thread.status, executionVerified: false };

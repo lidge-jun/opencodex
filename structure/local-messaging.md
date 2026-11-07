@@ -262,8 +262,8 @@ address and frame bounds. No listener, daemon, CLI helper or session is created.
 `src/messaging/rpc.ts` grants resume only through connectForResume, after initialize
 reports a home whose real path equals the configured Codex home. Older servers
 without a verifiable home refuse. Default connect/attach instances cannot resume;
-remote peers gain no lifecycle capability. The preflight exact-UUID thread/read
-uses includeTurns false. Idle/active targets return already_loaded without a
+remote peers gain no lifecycle capability. The preflight normalizes the validated UUID to lowercase before thread/read
+and uses includeTurns false. Idle/active targets return already_loaded without a
 resume RPC; systemError refuses. A notLoaded target is resumed once with only
 threadId and excludeTurns true: no model, cwd, sandbox, permission or approval
 policy override is supplied. No message is queued and no turn/start or steer is

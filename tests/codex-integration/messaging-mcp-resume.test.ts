@@ -32,6 +32,15 @@ describe.skipIf(process.platform === "win32")("explicit existing-server MCP resu
     }finally{await f.close();}
   });
 
+  test("uppercase UUIDs use canonical lowercase lookup and resume",async()=>{
+    const id="abcdefab-cdef-4abc-8def-abcdefabcdef";
+    const f=localMessagingFixture(c=>c.method === "thread/read" ? {thread:{...localFixtureThread(id),status:{type:"notLoaded"}}} : c.method === "thread/resume" ? {thread:localFixtureThread(id)} : undefined,{allowResume:true});
+    try {
+      expect(await queueMcpResume(options(f),{threadId:id.toUpperCase()})).toMatchObject({status:"resumed",threadId:id});
+      expect(f.calls.filter(c=>c.method === "thread/read"||c.method === "thread/resume").map(c=>c.params.threadId)).toEqual([id,id]);
+    }finally{await f.close();}
+  });
+
   for(const state of ["idle","active","systemError"]) test(`${state} does not trigger a resume`,async()=>{
     const f=localMessagingFixture(c=> c.method === "thread/read" ? {thread:{...localFixtureThread(),status:{type:state}}} : undefined);
     try {const r=await queueMcpResume(options(f),input);expect(r.status).toBe(state === "systemError" ? "not_resumed" : "already_loaded");expect(f.calls.some(c=>c.method === "thread/resume")).toBe(false);}
