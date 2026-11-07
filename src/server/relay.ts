@@ -227,9 +227,19 @@ export function refusalFailedTailFrame(
   );
 }
 
+/**
+ * A bare upstream error event: the `type: "error"` SSE event, or an untyped envelope that
+ * carries only an `error` object (`{"error":{...}}`, #8216). Some OpenAI-compatible gateways
+ * end a stream with the untyped form; without this it was dropped and EOF reported
+ * `adapter_eof`. A typed event of any other kind is never bare, even with an `error` field.
+ */
+function isBareUpstreamErrorEvent(root: JsonRecord): boolean {
+  return root.type === "error" || (root.type === undefined && asJsonRecord(root.error) !== null);
+}
+
 function boundedBareUpstreamErrorMessage(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)
-    || (payload as { type?: unknown }).type !== "error") return undefined;
+  const root = asJsonRecord(payload);
+  if (!root || !isBareUpstreamErrorEvent(root)) return undefined;
   const message = upstreamErrorMessageFromPayload(payload);
   return message ? redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS) : undefined;
 }
@@ -256,7 +266,7 @@ function boundedBareUpstreamError(payload: unknown): {
   errorCode: string | undefined;
 } | undefined {
   const root = asJsonRecord(payload);
-  if (!root || root.type !== "error") return undefined;
+  if (!root || !isBareUpstreamErrorEvent(root)) return undefined;
   const message = boundedBareUpstreamErrorMessage(payload);
   const response = asJsonRecord(root.response);
   // Precedence is {@link upstreamErrorMessageFromPayload}'s, so the envelope
@@ -272,7 +282,7 @@ function boundedBareUpstreamError(payload: unknown): {
   ];
   const code = candidates.map(candidate => stringField(candidate, "code"))
     .find(candidate => candidate !== undefined)?.slice(0, 128);
-  // Root `type` is the SSE event discriminator (`"error"`), not an error class. Only nested
+  // Root `type` is the SSE event discriminator (`"error"` or absent), not an error class. Only nested
   // error records can authoritatively name classes such as rate_limit_error or server_error.
   const errorType = candidates.slice(0, -1).map(candidate => stringField(candidate, "type"))
     .find(candidate => candidate !== undefined)?.slice(0, 128);

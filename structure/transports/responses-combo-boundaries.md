@@ -144,8 +144,10 @@ prelude.
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
 - a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`, or
   `upstream_stall_timeout` follows the same failure path; explicit semantic or unknown reasons stay terminal;
-- a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
-  may advance while errors explicitly classified as non-retryable 4xx remain committed;
+- a top-level `error` (`type: "error"`) arrives before output, in which case unknown, rate-limit, and server failures
+  may advance while errors explicitly classified as non-retryable 4xx remain committed. An untyped
+  `{"error":{...}}` envelope is not a control event, so it commits the target; the relay then reports it
+  as `response.failed` rather than `adapter_eof`;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 
