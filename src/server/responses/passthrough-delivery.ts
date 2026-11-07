@@ -18,6 +18,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesEffects } from "./response-effects";
 import type { PassthroughExchange } from "./passthrough-dispatch";
+import type { AuxiliaryModelSend } from "../../lib/request-execution-budget";
 import {
   sanitizePassthroughHeaders,
   createSseInspector,
@@ -433,6 +434,7 @@ export async function deliverPassthroughResponse(
     | "localUpstream"
     | "terminalOutcomeRecorded"
   >,
+  dispatchSidecarSend?: AuxiliaryModelSend,
 ): Promise<Response> {
   const { route } = requestState;
   // The proof must belong to the response whose headers are published.
@@ -783,6 +785,7 @@ export async function deliverPassthroughResponse(
             );
           },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
+            dispatchSidecarSend,
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
             hostedTool: parsed._webSearch,

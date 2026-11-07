@@ -183,7 +183,7 @@ test("C1/C2 ingress constructors have explicit producer rows and local identity"
 const envelopeWriterRows = [
   ["src/claude/outbound.ts", 6, "shared baseline helpers, original verdict and incomplete/unfinished presentation construction"],
   ["src/protocols/encoders/messages.ts", 4, "original verdict construction and fixed local collection failures"],
-  ["src/server/messages-native.ts", 4, "local/evidence legacy formatters, original combo and fold envelopes"],
+  ["src/server/messages-native.ts", 5, "local/evidence legacy formatters, original combo and fold envelopes, owned workflow refusal projection"],
   ["src/server/claude-messages.ts", 30, "mapped local ingress/bypass constructors, original combo and defensive JSON presentation envelopes"],
   ["src/server/index/serve-options.ts", 4, "fixed endpoint auth/origin bypasses"],
   ["src/server/messages-native-tool-guard.ts", 1, "deferred local guard terminal"],
@@ -274,7 +274,7 @@ const nativeFailRows = [
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
-    "call": "if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, \"send_budget_exhausted\", \"send_budget_exhausted\");",
+    "call": "return fail(429, sendError.message, \"send_budget_exhausted\", \"send_budget_exhausted\");",
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {

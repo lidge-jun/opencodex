@@ -1,6 +1,7 @@
 import { carryProxyErrorPresentation } from "../../lib/client-error-body";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
+import { carryWorkflowRefusal } from "../workflow-refusal";
 import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
@@ -145,6 +146,7 @@ export async function consumeComboFailure(
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
   carryProxyError(response, failureResponse);
+  carryWorkflowRefusal(response, failureResponse);
   carryReplayRefusal(response, failureResponse);
   carryProxyErrorPresentation(response, failureResponse);
   carryPolicyCandidateRefusal(response, failureResponse);

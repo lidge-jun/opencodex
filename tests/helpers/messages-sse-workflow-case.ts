@@ -11,7 +11,7 @@ const filterChecks = {
 Bun.plugin({ name: "native spend denial fixture", setup(build) {
   build.onLoad({ filter: nativeFilter }, ({ path }) => {
     const source = readFileSync(path, "utf8");
-    const anchor = "if (!physicalBudget.spendEnforced && !spendTracker.charge()) throw new NativeMessagesSpendRefusal();";
+    const anchor = "if (!physicalBudget.spendEnforced && !spendTracker.charge({ workflowAlreadyCounted: true })) throw new NativeMessagesSpendRefusal();";
     if (source.split(anchor).length !== 2) throw new Error("Native spend gate changed");
     return { contents: source.replace(anchor, "globalThis.__workflowHook.hits++; throw new NativeMessagesSpendRefusal();"), loader: "ts" };
   });
