@@ -103,7 +103,11 @@ export function applyExplicitChatReasoningWirePolicy(options: {
   const omitIndependentEffort = toggleWire && declaresIndependentChatReasoningEffort(provider, modelId)
     && requestedStrength !== undefined
     && isReasoningEffortOmitted(reasoningEffortMapFor(provider, modelId)?.[requestedStrength]);
-  if (omitIndependentEffort) delete body.reasoning_effort;
+  // A native caller's ultra stays on the wire when the provider explicitly advertises it.
+  // In that case the max alias belongs to a different value, even though the shared mapper folds ultra.
+  if (omitIndependentEffort && !(requestedEffort === "ultra" && body.reasoning_effort === "ultra")) {
+    delete body.reasoning_effort;
+  }
   const resolvedThinkingEnabled = toggleWire && !toggleDisabled
     ? resolveThinkingEnabled(provider, modelId, {
       thinkingEnabled: thinkingEnabled ?? (omitIndependentEffort && requestedStrength !== undefined && isDeclaredReasoningEffort(requestedStrength)

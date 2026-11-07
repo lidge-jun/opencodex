@@ -316,6 +316,18 @@ describe("toggle-only Chat reasoning capability", () => {
     }
   });
 
+  test("native dual-axis wire preserves explicitly supported ultra despite the max omission alias", () => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["high", "max", "ultra"] },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    const body = JSON.parse(buildOpenAIChatPassthroughRequest(target, request("ultra"), toggleModel, false).body);
+    expect(body.reasoning_effort).toBe("ultra");
+    expect(body.thinking).toEqual({ type: "enabled" });
+  });
+
   test.each([
     [undefined, false], [undefined, true],
     ["gateway-object", false], ["gateway-object", true],
