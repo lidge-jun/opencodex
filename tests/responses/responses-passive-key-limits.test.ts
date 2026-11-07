@@ -105,3 +105,29 @@ test("compact sends record the physical OpenAI key's limits", async () => {
     expect(observations.getPassiveKeyLimits(config, "openai-apikey", "compact-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 21 }]);
   } finally { release(); }
 });
+
+test("an in-flight response stays attributed to its key after another key becomes active", async () => {
+  const config = getDefaultConfig();
+  config.defaultProvider = "rotating-fixture";
+  config.defaultModel = "wire-model";
+  config.providers = { "rotating-fixture": { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authMode: "key",
+    apiKey: "first-synthetic-key", apiKeyPool: [{ id: "first", key: "first-synthetic-key" }, { id: "second", key: "second-synthetic-key" }],
+    models: ["wire-model"], liveModels: false } };
+  let finish!: () => void, started!: () => void;
+  const sent = new Promise<void>(resolve => { started = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  globalThis.fetch = (async () => {
+    started(); await gate;
+    return Response.json({ id: "synthetic", object: "chat.completion", model: "wire-model",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] },
+    { headers: { "x-ratelimit-remaining-requests": "42" } });
+  }) as typeof fetch;
+  const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "rotating-fixture/wire-model", input: "hi", stream: false, store: false }) });
+  const pending = handleResponses(request, config, { provider: "", model: "" }, {});
+  await sent;
+  config.providers["rotating-fixture"]!.apiKey = "second-synthetic-key";
+  finish();
+  await (await pending).text();
+  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "rotating-fixture", keyId: "first", model: "wire-model", windows: [{ remaining: 42 }] }]);
+});

@@ -1,4 +1,5 @@
 {
+  "passive-key-observation.test.ts": "providers",
   "claude-chat-gateway-tool-schema.test.ts": "providers",
   "provider-anthropic-usage-windows.test.ts": "providers",
   "xai-additional-tools.test.ts": "providers/xai",

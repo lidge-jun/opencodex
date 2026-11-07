@@ -1146,6 +1146,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { addProviderApiKey } = await import("../../providers/api-keys");
     const result = addProviderApiKey(config, name, body.key, body.label);
     if ("error" in result) return jsonResponse({ error: result.error }, 400);
+    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits();
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
@@ -1182,6 +1183,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ? storeProviderKeyInKeychain(config, name)
       : restoreProviderKeyFromKeychain(config, name);
     if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits();
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
@@ -1234,6 +1236,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeProviderApiKey } = await import("../../providers/api-keys");
     if (!removeProviderApiKey(config, name, id)) return jsonResponse({ error: "key not found" }, 404);
+    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits();
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");

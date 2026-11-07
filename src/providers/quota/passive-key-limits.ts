@@ -106,6 +106,11 @@ export class PassiveKeyLimitCache {
     }
   }
 
+  clear(): void {
+    for (const entry of this.entries.values()) if (entry.timer) clearTimeout(entry.timer);
+    this.entries.clear();
+  }
+
   private key(identity: PassiveKeyIdentity): string | undefined {
     if (!identity || typeof identity.owner !== "string" || identity.owner.length < 1 || identity.owner.length > 256
       || !PROVIDERS.includes(identity.provider) || typeof identity.model !== "string"
