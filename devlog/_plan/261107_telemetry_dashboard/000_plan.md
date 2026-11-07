@@ -1,8 +1,8 @@
-# Opt-in telemetry and the opencodex.me usage dashboard
+# Default-on (opt-out) telemetry and the opencodex.me usage dashboard
 
 ## Objective and scope
 
-Add anonymous, opt-in product telemetry to the opencodex proxy and a public, project-wide
+Add anonymous, default-on (opt-out) product telemetry to the opencodex proxy and a public, project-wide
 analytics page at `https://opencodex.me/dashboard`. The proxy reports install/version/platform
 pings, active time, request and token totals, and error counts; a collector stores daily
 aggregates; the dashboard renders installs, active time, usage, errors and downloads.
@@ -91,3 +91,9 @@ Same reviewer: PASS, 0 blockers; all 9 blockers and 6 majors verified resolved. 
 collector `tsconfig.json` overrides `rootDir`/`declaration` (030), and the new capability objects in
 `src/cli/capabilities-observe-system.ts` stay plain literals because `tests/helpers/cli-capability-data.ts`
 rejects `/` tokens and host identifiers there (010).
+
+## PR review round 1
+
+Reviewer feedback on the open stack is recorded, with owner decisions D1–D20, in
+[060_review_round.md](060_review_round.md). Those decisions supersede conflicting text in 000–050, including
+the public privacy statement change that must land with the first layer able to send.
