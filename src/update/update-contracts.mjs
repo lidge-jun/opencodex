@@ -21,6 +21,7 @@ const VERSION_PATHS = ["package.json", "desktop/src-tauri/tauri.conf.json", "des
 const FAIL = () => { throw new Error("Invalid update document"); };
 const text = (v, max = 4096) => typeof v === "string" && Buffer.byteLength(v, "utf8") <= max;
 const id = (v) => text(v, 128) && ASCII_ID.test(v);
+const assetName = (v) => text(v, 255) && ASCII_ID.test(v);
 const hash = (v) => typeof v === "string" && HASH.test(v);
 const integer = (v, min, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(v) && v >= min && v <= max;
 const oneOf = (v, values) => values.includes(v);
@@ -109,7 +110,7 @@ function expectedAsset(t, ver, channel) {
 }
 function target(t, ver, channel) {
   exact(obj(t, ["id", "platform", "arch", "owner", "artifactKind", "bundleKind", "assetName", "artifact", "tree", "capabilities"]));
-  exact(id(t.id) && t.id === targetTuple(t) && id(t.assetName) && t.assetName === expectedAsset(t, ver, channel));
+  exact(id(t.id) && t.id === targetTuple(t) && assetName(t.assetName) && t.assetName === expectedAsset(t, ver, channel));
   exact(obj(t.artifact, ["sha256", "size", "signatureBox", "signerFingerprint"]) && hash(t.artifact.sha256) && hash(t.artifact.signerFingerprint) && integer(t.artifact.size, 1, 1073741824));
   signature(t.artifact.signatureBox);
   if (t.artifactKind === "tauri" || t.artifactKind === "guardian") exact(t.tree === null); else digestSize(t.tree, 16777216);
@@ -130,11 +131,11 @@ function receipt(v) {
   exact(array(v.versionSources, 4, 4));
   for (const x of v.versionSources) exact(obj(x, ["path", "sha256"]) && VERSION_PATHS.includes(x.path) && hash(x.sha256));
   exact(unique(v.versionSources.map((x) => x.path)) && array(v.assets, 1, 4096));
-  for (const x of v.assets) exact(obj(x, ["name", "sha256", "size"]) && id(x.name) && hash(x.sha256) && integer(x.size, 1));
+  for (const x of v.assets) exact(obj(x, ["name", "sha256", "size"]) && assetName(x.name) && hash(x.sha256) && integer(x.size, 1));
   exact(v.assets.every((x, i) => i === 0 || v.assets[i - 1].name < x.name));
   exact(array(v.universalProofs, 0, 4096) && array(v.architectureProofs, 0, 4096));
-  for (const x of v.universalProofs) exact(obj(x, ["assetName", "artifactSha256", "architectures", "inspectionSha256"]) && id(x.assetName) && hash(x.artifactSha256) && hash(x.inspectionSha256) && array(x.architectures, 2, 2) && x.architectures[0] === "arm64" && x.architectures[1] === "x64");
-  for (const x of v.architectureProofs) exact(obj(x, ["targetId", "assetName", "artifactSha256", "arch", "inspectionSha256"]) && id(x.targetId) && id(x.assetName) && hash(x.artifactSha256) && hash(x.inspectionSha256) && oneOf(x.arch, ["x64", "arm64"]));
+  for (const x of v.universalProofs) exact(obj(x, ["assetName", "artifactSha256", "architectures", "inspectionSha256"]) && assetName(x.assetName) && hash(x.artifactSha256) && hash(x.inspectionSha256) && array(x.architectures, 2, 2) && x.architectures[0] === "arm64" && x.architectures[1] === "x64");
+  for (const x of v.architectureProofs) exact(obj(x, ["targetId", "assetName", "artifactSha256", "arch", "inspectionSha256"]) && id(x.targetId) && assetName(x.assetName) && hash(x.artifactSha256) && hash(x.inspectionSha256) && oneOf(x.arch, ["x64", "arm64"]));
   exact(unique(v.universalProofs.map((x) => JSON.stringify([x.assetName, x.artifactSha256, x.architectures, x.inspectionSha256])))
     && unique(v.architectureProofs.map((x) => JSON.stringify([x.targetId, x.assetName, x.artifactSha256, x.arch, x.inspectionSha256]))));
 }

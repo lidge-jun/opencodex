@@ -132,6 +132,14 @@ describe("closed unverified update contracts", () => {
     reject({...r, assets: [...r.assets].reverse()}); reject({...r, assets: [r.assets[0], r.assets[0]]});
     reject({...r, universalProofs: [{...r.universalProofs[0], architectures: ["x64", "arm64"]}]});
     reject({...r, architectureProofs: [{...r.architectureProofs[0], arch: "other"}]});
+    for (const field of ["assets", "universalProofs", "architectureProofs"]) {
+      const nameKey = field === "assets" ? "name" : "assetName";
+      const entry = r[field][0];
+      expect(parse({...r, [field]: [{...entry, [nameKey]: "a".repeat(255)}]})).toBeDefined();
+      reject({...r, [field]: [{...entry, [nameKey]: "a".repeat(256)}]});
+      reject({...r, [field]: [{...entry, [nameKey]: "a/b"}]});
+    }
+    reject({...r, architectureProofs: [{...r.architectureProofs[0], targetId: "a".repeat(129)}]});
   });
   test("tree inventory is physical, requires real directory parents and accepts relative links", () => {
     const t = fixtures()["ocx.update.tree/1"];
