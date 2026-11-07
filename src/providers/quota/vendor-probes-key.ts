@@ -1008,7 +1008,8 @@ async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig):
   }
   const inferenceQuota = { ...quota };
   delete inferenceQuota.customWindows; // search.hourly does not constrain model inference.
-  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey, inferenceQuota) : null;
+  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey,
+    fiveHour !== undefined || weekly !== undefined ? inferenceQuota : undefined) : null;
 }
 
 /**
