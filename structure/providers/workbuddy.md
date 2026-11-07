@@ -41,7 +41,8 @@ Unavailable discovery degrades to the same-account cache, then the minimal `defa
 fixed-origin API helper. It sums `Packages` once using the decimal representation of each validated
 number before returning numeric totals, and treats `CreditGroups` as a breakdown;
 explicit remaining/frozen amounts take precedence over arithmetic estimates. Team accounts use
-the enterprise meter when the personal summary has no capacity. Optional paid/free package
+the enterprise meter when the personal summary has no capacity; estimated remaining credits use
+decimal subtraction on validated amounts. Optional paid/free package
 queries use summary-owned codes, bounded pagination and the same total deadline; a failure
 omits expiry without losing the balance. Expiry uses the earliest future non-daily package
 and excludes packages absent from the summary.

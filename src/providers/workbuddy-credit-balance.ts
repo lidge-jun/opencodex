@@ -48,6 +48,11 @@ function sumAmounts(rows: readonly WorkBuddyCreditAmount[]): WorkBuddyCreditAmou
   };
 }
 
+/** Remaining credits when the provider omits them, bounded below by zero. */
+export function remainingWorkBuddyCredits(total: number, used: number, frozen = 0): number {
+  return Math.max(0, sumCapacities([total, -used, -frozen]));
+}
+
 function amount(value: unknown): WorkBuddyCreditAmount | undefined {
   const row = workBuddyRecord(value);
   const total = workBuddyCapacity(row.total), used = workBuddyCapacity(row.used);
@@ -77,7 +82,7 @@ function packageAmount(row: Record<string, unknown>): WorkBuddyCreditAmount | un
   const total = workBuddyCapacity(row.CycleTotalCapacity), used = workBuddyCapacity(row.CycleUsedCapacity);
   const frozen = row.CycleFrozenCapacity === undefined ? 0 : workBuddyCapacity(row.CycleFrozenCapacity);
   if (total === undefined || used === undefined || frozen === undefined) return undefined;
-  const remaining = row.CycleRemainCapacity === undefined ? Math.max(0, sumCapacities([total, -used, -frozen])) : workBuddyCapacity(row.CycleRemainCapacity);
+  const remaining = row.CycleRemainCapacity === undefined ? remainingWorkBuddyCredits(total, used, frozen) : workBuddyCapacity(row.CycleRemainCapacity);
   return remaining === undefined ? undefined : { total, used, remaining, frozen };
 }
 
