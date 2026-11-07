@@ -431,6 +431,13 @@ MiMo model Command Code serves.
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
 
+For the Google Vertex AI dashboard preset, Project ID and Location are optional fields. With
+an empty API key, the proxy uses ADC on the **proxy host**, unless `GOOGLE_CLOUD_API_KEY` is set;
+that environment key takes precedence. ADC also needs a project and location, supplied in the
+form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
+host. Adding the provider does not verify that credentials or permissions are usable. A key
+without an explicit project uses Vertex express mode.
+
 - **Location denials are permission errors, not invalid requests.** Google rejects unsupported
   geographic or datacenter locations with HTTP 400 `FAILED_PRECONDITION: User location is not
   supported for the API use.` The proxy reports this as `… location not supported: …` and

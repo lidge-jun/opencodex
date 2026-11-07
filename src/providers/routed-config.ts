@@ -110,6 +110,21 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
   return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
 }
 
+/** Bind the environment values used by Vertex to the routed request for send-time checks. */
+function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConfig {
+  if (provider.adapter !== "google" || provider.googleMode !== "vertex") return provider;
+  const marker = provider.apiKey?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) === true;
+  const configuredKey = provider.apiKey && !provider.apiKey.startsWith("<") && provider.apiKey !== "N/A" ? provider.apiKey : undefined;
+  const apiKey = marker ? provider.apiKey : configuredKey || process.env.GOOGLE_CLOUD_API_KEY || undefined;
+  if (apiKey && !marker) return { ...provider, apiKey };
+  return {
+    ...provider,
+    apiKey,
+    project: provider.project?.trim() ? provider.project : process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT,
+    location: provider.location || process.env.GOOGLE_CLOUD_LOCATION,
+  };
+}
+
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
@@ -124,7 +139,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     const destination = registryEntryForProviderDestination(provider);
     const inputModalities = provider.inputModalities === undefined
       ? registryInputModalitiesForDestination(providerName, provider) : undefined;
-    return {
+    return snapshotVertexEnvironment({
       ...provider,
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
@@ -140,7 +155,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
         : {}),
-    };
+    });
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
@@ -360,5 +375,5 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
   };
   applyDirectReasoningEffortContracts(registryEntry, resolved, provider);
-  return resolved;
+  return snapshotVertexEnvironment(resolved);
 }

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconCheck } from "../../icons";
-import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/catalog";
+import { binProviderStatus, usesUnverifiedVertexCredentials, type WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
 import { modelVisible } from "../../model-visibility";
 import { discoveryFailureLabel, type ModelRow } from "../../pages/models-shared";
@@ -79,6 +79,7 @@ export default function ProviderOverview({
   const t = useT();
   const { locale } = useI18n();
   const status = binProviderStatus(item);
+  const vertexUnverified = usesUnverifiedVertexCredentials(item);
   const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
   const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
   const effectiveStatus = item.disabled === true
@@ -89,7 +90,7 @@ export default function ProviderOverview({
   const statusText = effectiveStatus === "ready"
     ? t("pws.status.ready")
     : effectiveStatus === "needs-setup"
-      ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
+      ? (needsAttention ? t("pws.status.needsAttention") : vertexUnverified ? t("pws.vertexUnverified") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
@@ -178,7 +179,7 @@ export default function ProviderOverview({
       : providerStepState === "needs-login"
         ? t("pws.firstResponse.providerNeedsLogin")
         : providerStepState === "needs-setup"
-          ? t("pws.firstResponse.providerNeedsSetup")
+          ? t(vertexUnverified ? "pws.vertexSavedUnverified" : "pws.firstResponse.providerNeedsSetup")
           : t("pws.firstResponse.providerSaved");
 
   const providerRows = (modelRows ?? []).filter(row => row.provider === item.name);

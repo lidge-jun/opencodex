@@ -46,6 +46,7 @@ export interface WorkspaceProvider {
   /** Optional upstream HTTP version pin. Cursor defaults to HTTP/2 when omitted. */
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
   authMode?: "key" | "forward" | "oauth" | "local" | string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   keyOptional?: boolean;
   /** Free pricing (may still require an API key). */
   freeTier?: boolean;
@@ -156,6 +157,13 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
     p.authMode === "local" ||
     hasLoopbackBaseUrl(p.baseUrl) ||
     p.hasApiKey === true;
+}
+
+/** A keyless Vertex row can use host credentials, but the dashboard has not verified them. */
+export function usesUnverifiedVertexCredentials(p: WorkspaceProvider | WorkspaceItem): boolean {
+  if (p.disabled || p.adapter !== "google" || p.hasApiKey || (p.authMode !== undefined && p.authMode !== "key")) return false;
+  return p.googleMode === "vertex" || (p.googleMode === undefined && "name" in p && p.name === "google-vertex"
+    && normalizedBaseUrl(p.baseUrl) === "https://aiplatform.googleapis.com");
 }
 
 /**

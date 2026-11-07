@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, afterAll, describe, expect, spyOn, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +6,17 @@ import { join } from "node:path";
 import { getVertexAccessToken, __resetVertexTokenCache } from "../../../src/lib/gcp-adc";
 import { createGoogleAdapter } from "../../../src/adapters/google";
 import { providerManagementConfigError } from "../../../src/server/auth-cors";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { providerApiKeySelectionIsCurrent } from "../../../src/providers/api-key-selection";
+import { routedProviderConfig } from "../../../src/providers/routed-config";
+import { loadConfig, saveConfig } from "../../../src/config";
+import { handleChatCompletions } from "../../../src/server/chat-completions";
+import { handleManagementAPI } from "../../../src/server/management-api";
+import * as proxyEnv from "../../../src/lib/proxy-env";
+import * as destinationPolicy from "../../../src/lib/destination-policy";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+import { ManagementRequest } from "../../helpers/management-auth";
+import { catalogConvergenceFactory } from "../../helpers/catalog-convergence";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { STATE_STORE_REGISTRATIONS } from "../../../src/lib/state-store-registrations";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -81,6 +91,101 @@ function setEnv(k: string, v: string): void {
 }
 
 describe("gcp-adc resolver", () => {
+  test("keyless Vertex ADC remains valid through the physical-send selection check", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const routed = routedProviderConfig("google-vertex", provider);
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", routed)).toBe(true);
+    config.providers["google-vertex"] = { ...provider, project: "other-project" };
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", routed)).toBe(false);
+  });
+
+  test("Vertex send-time selection detects environment key, project and location changes", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    setEnv("GOOGLE_CLOUD_PROJECT", "project-one");
+    setEnv("GOOGLE_CLOUD_LOCATION", "global");
+    const adc = routedProviderConfig("google-vertex", provider);
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", adc)).toBe(true);
+    setEnv("GOOGLE_CLOUD_PROJECT", "project-two");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", adc)).toBe(false);
+    const changedProject = routedProviderConfig("google-vertex", provider);
+    setEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", changedProject)).toBe(false);
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", adc)).toBe(false);
+    const key = routedProviderConfig("google-vertex", provider);
+    expect(key.apiKey).toBe("fixture-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", key)).toBe(true);
+    setEnv("GOOGLE_CLOUD_API_KEY", "replacement-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", key)).toBe(false);
+    const placeholder = { ...provider, apiKey: "N/A" };
+    config.providers["google-vertex"] = placeholder;
+    const fallback = routedProviderConfig("google-vertex", placeholder);
+    expect(fallback.apiKey).toBe("replacement-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", fallback)).toBe(true);
+    setEnv("GOOGLE_CLOUD_API_KEY", "third-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", fallback)).toBe(false);
+  });
+
+  test("management saves and reloads a renamed keyless Vertex provider", async () => {
+    const config = { port: 0, defaultProvider: "fixture", providers: {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1" },
+    } } as OcxConfig;
+    saveConfig(config);
+    const destination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    try {
+      const request = new ManagementRequest("http://127.0.0.1/api/providers", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "my-vertex", provider: { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } }) });
+      const response = await handleManagementAPI(request, new URL(request.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      expect(response?.status).toBe(200);
+      expect(loadConfig().providers["my-vertex"]).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "global" });
+      expect(loadConfig().providers["my-vertex"]?.apiKey).toBeUndefined();
+      const read = new ManagementRequest("http://127.0.0.1/api/config");
+      const readResponse = await handleManagementAPI(read, new URL(read.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      const dto = await readResponse!.json() as { providers: Record<string, Record<string, unknown>> };
+      expect(dto.providers["my-vertex"]).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "global", hasApiKey: false });
+      expect(dto.providers["my-vertex"]).not.toHaveProperty("apiKey");
+    } finally {
+      destination.mockRestore();
+    }
+  });
+
+  test("a keyless Vertex provider sends a proxy chat request with ADC", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    const sent: Array<{ url: string; authorization: string | null; apiKey: string | null }> = [];
+    let tokenRequests = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url === OAUTH_TOKEN_URL) { tokenRequests++; return Response.json({ access_token: "vertex-tok", expires_in: 3600 }); }
+      const headers = new Headers(init?.headers);
+      sent.push({ url, authorization: headers.get("authorization"), apiKey: headers.get("x-goog-api-key") });
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "hello" }] }, finishReason: "STOP" }] })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }], stream: false }) });
+      const logContext = { model: "", provider: "" };
+      const response = await handleChatCompletions(request, config, logContext);
+      if (response.status !== 200) throw new Error(`Proxy returned ${response.status}: ${await response.text()}`);
+      expect(response.status).toBe(200);
+      expect(sent).toHaveLength(1);
+      expect(tokenRequests).toBe(1);
+      expect(sent[0]).toMatchObject({ authorization: "Bearer vertex-tok", apiKey: null });
+      expect(sent[0]!.url).toContain("/v1/projects/demo-project/locations/global/");
+    } finally {
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
   test("service_account flow signs an RS256 JWT and returns the access token", async () => {
     setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
     const tok = await getVertexAccessToken();

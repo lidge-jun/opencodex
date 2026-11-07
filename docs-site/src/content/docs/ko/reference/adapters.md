@@ -138,6 +138,13 @@ Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
 사용합니다.
 **인증:** `googleMode`에 따라 API 키, Vertex ADC, Google Antigravity OAuth 중 하나를 선택합니다.
 
+대시보드의 Google Vertex AI 프리셋에서 프로젝트 ID와 리전을 선택적으로 입력할 수 있습니다.
+API 키를 비우고 `GOOGLE_CLOUD_API_KEY`가 설정되지 않았다면 **프록시 호스트**의 ADC를
+사용합니다. ADC에는 프로젝트와 리전이 필요하며, 폼 또는 프록시 호스트의
+`GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 및 `GOOGLE_CLOUD_LOCATION`으로 설정합니다.
+provider를 추가했다고 자격증명이나 권한의 유효성이 검증되는 것은 아닙니다. API 키에
+프로젝트를 지정하지 않으면 Vertex express 모드를 사용합니다.
+
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.
 - Gemini가 tool-call id를 생략하면 합성합니다. Vertex와 Antigravity에서는 불투명한

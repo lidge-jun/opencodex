@@ -12,6 +12,8 @@ EOF output, retain the [shared byte-accounting contract](../transports/byte-acco
 
 ## Vertex API-key endpoint selection
 
+Vertex requests may use host ADC without an API key. `src/providers/routed-config.ts` captures the effective Vertex environment key and, for ADC, the project and location with the routed provider; `src/providers/api-key-selection.ts` rechecks those values before dispatch. A change forces transport rebuilding. A service-account marker continues to select its named credential instead of the ambient API key. The capture does not itself verify that ADC credentials are available. `tests/adapters/google/gcp-adc.test.ts` covers the selection boundary and a proxy Chat request using synthetic ADC credentials.
+
 `src/adapters/google-vertex-endpoint.ts` selects the Vertex endpoint once per request and the
 same selection feeds the thought-signature replay namespace. API keys follow explicit provider
 configuration only: `provider.project` selects
