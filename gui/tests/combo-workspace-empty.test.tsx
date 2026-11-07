@@ -58,7 +58,8 @@ test("an empty combo list renders the first-combo editor inline", () => {
   expect(html).toContain("Internal combo id. You can change it after creation.");
   expect(html).toContain("Create combo");
   expect(html).not.toContain('role="dialog"');
-  expect(html).not.toContain("Create your first combo");
+  expect(html).toContain("Create your first combo");
+  expect(html).toContain("Name a virtual model and chain two or more backends.");
 });
 
 test("an empty combo list creates the first combo and shows confirmation", async () => {

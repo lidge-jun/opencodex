@@ -67,6 +67,11 @@
   color: var(--text);
 }
 
+.combos-workspace-rail-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.combos-workspace-rail-heading .combos-workspace-rail-count { padding: 0 6px; border-radius: var(--radius-pill); background: var(--raised); }
+.combos-workspace-rail-empty { padding: 12px 16px; color: var(--muted); font-size: var(--text-label); }
+.combos-workspace-rail-empty p { margin: 4px 0 0; }
+
 .combos-workspace-rail-count {
   font-family: var(--mono);
   font-size: var(--text-caption);
@@ -208,6 +213,7 @@
   margin: 0;
   min-width: 0;
 }
+.combos-workspace-detail-title--label { font-family: var(--font-ui); }
 
 .combos-workspace-detail-actions {
   margin-left: auto;
@@ -667,8 +673,8 @@
 }
 
 .cwi-strategy-seg {
-  display: inline-flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
   border-radius: var(--radius-pill);
   background: var(--surface-soft, var(--raised));
   padding: 3px;
@@ -763,6 +769,10 @@
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+
+  .combos-workspace-root--empty { grid-template-rows: auto 1fr; }
+  .combos-workspace-root--empty .combos-workspace-rail { height: auto; }
+  .combos-workspace-root--empty .combos-workspace-rail-list { flex: 0 0 auto; }
 
   .cwi-capability-row {
     align-items: flex-start;
