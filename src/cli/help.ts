@@ -49,7 +49,7 @@ Usage:
   ocx connect <url>           Connect this machine to a remote OpenCodex hub (credential via stdin)
   ocx remote-workspace <sub>  Pair/run an OCX-only remote execution computer
   ocx disconnect              Restore local state and clear the hub connection
-  ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
+  ocx sync [--local-only] [--json] [--restart-codex]  Sync models and linked Children
                               --expect-link <id> | --expect-hub-key <id>: only from that Home/hub key (exit 5 otherwise)
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
@@ -72,7 +72,7 @@ Usage:
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
-  ocx capabilities [--json]    List declared capabilities and the API routes they drive
+  ocx capabilities [--json] [--contracts]  List capabilities and contracts
   ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
   ocx resolve [--json]        Config home, effective port, and liveness (JSON for shells)
   ocx provider <sub>          Providers, connectivity, quota, and selected models

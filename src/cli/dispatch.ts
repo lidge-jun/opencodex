@@ -1,4 +1,5 @@
 import type { ProxyRestartStartOutcome } from "./tray-proxy";
+import type { RestartSupervisor } from "./restart-failure";
 /**
  * Registry-driven command dispatch (Phase 3 of the CLI deepening).
  *
@@ -15,7 +16,6 @@ import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
-import type { OwnedIntegrationRefreshOutcome } from "../integrations/owned-refresh";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
 import { printUnknownCommand } from "./help-recovery";
 import {
@@ -30,9 +30,9 @@ import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
-import { handleRestartScopeAfterWrite, readRestartScope, type RestartScope } from "./restart-scope";
+import { handleRestartScopeAfterWrite, readRestartScope } from "./restart-scope";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
-import { isJsonOption, takeFlag, terminalSafeError, terminalSafeText } from "./runtime-api";
+import { isJsonOption, takeFlag } from "./runtime-api";
 import { printStopSummary, type StopOutcome } from "./stop-report";
 import { parseStopApproval, type StopApproval } from "./stop-approval";
 import type { ResolveArgs } from "./resolve";
@@ -60,7 +60,7 @@ export interface CliDispatchDeps {
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>) => Promise<boolean>;
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -404,171 +404,7 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleLogoutCommand } = await import("./logout-command");
     return handleLogoutCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
-  sync: async deps => {
-    const syncArgs = deps.args.slice(1);
-    // #7694: parse the expected identity before anything else reads or writes state.
-    const { parseSyncExpectation, reportSyncExpectationMismatch, SYNC_EXPECTATION_USAGE_EXIT } = await import("./sync-expectation");
-    const parsedExpectation = parseSyncExpectation(syncArgs);
-    if (!parsedExpectation.ok) {
-      console.error(parsedExpectation.message);
-      return SYNC_EXPECTATION_USAGE_EXIT;
-    }
-    const expectation = parsedExpectation.expectation;
-    const restartScope = readRestartScope(syncArgs, console);
-    // The wire field keeps APP-SERVER-ONLY meaning and is deliberately not widened. A
-    // remote hub must not end a local user's conversations because a field name acquired
-    // a wider meaning underneath it; the maintainer decision widened a local CLI flag and
-    // said nothing about remote callers. syncConnectedClient ignores it either way.
-    const restartCodex = restartScope.appServers;
-    const { readClientConnectionState } = await import("../client/state");
-    const clientState = readClientConnectionState();
-    // With an expectation the unlocked read decides nothing: the connected sync re-reads under its
-    // lock and refuses there, so a state that changes in between can never reach the local path.
-    if (!expectation && (clientState.kind === "invalid" || clientState.kind === "mismatched")) {
-      console.error(`Client state is ${clientState.kind}: ${clientState.reason}`);
-      return 1;
-    }
-    if (expectation || clientState.kind === "connected") {
-      try {
-        const { syncConnectedClient } = await import("../client/connect");
-        const result = await syncConnectedClient(expectation ? { restartCodex, expect: expectation } : { restartCodex });
-        if (expectation) {
-          // The root preflight skipped the shim repair for a pinned sync; the identity held, so
-          // run it now, as an unpinned sync would have.
-          const { runCodexShimAutoRestoreAsync } = await import("./codex-shim-autorestore");
-          await runCodexShimAutoRestoreAsync();
-        }
-        // The connection the sync ran under, read inside its lock; the read above may be stale.
-        const link = result.connection.transport === "link";
-        console.log(result.stale
-          ? `${link ? "Home" : "Hub"} unavailable; retained and applied the last-known-good remote catalog (stale).`
-          : link ? "Remote Link Home catalog synchronized." : "Remote hub catalog synchronized.");
-        if (result.homeSettings) {
-          const { describeHomeCodexSettings } = await import("../link/codex-settings");
-          const settings = result.homeSettings;
-          if (settings.source === "local") {
-            console.log(`Codex settings: kept this machine's local values (${terminalSafeText(settings.reason)}).`);
-          } else {
-            console.log(settings.source === "home"
-              ? `Codex settings applied from Home ${terminalSafeText(settings.document.home.name)}:`
-              : `Codex settings applied from the last recorded Home read (${terminalSafeText(settings.reason)}):`);
-            for (const line of describeHomeCodexSettings(settings.document.settings)) console.log(`  ${terminalSafeText(line)}`);
-          }
-        }
-        await handleConnectedSyncCatalogWrite(result, restartScope);
-        if (result.applyRecordFailed) {
-          console.error("The Home's Codex settings were applied, but the apply record could not be written; the client runtime was not restarted. Run 'ocx sync' again.");
-          process.exitCode = 1;
-        }
-        // OCX-6: a link Child's runtime must have started after the apply it serves under.
-        if (link && result.appliedRecord) {
-          const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
-          const { sameClientConnectionOwner } = await import("../client/state");
-          const applied = result.connection;
-          const outcome = await restartRuntimeAfterApply(result.appliedRecord, {
-            restart: startWhenStopped => deps.handleProxyRestart(startWhenStopped),
-            recoveryStart: recovering => deps.handleRestartStartWhenStopped(recovering),
-            connectionUnchanged: () => {
-              const current = readClientConnectionState();
-              return current.kind === "connected" && sameClientConnectionOwner(current.value, applied)
-                && current.value.link?.linkId === applied.link?.linkId;
-            },
-          });
-          const message = applyRestartMessage(outcome);
-          if (outcome.kind === "failed" || outcome.kind === "connection-changed") {
-            console.error(message);
-            process.exitCode = 1;
-          } else {
-            console.log(message);
-          }
-        }
-        // `process.exitCode` rather than a literal 0, for the same reason every other
-        // runner does it (tests/cli/cli-transport-honesty.test.ts): the catalog-write helper
-        // drives app-server restarts, and one of those recording a failure must not be
-        // erased by the value this runner returns. It reads 0 on the ordinary path. Node
-        // types it as `number | string`; only a numeric code means anything here.
-        return typeof process.exitCode === "number" ? process.exitCode : 0;
-      } catch (error) {
-        const { ClientSyncExpectationError } = await import("../client/sync-expectation");
-        if (error instanceof ClientSyncExpectationError) return reportSyncExpectationMismatch(error, console);
-        // The refresh path reaches the same hub catalog `ocx connect` validates, so a rejected
-        // reasoning level arrives here as hub-supplied text. Rendering it through the shared
-        // terminal boundary is what keeps the routine refresh from forging output; the domain
-        // error itself is left alone for callers that inspect it.
-        console.error(`Connected sync failed without local fallback: ${terminalSafeError(error).message}`);
-        return 1;
-      }
-    }
-    const live = await deps.findLiveProxy();
-    const synced = await syncModelsToCodex(
-      live?.port,
-      undefined,
-      undefined,
-      undefined,
-      { catalogEvenWhenNotInjected: true },
-    );
-    let code = 0;
-    if (synced.status === "skipped") {
-      console.log(synced.skippedReason === "hub-gated"
-        ? `${HUB_GATED_SKIP_MESSAGE} sync skipped and no Codex files changed.`
-        : "Codex integration is OFF; sync skipped and no Codex files changed.");
-    } else if (synced.status === "catalog-only") {
-      // Explicit sync with the integration OFF still refreshes the catalog/cache
-      // for side profiles that consume the proxy without injection.
-      console.log(synced.message ?? "Codex integration is OFF; catalog refreshed, Codex config untouched.");
-      if (!synced.ok) code = 1;
-    } else if (!synced.ok) {
-      code = 1;
-      console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
-    }
-    // Catalog/model-cache writes retain their warning/restart handling. This is
-    // deliberately not an `else`: refreshCodexModelCatalog runs before injectCodexConfig,
-    // so a sync can fail (`ok: false`) after the catalog was already rewritten — which is
-    // exactly when a long-lived app-server is holding the stale list.
-    // A configuration-only change also needs a reload, but only when explicitly
-    // requested. A successful no-op or refused write is never restart authority.
-    const requestedConfigRestart = (restartScope.appServers || restartScope.desktopApp)
-      && synced.ok && synced.configChanged === true;
-    if (synced.catalogWritten || synced.cacheSynced || requestedConfigRestart) {
-      await handleRestartScopeAfterWrite(restartScope, console);
-    }
-    // `ocx sync` is a direct CLI path; it does not call the management
-    // `/api/sync` route. Refresh already-connected file integrations here too,
-    // after Codex has published the catalog that supplies its capabilities.
-    if (synced.status !== "refused") {
-      const results: OwnedIntegrationRefreshOutcome[] = [];
-      if (live) {
-        try {
-          const config = deps.loadConfig();
-          const { refreshOwnedCatalogIntegrations } = await import("../integrations/catalog-refresh");
-          results.push(...await refreshOwnedCatalogIntegrations({
-            models: async () => {
-              const { loadExportModels } = await import("../server/management/model-rows");
-              return loadExportModels(config);
-            },
-            config,
-            port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
-        } catch (error) {
-          console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      // Even without a live proxy, report why Aside could not sync. Its server
-      // owner is never bypassed, and another client's failure cannot hide it.
-      try {
-        const { refreshAsideProfilesThroughServer } = await import("./aside-profiles");
-        results.push(...await refreshAsideProfilesThroughServer({ findLiveProxy: async () => live }));
-      } catch (error) {
-        console.warn(`Aside profiles were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      for (const result of results) {
-        const label = result.profileId === undefined ? result.client : `${result.client}:${result.profileId}`;
-        if (result.changed) console.log(`${label} integration refreshed from the current catalog.`);
-        else if (result.reason) console.warn(`${label} integration was not refreshed: ${result.reason}${result.residual ? " Recovery did not finish." : ""}${result.snapshotPath ? ` Backup: ${result.snapshotPath}` : ""}`);
-      }
-    }
-    return code;
-  },
+  sync: async deps => (await import("./sync-update-guard")).withSyncUpdateGuard(async () => (await import("./sync-command")).runSyncCommand(deps), deps.args),
   v2: async deps => {
     const { cmdV2 } = await import("./v2");
     return await cmdV2(deps.args.slice(1), { runtimeApi: { findLiveProxy: deps.findLiveProxy } }, async () => (await deps.findLiveProxy())?.port);
@@ -766,6 +602,7 @@ const commandRunners: Record<string, CommandRunner> = {
       case "remove": {
         const r = await uninstallCodexShimAsync();
         console.log(r.removed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+        if (r.refused) return 1;
         break;
       }
       default:
@@ -775,6 +612,14 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   update: async deps => {
+    const { isOrchestratedUpdateArgv, parseOrchestratedChildArgs } = await import("../update/orchestrated-arguments.mjs");
+    if (process.env.OCX_UPDATE_ORCHESTRATED_CHILD === "1" && deps.args.slice(1).some(arg => /^--orchestrated-(expect|result)(?:=|$)/.test(arg))) {
+      const child = parseOrchestratedChildArgs(deps.args.slice(1), process.env);
+      if (!child.ok) return 64;
+      await (await import("../update")).runUpdate(child);
+      return Number(process.exitCode ?? 0);
+    }
+    if (isOrchestratedUpdateArgv(deps.args.slice(1))) return (await import("../update/orchestrated-entry")).runOrchestratedUpdate(deps.args.slice(1));
     // `ocx update --help` must print usage and exit WITHOUT side effects — running the
     // real self-update stops the proxy and drops in-flight routed streams (issue #168).
     if (hasHelpFlag(deps.args.slice(1))) {
@@ -1252,14 +1097,6 @@ export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Pro
     return 1;
   }
   return await runner(deps);
-}
-
-async function handleConnectedSyncCatalogWrite(
-  result: { catalogWritten: boolean; cacheSynced: boolean },
-  scope: RestartScope,
-): Promise<void> {
-  if (!result.catalogWritten && !result.cacheSynced) return;
-  await handleRestartScopeAfterWrite(scope, console);
 }
 
 async function reconcileClientJournalBeforeLifecycle(

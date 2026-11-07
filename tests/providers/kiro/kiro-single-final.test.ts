@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createKiroAdapter } from "../../../src/adapters/kiro";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../../src/adapters/kiro-constants";
 import { resetKiroThrottleStateForTests } from "../../../src/adapters/kiro-retry";
 import { encodeMessage } from "../../../src/lib/eventstream-decoder";
+import { clearDebugSetting, getDebugSettings, setDebugSettings } from "../../../src/lib/debug-settings";
 import { createTranslatorBudget, releaseTranslatedEvent } from "../../../src/lib/translator-budget";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
@@ -68,6 +69,35 @@ async function run(first: Uint8Array[], retry: Uint8Array[], buffered = false, i
 }
 
 describe("Kiro single final answer (#6270)", () => {
+  test("attempt diagnostics classify upstream stop reasons without logging arbitrary content", async () => {
+    const original = getDebugSettings().runtimeOverride.debug;
+    setDebugSettings({ debug: true });
+    const output: string[] = [];
+    const log = spyOn(console, "error").mockImplementation((...args) => { output.push(args.join(" ")); });
+    try {
+      for (const reason of ["END_TURN", "private arbitrary upstream text"]) {
+        const input = structuredClone(parsed);
+        input.context.tools = [];
+        const adapter = createKiroAdapter(provider);
+        const budget = createTranslatorBudget();
+        try {
+          await adapter.buildRequest(input);
+          for await (const event of adapter.parseStream(response([text("hello"), frame("metadataEvent", { stopReason: reason })]), budget)) {
+            releaseTranslatedEvent(event, budget);
+          }
+        } finally { budget.dispose(); }
+      }
+    } finally {
+      log.mockRestore();
+      if (original === undefined) clearDebugSetting("debug");
+      else setDebugSettings({ debug: original });
+    }
+    const attempts = output.filter(line => line.includes("attempt_complete"));
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toContain('"stopReason":"END_TURN"');
+    expect(attempts[1]).toContain('"stopReason":"other"');
+    expect(attempts.join("\n")).not.toContain("private arbitrary upstream text");
+  });
   test("advisor guard survives request building and completion retry", async () => {
     const guard: NonNullable<OcxParsedRequest["_advisorGuard"]> = async function* () {};
     const input = { ...structuredClone(parsed), _advisorGuard: guard };

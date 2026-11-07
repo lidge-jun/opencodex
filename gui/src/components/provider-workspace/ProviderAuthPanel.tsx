@@ -1,3 +1,4 @@
+import { anthropicSubscriptionLabel } from "../../../../src/providers/anthropic-subscription";
 import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * ProviderAuthPanel — OAuth accounts, API-key pool, and forward-auth
@@ -486,7 +487,7 @@ export default function ProviderAuthPanel({
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
               <span className="pwi-auth-status-text">
                 {loggedIn
-                  ? (accounts.length > 0 ? t("pws.loggedInTitle") : (oauth?.email ?? t("pws.loggedInTitle")))
+                  ? t("pws.loggedInTitle")
                   : (oauth?.error || t("pws.notLoggedInTitle"))}
               </span>
               <span className="pwi-auth-actions">
@@ -535,6 +536,14 @@ export default function ProviderAuthPanel({
                 </div>
               </div>
             )}
+            {authHandlers.pendingAffinityResets?.[item.name] && (
+              <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+                <span>{t("prov.affinityResetPending")}</span>
+                {authHandlers.onRetryAffinityReset && <button type="button" className="btn btn-ghost btn-sm"
+                  disabled={Boolean(switchingAccountId || pausingAccountId)}
+                  onClick={() => void authHandlers.onRetryAffinityReset?.(item.name)}>{t("common.retry")}</button>}
+              </div>
+            )}
             {accountLoadState === "loading" && accounts.length === 0 && (
               <div className="pwi-auth-state" role="status">
                 <span className="pwi-spin-inline" aria-hidden="true" />
@@ -555,7 +564,7 @@ export default function ProviderAuthPanel({
               <ul className="pwi-auth-list">
                 {accounts.map(account => {
                   const label = oauthAccountDisplayLabel(accounts, account, t);
-                  const planLabel = item.name === "google-antigravity" ? account.plan : undefined;
+                  const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
                   const healthStatus = account.health?.status;
@@ -563,7 +572,7 @@ export default function ProviderAuthPanel({
                   const inCooldown = oauthHealthIsCooldown(healthStatus);
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
-                  const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
                   return (
                   <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
@@ -575,7 +584,7 @@ export default function ProviderAuthPanel({
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
                         <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
-                        <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
+                        {!isAnthropicPool && <span className="pwi-auth-row-secondary">{`${t("prov.accountId")}: ${maskedId}`}</span>}
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
                         )}

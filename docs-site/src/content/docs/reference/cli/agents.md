@@ -34,6 +34,23 @@ prints a proposed model and effort per role without writing anything. `--apply` 
 through the same write as `set`, skipping and naming the roles whose model and effort already match.
 See [Auto-assign](/guides/integrations/#auto-assign).
 
+One `--apply` accepts at most **50 changed roles**, so its recorded changes fit one complete
+history batch and can be restored together in the dashboard's **Change history**. Already-set,
+unsized and unassigned roles do not count toward this limit. If more than 50 roles would change,
+the command exits 5 before sending any role update. Preview without `--apply`, then use
+`ocx agent roles set <role> <model> [--effort <level>]` for individual changes.
+
+Updates run sequentially. If a request fails, earlier confirmed writes remain applied, later
+roles are not attempted, and the command keeps the original nonzero error exit. The receipt names
+confirmed writes, the role whose write was not confirmed, roles not attempted, and the server-issued
+history batch when known. A lost response can follow a saved write, including the first write before
+its batch id is received; inspect `ocx agent roles --json` and the dashboard history before retrying.
+No automatic retry or rollback occurs. History remains subject to its existing availability and
+retention limits; a batch id does not guarantee that every write was recorded or is still restorable.
+With `--json`, an interrupted apply adds `complete: false`, `unconfirmedRole` and `unattemptedRoles`
+beside the existing `applied`, `skipped` and `omoJsoncNotWritten` arrays. A preflight refusal instead
+adds `refusal` with code `too_many_role_changes`, the limit and the proposed change count.
+
 Human-readable suggestion output displays terminal control characters as visible escapes.
 Use `--json` when you need the original suggestion values without presentation escaping.
 
@@ -972,6 +989,8 @@ On a normal Windows installation, default ProgramData permissions allow other us
 Alternatively, supply the key yourself, for example by exporting `OPENCODEX_API_AUTH_TOKEN`; `ocx codex` leaves it untouched. Existing system configuration files still withhold automatic credentials and require separate review. Each withholding reason produces one short, specific stderr diagnostic without key values, key-file contents or key-file paths.
 
 Use `--` before a single-word prompt so it cannot select an unknown Codex subcommand.
+
+Automatic credentials also require a fresh ownership proof from this installation's running listener. For a standalone proxy, the proof must come from the exact HTTP origin in the managed Codex provider configuration; a running proxy on a different port or loopback address does not authorize that destination. A direct client proves its own machine listener and keeps its saved server URL checks, because the server it dials is a different installation. For a direct client the proof shows that the answering listener belongs to this installation; it does not prove which kind of listener it is. Without a matching proof, the launcher withholds the automatic token and leaves routing unchanged.
 
 The machine configuration namespace must also prevent other users from creating missing system files. An unprotected Windows ProgramData/OpenAI/Codex namespace withholds automatic credentials; the launcher does not create it. macOS accepts deny-only and read-only allow ACLs, but refuses any allow entry granting write, append, delete, attribute/security changes or ownership changes, even after a deny entry. Unknown tags and inspection errors refuse.
 

@@ -1,4 +1,6 @@
+import { carryProxyError, isProxyError, markProxyError } from "../lib/client-error-body";
 import { sharedPoolContinuityDenial } from "../lib/spend-reservation-ledger";
+import { markResponseNonReplayable } from "../lib/upstream-retry";
 /**
  * The one place that knows how this proxy refuses a turn on its own workflow budget.
  *
@@ -20,6 +22,7 @@ import {
 import {
   WORKFLOW_LOCAL_REFUSAL_HEADER,
   admitWorkflowTurn,
+  workflowSendCeilingReached,
   workflowDenialSummary,
   recordWorkflowRefusalEvent,
   type WorkflowDenial,
@@ -53,8 +56,8 @@ export interface WorkflowRefusalLog {
  * 429 to `rate_limit_error` / `rate_limit_exceeded`, so the body is shaped exactly like a
  * provider rate limit. That is a deliberate wire contract -- changing it would change how every
  * client retries -- which leaves two places to carry the truth. The message names the ceiling
- * that fired and says no provider was contacted, and the header carries the machine-readable
- * name. Nothing upstream sets that header, so its presence is conclusive.
+ * that fired and distinguishes admission from refusing a later send, and the header carries
+ * the machine-readable name. The in-process proxy marker establishes its local provenance.
  *
  * The row is where an operator actually looks, so it gets the same treatment #4639 established:
  * `terminalSource: "synthetic"`, a local reason, and an error code naming the ceiling. Pass
@@ -77,6 +80,12 @@ export function workflowRefusalResponse(
   // records its own denials, so passing one there would double-count them.
   if (rootId) recordWorkflowRefusalEvent(rootId, reason, Date.now(), spend);
   const recordOn = logCtx ?? refusalLog?.logCtx;
+  const sentPreviously = (recordOn?.activeAttempt?.sendCount ?? 0) > 0
+    || recordOn?.attempts?.some(attempt => attempt.sendCount > 0) === true;
+  const message = sentPreviously ? summary.message
+    .replace("refused the request locally", "refused an additional send locally")
+    .replace("no provider was contacted", "no additional provider request was sent")
+    .replace("No provider was contacted", "No additional provider request was sent") : summary.message;
   if (recordOn) {
     markLocalRequestLogRefusal(recordOn, summary.code);
     // A locally assigned code wins in addFinalRequestLog, so this is what names the ceiling in
@@ -92,13 +101,39 @@ export function workflowRefusalResponse(
   const refusal = formatErrorResponse(
     429,
     reason === "workflow-sends-exhausted" ? "workflow_budget_exhausted" : "queue_capacity_exceeded",
-    summary.message,
+    message,
   );
   refusal.headers.set(WORKFLOW_LOCAL_REFUSAL_HEADER, summary.code);
   // Without this a browser dashboard cannot read the header at all: the data plane never sets
   // Access-Control-Expose-Headers, so a cross-origin reader sees only the CORS-safelisted ones.
   refusal.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
-  return refusal;
+  // No Combo target has an allowance after a root send denial; do not classify it as quota.
+  if (reason === "workflow-sends-exhausted") markResponseNonReplayable(refusal);
+  return markProxyError(refusal, reason === "workflow-spend-exhausted" && spend && Object.hasOwn({ root: 1, identity: 1, pool: 1 }, spend.scope) ? (spend.includesUnboundPoolHistory ? "workflow_unbound" : "workflow") : undefined);
+}
+
+/** Preserve only a locally constructed workflow refusal across response projections. */
+export function carryWorkflowRefusal(source: Response, target: Response): Response {
+  const code = isProxyError(source) ? source.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER) : null;
+  if (!code) return target;
+  target.headers.set(WORKFLOW_LOCAL_REFUSAL_HEADER, code);
+  const exposed = target.headers.get("Access-Control-Expose-Headers");
+  if (!exposed?.split(",").some(name => name.trim().toLowerCase() === WORKFLOW_LOCAL_REFUSAL_HEADER)) {
+    target.headers.set("Access-Control-Expose-Headers", exposed ? `${exposed}, ${WORKFLOW_LOCAL_REFUSAL_HEADER}` : WORKFLOW_LOCAL_REFUSAL_HEADER);
+  }
+  return carryProxyError(source, target);
+}
+
+/** Distinguish an exhausted live root from the request's independent send allowance. */
+export function workflowSendCeilingRefusalResponse(
+  logCtx: RequestLogContext,
+  rootId?: string,
+  recordedOn: Pick<RequestLogContext, "localTerminalReason"> = logCtx,
+): Response | undefined {
+  if (!workflowSendCeilingReached(rootId, currentWorkflowBudgetPolicy())) return undefined;
+  // Observer-backed admission already records its denial; legacy budgets need the event here.
+  return workflowRefusalResponse("workflow-sends-exhausted", logCtx, undefined,
+    recordedOn.localTerminalReason === "workflow_sends_exhausted" ? undefined : rootId);
 }
 
 /** Render the approved conservative-overlay explanation after a dispatch reservation refuses. */

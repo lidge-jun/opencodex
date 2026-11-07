@@ -345,7 +345,7 @@ test("a web-search sidecar send carries the routed account's credential", async 
       index: 0,
       delta: { type: "text_delta", text: "done" },
     };
-    return new Response(`event: content_block_delta\ndata: ${JSON.stringify(frame)}\n\n`, { status: 200 });
+    return new Response(`event: content_block_delta\ndata: ${JSON.stringify(frame)}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`, { status: 200 });
   }) as typeof fetch;
 
   const out = await runAnthropicWebSearch(

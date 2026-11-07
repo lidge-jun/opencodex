@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { runWebSearch as runOpenAiWebSearch } from "../../src/web-search/executor";
 import { listOpenAiForwardSidecarCandidates } from "../../src/providers/openai-sidecar";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -173,4 +173,70 @@ describe("web-search sidecar 429 replays", () => {
     // A caller that left is neither a quota signal nor a connection failure.
     expect(recorded).toEqual(["connect_neutral"]);
   });
+});
+
+test("issue #8160 - OpenAI search helper strips responses-lite marker from merged headers", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedHeaders: Headers | undefined;
+  globalThis.fetch = (async (_url: any, init: any) => {
+    capturedHeaders = new Headers(init?.headers);
+    return new Response(
+      'data: ' + JSON.stringify({ type: "response.completed", response: { status: "completed", output: [] } }) + '\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    await runOpenAiWebSearch(
+      "synthetic query",
+      { type: "web_search" },
+      {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        headers: { "x-openai-internal-codex-responses-lite": "true", "x-custom-test": "forwarded" },
+      } as any,
+      new Headers({
+        "x-openai-internal-codex-responses-lite": "true",
+        "chatgpt-account-id": "test-account",
+      }),
+      { model: "gpt-6.1-sol", reasoning: "low", timeoutMs: 1_000 },
+    );
+
+    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders!.has("x-openai-internal-codex-responses-lite")).toBe(false);
+    expect(capturedHeaders!.get("chatgpt-account-id")).toBe("test-account");
+    expect(capturedHeaders!.get("x-custom-test")).toBe("forwarded");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test.each([
+  { name: "configured header only", configured: true, selected: false },
+  { name: "selected header only", configured: false, selected: true },
+])("classic search strips the Responses Lite marker from $name", async ({ configured, selected }) => {
+  let sent: Headers | undefined;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    sent = new Headers(init?.headers);
+    return new Response('data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n');
+  }) as typeof fetch;
+
+  await runOpenAiWebSearch(
+    "synthetic query",
+    { type: "web_search" },
+    {
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      headers: { ...(configured ? { "X-OpenAI-Internal-Codex-Responses-Lite": "true" } : {}), "x-custom-test": "forwarded" },
+    } as OcxProviderConfig,
+    new Headers({ ...(selected ? { "X-OpenAI-Internal-Codex-Responses-Lite": "true" } : {}), "chatgpt-account-id": "test-account" }),
+    { model: "gpt-6.1-sol", reasoning: "low", timeoutMs: 1_000 },
+  );
+
+  expect(sent).toBeDefined();
+  expect(sent!.has("x-openai-internal-codex-responses-lite")).toBe(false);
+  expect(sent!.get("chatgpt-account-id")).toBe("test-account");
+  expect(sent!.get("x-custom-test")).toBe("forwarded");
 });

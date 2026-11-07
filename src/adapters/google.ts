@@ -1130,21 +1130,21 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);
         const mappedEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+        // CCA Gemini exposes provider-authored summaries only when explicitly requested.
+        const includeThoughts = provider.showThinkingSummary === true
+          && parsed.options.hideThinkingSummary !== true
+          && /^gemini-/.test(routedModelId)
+          && !isImageCapableModel(parsed.modelId);
         const { wireModelId, thinkingLevel } = resolveAntigravityEffortWireModel(
           parsed.modelId,
           mappedEffort,
           provider.baseUrl,
+          { includeThoughts },
         );
         antigravityModel = wireModelId;
         antigravitySession = sessionId;
-        // CCA Gemini exposes provider-authored thought summaries with includeThoughts.
-        // Other CCA model families do not share this request contract.
-        const includeThoughts = provider.showThinkingSummary === true
-          && parsed.options.hideThinkingSummary !== true
-          && /^gemini-/.test(wireModelId)
-          && !isImageCapableModel(parsed.modelId);
         // Effort → thinkingConfig for CCA (CLIProxyAPI proven: request.generationConfig.thinkingConfig).
-        // Suffix/compat IDs return thinkingLevel=undefined — the suffix IS the effort, no contradiction.
+        // Argon summaries repeat the suffix tier; other suffix IDs keep their existing shape.
         if (thinkingLevel || includeThoughts) {
           const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
           gc.thinkingConfig = {

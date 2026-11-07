@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { en } from "../src/i18n/en";
 import SubagentForceControl from "../src/components/subagents-workspace/SubagentForceControl";
+import { chooseOption, selectOptions, selectOptionValues, selectTrigger, selectValue } from "./helpers/custom-select";
 
 let root: Root | undefined;
 let host: HTMLElement;
@@ -52,25 +53,29 @@ afterEach(async () => {
 async function render(apiBase = "") {
   await act(async () => { root!.render(<LanguageProvider><SubagentForceControl key={apiBase} apiBase={apiBase} roster={["retired/model", "combo/featured"]} /></LanguageProvider>); });
 }
-function toggle() { return host.querySelector("button[aria-pressed]") as HTMLButtonElement; }
+function toggle() { return host.querySelector('button[role="switch"]') as HTMLButtonElement; }
+/** The model picker: the app's Select (ui.tsx), never a native select. */
+function picker() { return selectTrigger(host, "[role=combobox]"); }
 async function select(value: string) {
-  await act(async () => {
-    const element = host.querySelector("select")!;
-    element.value = value;
-    element.dispatchEvent(new window.Event("change", { bubbles: true }));
-  });
+  await chooseOption(picker(), value);
 }
 
-test("default off requires a model; labeled native controls save enable and clear", async () => {
+test("default off requires a model; labeled controls save enable and clear", async () => {
   await render();
   expect(toggle().disabled).toBe(true);
   expect(toggle().getAttribute("aria-label")).toBe(en["sub.forceTitle"]);
   expect(host.querySelector("label")?.textContent).toContain(en["sub.forceModel"]);
-  expect([...host.querySelectorAll("option")].map(option => option.value)).toEqual(["", "combo/featured", "combo/other"]);
+  expect(picker().getAttribute("aria-label")).toBe(en["sub.forceModel"]);
+  // "Choose a model" stays listed but not choosable, like the native disabled placeholder.
+  expect(await selectOptions(picker())).toEqual([
+    { value: "", label: en["sub.forceChoose"], disabled: true },
+    { value: "combo/featured", label: "combo/featured", disabled: false },
+    { value: "combo/other", label: "combo/other", disabled: false },
+  ]);
   await select("combo/featured");
   await act(async () => toggle().click());
   expect(writes).toEqual([{ force: "combo/featured" }]);
-  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
   expect(host.textContent).toContain(en["sub.forceSaved"]);
   expect(host.textContent).toContain(en["sub.forceOld"]);
   expect(host.textContent).toContain(en["sub.forceOverride"]);
@@ -79,10 +84,28 @@ test("default off requires a model; labeled native controls save enable and clea
   expect(writes.at(-1)).toEqual({ force: null });
 });
 
+test("the long help sits behind a closed '?' and the committed pin feeds the page summary", async () => {
+  const seen: Array<string | null | undefined> = [];
+  await act(async () => {
+    root!.render(<LanguageProvider><SubagentForceControl apiBase="" roster={["combo/featured"]} onForceChange={value => { seen.push(value); }} /></LanguageProvider>);
+  });
+  const help = host.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+  const panel = window.document.getElementById(help.getAttribute("aria-controls")!) as unknown as HTMLElement;
+  expect(help.getAttribute("aria-expanded")).toBe("false");
+  expect(panel.hidden).toBe(true);
+  expect(panel.textContent).toContain(en["sub.forceScope"]);
+  await act(async () => help.click());
+  expect(panel.hidden).toBe(false);
+  expect(seen.at(-1)).toBeNull();
+  await select("combo/featured");
+  await act(async () => toggle().click());
+  expect(seen.at(-1)).toBe("combo/featured");
+});
+
 test("invalid persisted target remains visible and can be cleared", async () => {
   force = "retired/model";
   await render();
-  expect(host.querySelector("select")?.value).toBe(force);
+  expect(selectValue(picker())).toBe(force!);
   expect(host.textContent).toContain(en["sub.forceInvalid"]);
   expect(toggle().disabled).toBe(false);
   await act(async () => toggle().click());
@@ -96,9 +119,9 @@ test("failed save leaves committed selection intact and in-flight writes disable
   gate = new Promise(resolve => { release = resolve; });
   await select("combo/other");
   expect(toggle().disabled).toBe(true);
-  expect(host.querySelector("select")?.disabled).toBe(true);
+  expect(picker().disabled).toBe(true);
   await act(async () => { release(); await gate; });
-  expect(host.querySelector("select")?.value).toBe("combo/featured");
+  expect(selectValue(picker())).toBe("combo/featured");
   expect(host.textContent).toContain(en["sub.saveFailed"]);
   expect(host.textContent).not.toContain(en["sub.forceSaved"]);
 });
@@ -121,13 +144,15 @@ test.each(["resolve", "reject"] as const)("cancelled load body %s cannot update 
     if (outcome === "resolve") reads[0]!.resolve(JSON.stringify({ force: "retired/model", forceAvailable: ["retired/model"] }));
     else reads[0]!.reject(new Error("cancelled body"));
   });
-  expect(host.querySelector("select")?.value).toBe("");
-  expect(host.querySelector("option[value='retired/model']")).toBeNull();
+  expect(selectValue(picker())).toBe("");
+  expect(picker().textContent).not.toContain("retired/model");
   expect(host.textContent).not.toContain(en["sub.loadFail"]);
   expect(toggle().disabled).toBe(true);
-  expect(host.querySelector("select")?.disabled).toBe(true);
+  expect(picker().disabled).toBe(true);
   await act(async () => { reads[1]!.resolve(JSON.stringify({ force: "combo/featured", forceAvailable: ["combo/featured"] })); });
-  expect(host.querySelector("select")?.value).toBe("combo/featured");
+  expect(selectValue(picker())).toBe("combo/featured");
   expect(toggle().disabled).toBe(false);
-  expect(host.querySelector("select")?.disabled).toBe(false);
+  expect(picker().disabled).toBe(false);
+  // The cancelled body's target never reached the list.
+  expect(await selectOptionValues(picker())).not.toContain("retired/model");
 });

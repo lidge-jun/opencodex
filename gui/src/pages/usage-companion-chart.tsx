@@ -21,7 +21,12 @@ function maxValue(timeline: UsageTimeline, chartStyle: "line" | "stackedBar"): n
 }
 
 function dateLabels(timeline: UsageTimeline, locale: Locale): string[] {
-  const formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+  // Up to a day reads by the clock; up to three days the clock alone is ambiguous, so the
+  // label carries the day too; a week reads by the day.
+  const span = timeline.buckets * timeline.bucketSeconds;
+  const formatter = new Intl.DateTimeFormat(locale, span <= 24 * 3600
+    ? { hour: "2-digit", minute: "2-digit" }
+    : span <= 72 * 3600 ? { month: "numeric", day: "numeric", hour: "2-digit" } : { month: "short", day: "numeric" });
   const interval = Math.max(1, Math.floor((timeline.buckets - 1) / 3));
   return [0, 1, 2, 3].map(index => {
     const bucket = Math.min(timeline.buckets - 1, index * interval);

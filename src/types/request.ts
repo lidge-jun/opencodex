@@ -87,6 +87,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /**
+   * The caller's `instructions` prefix through its last cache-marked system block. The anthropic
+   * adapter ends a system block there so the breakpoint stays off the per-turn tail.
+   */
+  _anthropicSystemCachePrefix?: string;
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
@@ -180,6 +185,13 @@ export interface OcxParsedRequest {
    * answer/"Sources:" text can't bleed into and corrupt the model's schema-constrained output.
    */
   _structuredOutput?: boolean;
+  /**
+   * True for a Claude Messages `output_config.format` json_schema. Anthropic promises an answer
+   * that conforms to that schema, whatever `strict` the Responses translation states for
+   * OpenAI-compatible destinations, so an emulating adapter (Kiro) holds it to full conformance.
+   * Process-local; never forwarded.
+   */
+  _structuredOutputConformance?: boolean;
   /**
    * True when the input carried `{type:"compaction_trigger"}` — Codex remote compaction v2 asking
    * this turn to produce a `{type:"compaction"}` output item. Routed adapters can't natively;
@@ -414,7 +426,7 @@ export interface OcxRequestOptions {
    * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
    * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts.
    * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
-   * keeps rejecting structured output via `_structuredOutput`.
+   * emulates it through a private structured-output tool (src/adapters/kiro/structured-output.ts).
    */
   textFormat?: {
     type: "json_schema" | "json_object";
@@ -470,7 +482,8 @@ export type AdapterEvent =
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
-  | { type: "thinking_signature"; signature: string }
+  // afterOutput marks a turn-level attestation emitted after text/tools, not a new thinking block.
+  | { type: "thinking_signature"; signature: string; afterOutput?: true }
   | { type: "redacted_thinking"; data: string }
   // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
   // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope

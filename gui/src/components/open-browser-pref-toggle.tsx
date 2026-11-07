@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useT } from "../i18n/shared";
 import { readOpenBrowserPref, writeOpenBrowserPref } from "../oauth-open-browser-pref";
 
@@ -28,23 +28,33 @@ import { readOpenBrowserPref, writeOpenBrowserPref } from "../oauth-open-browser
  */
 export function OpenBrowserPrefToggle({ serverDefault = true }: { serverDefault?: boolean }) {
   const t = useT();
+  const id = useId();
+  const labelId = useId();
+  const hintId = useId();
   const [choice, setChoice] = useState<boolean | undefined>(readOpenBrowserPref);
   const open = choice ?? serverDefault;
 
   return (
-    <label className="open-browser-pref">
-      <input
-        type="checkbox"
-        checked={!open}
-        onChange={e => {
-          const next = !e.target.checked;
-          setChoice(next);
-          writeOpenBrowserPref(next);
-        }}
-      />
+    <label className="open-browser-pref" htmlFor={id}>
+      <span className="toggle">
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          aria-labelledby={labelId}
+          aria-describedby={hintId}
+          checked={!open}
+          onChange={e => {
+            const next = !e.target.checked;
+            setChoice(next);
+            writeOpenBrowserPref(next);
+          }}
+        />
+        <span className="slider" aria-hidden="true" />
+      </span>
       <span className="open-browser-pref-copy">
-        <span className="text-label">{t("prov.dontOpenBrowser")}</span>
-        <span className="muted text-label">{t("prov.dontOpenBrowserHint")}</span>
+        <span id={labelId} className="text-label">{t("prov.dontOpenBrowser")}</span>
+        <span id={hintId} className="muted text-label">{t("prov.dontOpenBrowserHint")}</span>
       </span>
     </label>
   );

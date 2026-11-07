@@ -1,6 +1,7 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
+import { isShadowSourceModel } from "../../lib/shadow-call";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
@@ -13,9 +14,10 @@ import { captureCallerDirectAuth } from "../../providers/caller-authorization";
 import { resolvePolicyProfileId } from "../../routing/profile";
 import { parseSyntheticRowId } from "../fast-row";
 import { routeConcreteModel } from "../../router";
-import { isPolicyCandidateRefusal, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
+import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal, mandatoryToolChoiceUnavailableResponse, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { upstreamCodeForComboFailure } from "../../bridge/errors";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -133,7 +135,7 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
     const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
     return comboFailureDecision(response.status, text, {
-      code: errorCodeFromText(text),
+      code: upstreamCodeForComboFailure(response, errorCodeFromText(text)),
       // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
       verifiedPlanRefusal: isVerifiedModelNotInPlanResponse(response),
     }) === "hop";
@@ -204,7 +206,15 @@ export async function handleResponsesWithPolicyFallback(
         && typeof (body as { model?: unknown }).model === "string") {
         const model = (body as { model: string }).model;
         const { fastRow, effortRow } = parseSyntheticRowId(model, config);
-        if (resolvePolicyProfileId(config, fastRow?.baseId ?? effortRow?.baseId ?? model) === null) return;
+        // A shadow-intercepted request is rewritten to its configured target after this hook —
+        // and that target may resolve through a routing profile. The snapshot has to exist now,
+        // while the body still names the source: a captured policy route without a replay body
+        // skips traversal and leaks the internal candidate refusal to the caller.
+        const intercept = config.shadowCallIntercept;
+        const shadowRewritable = Boolean(intercept?.enabled && intercept.model)
+          && isShadowSourceModel(model, intercept?.sourceModels);
+        if (resolvePolicyProfileId(config, fastRow?.baseId ?? effortRow?.baseId ?? model) === null
+          && !shadowRewritable) return;
         // Recovery and other core preparation may mutate the parsed body in place. Keep an
         // immutable snapshot of the original wire body so a retry cannot serialize those
         // mutations. Object-identity metadata is re-established by each attempt, not serialized.
@@ -246,12 +256,17 @@ export async function handleResponsesWithPolicyFallback(
   }));
   let current = resolvedPolicyTarget(config, initialTrace.selected);
   const policyRoute = `policy/${initialTrace.profile!.id}`;
+  let toolChoiceRefusalsOnly = isMandatoryToolChoiceRefusal(response);
 
   while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
     if (req.signal.aborted) return response;
     const next = rankPolicyFallbackCandidates(initialTrace, tried)
       .find(candidate => staysWithinPolicyAfterRedirect(config, policyEligibility, candidate, policyScope.triedDestinations));
-    if (!next) return response;
+    if (!next) {
+      if (!toolChoiceRefusalsOnly) return response;
+      try { await response.body?.cancel(); } catch { /* the terminal diagnostic replaces this body */ }
+      return mandatoryToolChoiceUnavailableResponse();
+    }
     // OCX-11: the next candidate is a hop; the fallback policy decides before it is sent, on the
     // redirected destination the guard above already validated.
     const nextTarget = resolvedPolicyTarget(config, next);
@@ -280,16 +295,29 @@ export async function handleResponsesWithPolicyFallback(
     delete policyScope.preparedDestination;
     try {
       try {
-        const nextResponse = await runCore(retryRequest, config, logCtx, { ...coreOptions, policyFallbackCandidate: next });
+        const nextResponse = await runCore(retryRequest, config, logCtx, {
+          ...coreOptions,
+          policyFallbackCandidate: next,
+          // A shadow-intercepted request retried on a candidate keeps helper isolation and
+          // its suppressed selector label; a first-party policy request leaves the flag unset.
+          ...(logCtx.shadowCallRewrittenFrom ? { shadowCallIntercepted: true } : {}),
+        });
+        toolChoiceRefusalsOnly &&= isMandatoryToolChoiceRefusal(nextResponse);
         // A locally skipped route owns neither the returned failure nor its usage/settlement.
         // Preparation can replace route metadata and the tracker, or add fields absent before it.
-        if (isPolicyCandidateRefusal(nextResponse)) {
+        // The sendCount seam separates that skip from a refusal minted only after a physical
+        // send — a re-negotiated Copilot destination refused inside 401 or account recovery.
+        // The send happened, so the hop it rode commits below and the sent destination becomes
+        // the next hop's source, which is what a provider-scoped fallback refusal keys on.
+        if (isPolicyCandidateRefusal(nextResponse) && (logCtx.activeAttempt?.sendCount ?? 0) === 0) {
+          try { await nextResponse.body?.cancel(); } catch { /* settle the skipped candidate's lifetime owners */ }
           for (const key of Object.keys(logCtx)) {
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);
           }
           Object.assign(logCtx, failureLog);
         } else {
           // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
+          try { await response.body?.cancel(); } catch { /* the dispatched candidate replaces the retained failure */ }
           hop.commit();
           response = nextResponse;
           current = nextTarget;

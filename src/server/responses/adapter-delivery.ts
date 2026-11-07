@@ -1,3 +1,4 @@
+import { proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -27,7 +28,7 @@ import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-err
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
+import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -56,7 +57,7 @@ export async function deliverAdapterResponse(
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
   adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort" | "localUpstream" | "thinkingSignatureRecovery" | "refetchThinkingSignature">,
-  continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry">,
+  continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry" | "isContinuationBodyStall">,
 ): Promise<Response> {
   const { logCtx, options, config } = requestContext;
   const {
@@ -72,6 +73,7 @@ export async function deliverAdapterResponse(
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
     fetchGuardedEmptyCompletionRetry,
+    isContinuationBodyStall,
   } = continuationState;
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
@@ -96,6 +98,7 @@ export async function deliverAdapterResponse(
         if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, errorSignal);
         const body = await readDisplaySafeErrorText(response, errorSignal, "Upstream recovery failed");
         const error = normalizeUpstreamErrorText(body, "Upstream recovery failed");
+        if (isProxyError(response)) rememberProxyErrorMessage(logCtx, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });
         yield { type: "error", status: response.status, message: error.message ?? error.safeText,
           errorType: error.type ?? "upstream_error", ...(error.code ? { code: error.code } : {}),
           ...(nonReplayable ? { retryable: false } : {}) };
@@ -116,15 +119,14 @@ export async function deliverAdapterResponse(
         }
       } catch (error) {
         if (!(error instanceof ResponseBodyInactivityError)) throw error;
-        yield { type: "error", message: "Upstream recovery response body stalled before completing",
-          status: 504, errorType: "upstream_error" };
+        yield { type: "error", message: error.message,
+          status: 504, errorType: "upstream_error", code: "upstream_stall_timeout" };
       }
     }, () => transportState.activeAdapter.name, !isNonReplayableResponse(upstreamResponse), upstreamResponse);
 
   const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
     ? requestState.clientToolCatalogRestriction : undefined;
-  const deliveryToolBridgeMaps = clientToolCatalog
-    ? { ...toolBridgeMaps, ...clientToolCatalog } : toolBridgeMaps;
+  const deliveryToolBridgeMaps = currentTurnToolBridgeMaps(toolBridgeMaps, clientToolCatalog);
 
 
   if (parsed.stream) {
@@ -154,9 +156,10 @@ export async function deliverAdapterResponse(
         if (error instanceof ResponseBodyInactivityError) {
           yield {
             type: "error",
-            message: "Upstream response body stalled before completing",
+            message: error.message,
             status: 504,
             errorType: "upstream_error",
+            code: "upstream_stall_timeout",
           };
           return;
         }
@@ -194,6 +197,7 @@ export async function deliverAdapterResponse(
       ? guardEmptyCompletionEventStream({
           firstEvents: advisorStream,
           continuation: fetchGuardedEmptyCompletionRetry,
+          preserveRetryError: isContinuationBodyStall,
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -253,7 +257,7 @@ export async function deliverAdapterResponse(
       guardedEventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => { cancelResponseCompletion(); upstream.abort(); }, 2_000,
       {
-        translatorBudget,
+        translatorBudget, proxyErrorContext: logCtx,
         replayCacheScope: parsed._reasoningReplayScope,
         ...(outputItemIds ? { outputItemIds } : {}),
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
@@ -344,6 +348,7 @@ export async function deliverAdapterResponse(
         for await (const event of guardEmptyCompletionEventStream({
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchGuardedEmptyCompletionRetry,
+          preserveRetryError: isContinuationBodyStall,
         })) events.push(event);
       } else {
         events = guardedEvents;
@@ -357,7 +362,7 @@ export async function deliverAdapterResponse(
       }
     } catch (error) {
       if (error instanceof ResponseBodyInactivityError) {
-        return formatErrorResponse(504, "upstream_error", "Upstream response body stalled before completing");
+        return formatErrorResponse(504, "upstream_error", error.message);
       }
       throw error;
     } finally {
@@ -407,7 +412,9 @@ export async function deliverAdapterResponse(
       commitReasoningReplayServingRoute();
     }
     notifyResponseComplete(json);
-    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
+    const lastError = events.findLast(event => event.type === "error");
+    const status = json.status === "failed" && lastError && isContinuationBodyStall(lastError) ? 504 : 200;
+    return new Response(JSON.stringify(json), { status, headers: { "Content-Type": "application/json" } });
   }
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");
