@@ -38,7 +38,19 @@ describe("unverified checkpoint payload codec", () => {
     const valid = Buffer.from(fixtures.proposed_valid_history_128.base64, "base64");
     const invalid = Buffer.from(fixtures.proposed_invalid_history_129.base64, "base64");
     expect(checkpointPayloadDigest(valid)).toBe(fixtures.proposed_valid_history_128.sha256);
-    expect(decodeCheckpointPayload(valid).history).toHaveLength(128);
+    const atLimit = decodeCheckpointPayload(valid);
+    expect(atLimit.history).toHaveLength(128);
+    const root = JSON.parse(Buffer.from(atLimit.rootBytes).toString("utf8")) as { revision: number };
+    root.revision = atLimit.rootRevision + 1;
+    const nextRoot = Buffer.from(JSON.stringify(root));
+    const nextDigest = createHash("sha256").update(nextRoot).digest();
+    atLimit.history.push({ previousRevision: atLimit.rootRevision, previousDigest: atLimit.rootDigest,
+      nextRevision: root.revision, nextDigest, acceptedAtMs: atLimit.history[127].acceptedAtMs,
+      rootBytes: nextRoot, envelopeBytes: atLimit.history[127].envelopeBytes });
+    atLimit.rootRevision = root.revision;
+    atLimit.rootDigest = nextDigest;
+    atLimit.rootBytes = nextRoot;
+    expect(() => encodeCheckpointPayload(atLimit)).toThrow();
     expect(() => decodeCheckpointPayload(invalid)).toThrow();
     expect(() => checkpointPayloadDigest(invalid)).toThrow();
   });
@@ -52,7 +64,9 @@ describe("unverified checkpoint payload codec", () => {
     expect(decoded.firstSeen.latest).toHaveLength(4096);
     expect(decoded.firstSeen.preview).toHaveLength(4096);
     expect(decoded.firstSeen.nightly).toHaveLength(4096);
-    data.firstSeen.preview.push(data.firstSeen.preview[4095]);
+    const nextDigest = Buffer.alloc(32);
+    nextDigest.writeUInt32BE(4096, 28);
+    data.firstSeen.preview.push({ candidateDigest: nextDigest, firstSeenMs: 0 });
     expect(() => encodeCheckpointPayload(data)).toThrow();
   });
 

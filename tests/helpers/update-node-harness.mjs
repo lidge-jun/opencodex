@@ -385,12 +385,28 @@ const limitPayload = Buffer.from(checkpointLimits.proposed_valid_history_128.bas
 assert.equal(decodeCheckpointPayload(limitPayload).history.length, 128);
 assert.equal(checkpointPayloadDigest(limitPayload), checkpointLimits.proposed_valid_history_128.sha256);
 assert.throws(() => decodeCheckpointPayload(Buffer.from(checkpointLimits.proposed_invalid_history_129.base64, "base64")));
+const oversizedHistory = decodeCheckpointPayload(limitPayload);
+const nextRootValue = JSON.parse(Buffer.from(oversizedHistory.rootBytes).toString("utf8"));
+nextRootValue.revision = oversizedHistory.rootRevision + 1;
+const nextRootBytes = Buffer.from(JSON.stringify(nextRootValue));
+const nextRootDigest = createHash("sha256").update(nextRootBytes).digest();
+oversizedHistory.history.push({ previousRevision: oversizedHistory.rootRevision, previousDigest: oversizedHistory.rootDigest,
+  nextRevision: nextRootValue.revision, nextDigest: nextRootDigest, acceptedAtMs: oversizedHistory.history[127].acceptedAtMs,
+  rootBytes: nextRootBytes, envelopeBytes: oversizedHistory.history[127].envelopeBytes });
+oversizedHistory.rootRevision = nextRootValue.revision;
+oversizedHistory.rootDigest = nextRootDigest;
+oversizedHistory.rootBytes = nextRootBytes;
+assert.throws(() => encodeCheckpointPayload(oversizedHistory));
 const checkpointData = decodeCheckpointPayload(Buffer.from(checkpointCorpus.valid.empty, "base64"));
 const maximumObservations = decodeCheckpointPayload(Buffer.from(checkpointCorpus.valid["observations-limit"], "base64"));
 maximumObservations.firstSeen.preview = maximumObservations.firstSeen.latest.slice();
 maximumObservations.firstSeen.nightly = maximumObservations.firstSeen.latest.slice();
 const maximumRoundtrip = decodeCheckpointPayload(encodeCheckpointPayload(maximumObservations));
 assert.deepEqual(Object.values(maximumRoundtrip.firstSeen).map((value) => value.length), [4096, 4096, 4096]);
+const overLimitDigest = Buffer.alloc(32);
+overLimitDigest.writeUInt32BE(4096, 28);
+maximumObservations.firstSeen.preview.push({ candidateDigest: overLimitDigest, firstSeenMs: 0 });
+assert.throws(() => encodeCheckpointPayload(maximumObservations));
 const checkpointAgain = decodeCheckpointPayload(Buffer.from(checkpointCorpus.valid.empty, "base64"));
 const checkpointBuffers = [checkpointData.namespaceDigest, checkpointData.principalDigest, checkpointData.identityBytes, checkpointData.rootDigest, checkpointData.rootBytes, checkpointAgain.rootDigest];
 assert.equal(new Set(checkpointBuffers.map((value) => value.buffer)).size, checkpointBuffers.length);
