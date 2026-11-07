@@ -432,7 +432,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
       acc.terminalEvent = true;
       const resp = data.response as { output?: OutputItem[] } | undefined;
       if (Array.isArray(resp?.output)) {
-        const final = fromOutputArray(resp.output, seen);
+        const final = fromOutputArray(resp.output, new Set<string>());
         if (acceptDecodedChars(final.text.length)) acc.final = final;
       }
     } else if (type === "response.failed" || type === "response.incomplete" || type === "error") {
@@ -510,7 +510,9 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     if (repaired.trim()) text = repaired;
   }
   // Merge sources from the final output[] and the streaming annotation events.
-  const sources = safeWebSearchSources(acc.final?.sources ?? []);
+  const finalSources = acc.final?.sources.map(source => source.title !== undefined ? source
+    : acc.streamSources.find(streamed => streamed.url === source.url) ?? source);
+  const sources = safeWebSearchSources(finalSources ?? []);
   for (const s of acc.streamSources) {
     appendSafeWebSearchSource(sources, s);
   }
