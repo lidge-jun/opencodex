@@ -482,8 +482,56 @@ describe("client link connection contracts", () => {
         expect(readFileSync(join(home, "moved-original"), "utf8")).toBe(`${key}\n`);
         const backupName = readdirSync(home).find(name => name.startsWith("orphaned-token-"));
         expect(backupName).toBeDefined();
+        // Another name still holds the original, so the refusal removes its identity pin.
+        expect(readdirSync(join(home, backupName!))).toEqual([]);
+        expect(lstatSync(join(home, "moved-original")).nlink).toBe(1);
+        expect(err.mock.calls.flat().join(" ")).toContain("orphan recovery incomplete");
+      } finally { err.mockRestore(); }
+    });
+  });
+
+  test("Windows-style identity pin is kept when it is the last name of the original", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true,
+            windowsMoveForTest: true, onWindowsHandlesClosed: () => {
+              rmSync(tokenPath);
+              writeFileSync(tokenPath, "different-private-key\n", { mode: 0o600 });
+            } },
+        } as never);
+        expect(result).toBe(1);
+        const backupName = readdirSync(home).find(name => name.startsWith("orphaned-token-"));
         expect(readFileSync(join(home, backupName!, ".service-api-token.identity"), "utf8")).toBe(`${key}\n`);
         expect(err.mock.calls.flat().join(" ")).toContain("orphan recovery incomplete");
+      } finally { err.mockRestore(); }
+    });
+  });
+
+  test("a leftover identity pin from an interrupted recovery is named in the refusal", async () => {
+    await withLinkHome(async home => {
+      const tokenPath = join(home, "service-api-token");
+      writeFileSync(tokenPath, `${key}\n`, { mode: 0o600 });
+      const backupDir = join(home, "orphaned-token-2026-11-07T00-00-00-000Z-abc123");
+      mkdirSync(backupDir, { mode: 0o700 });
+      linkSync(tokenPath, join(backupDir, ".service-api-token.identity"));
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await handleDisconnectCommand(["--orphaned-token", "--yes"], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          orphanRecoveryDeps: { inspectServiceManager: noService, acquireLease: () => ({ release() {} }), runtimeSafe: async () => true },
+        } as never);
+        expect(result).toBe(1);
+        const message = err.mock.calls.flat().join(" ");
+        expect(message).toContain("unsafe token file");
+        expect(message).toContain(".service-api-token.identity");
+        expect(message).toContain("orphaned-token-");
+        expect(message).not.toContain(key);
+        expect(readFileSync(tokenPath, "utf8")).toBe(`${key}\n`);
       } finally { err.mockRestore(); }
     });
   });

@@ -3920,6 +3920,7 @@ export const en = {
   "models.aliasStale": "stale",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "This Child's saved Remote Link connection is missing or now names another owner or link, so it no longer matches the running Child. Stop or restart this Child and check its connection before linking it again.",
   "connection.linkManaged": "Managed by Home {home} over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.linkManagedUnnamed": "Managed by its Home over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.disconnect": "Disconnect from hub",

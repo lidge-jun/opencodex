@@ -3861,6 +3861,7 @@ export const zh: Record<TKey, string> = {
   "models.aliasStale": "过期",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "此 Child 保存的 Remote Link 连接已丢失，或现在指向其他所有者或链接，与正在运行的 Child 不再一致。重新链接前，请停止或重启此 Child 并检查其连接。",
   "connection.linkManaged": "由 Home {home} 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.linkManagedUnnamed": "由其 Home 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.disconnect": "Disconnect from hub",
