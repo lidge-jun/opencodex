@@ -3,9 +3,8 @@ import { isAnthropicInstanceId, configuredAnthropicInstance } from "./anthropic-
 import { ANTIGRAVITY_OAUTH_STORE_KEY } from "./antigravity-quota-identity";
 import { fetchAnthropicAccountQuota } from "./quota/anthropic-account-quota";
 import { thrownQuotaFailure } from "./quota/failure-codes";
-import { resolveEnvValue } from "../config";
 import { getAccountCredential, getAccountSet } from "../oauth/store";
-import { apiKeyPoolEntryId } from "./api-keys";
+import { providerObservationAccountKey } from "./quota/reset-identity";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, CACHE_TTL_MS } from "./quota-wire";
 import { replaceCachedProviderQuotas } from "./quota-routing-cache";
@@ -20,7 +19,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent,
+  accountReportCurrent, accountReportObservationKeys,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -32,8 +31,9 @@ import {
   isBuiltInChatGptForwardProvider,
   isProviderQuotaReportCurrent,
   LAST_GOOD_MAX_AGE_MS,
-  providerQuotaBeforePublishForTests,
+  providerQuotaBeforePublishForTests, providerQuotaBeforeObservationForTests,
   routingEvidence, publishCollectedDecisionQuota,
+  keyReportCredentialIds, providerReportCurrentForConfig, validateJoinedReports, bindProviderReportProbe,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
   type CodexAuthAccountsSnapshotPromise,
@@ -74,6 +74,7 @@ import { persistKiroAccountState } from "./kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe";
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 export { QUOTA_RESPONSE_MAX_BYTES } from "./quota-wire";
+export { providerObservationAccountKeyForTests } from "./quota/reset-identity";
 export {
   clearProviderQuotaCache, clearProviderQuotaCacheFor,
   publishKeyReportForTests,
@@ -108,7 +109,7 @@ export async function fetchProviderApiKeyQuotas(config: OcxConfig, name: string,
     const result = await maybeFetchProviderQuota(name, isolatedProvider, isolatedConfig, false);
     if (result === TERMINAL_QUOTA_FAILURE) return { kind: "terminal" };
     if (result === AUTHORITATIVE_EMPTY_QUOTA) return { kind: "empty" };
-    return result ? { kind: "quota", quota: result.quota } : { kind: "unavailable" };
+    return result ? { kind: "quota", quota: result.quota, routing: routingEvidence.get(result) } : { kind: "unavailable" };
   });
 }
 async function maybeFetchProviderQuota(
@@ -131,7 +132,7 @@ async function maybeFetchProviderQuota(
     // imported or pasted one cannot, and falls back to its last in-band observation.
     // The probe is tried first and its failure is never fatal to the row.
     if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) {
-      return (await fetchMuseKeyQuota(name)) ?? await fetchPassiveProviderQuota(name);
+      return (await fetchMuseKeyQuota(name, config)) ?? await fetchPassiveProviderQuota(name);
     }
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured
@@ -169,49 +170,34 @@ async function maybeFetchProviderQuota(
  */
 let pendingProviderObservation: Promise<void> = Promise.resolve();
 
-/**
- * Stable per-account observation key for one provider report.
- *
- * OAuth providers key by active account id. Key-auth providers have NO account set, so
- * every key in `apiKeyPool` would collapse onto "default" and rotating from a spent key to
- * a fresh one would read as a reset (measured: 97% -> 12% fired a false surprise). The
- * cache key already discriminates these at cacheKey() via apiKeyPoolEntryId, so this
- * mirrors that discriminator instead of inventing a second notion of identity.
- */
-function providerObservationAccountKey(provider: string, config: OcxConfig): string {
-  const oauthAccountId = getAccountSet(provider)?.activeAccountId;
-  if (oauthAccountId !== undefined) return `${provider}\u0000${oauthAccountId}`;
-  const providerConfig = config.providers[provider];
-  const resolvedKey = typeof providerConfig?.apiKey === "string"
-    ? resolveEnvValue(providerConfig.apiKey)?.trim()
-    : undefined;
-  const keyId = resolvedKey ? apiKeyPoolEntryId(resolvedKey) : "default";
-  return `${provider}\u0000key:${keyId}`;
-}
-
-/** Test-only view of the observation account key. */
-export function providerObservationAccountKeyForTests(provider: string, config: OcxConfig): string {
-  return providerObservationAccountKey(provider, config);
-}
-
 function notifyProviderQuotaSnapshot(
   reports: ReadonlyArray<ProviderQuotaReport>,
   config: OcxConfig,
 ): void {
   if (reports.length === 0) return;
-  // Resolved here, synchronously, while the identity is still the one that produced these
-  // reports.
-  const observations = reports.map(report => ({
-    scope: report.provider,
-    accountKey: providerObservationAccountKey(report.provider, config),
-    quota: report.quota,
-  }));
+  // Key-probe identities were captured at the wire; resolve other identities synchronously.
+  const observations = reports.map(report => {
+    const keyId = keyReportCredentialIds.get(report);
+    const authMode = config.providers[report.provider]?.authMode;
+    return {
+      scope: report.provider,
+      report, accountKey: accountReportObservationKeys.get(report) ?? (keyId && authMode !== "oauth" && authMode !== "forward"
+        ? `${report.provider}\u0000key:${keyId}`
+        : providerObservationAccountKey(report.provider, config)),
+      quota: report.quota,
+    };
+  });
   pendingProviderObservation = pendingProviderObservation
     .then(async () => {
       const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
       const { providerWindowObservations } = await import("../quota/window-mapping");
+      await providerQuotaBeforeObservationForTests?.();
       for (const observation of observations) {
+        if (accountReportObservationKeys.has(observation.report)) {
+          getAccountSet(observation.scope);
+          if (!isProviderQuotaReportCurrent(observation.report)) continue;
+        }
         observer.observeQuotaSnapshot({
           scope: observation.scope,
           accountKey: observation.accountKey,
@@ -224,16 +210,21 @@ function notifyProviderQuotaSnapshot(
       // here also keeps the chain alive — a rejected link would poison every later one.
     });
 }
-
 /** Await the observation chain. Tests only: production never needs to join it. */
 export function flushProviderQuotaObservationsForTests(): Promise<void> {
   return pendingProviderObservation;
 }
 
+// External store changes need an active observation after each suspension, before accepting reports.
+function observeAntigravityOwner(config: OcxConfig): void {
+  if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
+}
+
 /** Collect provider quota reports, using the cache unless refresh is forced, and publish the secret-free decision evidence from the collected reports. */
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   // A passive read (a Remote Link Child's, #6959) shows the held reports and starts nothing.
-  if (isPassiveRead()) return heldProviderQuotaReports(Object.keys(config.providers));
+  if (isPassiveRead()) return heldProviderQuotaReports(config);
+  observeAntigravityOwner(config);
   // A Pool report's cache signature and provider fetch must share one account snapshot.
   // Preserve force semantics when deciding whether that snapshot refreshes upstream data.
   const prefetchedCodexSnapshot = hasCodexPoolProvider(config)
@@ -241,6 +232,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     : undefined;
   const keyCandidate = cacheKeyWithAggregationState(config, prefetchedCodexSnapshot);
   const key = typeof keyCandidate === "string" ? keyCandidate : await keyCandidate;
+  observeAntigravityOwner(config);
   const writerGeneration = captureConfigGeneration();
   const providerEpochs = captureProviderReportEpochs();
   const now = Date.now();
@@ -254,10 +246,15 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const cacheFresh = currentCache && currentCache.key === key && now - currentCache.ts < CACHE_TTL_MS
     && currentCache.response.reports.every(item =>
       (item.observed === true || now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)
-      && isProviderQuotaReportCurrent(item));
+      && isProviderQuotaReportCurrent(item)
+      && providerReportCurrentForConfig(item, config.providers[item.provider]));
   if (!forceRefresh && cacheFresh) return currentCache!.response;
   const joinable = inflight.get(key);
-  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
+  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) {
+    const joined = await joinable.promise;
+    observeAntigravityOwner(config);
+    return validateJoinedReports(joined, config);
+  }
   // A forced probe takes commit authority: older in-flight probes must not overwrite its result.
   if (forceRefresh) bumpProviderQuotaInvalidationEpoch();
   const epoch = invalidationEpoch;
@@ -265,9 +262,10 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const promise = (async (): Promise<ProviderQuotaResponse> => {
     const previousCache = getProviderQuotaReportCache();
     const previous = previousCache && previousCache.key === key ? previousCache.response.reports : [];
+    const providerEntries = Object.entries(config.providers);
     const probeResults = await Promise.all(
-      Object.entries(config.providers).map(([name, provider]) => (
-        maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
+      providerEntries.map(([name, provider]) => (
+        bindProviderReportProbe(maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot), name, provider)
       )),
     );
     const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
@@ -278,7 +276,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     // model windows. Either way the old row is no longer true, which is what separates them
     // from `null` (told us nothing — keep the last-good row).
     const terminalFailures = new Set(
-      Object.keys(config.providers).filter((_, index) => (
+      providerEntries.map(([name]) => name).filter((_, index) => (
         probeResults[index] === TERMINAL_QUOTA_FAILURE
         || probeResults[index] === AUTHORITATIVE_EMPTY_QUOTA
       )),
@@ -289,6 +287,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       const commitKeyCandidate = cacheKeyWithAggregationState(config);
       commitKey = typeof commitKeyCandidate === "string" ? commitKeyCandidate : await commitKeyCandidate;
     }
+    observeAntigravityOwner(config);
 
     // Keep bounded last-good rows when a probe fails transiently; terminal-invalid provider
     // responses explicitly suppress their old row. Never re-stamp preserved timestamps.
@@ -302,11 +301,11 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       // Same exemption as the fast path. A passive row reaching `previous` is not a probe
       // that went quiet — there is no probe — so age cannot condemn it.
       if (item.observed !== true && item.updatedAt < cutoff) continue;
-      if (isProviderQuotaReportCurrent(item)) byProvider.set(item.provider, item);
+      if (isProviderQuotaReportCurrent(item) && providerReportCurrentForConfig(item, config.providers[item.provider])) byProvider.set(item.provider, item);
       else generationMismatchedProviders.add(item.provider);
     }
     for (const item of fresh) {
-      if (isProviderQuotaReportCurrent(item)) {
+      if (isProviderQuotaReportCurrent(item) && providerReportCurrentForConfig(item, config.providers[item.provider])) {
         byProvider.set(item.provider, item);
         generationMismatchedProviders.delete(item.provider);
       } else {
@@ -340,7 +339,9 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const entry = { epoch, promise };
   inflight.set(key, entry);
   try {
-    return await promise;
+    const result = await promise;
+    observeAntigravityOwner(config);
+    return validateJoinedReports(result, config);
   } finally {
     if (inflight.get(key) === entry) inflight.delete(key);
   }
@@ -411,12 +412,14 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
   return flight;
 }
 async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderConfig, liveConfig: OcxConfig): Promise<ProviderQuotaProbeResult> {
-  const id = getAccountSet(provider)?.activeAccountId;
+  const selection = getAccountSet(provider), id = selection?.activeAccountId;
   if (!id) return null;
   const read = await readExplicitAccountQuota(provider, id, config);
   if (!read) return null;
-  const isCurrent = () => liveConfig.providers[provider] === config
-    && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id;
+  const isCurrent = () => {
+    const current = getAccountSet(provider);
+    return liveConfig.providers[provider] === config && read.isCurrent() && current?.activeAccountId === id && current.selectionRevision === selection.selectionRevision;
+  };
   if (!isCurrent()) return TERMINAL_QUOTA_FAILURE;
   if (read.result && typeof read.result !== "symbol") accountReportCurrent.set(read.result, isCurrent);
   return read.result;

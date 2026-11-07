@@ -109,7 +109,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   }
   for (const w of displayQuota.customWindows ?? []) {
     const customLabel = canonicalCustomWindowLabel(w.label);
-    const localized = localizeCustomQuotaLabel(customLabel, t);
+    const localized = w.displayLabel ?? localizeCustomQuotaLabel(customLabel, t);
     ranked.push({
       rank: rawCustomWindowRank(customLabel),
       row: {
@@ -281,6 +281,16 @@ export default function QuotaBars({
 }) {
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
+  const unknownWindows = quota?.unknownBudgetWindows ?? [];
+  const unknownRows = unknownWindows.map(window => (
+    <div className="quota-stacked-row" key={window.label}>
+      <div className="quota-stacked-head">
+        <span className="quota-stacked-limit">{window.label}</span>
+        <span className="quota-stacked-reset muted">{formatResetFuture(window.resetAt, t, locale)}</span>
+      </div>
+      <span className="muted">{t("cws.quota.unknown")}</span>
+    </div>
+  ));
   // Rendered above the bars in both layouts. Null age (under a minute, or no observation)
   // renders nothing rather than "just now", which would be one more thing to read.
   const observedAge = observedAt === undefined ? null : formatObservedAge(observedAt, t);
@@ -289,7 +299,7 @@ export default function QuotaBars({
       {t("quota.observedAgo").replace("{age}", observedAge)}
     </p>
   );
-  if (rows.length === 0) {
+  if (rows.length === 0 && unknownWindows.length === 0) {
     if (!pending) return layout === "compact" && afterWeekly ? (
       <div className={`codex-account-quota-slot quota-compact${className ? ` ${className}` : ""}`}>{afterWeekly}</div>
     ) : null;
@@ -348,6 +358,7 @@ export default function QuotaBars({
               : isCustomQuotaWindowIncomplete(row.customLabel, incompleteCustomWindowLabels)}
           />
         ))}
+        {unknownRows}
       </div>
     );
   }
@@ -368,6 +379,7 @@ export default function QuotaBars({
           {row.windowKey === "weekly" && afterWeekly}
         </Fragment>
       ))}
+      {unknownRows}
       {!rows.some(row => row.windowKey === "weekly") && afterWeekly}
     </div>
   );

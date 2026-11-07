@@ -148,11 +148,20 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
         return [{
           label: row.label,
           percent: row.percent as number,
+          ...(typeof row.displayLabel === "string" ? { displayLabel: row.displayLabel } : {}),
           ...(finite(row.resetAt) !== undefined ? { resetAt: row.resetAt as number } : {}),
           ...(typeof row.modelId === "string" && row.modelId.length <= 128 ? { modelId: row.modelId } : {}),
         }];
       })
     : [];
+  const unknownBudgetWindows = Array.isArray(q.unknownBudgetWindows)
+    ? q.unknownBudgetWindows.flatMap((value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const row = value as Record<string, unknown>;
+      if (typeof row.label !== "string") return [];
+      const resetAt = dateTimestamp(row.resetAt);
+      return [{ label: row.label, ...(resetAt === undefined ? {} : { resetAt }) }];
+    }) : [];
   const creditsRaw = q.creditsUsd && typeof q.creditsUsd === "object" && !Array.isArray(q.creditsUsd)
     ? q.creditsUsd as Record<string, unknown>
     : null;
@@ -184,6 +193,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     ...(finite(q.monthlyPercent) !== undefined ? { monthlyPercent: q.monthlyPercent as number } : {}),
     ...(finite(q.monthlyResetAt) !== undefined ? { monthlyResetAt: q.monthlyResetAt as number } : {}),
     ...(windows.length > 0 ? { customWindows: windows } : {}),
+    ...(unknownBudgetWindows.length > 0 ? { unknownBudgetWindows } : {}),
     ...(creditsUsd ? { creditsUsd } : {}),
     updatedAt: finite(q.updatedAt) ?? fallbackUpdatedAt ?? Date.now(),
   };
@@ -191,6 +201,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     || out.weeklyPercent !== undefined
     || out.monthlyPercent !== undefined
     || (out.customWindows?.length ?? 0) > 0
+    || (out.unknownBudgetWindows?.length ?? 0) > 0
     || out.creditsUsd !== undefined
     || out.workbuddyCredits !== undefined
     ? out

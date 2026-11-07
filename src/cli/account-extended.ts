@@ -3,6 +3,7 @@ import { loadConfig } from "../config";
 import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
+import { terminalSafeText } from "./runtime-api";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -284,7 +285,12 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   add("5h", quota.fiveHourPercent, quota.fiveHourResetAt);
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
-  for (const window of quota.customWindows ?? []) add(window.label, window.percent, window.resetAt);
+  for (const window of quota.customWindows ?? []) add(terminalSafeText(window.displayLabel ?? window.label), window.percent, window.resetAt);
+  for (const window of quota.unknownBudgetWindows ?? []) {
+    parts.push(`${terminalSafeText(window.label)} unknown`);
+    const reset = resetIso(window.resetAt);
+    if (reset) parts.push(`resets ${reset}`);
+  }
   return parts;
 }
 

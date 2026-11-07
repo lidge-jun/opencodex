@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import {
   clearAccountQuotaCache,
   getCachedProviderAccountQuota,
@@ -82,10 +82,12 @@ describe("passive Muse quota cache", () => {
     expect(getCachedProviderAccountQuota("anthropic", FIRST.accountId)).toBeNull();
   });
 
-  test("writes under the account that served the turn", () => {
-    recordPassiveAccountQuota("meta-muse", SECOND.accountId, quotaAt(42), captureConfigGeneration());
-    expect(getCachedProviderAccountQuota("meta-muse", SECOND.accountId)?.fiveHourPercent).toBe(42);
-    expect(getCachedProviderAccountQuota("meta-muse", FIRST.accountId)).toBeNull();
+  test("writes under the selected account that served the turn", async () => {
+    const [firstId, secondId] = await seedAccounts(FIRST, SECOND);
+    await setActiveAccount("meta-muse", secondId!);
+    recordPassiveAccountQuota("meta-muse", secondId!, quotaAt(42), captureConfigGeneration());
+    expect(getCachedProviderAccountQuota("meta-muse", secondId!)?.fiveHourPercent).toBe(42);
+    expect(getCachedProviderAccountQuota("meta-muse", firstId!)).toBeNull();
   });
 
   test("ignores a write with no account id", () => {
@@ -104,6 +106,7 @@ describe("passive Muse quota cache", () => {
   test("omits accounts with no observation rather than reporting a failed probe", async () => {
     const [firstId] = await seedAccounts(FIRST, SECOND);
     clearAccountQuotaCache();
+    await setActiveAccount("meta-muse", firstId!);
     recordPassiveAccountQuota("meta-muse", firstId!, quotaAt(7), captureConfigGeneration());
     const rows = readPassiveProviderAccountQuotas("meta-muse");
     expect(rows).toHaveLength(1);

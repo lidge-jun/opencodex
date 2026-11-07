@@ -8,13 +8,13 @@ import {
   AUTHORITATIVE_EMPTY_QUOTA,
   hasQuotaRows,
   keyReport,
-  report,
   TERMINAL_QUOTA_FAILURE,
   type ProviderQuotaProbeResult,
   type ProviderQuotaReport,
 } from "./report-cache";
 import { getTokenForAccountQuotaProbe } from "./account-cache";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaCreditsUsd } from "../quota-types";
+import { markDisplayOnlyQuota } from "../quota-types";
 import type { OcxProviderConfig } from "../../types";
 
 // A quota probe must use the provider's inference route so it neither reports a false healthy path nor leaks a key through another exit.
@@ -35,6 +35,7 @@ const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const MISTRAL_BASE_URL = "https://api.mistral.ai";
 const CLINE_BASE_URL = "https://api.cline.bot";
 const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
@@ -68,6 +69,58 @@ function isCanonicalOpenRouterBaseUrl(baseUrl: string): boolean {
 function isCanonicalDeepSeekBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === DEEPSEEK_BASE_URL || normalized === `${DEEPSEEK_BASE_URL}/v1`;
+}
+
+function isCanonicalMistralBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === MISTRAL_BASE_URL || normalized === `${MISTRAL_BASE_URL}/v1`;
+}
+
+async function fetchMistralQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalMistralBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const init: RequestInit = {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  };
+  const settled = await Promise.allSettled([
+    quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/budget`, init),
+    quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/subscription`, init),
+  ]);
+  const responses = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+  if (responses.some(response => response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)) return TERMINAL_QUOTA_FAILURE;
+  if (responses.length !== 2 || responses.some(response => !response.ok)) return null;
+  const [budgetResponse, subscriptionResponse] = responses as [Response, Response];
+  const [budgetValue, subscriptionValue] = await Promise.all([
+    readQuotaJson(budgetResponse), readQuotaJson(subscriptionResponse),
+  ]);
+  if (budgetValue === QUOTA_JSON_READ_FAILURE || subscriptionValue === QUOTA_JSON_READ_FAILURE) return null;
+  const budget = asRecord(budgetValue);
+  const subscription = asRecord(subscriptionValue);
+  if (!budget || !subscription) return null;
+  const plan = typeof subscription.plan_name === "string" && ["FREE", "INDIVIDUAL", "EDU", "TEAM"].includes(subscription.plan_name)
+    ? subscription.plan_name : undefined;
+  const customWindows: NonNullable<ProviderQuota["customWindows"]> = [];
+  const unknownBudgetWindows: NonNullable<ProviderQuota["unknownBudgetWindows"]> = [];
+  for (const [key, label] of [["api_budget", "API budget"], ["vibe_budget", "Vibe budget"]] as const) {
+    const row = asRecord(budget[key]);
+    const resetAt = normalizeResetAt(row?.reset_at);
+    const reset = resetAt === undefined ? {} : { resetAt };
+    const suffix = plan ? ` (${plan})` : "";
+    const initial = toFiniteNumber(row?.initial_budget);
+    const percent = toFiniteNumber(row?.usage_percentage);
+    const currency = typeof row?.currency === "string" && /^[A-Za-z]{3}$/.test(row.currency) ? row.currency.toUpperCase() : undefined;
+    if (initial === undefined || initial <= 0 || percent === undefined || percent < 0 || percent > 100 || !currency) {
+      unknownBudgetWindows.push({ label: `${label}${suffix}`, ...reset });
+      continue;
+    }
+    const used = initial * (percent / 100);
+    customWindows.push({ label, displayLabel: `${label} (${currency} ${used.toFixed(2)} of ${currency} ${initial.toFixed(2)} used${plan ? `; ${plan}` : ""})`, percent, ...reset });
+  }
+  const quota: ProviderQuota = { customWindows, unknownBudgetWindows, updatedAt: Date.now() };
+  // Vibe and PAYG entitlements are display information, not inference eligibility evidence.
+  return keyReport(provider, "mistral:budget", markDisplayOnlyQuota(quota), config, apiKey);
 }
 
 function isCanonicalClineBaseUrl(baseUrl: string): boolean {
@@ -388,10 +441,10 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
   const label = grantedBalance !== undefined && grantedBalance > 0
     ? `API balance (${amount(balance)} total, ${amount(grantedBalance)} granted)`
     : `API balance (${amount(balance)})`;
-  return report(provider, "deepseek:balance", {
+  return keyReport(provider, "deepseek:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -815,10 +868,10 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
     }
   }
   if (customWindows.length === 0) return null;
-  return report(provider, "minimax:token-plan-remains", {
+  return keyReport(provider, "minimax:token-plan-remains", {
     customWindows,
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -860,10 +913,10 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
   const label = voucher !== undefined && cash !== undefined
     ? `Balance (${money(available)} ${unit} available, ${money(voucher)} voucher)`
     : `Balance (${money(available)} ${unit} available)`;
-  return report(provider, "moonshot:balance", {
+  return keyReport(provider, "moonshot:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -898,15 +951,15 @@ async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Pr
   if (epochAllocated !== undefined && epochAllocated > 0 && epochUsed !== undefined) {
     const percent = normalizePercent((epochUsed / epochAllocated) * 100);
     if (percent === undefined) return null;
-    return report(provider, "venice:billing-balance", {
+    return keyReport(provider, "venice:billing-balance", {
       customWindows: [{ label, percent }],
       updatedAt: Date.now(),
-    });
+    }, config, apiKey);
   }
-  return report(provider, "venice:billing-balance", {
+  return keyReport(provider, "venice:billing-balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -955,7 +1008,8 @@ async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig):
   }
   const inferenceQuota = { ...quota };
   delete inferenceQuota.customWindows; // search.hourly does not constrain model inference.
-  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey, inferenceQuota) : null;
+  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey,
+    fiveHour !== undefined || weekly !== undefined ? inferenceQuota : undefined) : null;
 }
 
 /**
@@ -990,15 +1044,15 @@ async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig):
     const spent = total !== undefined && total > 0 ? total : Math.max(0, spendLimit - available);
     const percent = normalizePercent((spent / spendLimit) * 100);
     if (percent === undefined) return null;
-    return report(provider, "deepinfra:billing-checklist", {
+    return keyReport(provider, "deepinfra:billing-checklist", {
       customWindows: [{ label: `Billing cycle spend ($${spent.toFixed(2)} of $${spendLimit.toFixed(2)})`, percent }],
       updatedAt: Date.now(),
-    });
+    }, config, apiKey);
   }
-  return report(provider, "deepinfra:billing-checklist", {
+  return keyReport(provider, "deepinfra:billing-checklist", {
     customWindows: [{ label: `Prepaid balance ($${available.toFixed(2)})`, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -1047,7 +1101,7 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
       windows += 1;
     }
   }
-  return windows > 0 ? report(provider, "neuralwatt:quota", quota) : null;
+  return windows > 0 ? keyReport(provider, "neuralwatt:quota", quota, config, apiKey) : null;
 }
 
 /**
@@ -1451,6 +1505,7 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (isCanonicalA6apiBaseUrl(provider.baseUrl)) return fetchA6apiQuota;
   if (name === "openrouter" && isCanonicalOpenRouterBaseUrl(provider.baseUrl)) return fetchOpenRouterQuota;
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
+  if (isCanonicalMistralBaseUrl(provider.baseUrl)) return fetchMistralQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;
   // #4201: the Responses preset is the same domestic GLM Coding Plan subscription on the OpenAI

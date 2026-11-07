@@ -23,6 +23,7 @@ export interface QuotaSummaryWindow {
   /** Provider-named window label, shown verbatim. */
   label?: string;
   percent?: number;
+  unknownBudget?: true;
   resetAt?: number;
   severity: QuotaSummarySeverity;
 }
@@ -35,6 +36,7 @@ export interface QuotaSummaryRow {
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
+  showAllWindows?: boolean;
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -66,6 +68,7 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       ...("key" in window && window.key ? { labelKey: window.key } : {}),
       ...("label" in window && typeof window.label === "string" ? { label: window.label } : {}),
       ...(percent !== undefined ? { percent } : {}),
+      ...("unknownBudget" in window && window.unknownBudget ? { unknownBudget: true as const } : {}),
       ...(resetMs !== null ? { resetAt: resetMs } : {}),
       severity: modelId === undefined ? quotaSeverity(percent) : "normal",
     };
@@ -110,7 +113,7 @@ function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undef
   if (!regular) regular = measured.find(window => window.labelKey !== "quotaSummary.credits");
   const credits = byLabel.get("quotaSummary.credits");
   if (credits && credits.severity === "critical" && regular?.severity !== "critical") return credits;
-  return regular ?? measured[0];
+  return regular ?? measured[0] ?? windows.find(window => window.unknownBudget);
 }
 
 /**
@@ -129,6 +132,9 @@ export function buildQuotaSummary(
     const windows = summaryWindows(quota);
     const headline = pickHeadline(windows);
     if (!headline) continue;
+    const showAllWindows = report.source === "mistral:budget";
+    const severity = showAllWindows && windows.some(window => window.severity === "critical") ? "critical"
+      : showAllWindows && windows.some(window => window.severity === "warn") ? "warn" : headline.severity;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
@@ -136,7 +142,8 @@ export function buildQuotaSummary(
       windows,
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
-      severity: headline.severity,
+      severity,
+      ...(showAllWindows ? { showAllWindows: true } : {}),
     });
   }
   return rows;

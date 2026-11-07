@@ -22,6 +22,7 @@ import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TI
 import { providerCodexAccountMode } from "../registry";
 import {
   accountReportCurrent,
+  accountReportObservationKeys,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -43,6 +44,15 @@ import {
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor } from "./anthropic-cooldown-recovery";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
+
+function bindMuseReport(value: ProviderQuotaReport | null, owner: MuseQuotaOwner): ProviderQuotaReport | null {
+  if (value) {
+    accountReportCurrent.set(value, owner.isCurrent);
+    accountReportObservationKeys.set(value, owner.accountKey);
+  }
+  return value;
+}
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
@@ -381,27 +391,31 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
  * switch to is gated on supportsPerAccountQuota, which has no meta-muse reader, so the
  * GUI account list would go from showing observations to showing nothing.
  */
-export async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  const probedAccountId = getAccountSet(provider)?.activeAccountId;
-  if (!probedAccountId) return null;
+export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): Promise<ProviderQuotaReport | null> {
+  const captured = captureMuseQuotaOwner(provider);
+  const owner = config ? bindMuseQuotaConfig(captured, config, provider) : captured;
+  if (!owner) return null;
+  const probedAccountId = owner.accountId;
   // A paused account is excluded from every automatic upstream use; a key mint is one.
   if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;
   const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
   // An imported or pasted credential has no account token and never will: it is
   // capability, not provider id, that decides whether a probe is possible.
-  if (!oauthAccessToken) return null;
+  if (!oauthAccessToken || !owner.isCurrent()) return null;
   const probedAccountKey = accountCacheKey(provider, probedAccountId);
   const writerGeneration = captureConfigGeneration();
-  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken);
-  if (!quota) return null;
-  if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-    // Hydrate before writing, for the same reason recordPassiveAccountQuota does:
-    // persistAccountQuotaCache serializes the whole in-memory map.
-    hydrateAccountQuotaCache();
-    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
-    persistAccountQuotaCache();
-  }
-  return report(provider, `${provider}:key-endpoint`, quota);
+  const epoch = captureProviderAccountQuotaEpoch(provider);
+  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken, {}, undefined, owner.identity);
+  if (!quota || !owner.isCurrent() || epoch !== captureProviderAccountQuotaEpoch(provider)
+    || !mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) return null;
+  // Hydrate before writing: persistence serializes the whole in-memory map.
+  hydrateAccountQuotaCache();
+  accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, identity: owner.identity,
+    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent() });
+  persistAccountQuotaCache();
+  return bindMuseReport(report(provider, `${provider}:key-endpoint`, quota), {
+    ...owner, isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent(),
+  });
 }
 /**
  * Provider-level row for a passive provider: the ACTIVE account's last observed
@@ -414,16 +428,18 @@ export async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuota
  * as the relative age of the row.
  */
 export async function fetchPassiveProviderQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  const activeId = getAccountSet(provider)?.activeAccountId;
-  if (!activeId) return null;
+  const owner = captureMuseQuotaOwner(provider);
+  if (!owner) return null;
   // Idempotent; without it a proxy restart shows nothing until the next streaming turn
   // even though the last observation is on disk.
   hydrateAccountQuotaCache();
-  const entry = accountQuotaCache.get(accountCacheKey(provider, activeId));
-  if (!entry?.quota) return null;
+  const entry = accountQuotaCache.get(accountCacheKey(provider, owner.accountId));
+  if (!entry?.quota || entry.identity !== owner.identity || !entry.isCurrent?.()) return null;
   const built = report(provider, `${provider}:subscription-observation`, entry.quota);
   // Tagged here rather than inside report(), which every probed path shares.
-  return built ? { ...built, observed: true } : null;
+  return bindMuseReport(built ? { ...built, observed: true } : null, {
+    ...owner, isCurrent: () => entry.isCurrent?.() === true && owner.isCurrent(),
+  });
 }
 
 // ---------------------------------------------------------------------------

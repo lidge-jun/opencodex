@@ -209,7 +209,11 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         onClick={onClick}
       >
         <span className="quota-summary-name">{row.label}</span>
-        <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>
+        {row.showAllWindows ? row.windows.map(window => (
+          <span key={window.id} className={`quota-summary-pct quota-summary-pct--${window.severity}`} title={windowLabel(window, t)}>
+            {windowLabel(window, t).split(" (")[0]}: {formatQuotaPercent(window.percent)}
+          </span>
+        )) : <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>}
         {row.provider === "meta-muse" && headline.resetAt !== undefined && (
           <span className="quota-summary-name" title={formatResetFuture(headline.resetAt, t, locale)}>
             {formatMuseResetCountdown(headline.resetAt, clock)}

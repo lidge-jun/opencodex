@@ -148,8 +148,14 @@ keys by default; `promptCacheKey: false` disables forwarding. Cache affinity imp
 chance of reuse, but does not guarantee a cache hit or remove token-throughput limits.
 
 Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
-are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. For every model, explicit upstream
+are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys).
+The dashboard header shows both API and Vibe budget percentages, and the dashboard and `ocx provider quota` show their used amounts,
+reset times, and the plan reported by Mistral. A zero or missing initial budget or missing
+currency is shown as unknown. Quota reads require the key's usage permission; a 401 or 403
+means quota is unavailable for that key. These budgets are display-only: they do not rank keys
+under the quota selection strategy or constrain machine placement through `/api/quota-pool`.
+Reports are cached and can be refreshed manually.
+The proxy does not infer a subscription tier from the key. For every model, explicit upstream
 `Retry-After` deadlines are shared between calls on the same credential and model. A 429
 without a retry time can activate a conservative 60-second recovery wait when valid minute
 counters show exhausted capacity, or the refused query's measured cost exceeds the remaining

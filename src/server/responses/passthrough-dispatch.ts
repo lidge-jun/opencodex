@@ -205,7 +205,7 @@ export async function preparePassthroughExchange(
     ResponsesTransport,
     | "adapter"
     | "genericFailoverAccountId"
-    | "passiveQuotaWriterGeneration"
+    | "passiveQuotaWriterGeneration" | "passiveQuotaOwner" | "passiveQuotaEpoch"
     | "oauthDispatch"
     | "recoverAutoPausedSelection"
     | "resolveSelectionAdapter"
@@ -587,9 +587,9 @@ export async function preparePassthroughExchange(
         const quota = parseMuseSubscriptionUsage(payload);
         // Read at EVENT time, not at handler construction: failover rebinds this, and the
         // quota belongs to the account that actually served the turn.
-        const servingAccountId = transportState.genericFailoverAccountId;
+        const servingAccountId = transportState.passiveQuotaOwner?.accountId;
         if (quota && servingAccountId) {
-          recordPassiveAccountQuota(route.providerName, servingAccountId, quota, passiveQuotaWriterGeneration);
+          recordPassiveAccountQuota(route.providerName, servingAccountId, quota, passiveQuotaWriterGeneration, transportState.passiveQuotaOwner, transportState.passiveQuotaEpoch);
         }
       }
       // Gated on the same flag as the guard itself: with no readable catalog (or a forward-auth
