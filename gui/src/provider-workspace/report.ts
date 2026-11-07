@@ -148,6 +148,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
         return [{
           label: row.label,
           percent: row.percent as number,
+          ...(typeof row.displayLabel === "string" ? { displayLabel: row.displayLabel } : {}),
           ...(finite(row.resetAt) !== undefined ? { resetAt: row.resetAt as number } : {}),
           ...(typeof row.modelId === "string" && row.modelId.length <= 128 ? { modelId: row.modelId } : {}),
         }];

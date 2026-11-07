@@ -538,7 +538,7 @@ enabling it takes effect without a restart.
 
 - `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
   and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
-  most one reset event, classified as scheduled or surprise.
+  most one reset event, classified as scheduled or surprise. Mistral budget labels are stable; amounts and plan are presentation text.
 - `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification. It
   never throws into the quota write that triggered it. `src/codex/quota.ts` and
   `src/providers/quota.ts` reach it only through a lazy import, because both are statically

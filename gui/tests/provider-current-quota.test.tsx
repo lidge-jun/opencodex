@@ -36,8 +36,8 @@ test("Mistral budget windows display unknown without a false zero", () => {
 
 test("Mistral measured budgets use the existing quota renderer", () => {
   const report = { quota: { updatedAt: observedAt, customWindows: [
-    { label: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5, resetAt: Date.UTC(2026, 11, 1) },
-    { label: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2, resetAt: Date.UTC(2026, 11, 1) },
+    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5, resetAt: Date.UTC(2026, 11, 1) },
+    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2, resetAt: Date.UTC(2026, 11, 1) },
   ] } };
   const markup = render(<ProviderCurrentQuota report={report} />);
   expect(markup).toContain("API budget (EUR 2.50 of EUR 20.00 used; EDU)");

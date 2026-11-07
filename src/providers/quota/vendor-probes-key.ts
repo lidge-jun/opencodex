@@ -117,7 +117,7 @@ async function fetchMistralQuota(provider: string, config: OcxProviderConfig): P
       continue;
     }
     const used = initial * (percent / 100);
-    customWindows.push({ label: `${label} (${currency} ${used.toFixed(2)} of ${currency} ${initial.toFixed(2)} used${plan ? `; ${plan}` : ""})`, percent, ...reset });
+    customWindows.push({ label, displayLabel: `${label} (${currency} ${used.toFixed(2)} of ${currency} ${initial.toFixed(2)} used${plan ? `; ${plan}` : ""})`, percent, ...reset });
   }
   const quota: ProviderQuota = { customWindows, unknownBudgetWindows, updatedAt: Date.now() };
   // Vibe and PAYG entitlements are display information, not inference eligibility evidence.
