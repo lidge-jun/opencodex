@@ -231,7 +231,7 @@ test("real steering handler preserves sparse output through automatic and ordina
   expect(admission).not.toBeNull();
   // Direct handler fixtures supply the verified local admission separately from
   // their upstream bearer; the default fixture remains keyless.
-  const { ws, socket, send, sent, id } = await beginInjection({ multi_agent: undefined }, settings, "test", admission!);
+  const { ws, socket, send, sent, id } = await beginInjection({ multi_agent: undefined }, settings, "test", { admission: admission! });
   for (let index = 0; index < output.length; index++) {
     socket.emit({ type: "response.output_item.added", output_index: index, item: output[index] });
     socket.emit({ type: "response.output_item.done", output_index: index, item: output[index] });

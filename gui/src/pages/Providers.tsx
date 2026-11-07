@@ -590,6 +590,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
     onSwitchAccount: switchAccount,
     onPauseAccount: pauseAccount,
+    pendingAffinityResets: pools.pendingAffinityResets,
+    onRetryAffinityReset: pools.retryAffinityReset,
     onAccountPoolThreshold: setAccountPoolThreshold,
     onAccountThreshold: setAccountThreshold,
     onRemoveAccount: removeAccount,

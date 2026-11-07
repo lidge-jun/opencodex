@@ -103,7 +103,7 @@ ocx login anthropic
 実行中のプロキシを介してプロバイダー アカウントと API キー プールを一覧表示し、切り替えます。出荷されたヘルプ画面は次のとおりです。
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -117,6 +117,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -131,7 +132,7 @@ main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App logi
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
-サブコマンドはプロキシが実行されている必要があり、記録されたランタイムポートを自動解決します。ただし `import-orca` は例外で、プレビューはローカルのみ、`import-orca --apply` はプロキシの停止が必要です。操作が成功した場合は 0 で終了します。無効な使用法、不明なプロバイダーまたはアカウント/キー ID、到達不能なプロキシ、または API エラーが発生した場合は 1 で終了します。資格情報フィールドは、管理 API が返したとおりに表示されます (マスキングを含む)。生の API キーと OAuth トークンは決して返されません。表示の利便性は、ダッシュボードと同様にクライアント側で合成されます。`main` は、`openai` アカウント プール内の Codex アプリ ログインの CLI エイリアスであり、電子メールのない OAuth アカウントは `Account N` として表示され、プラン/ラベル列はプラン、マスクされた電子メール、ラベル、およびマスクされたキーにわたってフォールバックされます。
+サブコマンドはプロキシが実行されている必要があり、記録されたランタイムポートを自動解決します。ただし `import-orca` は例外で、プレビューはローカルのみ、`import-orca --apply` はプロキシの停止が必要です。操作が成功した場合は 0 で終了します。無効な使用法、不明なプロバイダーまたはアカウント/キー ID、到達不能なプロキシ、または API エラーが発生した場合は通常 1 で終了します。ただし `reset-affinity` は HTTP 404 で終了コード 4、HTTP 409 で終了コード 5 を返し、その他の API エラーや未確認の結果では 1 を返します。資格情報フィールドは、管理 API が返したとおりに表示されます (マスキングを含む)。生の API キーと OAuth トークンは決して返されません。表示の利便性は、ダッシュボードと同様にクライアント側で合成されます。`main` は、`openai` アカウント プール内の Codex アプリ ログインの CLI エイリアスであり、電子メールのない OAuth アカウントは `Account N` として表示され、プラン/ラベル列はプラン、マスクされた電子メール、ラベル、およびマスクされたキーにわたってフォールバックされます。
 
 `--json` アカウント行では、次の一般的な形状が使用されます (オプションのフィールドが使用できない場合は省略されます)。
 

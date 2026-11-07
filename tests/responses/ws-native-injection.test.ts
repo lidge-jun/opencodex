@@ -258,7 +258,7 @@ test("accepted function results survive ordinary subsequent delta turns; no user
   expect(admission).not.toBeNull();
   // This handler fixture has no HTTP handshake; supply the admission that a real
   // dedicated local key resolves to, separately from the upstream bearer.
-  const { socket, send, sent, ws, id } = await beginInjection({}, settings, "test", admission!);
+  const { socket, send, sent, ws, id } = await beginInjection({}, settings, "test", { admission: admission! });
   const call = advertiseInjection(socket);
   send({ type: "response.inject", response_id: id, input: [savedResult("call-1", "accepted-result")] });
   acknowledgeInjection(socket); completeInjection(socket, { output: [call] });

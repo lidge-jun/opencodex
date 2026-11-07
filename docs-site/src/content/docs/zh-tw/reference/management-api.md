@@ -241,8 +241,8 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `POST /api/oauth/logout` | 移除所選的供應商憑證 | 400 未知供應商；`oauth_mutation_busy` |
 | `GET /api/oauth/accounts` | 列出遮罩帳號；Anthropic 與通用 OAuth 帳號列也會提供 `paused` 狀態。Kiro 列包含自動選取狀態 `autoSelectable`，排除時還包含封閉集合的 `skipReason`。唯一的有效帳號仍可傳送請求，配額查詢仍為選用。 | 400 無效供應商 |
 | `DELETE /api/oauth/accounts` | 移除一個帳號 | 400 無效供應商/id；404 帳號缺失；`oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | 選擇現用 OAuth 帳號 | 400 無效供應商／帳號；404 帳號缺失；409 帳號已暫停；`oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/pause` | 暫停或恢復一個 Anthropic 或通用 OAuth 帳號。Body `{ provider, accountId, paused }`；若暫停現用帳號，且有可用帳號，會切換至下一個。暫停會持久儲存且不受帳號池開關影響，恢復保留健康狀態與憑證。 | 400 不支援的供應商或無效 body；404 帳號缺失；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | 選擇現用 OAuth 帳號 | 400 無效供應商／帳號；404 帳號缺失；409 帳號已暫停；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; 帳戶選擇已儲存；即使已啟用，也請重新傳送相同請求) |
+| `PUT /api/oauth/accounts/pause` | 暫停或恢復一個 Anthropic 或通用 OAuth 帳號。Body `{ provider, accountId, paused }`；若暫停現用帳號，且有可用帳號，會切換至下一個。暫停會持久儲存且不受帳號池開關影響，恢復保留健康狀態與憑證。 | 400 不支援的供應商或無效 body；404 帳號缺失；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 暫停狀態已儲存；保留帳號和暫停狀態，加入 `retryAffinityReset: true` 後重試，伺服器重新啟動後也會確認重設) |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | 讀取或更新 Anthropic OAuth 池政策 | 400 非 Anthropic 供應商或無效政策 |
 | `POST /api/oauth/accounts/clear-cooldown` | 清除一個 OAuth 帳號的 runtime 冷卻 | 400 無效供應商／帳號 |
 | `PUT /api/oauth/accounts/alias` | 設定或清除 OAuth 帳號別名 | 400 無效供應商／帳號／別名 |
@@ -250,6 +250,9 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `PUT /api/providers/keys/active` | 選擇供應商的現用金鑰 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/alias` | 設定或清除供應商金鑰別名 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、建立、編輯或刪除 data-plane 許可金鑰 | 400 無效 body/id；404 金鑰缺失 |
+| `PUT /api/oauth/accounts/affinity-reset` | 無需帳戶即可確認 provider 全部對話繫結的重設已儲存。Body `{ provider }`；成功回傳 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+
+即使儲存的帳戶已消失，儀表板也會保留未確認的重設警告。清單載入失敗、帳戶暫停或需要重新驗證時，會保留重試並提示。清單確認帳戶不存在後，重試使用 `{ provider }` 呼叫 `PUT /api/oauth/accounts/affinity-reset`，只有收到 `affinityResetConfirmed: true` 才清除警告。此操作會清除所有繫結，包括首次失敗後建立的繫結，但不會選擇或恢復帳戶，帳戶清單為空時也可執行。存在待完成重設時，刪除請求傳送 `retryAffinityReset=true`；儲存失敗回傳 503 `affinity_reset_not_persisted`、`deletionCommitted: true` 和 `retryable: true`。帳戶已經刪除，請重試專用重設端點而非刪除。一般刪除保留其他帳戶的繫結。專用清理僅適用於註冊的 Anthropic OAuth 執行個體，並保留原有管理驗證與來源檢查。
 
 憑證清單回應被刻意遮罩。OAuth access token 與完整的供應商 API 金鑰不回傳給儀表板客戶端。
 
