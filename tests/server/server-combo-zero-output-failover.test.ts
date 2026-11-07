@@ -1011,4 +1011,29 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(hits).not.toContain("m2");
     });
   }
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} done pause_turn preserves child turn without failing over`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        emit({ type: "done", stopReason: "pause_turn" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const parent: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, parent);
+
+      expect(response.status).toBe(200);
+      expect(hits).toEqual(["m1"]);
+      expect(hits).not.toContain("m2");
+    });
+  }
 });

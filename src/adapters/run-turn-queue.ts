@@ -175,7 +175,9 @@ export function classifyZeroOutputTokenLimit(
 ): Extract<AdapterEvent, { type: "error" }> | undefined {
   const zeroOutputLimit = event.type === "incomplete"
     ? event.reason === "max_output_tokens" && event.retryable !== false && event.endTurn !== false && !event.providerState
-    : event.type === "done" && (["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "") || truncationReasonFor(event.stopReason) === "max_output_tokens")
+    : event.type === "done"
+      && event.stopReason?.trim().toLowerCase() !== "pause_turn"
+      && (["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "") || truncationReasonFor(event.stopReason) === "max_output_tokens")
       && event.endTurn !== false && !event.providerState && (options?.allowCompactionWithContent || !event.compactionEncryptedContent);
   if (!zeroOutputLimit) return undefined;
   return {

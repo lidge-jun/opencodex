@@ -790,9 +790,11 @@ describe("classifyZeroOutputTokenLimit", () => {
     expect(classifyZeroOutputTokenLimit({ type: "incomplete", reason: "cancelled" })).toBeUndefined();
   });
 
-  test("ignores done with normal stop reasons", () => {
+  test("ignores done with normal stop reasons or continuation pauses", () => {
     expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "stop" })).toBeUndefined();
     expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "end_turn" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "pause_turn" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "PAUSE_TURN" })).toBeUndefined();
     expect(classifyZeroOutputTokenLimit({ type: "done" })).toBeUndefined();
   });
 
