@@ -5,7 +5,6 @@ import {
   fetchTelemetryStatus,
   formatTelemetryPreviewJson,
   hasOtherOpenModalDialog,
-  postTelemetryNotice,
   putTelemetryDecision,
   shouldShowTelemetryConsentPrompt,
   subscribeModalDialogChanges,
@@ -19,9 +18,9 @@ const CONSENT_DIALOG_SELECTOR = "dialog.telemetry-consent-overlay";
  * First-run and post-update telemetry disclosure dialog.
  *
  * Opens only after DesktopStarOnboarding has settled, and only when the proxy reports an
- * undecided install with no environment override. Opening the dialog records nothing;
- * Continue records the checkbox decision via PUT /api/telemetry, and dismissing via Escape
- * or backdrop records only that the notice was seen via POST /api/telemetry/notice.
+ * undecided install with no environment override. Opening or dismissing the dialog
+ * (Escape or backdrop) records nothing so the prompt returns on the next app start while
+ * undecided; only Continue records the checkbox decision and notice via PUT /api/telemetry.
  */
 export function TelemetryConsentCard({
   apiBase,
@@ -143,23 +142,15 @@ function TelemetryConsentDialog({
     }
   }, [apiBase, checked, onClose, status]);
 
-  const handleDismiss = useCallback(async () => {
+  const handleDismiss = useCallback(() => {
     if (busyRef.current) return;
-    busyRef.current = true;
-    setSubmitting(true);
-    setSaveError(false);
-    try {
-      await postTelemetryNotice(apiBase, status);
-    } catch {
-      // Dismissal never traps the user inside the modal even if the notice write fails.
-    }
     onClose();
-  }, [apiBase, onClose, status]);
+  }, [onClose]);
 
   const handleCancel = useCallback(
     (event: React.SyntheticEvent) => {
       event.preventDefault();
-      void handleDismiss();
+      handleDismiss();
     },
     [handleDismiss],
   );
@@ -168,7 +159,7 @@ function TelemetryConsentDialog({
     (event: React.KeyboardEvent<HTMLDialogElement>) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        void handleDismiss();
+        handleDismiss();
       }
     },
     [handleDismiss],
@@ -188,9 +179,7 @@ function TelemetryConsentDialog({
         className="modal-backdrop-dismiss"
         aria-label={t("common.close")}
         tabIndex={-1}
-        onClick={() => {
-          void handleDismiss();
-        }}
+        onClick={handleDismiss}
       />
       <div className="modal-card telemetry-consent-card flex flex-col gap-3" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
@@ -225,6 +214,11 @@ function TelemetryConsentDialog({
           <summary>{t("proxyV2.telemetryWhatIsSent")}</summary>
           <div className="mt-2 flex flex-col gap-2">
             <p className="m-0 text-[12px] text-fg-muted">{t("proxyV2.telemetryPreviewHint")}</p>
+            {status.previewEligible === false && (
+              <p className="telemetry-preview-ineligible m-0 text-[12px] text-fg-muted">
+                {t("proxyV2.telemetryPreviewIneligible")}
+              </p>
+            )}
             <pre className="log-detail-json telemetry-preview-json">{formatTelemetryPreviewJson(status)}</pre>
           </div>
         </details>

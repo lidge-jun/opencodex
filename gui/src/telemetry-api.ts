@@ -1,6 +1,6 @@
 import { createBoundedFetch } from "./bounded-fetch";
 
-/** Wire shape of GET/PUT /api/telemetry and POST /api/telemetry/notice. */
+/** Wire shape of GET/PUT /api/telemetry. */
 export type TelemetryDecision = "accepted" | "declined";
 export type TelemetryStatusReason =
   | "env-ocx-telemetry"
@@ -22,6 +22,7 @@ export interface TelemetryStatusSnapshot {
   lastSentDay: string | null;
   lastSentAt: string | null;
   preview: Record<string, unknown>;
+  previewEligible?: boolean;
 }
 
 export const TELEMETRY_TIMEOUT_MS = 15_000;
@@ -64,6 +65,8 @@ export function parseTelemetryStatus(value: unknown): TelemetryStatusSnapshot | 
     raw.preview && typeof raw.preview === "object" && !Array.isArray(raw.preview)
       ? (raw.preview as Record<string, unknown>)
       : {};
+  const previewEligible =
+    typeof raw.previewEligible === "boolean" ? raw.previewEligible : undefined;
   return {
     effective: raw.effective,
     reason,
@@ -75,6 +78,7 @@ export function parseTelemetryStatus(value: unknown): TelemetryStatusSnapshot | 
     lastSentDay: typeof raw.lastSentDay === "string" ? raw.lastSentDay : null,
     lastSentAt: typeof raw.lastSentAt === "string" ? raw.lastSentAt : null,
     preview,
+    ...(previewEligible !== undefined ? { previewEligible } : {}),
   };
 }
 
@@ -207,44 +211,15 @@ export async function putTelemetryDecision(
       lastSentDay: previous?.lastSentDay ?? null,
       lastSentAt: previous?.lastSentAt ?? null,
       preview: previous?.preview ?? {},
+      ...(previous?.previewEligible !== undefined
+        ? {
+            previewEligible:
+              decision === "accepted" && envOverride === null ? previous.previewEligible : false,
+          }
+        : {}),
     };
     notifyTelemetryStatusChanged(snapshot);
     return snapshot;
-  } finally {
-    bounded.clear();
-  }
-}
-
-export async function postTelemetryNotice(
-  apiBase: string,
-  previous?: TelemetryStatusSnapshot | null,
-): Promise<TelemetryStatusSnapshot | null> {
-  const bounded = createBoundedFetch(TELEMETRY_TIMEOUT_MS);
-  try {
-    const res = await fetch(apiBase + "/api/telemetry/notice", {
-      method: "POST",
-      signal: bounded.signal,
-    });
-    if (!res.ok) throw new Error("HTTP " + String(res.status));
-    const body: unknown = await res.json().catch(() => null);
-    const parsed = parseTelemetryStatus(body);
-    if (parsed) {
-      notifyTelemetryStatusChanged(parsed);
-      return parsed;
-    }
-    if (previous) {
-      const nowIso = new Date().toISOString();
-      const fallback: TelemetryStatusSnapshot = {
-        ...previous,
-        effective: previous.envOverride === null && previous.decision !== "declined",
-        reason:
-          previous.reason === "awaiting-notice" ? "default-on" : previous.reason,
-        noticeShownAt: previous.noticeShownAt ?? nowIso,
-      };
-      notifyTelemetryStatusChanged(fallback);
-      return fallback;
-    }
-    return null;
   } finally {
     bounded.clear();
   }
