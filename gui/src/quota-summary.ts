@@ -36,6 +36,7 @@ export interface QuotaSummaryRow {
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
+  showAllWindows?: boolean;
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -131,6 +132,9 @@ export function buildQuotaSummary(
     const windows = summaryWindows(quota);
     const headline = pickHeadline(windows);
     if (!headline) continue;
+    const showAllWindows = report.source === "mistral:budget";
+    const severity = showAllWindows && windows.some(window => window.severity === "critical") ? "critical"
+      : showAllWindows && windows.some(window => window.severity === "warn") ? "warn" : headline.severity;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
@@ -138,7 +142,8 @@ export function buildQuotaSummary(
       windows,
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
-      severity: headline.severity,
+      severity,
+      ...(showAllWindows ? { showAllWindows: true } : {}),
     });
   }
   return rows;

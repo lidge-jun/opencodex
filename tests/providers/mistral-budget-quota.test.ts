@@ -5,6 +5,8 @@ import { clearProviderQuotaCache, fetchProviderApiKeyQuotas, fetchProviderQuotaR
 import { providerApiKeyQuotaMode } from "../../src/providers/quota/vendor-probes-key";
 import { classifyUpstreamCondition } from "../../src/lib/upstream-condition";
 import type { OcxConfig } from "../../src/types";
+import { saveConfig } from "../../src/config";
+import { selectProactiveApiKey, clearKeyCooldowns } from "../../src/providers/key-failover";
 
 const originalFetch = globalThis.fetch;
 const provider = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "test-mistral-key" } as const;
@@ -83,5 +85,65 @@ test("401 and 403 invalidate previous budgets and mark the key unavailable", asy
     const row = (await fetchProviderApiKeyQuotas(config, "mistral", true))[0];
     expect(row?.unavailable).toBe(true);
     expect(row?.quota).toBeNull();
+  }
+});
+
+test("a denial wins over a rejected companion probe and clears stale rows", async () => {
+  for (const status of [401, 403]) for (const denied of ["budget", "subscription"]) {
+    clearProviderQuotaCache();
+    globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? subscription : budget)) as typeof fetch;
+    expect((await fetchProviderQuotaReports(config, true)).reports).toHaveLength(1);
+    await fetchProviderApiKeyQuotas(config, "mistral", true);
+    globalThis.fetch = (async input => {
+      if (String(input).endsWith(`/${denied}`)) return new Response(null, { status });
+      throw new Error("transport failure");
+    }) as typeof fetch;
+    expect((await fetchProviderQuotaReports(config, true)).reports).toEqual([]);
+    const row = (await fetchProviderApiKeyQuotas(config, "mistral", true))[0];
+    expect(row?.unavailable).toBe(true);
+    expect(row?.quota).toBeNull();
+  }
+});
+
+test("a transient rejection does not reject the aggregated report or hide another provider", async () => {
+  const other = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "test-deepseek-key" } as const;
+  const multi = { ...config, providers: { mistral: provider, deepseek: other } } as OcxConfig;
+  for (const transient of ["both-rejected", "budget-500", "subscription-429"]) {
+    clearProviderQuotaCache();
+    globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? subscription : budget)) as typeof fetch;
+    await fetchProviderQuotaReports(multi, true);
+    await fetchProviderApiKeyQuotas(multi, "mistral", true);
+    globalThis.fetch = (async input => {
+      const url = String(input);
+      if (!url.includes("mistral.ai")) return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
+      if (transient === "budget-500" && url.endsWith("/budget")) return new Response(null, { status: 500 });
+      if (transient === "subscription-429" && url.endsWith("/subscription")) return new Response(null, { status: 429 });
+      throw new Error("network unavailable");
+    }) as typeof fetch;
+    const result = await fetchProviderQuotaReports(multi, true);
+    expect(result.reports.some(row => row.provider === "deepseek")).toBe(true);
+    expect(result.reports.some(row => row.provider === "mistral")).toBe(true); // bounded last-good display
+    const row = (await fetchProviderApiKeyQuotas(multi, "mistral", true))[0];
+    expect(row?.unavailable).toBe(true);
+    expect(row?.quota?.customWindows).toHaveLength(2);
+  }
+});
+
+test("display-only API and Vibe budgets do not rank keys in the quota strategy", async () => {
+  for (const [api, vibe] of [[100, 0], [0, 100]]) {
+    clearProviderQuotaCache();
+    clearKeyCooldowns();
+    const pooled = { ...provider, apiKey: "missing-active", apiKeyPoolStrategy: "quota", apiKeyPool: [
+      { id: "first", key: "first-key" }, { id: "second", key: "second-key" },
+    ] } as const;
+    const cfg = { defaultProvider: "mistral", providers: { mistral: pooled } } as unknown as OcxConfig;
+    saveConfig(cfg);
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).endsWith("/subscription")) return Response.json(subscription);
+      const first = new Headers(init?.headers).get("authorization") === "Bearer first-key";
+      return Response.json({ api_budget: { ...budget.api_budget, usage_percentage: first ? api : 10 }, vibe_budget: { ...budget.vibe_budget, usage_percentage: first ? vibe : 10 } });
+    }) as typeof fetch;
+    await fetchProviderApiKeyQuotas(cfg, "mistral", true);
+    expect(selectProactiveApiKey(cfg, "mistral")?.apiKey).toBe("first-key");
   }
 });

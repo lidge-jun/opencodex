@@ -169,6 +169,10 @@
   color: var(--red);
 }
 
+.quota-summary-item .quota-summary-pct--normal { color: var(--text); }
+.quota-summary-item .quota-summary-pct--warn { color: var(--amber); }
+.quota-summary-item .quota-summary-pct--critical { color: var(--red); }
+
 .quota-summary-item--critical .quota-summary-flag {
   background: var(--red);
 }

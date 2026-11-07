@@ -282,8 +282,8 @@ export default function QuotaBars({
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
   const unknownWindows = quota?.unknownBudgetWindows ?? [];
-  const unknownRows = unknownWindows.map((window, index) => (
-    <div className="quota-stacked-row" key={`${window.label}-${index}`}>
+  const unknownRows = unknownWindows.map(window => (
+    <div className="quota-stacked-row" key={window.label}>
       <div className="quota-stacked-head">
         <span className="quota-stacked-limit">{window.label}</span>
         <span className="quota-stacked-reset muted">{formatResetFuture(window.resetAt, t, locale)}</span>

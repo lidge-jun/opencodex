@@ -75,7 +75,7 @@ async function advance(ms: number) {
   now = target;
 }
 
-async function mount(source: string, percent = 100) {
+async function mount(source: string, percent = 100, extraReports: unknown[] = []) {
   let polls = 0;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
     expect(String(input)).toBe("/api/provider-quotas");
@@ -84,6 +84,7 @@ async function mount(source: string, percent = 100) {
       { provider: "meta-muse", label: "Muse Code", source, observed: true, updatedAt: now,
         quota: { customWindows: [{ label: "Muse Code", percent, resetAt: now + 5_000 }], updatedAt: now } },
       { provider: "openai", label: "OpenAI", updatedAt: now, quota: { weeklyPercent: 20, updatedAt: now } },
+      ...extraReports,
     ] });
   } });
   const host = document.createElement("div");
@@ -99,6 +100,35 @@ async function mount(source: string, percent = 100) {
     openai: () => host.querySelector('a[href="#providers?provider=openai&tab=accounts"]'),
   };
 }
+
+test("Mistral header shows both named budgets and the critical Vibe severity", async () => {
+  const view = await mount("meta-muse:usage-frame", 42, [{
+    provider: "mistral", label: "Mistral", source: "mistral:budget", updatedAt: now,
+    quota: { updatedAt: now, customWindows: [
+      { label: "API budget (EUR 2.00 of EUR 20.00 used; EDU)", percent: 10 },
+      { label: "Vibe budget (EUR 9.50 of EUR 10.00 used; EDU)", percent: 95 },
+    ] },
+  }]);
+  const chip = view.host.querySelector('a[href="#providers?provider=mistral&tab=accounts"]');
+  expect(chip?.textContent).toContain("API budget");
+  expect(chip?.textContent).toContain("10%");
+  expect(chip?.textContent).toContain("Vibe budget");
+  expect(chip?.textContent).toContain("95%");
+  expect(chip?.closest("li")?.className).toContain("critical");
+  expect(chip?.querySelector(".quota-summary-pct--normal")?.textContent).toContain("API budget");
+  expect(chip?.querySelector(".quota-summary-pct--critical")?.textContent).toContain("Vibe budget");
+});
+
+test("Mistral header retains unknown budgets alongside measured budgets", async () => {
+  const view = await mount("meta-muse:usage-frame", 42, [{
+    provider: "custom-mistral", source: "mistral:budget", updatedAt: now,
+    quota: { updatedAt: now, customWindows: [{ label: "Vibe budget (EDU)", percent: 20 }],
+      unknownBudgetWindows: [{ label: "API budget (EDU)" }] },
+  }]);
+  const chip = view.host.querySelector('a[href="#providers?provider=custom-mistral&tab=accounts"]');
+  expect(chip?.textContent).toContain("API budget: -");
+  expect(chip?.textContent).toContain("Vibe budget: 20%");
+});
 
 test("the observed Muse row expires at reset without a successful poll and stays absent after a failed poll", async () => {
   const view = await mount("meta-muse:rate-limit-observation");

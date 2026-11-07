@@ -10,6 +10,16 @@
 
 export const PROVIDER_QUOTA_MAX_AGE_MS = 30 * 60_000;
 
+// Process-local authority: display readings must not acquire key-selection authority.
+const displayOnlyQuotas = new WeakSet<ProviderQuota>();
+export function markDisplayOnlyQuota(quota: ProviderQuota): ProviderQuota {
+  displayOnlyQuotas.add(quota);
+  return quota;
+}
+export function isDisplayOnlyQuota(quota: ProviderQuota): boolean {
+  return displayOnlyQuotas.has(quota);
+}
+
 /** Management-only eligibility evidence; private credential binding never leaves the server. */
 export type ProviderRoutingQuota =
   | { state: "unknown" }

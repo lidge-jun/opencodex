@@ -15,6 +15,7 @@ import {
 } from "./report-cache";
 import { getTokenForAccountQuotaProbe } from "./account-cache";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaCreditsUsd } from "../quota-types";
+import { markDisplayOnlyQuota } from "../quota-types";
 import type { OcxProviderConfig } from "../../types";
 
 // A quota probe must use the provider's inference route so it neither reports a false healthy path nor leaks a key through another exit.
@@ -84,15 +85,14 @@ async function fetchMistralQuota(provider: string, config: OcxProviderConfig): P
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   };
-  const [budgetResponse, subscriptionResponse] = await Promise.all([
+  const settled = await Promise.allSettled([
     quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/budget`, init),
     quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/subscription`, init),
   ]);
-  if (!budgetResponse.ok || !subscriptionResponse.ok) {
-    const statuses = [budgetResponse.status, subscriptionResponse.status];
-    return statuses.some(status => status >= 400 && status < 500 && status !== 408 && status !== 429)
-      ? TERMINAL_QUOTA_FAILURE : null;
-  }
+  const responses = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+  if (responses.some(response => response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)) return TERMINAL_QUOTA_FAILURE;
+  if (responses.length !== 2 || responses.some(response => !response.ok)) return null;
+  const [budgetResponse, subscriptionResponse] = responses as [Response, Response];
   const [budgetValue, subscriptionValue] = await Promise.all([
     readQuotaJson(budgetResponse), readQuotaJson(subscriptionResponse),
   ]);
@@ -121,7 +121,7 @@ async function fetchMistralQuota(provider: string, config: OcxProviderConfig): P
   }
   const quota: ProviderQuota = { customWindows, unknownBudgetWindows, updatedAt: Date.now() };
   // Vibe and PAYG entitlements are display information, not inference eligibility evidence.
-  return keyReport(provider, "mistral:budget", quota, config, apiKey);
+  return keyReport(provider, "mistral:budget", markDisplayOnlyQuota(quota), config, apiKey);
 }
 
 function isCanonicalClineBaseUrl(baseUrl: string): boolean {
