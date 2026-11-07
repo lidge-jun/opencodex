@@ -528,7 +528,7 @@ and without opening omo.jsonc, and `PUT` answers 409 `lazycodex_not_detected` be
 Kilo owns only `provider.opencodex` in the first existing global file among `kilo.jsonc`,
 `kilo.json`, `opencode.jsonc`, `opencode.json`, and `config.json` under `~/.config/kilo`
 (`XDG_CONFIG_HOME` relocates that directory); when none exists, the destination is
-`kilo.jsonc`. Parse accepts JSONC comments (including CR, LF and CRLF line endings) and trailing
+`kilo.jsonc`. Parse accepts one leading UTF-8 BOM, JSONC comments (including CR, LF and CRLF line endings) and trailing
 commas after actual members, but refuses a comma in an otherwise empty container; serialize rewrites the whole file as pretty JSON, so comments in other keys are
 not preserved. Kilo and OpenCode participate in the implicit owned-catalog fan-out; unowned, removed or hand-edited blocks are never claimed or overwritten. Remote admission uses
 the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode.
