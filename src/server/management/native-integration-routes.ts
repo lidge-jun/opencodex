@@ -130,7 +130,7 @@ function refusal(
   clientId: NativeIntegrationClientId,
   reason: NativeRefusalReason,
   message: string,
-  extra: Pick<NativeRefusalEnvelope, "desiredEnabled" | "residualPaths"> = {},
+  extra: Pick<NativeRefusalEnvelope, "desiredEnabled" | "residualPaths" | "diagnostic"> = {},
 ): Response {
   return jsonResponse({
     error: status >= 500 ? "native integration change failed" : "native integration change refused",
@@ -1055,7 +1055,12 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
   try { return await settleConfigRoot(configRoot(), () => withLinkApply(() => handleNativeIntegrationRoutesUnlocked(ctx))); }
   catch (error) {
     if (error instanceof LinkApplyBusyError) return refusal(409, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "config_busy", "Another Home apply is running. Nothing was written; retry in a moment.");
-    if (error instanceof WindowsSecretAclSettleTimeoutError) return refusal(500, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "write_failed", "Config ACL settlement timed out. Nothing was written; retry after it settles.");
+    if (error instanceof WindowsSecretAclSettleTimeoutError) {
+      const clientId = ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId;
+      const firstParty = clientId === "claude-desktop" && resolveClaudeDesktopApplyMode(ctx.config, observeClaudeDesktopMode(ctx.config)) === "first-party";
+      return refusal(500, clientId, "write_failed", "Config ACL settlement timed out. Nothing was written; retry after it settles.",
+        firstParty ? { diagnostic: { stage: "ca", cause: "ETIMEDOUT" } } : {});
+    }
     throw error;
   }
 }
