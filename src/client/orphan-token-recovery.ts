@@ -149,7 +149,7 @@ function openSource(path: string, name: string): OpenSource | null {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   if (entry.isFile() && !entry.isSymbolicLink() && entry.nlink > 1) {
     // An interrupted Windows recovery leaves its identity pin linked to the original.
-    throw new Error(`orphan recovery refused: unsafe token file (another hard link exists; an interrupted earlier recovery may have left a .${name}.identity pin in an orphaned-token-* backup folder. Remove that pin if present, otherwise inspect other hard links to this file, then retry)`);
+    throw new Error(`orphan recovery refused: unsafe token file (another hard link exists; an interrupted earlier recovery may have left a .${name}.identity pin in an orphaned-token-* backup folder. Remove such a pin only if it is a hard link of this token file and keep any other pin, then inspect any remaining hard links to this file before retrying)`);
   }
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size > 4096
     || (process.platform !== "win32" && entry.uid !== process.getuid?.())) throw new Error("orphan recovery refused: unsafe token file");
