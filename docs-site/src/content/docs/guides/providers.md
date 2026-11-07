@@ -152,8 +152,9 @@ are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin
 The dashboard header shows both API and Vibe budget percentages, and the dashboard and `ocx provider quota` show their used amounts,
 reset times, and the plan reported by Mistral. A zero or missing initial budget or missing
 currency is shown as unknown. Quota reads require the key's usage permission; a 401 or 403
-means quota is unavailable for that key. These budgets are display-only and do not rank keys
-under the quota selection strategy. Reports are cached and can be refreshed manually.
+means quota is unavailable for that key. These budgets are display-only: they do not rank keys
+under the quota selection strategy or constrain machine placement through `/api/quota-pool`.
+Reports are cached and can be refreshed manually.
 
 For supported OpenAI, Anthropic, xAI, Groq and Mistral endpoints, the header also shows passively
 observed request and token limits as separate entries for each observed key and model, alongside

@@ -38,7 +38,16 @@ every caller, and reads only caches other paths filled:
   `pooled` windows only where account rows do not serve the configured provider: a provider with
   no account rows (an API-key provider's credits, for example) or a per-account provider configured
   with an API key (see [Pooled windows](#pooled-windows)). An in-band observed report is `header`,
-  any other report is `measured`.
+  any other report is `measured`. Held key reports require the current enabled provider, key auth,
+  destination and credential to match the owner of the report. Literal and environment keys are
+  checked without publishing routing observations; keychain-backed reports are omitted because a
+  passive read cannot establish currentness without consulting the OS keychain. The same rule
+  applies to passive provider quota reads.
+
+Display-only `ProviderQuota` readings are excluded from both account and pooled decision windows.
+The rows remain present; without other evidence their quota is unknown. Account pause and reauth
+states remain independent. Dashboard reports and reset observations retain the original readings.
+This applies regardless of provider or window kind.
 
 `tests/server/quota-pool-relay.test.ts` reads the route on the Home, over the link relay and over
 the hub relay against a pool account with an expired token and an empty provider-report cache. It

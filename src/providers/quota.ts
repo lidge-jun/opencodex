@@ -237,7 +237,7 @@ export function flushProviderQuotaObservationsForTests(): Promise<void> {
 /** Collect provider quota reports, using the cache unless refresh is forced, and publish the secret-free decision evidence from the collected reports. */
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   // A passive read (a Remote Link Child's, #6959) shows the held reports and starts nothing.
-  if (isPassiveRead()) return heldProviderQuotaReports(Object.keys(config.providers));
+  if (isPassiveRead()) return heldProviderQuotaReports(config);
   // A Pool report's cache signature and provider fetch must share one account snapshot.
   // Preserve force semantics when deciding whether that snapshot refreshes upstream data.
   const prefetchedCodexSnapshot = hasCodexPoolProvider(config)
