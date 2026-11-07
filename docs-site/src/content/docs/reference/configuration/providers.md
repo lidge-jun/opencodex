@@ -76,7 +76,8 @@ for a model replaces its row.
 
 On native Chat Completions, a caller's `ultra` is sent as `max`, or as the model's highest
 declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
-unless the model's declared ladder lists `ultra` itself. Other caller values are forwarded as sent.
+unless the model's declared ladder lists `ultra` itself. A `reasoningEffortMap` alias for `max`
+applies to the folded value, and `__omit__` drops the field. Other caller values are forwarded as sent.
 
 ## GPT-6.1 Terra
 

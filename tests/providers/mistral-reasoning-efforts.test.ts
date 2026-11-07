@@ -76,4 +76,14 @@ describe("Mistral reasoning effort ladders (#8254)", () => {
     expect(wireEffort(declaresUltra, "frontier", "ultra")).toBe("ultra");
     expect(wireEffort(declaresUltra, "other", "ultra")).toBe("max");
   });
+
+  test("a folded ultra goes through the provider's wire alias map, including omission", () => {
+    const gateway = (reasoningEffortMap: Record<string, string>): OcxProviderConfig => ({
+      adapter: "openai-chat", baseUrl: "https://gateway.example/v1", apiKey: "test-gateway", reasoningEffortMap,
+    });
+    expect(wireEffort(gateway({ max: "high" }), "any", "ultra")).toBe("high");
+    expect(wireEffort(gateway({ max: "__omit__" }), "any", "ultra")).toBeUndefined();
+    // Caller values the proxy did not rewrite keep their spelling.
+    expect(wireEffort(gateway({ max: "high" }), "any", "max")).toBe("max");
+  });
 });

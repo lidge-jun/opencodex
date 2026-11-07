@@ -102,7 +102,11 @@ export function buildOpenAIChatPassthroughRequest(
   if (reasoningDisabled) {
     delete body.reasoning_effort;
   }
-  if (body.reasoning_effort === "ultra") body.reasoning_effort = nativeChatUltraWireEffort(provider, modelId);
+  if (body.reasoning_effort === "ultra") {
+    const folded = nativeChatUltraWireEffort(provider, modelId);
+    if (folded === undefined) delete body.reasoning_effort;
+    else body.reasoning_effort = folded;
+  }
   const hasTools = Array.isArray(rawBody.tools) && rawBody.tools.length > 0;
   const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
   const explicitThinkingEnabled = rawBody.reasoning !== null && typeof rawBody.reasoning === "object"
