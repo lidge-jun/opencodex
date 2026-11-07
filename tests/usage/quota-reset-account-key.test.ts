@@ -210,7 +210,7 @@ test("a credential changed and restored during collection cannot publish a misma
   }
 });
 
-test.each(["removed", "oauth", "forward", "destination", "adapter", "disabled"] as const)("a key-probe report is not published when the provider becomes %s", async change => {
+test.each(["removed", "oauth", "forward", "local", "destination", "adapter", "disabled"] as const)("a key-probe report is not published when the provider becomes %s", async change => {
   const originalFetch = globalThis.fetch;
   const config = { defaultProvider: "mistral", providers: { mistral: {
     adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "synthetic-swap-key",
