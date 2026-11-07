@@ -82,7 +82,10 @@ import {
   recordAttemptCredentialSource,
   type RequestLogContext,
 } from "./request-log";
-import { chatResponseHasUndeclaredToolCalls, UNDECLARED_CHAT_TOOL_MESSAGE, jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
+import {
+  chatResponseHasUndeclaredToolCalls, UNDECLARED_CHAT_TOOL_MESSAGE, jsonCompletionSse, mistralTypedContentCompletion, nativeChatSse,
+  structuredError, usageFromChat,
+} from "./chat-native-sse";
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
@@ -92,7 +95,7 @@ import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
 import { protocolTraceSuppressed } from "../protocols/trace";
 import { nativeChatReplayScope, bindNativeChatReplayScope, nativeChatReasoningCapture } from "./chat-native-reasoning";
-import { resolveMistralTransport } from "../providers/mistral-transport";
+import { isCanonicalMistralChat, resolveMistralTransport } from "../providers/mistral-transport";
 
 export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
@@ -813,6 +816,7 @@ export async function runNativeChatAttempt(
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const reasoningCapture = nativeChatReasoningCapture(activeProvider, route.modelId, replayScope, translatorBudget);
+  const mistralBaseUrl = isCanonicalMistralChat(activeProvider) ? activeProvider.baseUrl : undefined;
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
     let terminalStatus: number | undefined;
@@ -853,6 +857,7 @@ export async function runNativeChatAttempt(
       signal: upstream.signal,
       stallTimeoutSec: config.stallTimeoutSec,
       localUpstream,
+      mistralBaseUrl,
       clientDeclaredEmptyToolCatalog,
       declaredLegacyFunctionNames,
       onFirstOutput,
@@ -964,11 +969,14 @@ export async function runNativeChatAttempt(
   if (clientDeclaredEmptyToolCatalog && chatResponseHasUndeclaredToolCalls(completion, declaredLegacyFunctionNames)) {
     return failUpstream(502, UNDECLARED_CHAT_TOOL_MESSAGE, "upstream_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }
+  // Replay capture above keeps reading the upstream body; only the client copy is converted.
+  const clientCompletion = mistralBaseUrl ? mistralTypedContentCompletion(completion, mistralBaseUrl) : completion;
+  if (!clientCompletion) return failUpstream(502, "unsupported Mistral content block", "upstream_error");
   onFirstOutput?.();
   try {
     const serialized = requestedStream
-      ? jsonCompletionSse(completion, requestedModel, translatorBudget)
-      : JSON.stringify(completion);
+      ? jsonCompletionSse(clientCompletion, requestedModel, translatorBudget)
+      : JSON.stringify(clientCompletion);
     if (!requestedStream) translatorBudget.chargeRetained(Buffer.byteLength(serialized) * 2, { kind: "live_transient" });
     finishLog(200);
     return new Response(serialized, {
