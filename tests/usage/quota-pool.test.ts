@@ -86,7 +86,8 @@ beforeEach(async () => {
     },
   }));
   const openrouter = config().providers.openrouter!;
-  const held = keyReport("openrouter", "fixture", { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 }, openrouter, "fixture-openrouter-key")!;
+  const quota = { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 };
+  const held = keyReport("openrouter", "fixture", quota, openrouter, "fixture-openrouter-key", quota)!;
   setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
 });
 
@@ -194,18 +195,19 @@ describe("ocx.quota-pool/1 producer", () => {
     const providers = { positive: { ...base }, absent: { ...base }, mistral: { ...base }, override: { ...base }, multiple: { ...base }, oauth: { ...base, authMode: "oauth" } } as OcxConfig["providers"];
     const current = { port: 0, defaultProvider: "positive", providers } as OcxConfig;
     const quota = { weeklyPercent: 100, updatedAt: NOW };
+    const oauth = await bindProviderReportProbe(Promise.resolve({ provider: "oauth", label: "oauth", source: "oauth", quota, updatedAt: NOW }), "oauth", providers.oauth!);
     const reports = [
       keyReport("positive", "fixture", quota, providers.positive!, "fixture-key", quota)!,
       keyReport("absent", "fixture", quota, providers.absent!, "fixture-key")!,
       keyReport("mistral", "fixture", markDisplayOnlyQuota({ ...quota }), providers.mistral!, "fixture-key")!,
       keyReport("override", "fixture", quota, providers.override!, "fixture-key", quota)!,
       keyReport("multiple", "fixture", quota, providers.multiple!, "fixture-key", quota)!,
-      { provider: "oauth", label: "oauth", source: "oauth", quota, updatedAt: NOW },
+      oauth,
     ];
     providers.override!.headers = { Authorization: "fixture-override" };
     providers.multiple!.apiKeyPool = [{ id: "one", key: "fixture-key" }, { id: "two", key: "fixture-key-two" }];
     setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports } });
-    // No OAuth rows: an untagged account report remains usable as before.
+    // No OAuth rows: an ownership-bound account report remains usable.
     const result = await readQuotaPool(current, { now: () => NOW });
     if (!result.ok) throw new Error(result.error);
     expect(QuotaPoolSchema.parse(result.pool)).toEqual(result.pool);
@@ -393,8 +395,9 @@ describe("ocx.quota-pool/1 producer", () => {
   test("a per-account provider configured with an API key keeps its key's report as the pool", async () => {
     ensureQuotaPoolIdentity();
     const keyed = config();
-    keyed.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
-    const held = keyReport("xai", "fixture", { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 }, keyed.providers.xai, "fixture-xai-key")!;
+    keyed.providers.xai = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
+    const quota = { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 };
+    const held = keyReport("xai", "fixture", quota, keyed.providers.xai, "fixture-xai-key", quota)!;
     setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
     const result = await readQuotaPool(keyed, { now: () => NOW, claudeUsageStatePath: admissionPath });
     if (!result.ok) throw new Error(result.error);
