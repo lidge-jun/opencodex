@@ -24,14 +24,12 @@ Video Bridge позволяет использовать генерацию xAI 
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> Если вы подключали его через `ocx login xai` (OAuth), провайдер останется в
-> `authMode: "oauth"`, и bridge просто не активируется. Задайте `XAI_API_KEY` в окружении
-> **или** укажите ключ прямо в конфигурации, как выше.
+> После настройки через `ocx login xai` (OAuth) провайдер остаётся в `authMode: "oauth"`, и мост не активируется. Задайте `XAI_API_KEY` в окружении, сохраните ссылку `${XAI_API_KEY}` из примера и явно выберите `authMode: "key"`. Не записывайте сами ключи в коммиты, журналы или общедоступные отчёты.
 
 ## Конфигурация
 

@@ -12,6 +12,8 @@ Etkileşimli bir istemci için [Web Kontrol Panelini](/tr/guides/web-dashboard/)
 veya otomasyon oluştururken bu referansı kullanın. Kalıcı değerler nihai olarak
 [Yapılandırma](/tr/reference/configuration/) bölümünü takip eder.
 
+<a id="authentication-model"></a>
+
 ## Kimlik doğrulama modeli
 
 Yönetim API'sinin, veri düzlemi API anahtarlarından bağımsız kendi yönetici

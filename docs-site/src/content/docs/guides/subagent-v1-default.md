@@ -7,9 +7,12 @@ OpenCodex installs with the sub-agent surface set to **v1**. The Dashboard, Mode
 pages all ask you to confirm before moving to **base** or **v2**, and this page is what that
 confirmation links to. The CLI does not prompt.
 
-The reason is narrow and specific: on v2, a task handed from a ChatGPT-native model to a routed
+The reason is narrow and specific: by default on v2, a task handed from a ChatGPT-native model to a routed
 model cannot be read by the routed model. That is the single most common way people delegate —
-a GPT parent spawning a Grok, Claude or GLM child — and on v2 it fails every time.
+a GPT parent spawning a Grok, Claude or GLM child — and on v2 it fails by default.
+Explicit exceptions are `keepNativeChatGptOnV1`, which keeps native ChatGPT entries on v1 while
+routed entries use v2; an authorized destination that can process the encrypted task with
+`allowEncryptedV2AgentTasks: true`; or experimental `agentTaskRecovery`, described below.
 
 ## What you see when it happens
 
@@ -44,7 +47,7 @@ failure rather than the failure being mysterious:
 
 | Topology | v1 | v2 |
 | --- | --- | --- |
-| ChatGPT parent to routed child | works | **fails** |
+| ChatGPT parent to routed child | works | **fails by default**; exceptions: `keepNativeChatGptOnV1` keeps the native parent on v1, an authorized destination uses `allowEncryptedV2AgentTasks: true`, or experimental `agentTaskRecovery` recovers the task |
 | Routed parent to routed child | works | works |
 | ChatGPT parent to ChatGPT child | works | works — the backend can decrypt what it minted |
 

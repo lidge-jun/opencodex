@@ -131,7 +131,7 @@ Responses 항목 타입으로 구분됩니다 — 따라서 MCP 네임스페이�
 엔드포인트가 업그레이드를 받아들이고 WebSocket 브리지를 사용합니다.
 
 이 클라이언트 설정과 별개로, 루트 `stream: true`인 canonical ChatGPT forward 요청은
-stable Bun 1.4.0 이상에서 Codex 업스트림 WebSocket을 사용할 수 있습니다. 번들 Bun 1.3.14,
+stable Bun 1.4.0 이상에서 Codex 업스트림 WebSocket을 사용할 수 있습니다. 현재 패키지에는 Bun **1.4.4**가 포함됩니다. Bun 1.3.14 같은 이전 번들,
 prerelease, 또는 검증할 수 없는 런타임 identity는 HTTP/SSE를 사용합니다. 성공한 업스트림 WS
 응답은 같은 downstream SSE 계약을 유지하며, 원시 JSON WebSocket 프레임과 downstream SSE
 envelope를 각각 4 MiB로 제한하고 8 MiB producer queue 상한이 있는 bounded eager single-reader

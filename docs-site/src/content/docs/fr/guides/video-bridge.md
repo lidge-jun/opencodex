@@ -23,14 +23,12 @@ achèvement, puis télécharge le résultat.
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> Si vous avez configuré xAI avec `ocx login xai` (OAuth), le fournisseur reste en `authMode: "oauth"`
-> et le pont ne s'activera pas, sans produire d'erreur. Définissez `XAI_API_KEY` dans l'environnement
-> **ou** enregistrez directement la clé comme dans l'exemple ci-dessus.
+> Si vous avez configuré xAI avec `ocx login xai` (OAuth), le fournisseur reste en `authMode: "oauth"` et le pont ne s'active pas. Définissez `XAI_API_KEY` dans l'environnement, conservez la référence `${XAI_API_KEY}` ci-dessus et sélectionnez explicitement `authMode: "key"`. Ne placez pas de clés littérales dans les commits, journaux ou rapports partagés.
 
 ## Configuration
 

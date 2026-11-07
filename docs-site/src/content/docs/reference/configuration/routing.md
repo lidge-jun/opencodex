@@ -72,7 +72,7 @@ account removal or policy change); until then the notifier is bounded by a five-
 opencodex resolves the requested model in this order:
 
 1. A configured `policy/<id>` or routing-profile alias, executing the policy evaluator and routing
-   the selected candidate. An unresolved `policy/<id>` falls through to the later rules.
+   the selected candidate. An unknown reserved `policy/<id>` fails before later rules.
 2. A configured `<account-selector>/<native-openai-model>` namespace, routed through exactly the
    mapped stored Codex account. An invalid or unavailable exact target fails closed.
 3. A canonical `combo/<id>` or configured combo alias. Canonical ids win before alias matching.
@@ -163,7 +163,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `allowMeteredTargets?` | `boolean` | `false` | Operator consent for local callers on a loopback-only proxy. A non-loopback listener disables this flag; configured-key and linked callers still need key consent. |
 | `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset; JEV makes one bounded decision for the initial eligible target and effort, then uses ordinary ordered fallback. |
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. Applies only to round-robin. |
-| `cooldownMs?` | `number` | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Range 1–600000. When set, applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. Upstream signals take precedence. An explicit upstream `Retry-After` is capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped at 10 minutes. |
+| `cooldownMs?` | `number` | unset → 5 s for request-rate 429 codes `1302`/`1305`; 10 min for a spent usage window or provider-wide credential/billing failure; otherwise 60 s | Range 1–600000. When set, applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. Upstream signals take precedence. An explicit upstream `Retry-After` is capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped at 10 minutes. |
 | `waitForCooldownMs?` | `number` | `0` | Maximum wait for the earliest eligible cooling target on each selection attempt. Range 0–600000; an abort cancels the wait. A single-target combo with a nonzero wait holds the request up to this ceiling and retries the same target instead of failing immediately; if no target was ever dispatched the wait ends in `combo_unavailable`, otherwise the last upstream failure is returned. |
 | `cooldownWaitPolicy?` | `"before-last-resort"` | unset | Defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy. `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. The deferral and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. Only that exact string opts in; `lastResort` is inert without it. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | `defaultEffort` fills an absent `reasoning.effort` in fallback mode, or overrides valid caller effort in explicit force mode when the combo has a non-null default and the selected target has a known, nonempty supported ladder. If the target supports the configured value, it is retained; otherwise the highest supported rung at or below it is used, or the lowest supported rung when none is lower. Unknown or empty ladders omit the default. |
@@ -247,7 +247,8 @@ Ollama's `tev1` (Ollama 0.35+, `POST /v1/systemone`, no API key):
 }
 ```
 
-The row's `baseUrl` is the full decision endpoint and must end in `/systemone`; its model is
+The row's `baseUrl` is the full decision endpoint. Local plain-HTTP endpoints must end in
+`/systemone`; HTTPS endpoints may use their configured path, including `/v1/decisions`. Its model is
 `defaultModel`, else `models[0]` (a row with neither fails open without a request). Loopback needs
 the row's own explicit `allowPrivateNetwork: true`, and plain `http:` is accepted only for `localhost`
 or a loopback/RFC 1918/ULA address literal reached without a proxy. Only the row's own `apiKey` is

@@ -104,7 +104,7 @@ Home is unreachable, a Child answers a retryable `503` (and a Hub client's dashb
 { "error": "link tunnel unavailable", "code": "home_unreachable", "message": "The Home is unreachable, and OpenCodex did not serve this request from this device's local providers. …" }
 ```
 
-Nothing is sent to a local provider, and the link key and the request body never leave the device.
+Nothing is sent to a local provider. If the failure occurs before forwarding starts, neither the link key nor the request body leaves the device. If forwarding has started, the Home may already have received or processed the request: the result is uncertain. Inspect the Home before deciding whether to retry; OpenCodex does not automatically replay a dispatched request.
 
 ### Per-device settings
 

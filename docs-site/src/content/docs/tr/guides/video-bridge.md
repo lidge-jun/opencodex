@@ -27,12 +27,12 @@ indirir.
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> `ocx login xai` (OAuth) ile katıldıysanız sağlayıcı `authMode: "oauth"` modunda kalır ve köprü sessizce devreye girmez. Ortamda `XAI_API_KEY` ayarlayın **veya** anahtarı yukarıda gösterildiği gibi sabit kodlayın.
+> `ocx login xai` (OAuth) ile kurulum yaptıysanız sağlayıcı `authMode: "oauth"` modunda kalır ve köprü etkinleşmez. Ortamda `XAI_API_KEY` tanımlayın, yukarıdaki `${XAI_API_KEY}` başvurusunu koruyun ve açıkça `authMode: "key"` seçin. Gerçek anahtarları commit, günlük veya paylaşılan raporlara yazmayın.
 
 ## Yapılandırma
 

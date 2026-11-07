@@ -15,6 +15,10 @@ through to one another.
 
 ## Precedence
 
+Before these model rules, an explicit `policy/<id>` or configured routing-profile alias
+evaluates the policy and routes its selected concrete candidate. An unknown reserved
+policy selector fails instead of falling through to provider or default routing.
+
 1. **Exact Codex account selector** — if the id is
    `<selector>/<native-openai-model>` and the selector is configured in `codexAccountNamespaces`,
    the request uses only the mapped stored account and sends the bare native model upstream.

@@ -3,10 +3,7 @@ title: Pi
 description: Utilisez n’importe quel modèle routé depuis Pi — ocx export produit un bloc de fournisseur personnalisé pour le fichier models.json de Pi, relié au proxy en cours d’exécution.
 ---
 
-Pi lit ses fournisseurs dans un fichier JSON global unique plutôt que dans des variables d’environnement ;
-opencodex ne lance donc pas Pi. À la place, `ocx export` sérialise le bloc du fournisseur `opencodex` —
-URL de base, liste des modèles et référence de variable d’environnement interpolée par Pi — que vous fusionnez ensuite dans votre
-propre configuration.
+Pi lit ses fournisseurs dans un fichier JSON global unique. opencodex ne lance pas Pi : `ocx export` sérialise le bloc du fournisseur `opencodex`, avec l’URL de base, les modèles et une valeur de clé locale non secrète, puis vous le fusionnez dans votre configuration.
 
 ## Démarrage rapide
 
@@ -14,11 +11,15 @@ Démarrez le proxy, puis imprimez la configuration :
 
 ```bash
 ocx start
+```
+
+Laissez ce processus en cours. Dans un second terminal, affichez la configuration :
+
+```bash
 ocx export --client pi
 ```
 
-La sortie commence par le JSON, puis affiche le chemin de destination, l’avertissement de fusion, la ligne
-d’exportation de la variable d’environnement et le nombre de modèles dotés de limites de contexte faisant autorité.
+La sortie commence par le JSON, puis affiche le chemin de destination, l’avertissement de fusion, une indication d’utilisation locale et le nombre de modèles dont les limites de contexte sont connues. Cet export prend uniquement en charge un proxy de bouclage sans authentification ; il ne configure pas l’accès distant.
 
 ```json
 {
@@ -26,7 +27,7 @@ d’exportation de la variable d’environnement et le nombre de modèles dotés
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -78,27 +79,7 @@ fournisseur ou modification de la visibilité du modèle, et fusionnez le nouvea
 
 ## La clé d'admission
 
-Deux clés différentes sont ici faciles à confondre, et seule la première apparaît dans ce fichier :
-
-| Clé | Qu'est-ce que c'est | Où il vit |
-| --- | --- | --- |
-| Clé d'admission proxy | Les propres informations d'identification de opencodex, générées dans l'onglet **API** du tableau de bord | référencé par `apiKey` comme `$OPENCODEX_API_KEY` ; la valeur reste dans votre environnement |
-| Clé du fournisseur | votre touche Anthropic / OpenAI / OpenRouter | La propre configuration de opencodex, selon [Fournisseurs](/fr/guides/providers/) |
-
-La configuration exportée ne contient que la référence, jamais le secret. Pi interpole une valeur simple de la forme `$NAME` ;
-la variable est :
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-Ce nom est propre à Pi. opencode utilise une autre variable
-(`OPENCODEX_OPENCODE_API_KEY`, sous la forme `{env:…}`) — voir le [guide opencode](/fr/guides/opencode/).
-
-**Un proxy lié à l’interface de bouclage n’a besoin d’aucune clé.** Par défaut, opencodex se lie à `127.0.0.1` et n’y exige
-aucune authentification ; la référence `$OPENCODEX_API_KEY` est donc inerte et la variable peut rester indéfinie.
-Cela n'a d'importance que lorsque `hostname` est défini au-delà du bouclage, ce qui est également le cas lorsque le proxy
-refuse de démarrer sans jeton — voir [Accès à distance](/fr/reference/configuration/server/#accès-à-distance).
+La valeur `apiKey` exportée est `opencodex-loopback`, un marqueur non secret. Aucune variable de clé n’est à exporter. L’exportateur accepte uniquement un proxy de bouclage sans authentification et refuse les proxys distants ou protégés par jeton. Les identifiants des fournisseurs restent dans la configuration d’opencodex, comme décrit dans [Fournisseurs](/fr/guides/providers/) ; ne placez jamais de clé du fournisseur dans ce bloc Pi. Pour un accès distant, utilisez une intégration qui prend en charge les identifiants d’accès au proxy. Modifier le marqueur n’active pas l’export Pi distant.
 
 ## Métadonnées du modèle
 

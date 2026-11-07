@@ -56,9 +56,11 @@ ocx health --json
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+シングルクォートを残してください。参照を文字列のまま渡すことで、秘密値をプロセス引数や設定ファイルに含めずに済みます。`ANTHROPIC_API_KEY` はプロキシの起動前に、その起動環境と、モデル同期など認証情報を解決する CLI プロセスの環境に設定してください。別のターミナルで後から export しても、起動済みのプロキシには反映されません。バックグラウンドサービスの場合は起動環境を設定して再起動してください。サービスのインストールだけでは、任意のプロバイダー変数は引き継がれません。
 
 `ocx provider add` はローカル設定を書き込みます。稼働中のプロキシがすでに実行中で、モデルを Codex にすぐに同期したい場合は、`--sync` を追加します。それ以外の場合は、後で `ocx sync` を実行します。レジストリにないカスタム プロバイダーには、`--adapter` と `--base-url` の両方が必要です。
 
@@ -74,11 +76,11 @@ ocx combo set main \
 
 ## リモートとLANのバインド
 
-デフォルトのループバック バインドには API トークンは必要ありません。 `0.0.0.0` などの非ループバック バインドには `OPENCODEX_API_AUTH_TOKEN` が必要です。プロキシはそれなしでは起動を拒否します。変数を `ocx start` の前、または `ocx service install` の前に設定して、サービスがそれを受け取るようにします。
+通常のループバック上のモデルルートにはデータトークンは不要です。`0.0.0.0` などの非ループバックへのバインドには、`config.apiKeys` に設定したクライアントキー、または `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、所有者だけが読める `service-api-token` ファイルから解決される共有トークンが必要です。ファイルがなければ `ocx service install` が作成できます。環境変数でトークンを渡す場合は、`ocx start` または `ocx service install` より前に設定します。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-その後、クライアントは管理リクエストとモデルリクエストを認証する必要があります。 opencodex をローカル マシンの外に公開する前に、[構成](/reference/configuration/) のリモート アクセス ルールを読んでください。
+モデルリクエストはデータプレーン認証を使います。管理には独立した認証情報である `OPENCODEX_ADMIN_AUTH_TOKEN` または保護されたファイル内の生成済み管理トークンを使います。データトークンで管理アクセスはできません。ダッシュボードには[管理 API](/ja/reference/management-api/#authentication-model)のセッション・アクセス規則が適用されます。管理トークンをモデルクライアントに渡さないでください。外部公開前に[リモートアクセス](/ja/reference/configuration/server/#remote-access)を確認してください。

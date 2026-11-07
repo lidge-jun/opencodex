@@ -133,12 +133,14 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-For a proxy reachable over the network, point `base_url` at the address `grok` can actually
-dial and use your admission token:
+For a proxy reachable over the network, configure a TLS frontend before supplying your admission
+token, then point `base_url` at its HTTPS address. Alternatively, use a local tunnel and its
+loopback address. Grok stores the literal `api_key` in `~/.grok/config.toml`; restrict access to
+that file and keep it out of version control and shared backups.
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

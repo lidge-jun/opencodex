@@ -56,9 +56,11 @@ ocx health --json
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+请保留单引号，以便按字面传递环境变量引用，而不是把密钥值放入进程参数或保存到配置中。启动代理前，请在其启动环境中设置 `ANTHROPIC_API_KEY`，并为模型同步等会解析凭据的 CLI 进程提供该变量。稍后在另一终端中 export 不会更新正在运行的代理。后台服务需要配置启动环境并重启；安装服务不会自动保留终端中的任意提供商变量。
 
 `ocx provider add` 会写入本地配置。如果已经有正在运行的代理，并且你希望立刻把模型同步到 Codex，请加上 `--sync`；否则之后再运行 `ocx sync`。不在注册表中的自定义提供方同时需要 `--adapter` 和 `--base-url`。
 
@@ -74,11 +76,11 @@ ocx combo set main \
 
 ## 远程和 LAN 绑定
 
-默认的回环绑定不需要 API token。非回环绑定，例如 `0.0.0.0`，则需要 `OPENCODEX_API_AUTH_TOKEN`；没有它，代理会拒绝启动。请在 `ocx start` 之前设置该变量，或者在 `ocx service install` 之前设置，这样服务就能接收到它：
+普通回环模型路由不需要数据令牌。绑定到 `0.0.0.0` 等非回环地址时，需要 `config.apiKeys` 中配置的客户端密钥，或从 `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、仅所有者可读的 `service-api-token` 文件解析出的共享令牌。文件不存在时，`ocx service install` 可以创建它。如果通过环境变量提供令牌，请在 `ocx start` 或 `ocx service install` 之前设置：
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-之后，客户端必须对其管理请求和模型请求进行身份验证。在把 opencodex 暴露到本机之外之前，请先阅读 [Configuration](/reference/configuration/) 中的远程访问规则。
+模型请求使用数据平面认证。管理使用独立凭据：`OPENCODEX_ADMIN_AUTH_TOKEN` 或受保护文件中生成的管理员令牌；数据令牌不授予管理访问权。仪表板遵循[管理 API](/zh-cn/reference/management-api/#authentication-model)的会话和访问规则。切勿把管理员令牌交给模型客户端。向本机之外开放代理前，请阅读[远程访问](/zh-cn/reference/configuration/server/#remote-access)。

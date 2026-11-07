@@ -83,9 +83,11 @@ makes it the default provider:
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+Keep the single quotes: they pass the environment reference literally instead of putting the secret in process arguments or saving its value in config. Make `ANTHROPIC_API_KEY` available to the proxy before it starts and to CLI processes that resolve provider credentials, such as model sync. Exporting it later in another terminal does not update a running proxy. For a background service, configure its startup environment and restart it; service installation does not automatically retain arbitrary provider variables from your shell.
 
 `ocx provider add` writes local configuration. Add `--sync` if a live proxy is already running and
 you want to sync models to Codex immediately; otherwise run `ocx sync` later. Custom providers that
@@ -105,14 +107,11 @@ behavior.
 
 ## Remote and LAN binds
 
-The default loopback bind does not require an API token. A non-loopback bind, such as `0.0.0.0`,
-requires `OPENCODEX_API_AUTH_TOKEN`; the proxy refuses to start without it. Set the variable before
-`ocx start`, or before `ocx service install` so the service receives it:
+Normal loopback model routes do not require a data token. A non-loopback bind, such as `0.0.0.0`, requires a data-admission credential: a client API key configured in `config.apiKeys`, or a shared token resolved from `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE`, or the owner-only `service-api-token` file. `ocx service install` can provision that file when absent. If supplying an environment token, set it before `ocx start` or `ocx service install`:
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-Clients must then authenticate their management and model requests. Read the remote-access rules in
-[Configuration](/reference/configuration/) before exposing opencodex beyond the local machine.
+Model requests use data-plane authentication. Management uses an independent credential: `OPENCODEX_ADMIN_AUTH_TOKEN` or the generated admin token in a hardened file; a data token does not grant management access. The dashboard follows the session and access rules in [Management API](/reference/management-api/#authentication-model). Never give the admin token to a model client. Read [Remote access](/reference/configuration/server/#remote-access) before exposing the proxy beyond the local machine.

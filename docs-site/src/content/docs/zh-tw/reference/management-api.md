@@ -7,6 +7,8 @@ description: opencodex 控制平面的認證、錯誤與端點參考。
 
 使用[網頁儀表板](/zh-tw/guides/web-dashboard/)作為互動式客戶端，或在建構自動化時使用此參考。持久值最終遵循[設定](/zh-tw/reference/configuration/)。
 
+<a id="authentication-model"></a>
+
 ## 認證模型
 
 管理 API 有自己的管理憑證，獨立於 data-plane API 金鑰。在啟動時，opencodex 依此順序解析它：

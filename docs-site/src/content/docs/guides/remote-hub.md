@@ -60,7 +60,13 @@ Connect with exactly one transient authority source. The authority is read from 
 written to config or the token file:
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -89,9 +95,16 @@ to the Hub with `https://` (or use loopback HTTP when both sides are on the same
 Rotate a connected client with a fresh transient authority:
 
 ```bash
-ocx connect rotate --pairing-code-stdin
-# or, only over HTTPS:
-ocx connect rotate --admin-token-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 Rotation keeps the old and new data keys valid for at most ten minutes under the same `apiKeyId`.
@@ -332,7 +345,7 @@ a session. Verify both directions:
 # Negative: the loopback-only port must not be reachable through the node's tailnet address.
 curl --fail --connect-timeout 3 http://100.64.0.10:10101/ && echo "unexpected exposure"
 
-# Positive: the HTTPS dashboard loads through Serve from an allowed tailnet user.
+# Transport only: an identity-required dashboard may reject curl; verify it in an allowed user's browser.
 curl --fail --silent --show-error https://hub-name.tailnet-name.ts.net/ >/dev/null
 ```
 
@@ -380,10 +393,13 @@ it is where `/readyz` and `/v1/catalog` are fetched — and `--management-url` i
 origin used for pairing and key issuance. They do not have to share a port:
 
 ```bash
-# This is exactly the line `ocx hub invite` prints, with the code filled in.
-echo '<pairing-code>' | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
+unset pairing_code
 ```
 
 Record those two origins on the hub as `hub.dataPublicOrigin` and `hub.managementPublicOrigin`, and
@@ -436,11 +452,15 @@ Run this on the hub rather than writing an `ocx connect` line by hand:
 ocx hub invite
 ```
 
-It mints a single-use, short-lived pairing code and prints the command to run on the other machine:
+It mints a single-use, short-lived pairing code and prints the command to run on the other machine.
+To keep the code out of shell history, read it silently and pass it through stdin:
 
-```text
-# Run on the other machine:
-echo '<code>' | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+```bash
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash, on the other machine:
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+unset pairing_code
 ```
 
 The data origin comes from `--data-url`, then `hub.dataPublicOrigin`, then the bind address. That
@@ -678,8 +698,19 @@ an existing deployment, run `docker compose build` and recreate the hub with `do
 do not repeat the one-time token initialization.
 
 Configure providers with the dashboard through an operator-owned management frontend, or with
-one-shot CLI commands that share the state volume. The commands below show the existing Remote Hub
-settings; replace the example origin and identity before enabling them:
+one-shot CLI commands that share the state volume. The commands below distinguish first-run initialization from later field updates.
+Replace the example origins and identity before enabling them:
+
+**Fresh volume only:** the seed declares runtimeRole=hub, but has no `hub` or `remoteGui` object. The token bootstrap does not create them. The initial whole-object writes below **replace** those objects: do not run them on a configured volume, where they could erase `hub.managementIngress` or other saved settings. Replace both example origins and the allowed identity first; the CORS origin is the joining machine's local proxy port.
+
+```bash
+docker compose run --rm hub bun run src/cli/index.ts config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","dataPublicOrigin":"https://hub-name.tailnet-name.ts.net:8443","managementIngress":{"enabled":true,"port":10101}}'
+docker compose run --rm hub bun run src/cli/index.ts config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+docker compose run --rm hub bun run src/cli/index.ts config set corsAllowOrigins '["http://localhost:10100"]'
+docker compose restart hub
+```
+
+On an already configured volume, inspect the saved objects first and update only the intended fields instead. The nested writes preserve sibling fields; the allowed-user array replaces that array, so include every identity you intend to keep. If an object is absent, use the fresh-volume initializer for that absent object only. For an existing CORS list, retain its current entries and add the joining origin as described under [Inviting another machine](#inviting-another-machine).
 
 ```bash
 docker compose run --rm hub bun run src/cli/index.ts config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
@@ -688,13 +719,9 @@ docker compose run --rm hub bun run src/cli/index.ts config set remoteGui.allowe
 docker compose restart hub
 ```
 
-These nested sets work because the image seeds a first-run `hub` configuration, so the object
-already exists. On a fresh standalone install it does not, and the same lines fail until you create
-it — see [Linux systemd or macOS launchd](#linux-systemd-or-macos-launchd) above.
-
 The container listener binds `0.0.0.0`, so it is already reachable on the container's own loopback
 address and the companion form of `unauthenticatedLoopbackListener` does not apply there — it is
-refused on a wildcard bind. The token bootstrap below is the container equivalent of the service's
+refused on a wildcard bind. The token bootstrap above is the container equivalent of the service's
 own provisioning step, and it likewise runs once.
 
 Do not put a token in `ARG`, `ENV`, `COPY`, Compose YAML, image history, or command arguments. Do not
@@ -734,7 +761,7 @@ on the node; use a narrower supported removal command when unrelated mappings ex
 tailscale serve status
 tailscale serve reset
 ocx config set hub.managementIngress '{"enabled":false}'
-ocx service repair
+ocx service restart
 ```
 
 For a container rollback, retain both named state volumes and their mappings. An older image

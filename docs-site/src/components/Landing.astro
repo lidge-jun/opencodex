@@ -24,12 +24,14 @@ import SiteJsonLd from './SiteJsonLd.astro';
 import { GITHUB_URL, getStarCount, formatStarCount } from '../data/github-stars';
 
 interface Props {
-	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
+	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr' | 'es';
 }
 const { locale } = Astro.props;
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const prefix = locale ? `${base}${locale}/` : base;
+const signingPolicies = import.meta.glob('../content/docs/*/reference/code-signing.md');
+const signingPolicyPrefix = locale && `../content/docs/${locale}/reference/code-signing.md` in signingPolicies ? prefix : base;
 
 const fr = {
 	'Install': 'Installer',
@@ -63,6 +65,7 @@ const fr = {
 	'Project': 'Projet',
 	'Contributing': 'Contribuer',
 	'Run ': 'Exécutez ',
+	'Codex and Claude': 'Codex et Claude',
 	' on the models you choose.': ' sur les modèles de votre choix.',
 	'opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.': 'opencodex est une passerelle locale unique pour vos outils de code IA et vos modèles. Il sert Codex, Claude Code, Claude Desktop et Grok Build sur un même port et connecte d’autres outils via des configurations gérées, en traduisant chaque format de protocole vers le fournisseur de votre choix, avec la diffusion en continu, les appels d’outils, le raisonnement et les images lorsque le modèle les prend en charge. Aucune modification des clients.',
 	'Get Started': 'Commencer',
@@ -120,8 +123,99 @@ const fr = {
 	'Star on GitHub, {count} stars': 'Ajouter une étoile sur GitHub, {count} étoiles',
 } as const;
 
+const es: Record<keyof typeof fr, string> = {
+	"Install": "Instalar",
+	"Start the proxy": "Iniciar el proxy",
+	"Add a provider and connect Codex": "Añade un proveedor y conecta Codex",
+	"In another terminal: launch Claude Code through ocx": "En otra terminal: inicia Claude Code mediante ocx",
+	"See supported tools": "Ver herramientas compatibles",
+	"Codex now routes through ocx": "Codex ahora se conecta a través de ocx",
+	"Getting Started": "Primeros pasos",
+	"Installation": "Instalación",
+	"Quickstart": "Inicio rápido",
+	"How It Works": "Cómo funciona",
+	"Agent Quickstart": "Inicio rápido para agentes",
+	"Guides": "Guías",
+	"Providers": "Proveedores",
+	"Model Routing": "Enrutamiento de modelos",
+	"Combos": "Combos",
+	"Codex Integration": "Integración con Codex",
+	"Codex App Model Picker": "Selector de modelos de Codex App",
+	"Sidecars: Search & Vision": "Sidecars: búsqueda y visión",
+	"Image Bridge": "Puente de imágenes",
+	"Video Bridge": "Puente de video",
+	"Web Dashboard": "Dashboard web",
+	"Sub-agent Surface": "Interfaz de subagentes",
+	"Reference": "Referencia",
+	"Configuration": "Configuración",
+	"Adapters": "Adaptadores",
+	"Architecture": "Arquitectura",
+	"Proxy API Formats": "Formatos de API del proxy",
+	"Management API": "API de administración",
+	"Project": "Proyecto",
+	"Contributing": "Cómo contribuir",
+	"Run ": "Ejecuta ",
+	"Codex and Claude": "Codex y Claude",
+	" on the models you choose.": " con los modelos que elijas.",
+	"opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.": "opencodex es una única pasarela local para tus herramientas de programación con IA y tus modelos. Conecta Codex, Claude Code, Claude Desktop y Grok Build por un mismo puerto, y otras herramientas mediante configuraciones administradas. Convierte cada protocolo para el proveedor que elijas, con streaming, llamadas a herramientas, razonamiento e imágenes cuando el modelo lo permite. No requiere parches en los clientes.",
+	"Get Started": "Comenzar",
+	"Supported providers": "Proveedores compatibles",
+	"40+ providers": "Más de 40 proveedores",
+	"The opencodex dashboard — live proxy status, routed providers, and available models": "Dashboard de opencodex: estado del proxy en tiempo real, proveedores enrutados y modelos disponibles",
+	"Install. Start. Connect your tool.": "Instala. Inicia. Conecta tu herramienta.",
+	"Install.": "Instala.",
+	"Start.": "Inicia.",
+	"Connect your tool.": "Conecta tu herramienta.",
+	"Full quickstart": "Inicio rápido completo",
+	"Watch Codex run on a routed model.": "Mira cómo Codex ejecuta un modelo enrutado.",
+	"Codex App running a task on a routed non-OpenAI model": "Codex App ejecuta una tarea con un modelo enrutado de otro proveedor distinto de OpenAI",
+	"One task, streamed end to end through opencodex.": "Una tarea, transmitida de extremo a extremo a través de opencodex.",
+	"One proxy, the whole surface.": "Un proxy para todas las funciones.",
+	"Any provider": "Cualquier proveedor",
+	"Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.": "Cinco adaptadores cubren Anthropic Messages, Google Gemini, Azure, el paso directo de OpenAI Responses y cualquier endpoint de Chat Completions compatible con OpenAI. Más de 40 proveedores integrados.",
+	"OAuth or API key": "OAuth o clave API",
+	"Log in with your xAI, Anthropic, or Kimi account — auto-refreshed — forward your ChatGPT login, or paste a key.": "Inicia sesión con tu cuenta de xAI, Anthropic o Kimi, con renovación automática; reenvía tu sesión de ChatGPT o pega una clave API.",
+	"ChatGPT account pool": "Grupo de cuentas ChatGPT",
+	"Existing threads keep their account; new sessions auto-route to the lowest-usage healthy one after quota refresh.": "Los hilos existentes conservan su cuenta. Tras actualizar las cuotas, las sesiones nuevas se asignan automáticamente a la cuenta disponible con menor uso.",
+	"Native in the model picker": "Nativo en el selector de modelos",
+	"Routed models show up in Codex App with reasoning effort levels, next to the native ones.": "Los modelos enrutados aparecen en la aplicación Codex con niveles de esfuerzo de razonamiento, junto a los nativos.",
+	"Codex App model picker with reasoning effort levels": "Selector de modelos de Codex App con niveles de esfuerzo de razonamiento",
+	"Sub-agents": "Subagentes",
+	"Pin up to five routed or native models for Codex spawn_agent, and switch the v1 / base / v2 surface globally.": "Fija hasta cinco modelos enrutados o nativos para spawn_agent de Codex y cambia globalmente entre las interfaces v1, base y v2.",
+	"ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.": "ocx claude inicia Claude Code en el mismo puerto: todos los modelos enrutados aparecen en /model, con contexto automático de hasta 1M y subagentes del listado. Tu sesión de claude.ai permanece activa.",
+	"Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar": "Claude Code ejecutando un modelo enrutado a través de opencodex — gpt-5.6-luna-medium activo en la barra de estado",
+	"Search & vision sidecars": "Sidecars de búsqueda y visión",
+	"Give non-OpenAI models real web search and image understanding through a gpt-5.6-luna sidecar.": "Añade búsqueda web y comprensión de imágenes a los modelos de otros proveedores mediante un sidecar gpt-5.6-luna.",
+	"ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.": "ocx init escribe un proveedor en tu configuración de Codex y comparte el catálogo con Codex CLI, TUI, App y SDK. ocx stop detiene el proxy o su servicio administrado y restaura la configuración nativa de Codex.",
+	"Documentation map": "Mapa de la documentación",
+	"Explore the docs": "Explorar la documentación",
+	"opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider’s Terms of Service before connecting.": "opencodex es un proyecto comunitario independiente, sin afiliación ni respaldo de OpenAI, Anthropic u otros proveedores. Algunos proveedores pueden restringir las cuentas que enrutan tráfico a través de proxies de terceros. Revisa los términos de servicio de cada proveedor antes de conectarte.",
+	"Desktop beta": "Aplicación de escritorio beta",
+	"Other platforms": "Otras plataformas",
+	"Download": "Descargar",
+	"Download for macOS": "Descargar para macOS",
+	"Download for Windows": "Descargar para Windows",
+	"Download for Linux": "Descargar para Linux",
+	"Download OpenCodex": "Descargar OpenCodex",
+	"The desktop app bundles the proxy, the dashboard and a tray. Beta.": "La aplicación de escritorio incluye el proxy, el dashboard y una bandeja. Versión beta.",
+	"Universal · Apple Silicon and Intel · macOS 13+ · .dmg": "Universal · Apple Silicon e Intel · macOS 13+ · .dmg",
+	"Installer not code-signed yet": "El instalador aún no tiene firma de código",
+	".deb package": "Paquete .deb",
+	"Recommended for your system": "Recomendado para tu sistema",
+	"Prefer the terminal?": "¿Prefieres la terminal?",
+	"Installation guide": "Guía de instalación",
+	"All releases and checksums": "Todas las versiones y sumas de comprobación",
+	"Desktop app guide": "Guía de la aplicación de escritorio",
+	"Code signing policy": "Política de firma de código",
+	"Desktop App": "Aplicación de escritorio",
+	"Latest release": "La última versión",
+	"Star on GitHub": "Dar una estrella en GitHub",
+	"Star on GitHub, {count} stars": "Dar una estrella en GitHub, {count} estrellas",
+};
+
+/** Select landing copy while requiring Spanish and French to cover every source key. */
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
-	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+	locale === 'es' ? es[en] : locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
 
 const starCount = await getStarCount();
 const starLocale = locale || 'en';
@@ -257,7 +351,7 @@ const docsMap = [
 			    Codex and Claude Code. 4-face rotateX cylinder, fixed slot width via
 			    inline-grid stacking; reduced-motion collapses to a static pairing. */}
 			<h1 id="_top">
-				{t('Run ', '', '让 ', 'Запускайте ', '実行 ', '讓 ', '')}<span class="lp-drum" aria-label="Codex and Claude">
+				{t('Run ', '', '让 ', 'Запускайте ', '実行 ', '讓 ', '')}<span class="lp-drum" aria-label={t('Codex and Claude', 'Codex 및 Claude', 'Codex 和 Claude', 'Codex и Claude', 'Codex と Claude', 'Codex 和 Claude', 'Codex ve Claude')}>
 					<span class="lp-drum-spin" aria-hidden="true">
 						<span class="lp-drum-face lp-drum-codex">Codex</span>
 						<span class="lp-drum-face lp-drum-claude">Claude</span>
@@ -350,10 +444,10 @@ const docsMap = [
 			<a href={`${prefix}guides/desktop-app/`}>{t('Desktop app guide', '데스크톱 앱 가이드', '桌面应用指南', 'Руководство по приложению', 'デスクトップアプリガイド', '桌面應用程式指南', 'Masaüstü uygulaması kılavuzu')}</a>
 		</p>
 		<!-- SignPath Foundation's terms require this attribution, verbatim, and the code signing
-		     policy link on the download page; the policy page exists in English only. -->
+		     policy link on the download page; use a translation when that page exists. -->
 		<p class="lp-dl-foot">
 			<span>Free code signing provided by <a href="https://about.signpath.io/">SignPath.io</a>, certificate by <a href="https://signpath.org/">SignPath Foundation</a>.</span>
-			<a href={`${base}reference/code-signing/`}>{t('Code signing policy', '코드 서명 정책', '代码签名策略', 'Политика подписи кода', 'コード署名ポリシー', '程式碼簽署政策', 'Kod imzalama politikası')}</a>
+			<a href={`${signingPolicyPrefix}reference/code-signing/`}>{t('Code signing policy', '코드 서명 정책', '代码签名策略', 'Политика подписи кода', 'コード署名ポリシー', '程式碼簽署政策', 'Kod imzalama politikası')}</a>
 		</p>
 	</section>
 
