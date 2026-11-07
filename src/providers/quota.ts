@@ -258,7 +258,8 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const cacheFresh = currentCache && currentCache.key === key && now - currentCache.ts < CACHE_TTL_MS
     && currentCache.response.reports.every(item =>
       (item.observed === true || now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)
-      && isProviderQuotaReportCurrent(item));
+      && isProviderQuotaReportCurrent(item)
+      && keyReportCredentialCurrent(item, config.providers[item.provider]));
   if (!forceRefresh && cacheFresh) return currentCache!.response;
   const joinable = inflight.get(key);
   if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
@@ -269,8 +270,9 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const promise = (async (): Promise<ProviderQuotaResponse> => {
     const previousCache = getProviderQuotaReportCache();
     const previous = previousCache && previousCache.key === key ? previousCache.response.reports : [];
+    const providerEntries = Object.entries(config.providers);
     const probeResults = await Promise.all(
-      Object.entries(config.providers).map(([name, provider]) => (
+      providerEntries.map(([name, provider]) => (
         maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
       )),
     );
@@ -282,7 +284,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     // model windows. Either way the old row is no longer true, which is what separates them
     // from `null` (told us nothing — keep the last-good row).
     const terminalFailures = new Set(
-      Object.keys(config.providers).filter((_, index) => (
+      providerEntries.map(([name]) => name).filter((_, index) => (
         probeResults[index] === TERMINAL_QUOTA_FAILURE
         || probeResults[index] === AUTHORITATIVE_EMPTY_QUOTA
       )),
@@ -306,7 +308,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       // Same exemption as the fast path. A passive row reaching `previous` is not a probe
       // that went quiet — there is no probe — so age cannot condemn it.
       if (item.observed !== true && item.updatedAt < cutoff) continue;
-      if (isProviderQuotaReportCurrent(item)) byProvider.set(item.provider, item);
+      if (isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, config.providers[item.provider])) byProvider.set(item.provider, item);
       else generationMismatchedProviders.add(item.provider);
     }
     for (const item of fresh) {

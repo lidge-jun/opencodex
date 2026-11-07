@@ -7,7 +7,6 @@ import { CODEX_EXHAUSTED_USAGE_PERCENT, withoutRetiredCodexQuota, type StoredAcc
 import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-cache";
 import { codexPlanKey } from "../../codex/plan";
 import { resolveProviderApiKey } from "../key-store";
-import { apiKeyPoolEntryId } from "../api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../registry";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../openai-tiers";
 import { CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityAggregation, type CodexCapacityQuota } from "../codex-capacity";
@@ -148,7 +147,7 @@ function cacheKey(config: OcxConfig): string {
       const resolvedKey = typeof provider.apiKey === "string"
         ? resolveProviderApiKey(provider.apiKey)?.trim()
         : undefined;
-      const activeKeyId = resolvedKey ? apiKeyPoolEntryId(resolvedKey) : "none";
+      const activeKeyId = resolvedKey ? createHash("sha256").update(resolvedKey).digest("hex") : "none";
       return `${name}:${provider.adapter}:${provider.authMode ?? "key"}:${providerCodexAccountMode(name, provider) ?? "none"}:${provider.disabled === true ? "off" : "on"}:${provider.baseUrl}:${activeKeyId}`;
     })
     .sort()
