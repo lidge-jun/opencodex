@@ -112,17 +112,17 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 | フィールド | 型 | 既定値 | 説明 |
 | --- | --- | --- | --- |
 | `telemetry.decision?` | `"accepted" \| "declined"` | 未設定（未決定） | 明示的なユーザーの選択。`"declined"` はテレメトリを無効化し `<OPENCODEX_HOME>/telemetry-id.json` を削除します。`"accepted"` は日次レポートを有効化します。 |
-| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | `decision` が記録された UTC タイムスタンプ。`decidedAt ?? noticeShownAt` の UTC 日より前の完了済み UTC 暦日は遡って送信されません。 |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | `decision` が記録された UTC タイムスタンプ。`decidedAt ?? noticeShownAt` の UTC 日より後の完了済み UTC 暦日（`day > formatUtcDay(decidedAt ?? noticeShownAt)`）のみが送信され、同意当日およびそれ以前の日は送信されません。 |
 | `telemetry.noticeShownAt?` | `string` (ISO 8601) | 未設定 | ウェブダッシュボードまたは対話型ターミナルで人間が開示通知を見た UTC タイムスタンプ。`decision` が未設定の場合、`noticeShownAt` が設定されているときのみ送信され（`default-on`）、未設定なら `awaiting-notice` のまま待機します。 |
 
 コレクターのエンドポイント（`https://telemetry.opencodex.me/v1/events`）はコード定数であり、`config.json` では変更できません。
 
-2 つの環境変数が `config.json` より優先され、保存済み設定を変更せずにテレメトリを即座に無効化します。
+2 つの環境変数が `config.json` より優先され、保存済み `config.json` を変更せずにテレメトリを即座に無効化します（起動時またはスケジューラのティックで検出されると `<OPENCODEX_HOME>/telemetry-state.json` に当日の UTC 日を `ineligibleThroughDay` として記録し `<OPENCODEX_HOME>/telemetry-id.json` を削除するため、後から変数を解除してもその期間の日次データは送信されず新しい ID が発行されます）。
 
 - `OCX_TELEMETRY=0`（大文字・小文字を問わず `false`、`off`、`no` も可）
 - `DO_NOT_TRACK=1`（大文字・小文字を問わず `true`、`yes` も可）
 
-自動化ツールが汎用設定コマンドで同意を記録できないよう、`ocx config set telemetry` と `ocx config unset telemetry` は拒否されます。代わりに `ocx telemetry enable`、`ocx telemetry disable`、`ocx telemetry status [--json]`、またはダッシュボードの **プロキシ詳細** トグルを使用してください。ペイロードスキーマと保持ポリシーの詳細は [テレメトリとプライバシー](/ja/guides/telemetry/) を参照してください。
+`ocx config set telemetry` と `ocx config unset telemetry` は拒否され、`ocx config import` もすべての呼び出し元でインポートされた `telemetry` ブロックを無視して既存の状態を保持します。代わりに `ocx telemetry enable`（対話型ターミナルが必須で開示と確認を表示し、それ以外は `agent_consent_required` / `tty_required` で終了）、`ocx telemetry disable`、`ocx telemetry status [--json]`、またはダッシュボードの **プロキシ詳細** トグルを使用してください。ペイロードスキーマと保持ポリシーの詳細は [テレメトリとプライバシー](/ja/guides/telemetry/) を参照してください。
 
 ## ストレージのクリーンアップ
 

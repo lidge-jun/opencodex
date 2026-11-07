@@ -507,19 +507,22 @@ that consent state:
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `telemetry.decision?` | `"accepted" \| "declined"` | unset (undecided) | Explicit user choice. `"declined"` disables telemetry and deletes `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` enables daily reports. |
-| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Completed UTC calendar days prior to the UTC day of `decidedAt ?? noticeShownAt` are never backfilled. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Only completed UTC calendar days strictly after the UTC day of `decidedAt ?? noticeShownAt` (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) are ever sent; the consent/disclosure day itself and earlier days are never backfilled. |
 | `telemetry.noticeShownAt?` | `string` (ISO 8601) | unset | UTC timestamp when a human saw the disclosure in the web dashboard or an interactive terminal. When `decision` is unset, telemetry sends only if `noticeShownAt` is set (`default-on`); without it the proxy remains in `awaiting-notice`. |
 
 The collector endpoint (`https://telemetry.opencodex.me/v1/events`) is a code constant and cannot
 be configured in `config.json`.
 
 Two environment variables override `config.json` and disable telemetry immediately without modifying
-saved configuration:
+saved `config.json` (observing either opt-out at proxy startup or on a scheduler tick also persists
+`ineligibleThroughDay` set to today's UTC day in `<OPENCODEX_HOME>/telemetry-state.json` and deletes
+`<OPENCODEX_HOME>/telemetry-id.json`, so opt-out days are never backfilled and a fresh ID is minted
+if the variable is later removed):
 
 - `OCX_TELEMETRY=0` (also accepts `false`, `off`, or `no`, case-insensitive)
 - `DO_NOT_TRACK=1` (also accepts `true` or `yes`, case-insensitive)
 
-`ocx config set telemetry` and `ocx config unset telemetry` are refused so automated callers cannot record consent through generic config writes; use `ocx telemetry enable`, `ocx telemetry disable`, `ocx telemetry status [--json]`, or the dashboard **Proxy details** toggle instead. See [Telemetry and Privacy](/guides/telemetry/) for the full payload schema and retention policy.
+`ocx config set telemetry` and `ocx config unset telemetry` are refused for all callers, and `ocx config import` ignores any imported `telemetry` block for every caller and preserves persisted `telemetry` state unchanged. Use `ocx telemetry enable` (requires an interactive human TTY; prints the disclosure block and confirmation prompt, or exits non-zero with `agent_consent_required` / `tty_required`), `ocx telemetry disable`, `ocx telemetry status [--json]`, or the dashboard **Proxy details** toggle instead. See [Telemetry and Privacy](/guides/telemetry/) for the full payload schema and retention policy.
 
 ## Storage cleanup
 
