@@ -484,28 +484,29 @@ describe("native Messages candidates in a combo", () => {
       expect(seen).toHaveLength(1);
     });
   }
-  test("a preflight buffer failure after a content frame never replays", async () => {
-    const budgets = await import("../../src/lib/translator-budget");
-    const create = budgets.createTranslatorBudget;
-    // The prelude's chunk is retained; the content chunk the tap already read overflows.
-    let charges = 0;
-    const spy = spyOn(budgets, "createTranslatorBudget").mockImplementation(options => {
-      const budget = create(options);
-      const charge = budget.chargeRetained.bind(budget);
-      budget.chargeRetained = (delta, scope) => {
-        if (scope.kind === "retained_collectors" && ++charges === 2) throw new budgets.TranslatorBudgetExceededError(scope.kind, 1);
-        charge(delta, scope);
-      };
-      return budget;
+  for (const committing of [textStart + textDelta, frame("fixture_unknown")]) {
+    test(`a buffer refusal cannot replay ${committing.includes("unknown") ? "an unknown event" : "a content frame"}`, async () => {
+      const budgets = await import("../../src/lib/translator-budget");
+      const create = budgets.createTranslatorBudget;
+      // Only the prelude's chunk fits; a committing chunk must be held without a charge.
+      let charges = 0;
+      const spy = spyOn(budgets, "createTranslatorBudget").mockImplementation(options => {
+        const budget = create(options);
+        const charge = budget.chargeRetained.bind(budget);
+        budget.chargeRetained = (delta, scope) => {
+          if (scope.kind === "retained_collectors" && ++charges === 2) throw new budgets.TranslatorBudgetExceededError(scope.kind, 1);
+          charge(delta, scope);
+        };
+        return budget;
+      });
+      try {
+        answer = () => stream(prelude + committing + terminal);
+        const { text } = await send();
+        expect(text).not.toContain("fallback reply");
+        expect(seen).toHaveLength(1);
+      } finally { spy.mockRestore(); }
     });
-    try {
-      answer = () => stream(prelude + textStart + textDelta + terminal);
-      const { response } = await send();
-      expect(charges).toBeGreaterThanOrEqual(2);
-      expect(response.status).not.toBe(200);
-      expect(seen).toHaveLength(1);
-    } finally { spy.mockRestore(); }
-  });
+  }
   test("a streamed error after content is a failed child, not a completion", async () => {
     answer = () => stream(prelude + textStart + textDelta + refusal);
     const { text, rows } = await send();

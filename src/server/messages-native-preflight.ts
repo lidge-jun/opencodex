@@ -68,15 +68,19 @@ export async function preflightNativeMessagesResponse(
       if (retained + next.value.byteLength > MAX_CLIENT_SSE_FRAME_BYTES || chunks.length >= 1024) {
         chunks.push(next.value); committed = true; break;
       }
-      budget.chargeRetained(next.value.byteLength, { kind: "retained_collectors" });
-      retained += next.value.byteLength;
-      chunks.push(next.value);
+      // Classify before retaining: a chunk that commits is held like the cap's, so a budget
+      // refusal can only meet a prelude that is still safe to replay.
       try {
         for (const frame of inspector.feed(next.value)) if (!frame.continuation) inspectFrame(frame.block);
       } catch (error) {
         if (!(error instanceof SseFrameTooLargeError || error instanceof SseFrameCountLimitError)) throw error;
         committed = true;
       }
+      if (!committed) {
+        budget.chargeRetained(next.value.byteLength, { kind: "retained_collectors" });
+        retained += next.value.byteLength;
+      }
+      chunks.push(next.value);
       if (committed || terminal || failure) break;
     }
     if (failure && !committed) {

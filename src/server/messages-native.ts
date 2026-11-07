@@ -1053,8 +1053,6 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           delivered = new Response(watchFirstOutput(preflight.response.body!), { status: preflight.response.status, headers: preflight.response.headers });
         } catch (error) {
           cleanupAbort(); releaseStreamTurn(); upstream.abort();
-          // A content frame the tap already saw ran upstream: the failure must not replay.
-          if (logCtx.generationStartedAt !== undefined) committed = true;
           if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
           if (isTranslatorBudgetExceededError(error)) return fail(502, "upstream translation buffer exceeded the safe limit", "api_error", "translation_buffer_limit");
           return fail(502, "upstream Messages stream failed before output", "api_error");
@@ -1135,7 +1133,6 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       cleanupAbort();
       upstream.abort();
       bindUsage(logCtx.usage);
-      if (logCtx.generationStartedAt !== undefined) committed = true;
       if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
       if (isTranslatorBudgetExceededError(error)) {
         return fail(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
