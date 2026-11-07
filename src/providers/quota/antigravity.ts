@@ -4,7 +4,8 @@ import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
 import { getValidAccessTokenSnapshot } from "../../oauth";
 import { credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
-import { antigravityReportOwnerCurrent, captureAntigravityReportOwner, captureAntigravityReportSelection } from "../../oauth/antigravity-quota-owner";
+import { antigravityReportOwnerCurrent, antigravityReportOwnerMatches, captureAntigravityReportOwner, captureAntigravityReportSelection } from "../../oauth/antigravity-quota-owner";
+import { isPassiveRead } from "../../lib/passive-read";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { accountReportCurrent, accountReportObservationKeys, antigravityEvidence, bindProviderReportProbe, report, type ProviderQuotaReport } from "./report-cache";
 import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
@@ -383,7 +384,7 @@ async function fetchAntigravityQuotaBound(provider: string, config: OcxProviderC
   const result = await probeAntigravityUsageQuota(snapshot.accessToken, snapshot.projectId);
   if (result.kind === "available") {
     const value = report(provider, result.source, result.quota);
-    if (value) { accountReportCurrent.set(value, () => antigravityReportOwnerCurrent(owner)); accountReportObservationKeys.set(value, owner.accountKey); }
+    if (value) { accountReportCurrent.set(value, () => isPassiveRead() ? antigravityReportOwnerMatches(owner, getAccountSet(provider)) : antigravityReportOwnerCurrent(owner)); accountReportObservationKeys.set(value, owner.accountKey); }
     // Only the summary endpoint reports real family buckets. The models fallback labels one model's
     // counter Gem/Cla, so it stays display-only: no windows, and retained summary clocks survive.
     const windows = result.source === "google-antigravity:retrieveUserQuotaSummary" ? antigravityDecisionWindows(result.quota) : [];

@@ -74,15 +74,22 @@ for (const transition of ["credential", "login", "switch", "aba"] as const) test
   expect((await fetchProviderQuotaReports(config)).reports).toEqual([]);
 });
 
-test("passive reads use the observed owner without loading the OAuth store or changing advisory evidence", async () => {
+test("passive reads withhold malformed stores without repairing them or changing advisory evidence", async () => {
   await fetchProviderQuotaReports(config, true);
   expect(signal("gemini-3.8-flash").tier).toBe("healthy");
   writeFileSync(getAuthStorePath(), "invalid-json");
   const held = await runPassiveRead(() => fetchProviderQuotaReports(config));
-  expect(held.reports).toHaveLength(1);
+  expect(held.reports).toEqual([]);
   expect(readFileSync(getAuthStorePath(), "utf8")).toBe("invalid-json");
   expect(signal("gemini-3.8-flash").tier).toBe("healthy");
   persistStore();
+});
+
+test("passive reads withhold an Antigravity report after an external credential replacement", async () => {
+  await fetchProviderQuotaReports(config, true);
+  store["google-antigravity"]!.accounts[0]!.credential.access = "external-replacement";
+  writeFileSync(getAuthStorePath(), JSON.stringify(store));
+  expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
 });
 
 test("a switch during the network probe cannot return or publish the old account report", async () => {
