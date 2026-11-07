@@ -1044,6 +1044,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
     id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest", promptCacheKey: true,
+    foldDeveloperRoleToSystem: true,
     // Native text-only input enrolls this model in the existing vision sidecar.
     modelInputModalities: { "zai-glm-5-3": ["text"] },
     // Images per request above the documented 8, measured on api.mistral.ai on 2026-11-04 as the

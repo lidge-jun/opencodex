@@ -1,3 +1,4 @@
+import { upstreamValidationIssues } from "../lib/upstream-validation-detail";
 import { clientFacingModelText, errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { knownModelIdentity } from "../lib/model-identity";
 /**
@@ -77,4 +78,16 @@ export function projectLocalModelRefusalLog(
   if (decision && (!known(decision.requestedModel)
     || decision.candidates.some(candidate => !known(candidate.model) || !providerKnown(candidate.provider))
     || decision.selected && (!known(decision.selected.model) || !providerKnown(decision.selected.provider)))) logCtx.routeDecision = undefined;
+}
+
+/** Capture bounded schema facts before a 4xx is replaced by the client-facing error policy. */
+export function recordUpstreamValidationDetail(logCtx: { failureDetail?: FailureDetail }, status: number, payload: unknown): void {
+  if (status < 400 || status >= 500) return;
+  let parsed = payload;
+  if (typeof payload === "string") {
+    if (payload.length > 256 * 1024) return;
+    try { parsed = JSON.parse(payload); } catch { return; }
+  }
+  const validation = upstreamValidationIssues(parsed);
+  if (validation) logCtx.failureDetail = { code: "provider_error", type: "invalid_request_error", validation };
 }

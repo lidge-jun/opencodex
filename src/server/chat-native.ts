@@ -1,3 +1,5 @@
+import { recordUpstreamValidationDetail } from "./request-log-failure-detail";
+import { normalizeNativeChatContent } from "../adapters/openai-chat/native-content";
 import { attachComboFailureEvidence, ownedChatErrorPayload, type ClientErrorContract } from "../lib/client-error-body";
 import type { FailureVerdictSink } from "../chat/failure-verdict";
 import { normalizeChatChoiceErrors } from "./chat-native-sse";
@@ -743,6 +745,7 @@ export async function runNativeChatAttempt(
     let upstreamMessage: string | undefined;
     try {
       const parsedError = JSON.parse(bodyText) as Rec;
+      recordUpstreamValidationDetail(logCtx, response.status, parsedError);
       const nested = isRec(parsedError.error) ? parsedError.error : undefined;
       const details = nested ?? parsedError;
       if (typeof details.type === "string") upstreamType = details.type;
@@ -846,6 +849,7 @@ export async function runNativeChatAttempt(
     const failureVerdictSink: FailureVerdictSink = {};
     const collectorSource = requestedStream ? undefined : new ChatCompletionsCollectorSource(translatorBudget);
     const stream = nativeChatSse(resilientBody, {
+      provider: activeProvider,
       failureVerdictSink,
       collectorSource,
       requestedModel,
@@ -948,19 +952,20 @@ export async function runNativeChatAttempt(
   } catch {
     return failUpstream(502, "upstream returned malformed Chat Completions JSON", "upstream_error");
   }
-  const error = structuredError(parsedJson);
-  if (error) return failUpstream(error.status ?? 502, error.message, error.type, error.code);
-  const originalCompletion = chatCompletionJson(parsedJson);
-  const completion = originalCompletion ? normalizeChatChoiceErrors(originalCompletion) : null;
-  if (!completion) return failUpstream(502, "upstream response contained no choices", "upstream_error");
-  reasoningCapture.json(completion);
-  const usage = usageFromChat(completion.usage);
+  const usage = isRec(parsedJson) ? usageFromChat(parsedJson.usage) : undefined;
   if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
       attempt.usage = usage;
     }
   }
+  if (isRec(parsedJson)) parsedJson = normalizeNativeChatContent(parsedJson, activeProvider);
+  const error = structuredError(parsedJson);
+  if (error) return failUpstream(error.status ?? 502, error.message, error.type, error.code);
+  const originalCompletion = chatCompletionJson(parsedJson);
+  const completion = originalCompletion ? normalizeChatChoiceErrors(originalCompletion) : null;
+  if (!completion) return failUpstream(502, "upstream response contained no choices", "upstream_error");
+  reasoningCapture.json(completion);
   if (clientDeclaredEmptyToolCatalog && chatResponseHasUndeclaredToolCalls(completion, declaredLegacyFunctionNames)) {
     return failUpstream(502, UNDECLARED_CHAT_TOOL_MESSAGE, "upstream_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }

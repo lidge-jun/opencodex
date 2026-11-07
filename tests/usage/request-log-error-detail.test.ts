@@ -6,7 +6,7 @@ import {
   addFinalRequestLog, addRequestLog, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage,
   type RequestLogContext, type RequestLogEntry,
 } from "../../src/server/request-log";
-import { recordLocalFailureDetail } from "../../src/server/request-log-failure-detail";
+import { recordLocalFailureDetail, recordUpstreamValidationDetail } from "../../src/server/request-log-failure-detail";
 import {
   appendUsageEntry, readUsageEntries, resetUsageReadCacheForTests, usageLogPath, type PersistedUsageEntry,
 } from "../../src/usage/log";
@@ -247,4 +247,42 @@ describe("request-log rows keep only proxy-owned error facts", () => {
     const changed = log({ requestId: "changed", status: 503, errorCode: "server_busy", ...UPSTREAM_TEXT });
     expect(projectErrorDetail(changed)).not.toBe(changed);
   });
+});
+
+describe("closed upstream validation detail", () => {
+  test("keeps only known fields and validation types through projection and usage hydration", () => withHome(() => {
+    const validation = [{ field: "max_completion_tokens", type: "extra_forbidden" }, { field: "messages.role", type: "union_tag_invalid" }];
+    const entry = { ...log({ status: 422 }), failureDetail: { code: "provider_error", type: "invalid_request_error", validation,
+      message: PROVIDER_KEY, input: "private prompt" } };
+    addRequestLog(entry as RequestLogEntry);
+    const row = getRequestLogEntries().at(-1)!;
+    expect(row.failureDetail).toEqual({ code: "provider_error", type: "invalid_request_error", validation });
+    appendUsageEntry(row as unknown as PersistedUsageEntry);
+    const disk = readUsageEntries().at(-1)!;
+    expect(disk.failureDetail).toEqual(row.failureDetail);
+    expect(requestLogEntryFromPersistedUsage(disk).failureDetail).toEqual(row.failureDetail);
+    expect(persisted()).not.toContain(PROVIDER_KEY);
+    expect(persisted()).not.toContain("private prompt");
+  }));
+
+  test("discards unknown names, types, free text and oversized lists", () => {
+    const validation = [{ field: PROVIDER_KEY, type: "extra_forbidden" }, { field: "user", type: PROVIDER_KEY },
+      ...Array.from({ length: 20 }, () => ({ field: "store", type: "extra_forbidden", input: PROVIDER_KEY }))];
+    const projected = errorDetailFor({ status: 422, failureDetail: { code: "provider_error", validation } });
+    expect(projected.failureDetail).toEqual({ code: "provider_error", validation: [{ field: "store", type: "extra_forbidden" }] });
+    expect(JSON.stringify(projected)).not.toContain(PROVIDER_KEY);
+    expect(errorDetailFor({ failureDetail: { code: "body_stall", value: 1, validation } }).failureDetail).toEqual({ code: "body_stall", value: 1 });
+  });
+});
+
+test("validation capture requires a 4xx and bounds unique pairs", () => {
+  const payload = { detail: ["user", "store", "thinking", "reasoning", "top_k", "max_tokens", "max_completion_tokens", "temperature", "top_p"].map(field => ({ loc: ["body", field], type: "extra_forbidden", input: PROVIDER_KEY })) };
+  const ctx: RequestLogContext = {};
+  recordUpstreamValidationDetail(ctx, 500, payload);
+  expect(ctx.failureDetail).toBeUndefined();
+  recordUpstreamValidationDetail(ctx, 200, payload);
+  expect(ctx.failureDetail).toBeUndefined();
+  recordUpstreamValidationDetail(ctx, 422, JSON.stringify(payload));
+  expect(ctx.failureDetail?.validation).toHaveLength(8);
+  expect(JSON.stringify(ctx.failureDetail)).not.toContain(PROVIDER_KEY);
 });
