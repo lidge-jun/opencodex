@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readConfigDiagnostics, telemetryConfigError } from "../../src/config/diagnostics";
@@ -10,6 +10,7 @@ import {
   aggregateTelemetryForDay,
   classifyModelFamily,
   classifyProviderKind,
+  createDailyTelemetryAccumulator,
   disjointTelemetryTokens,
 } from "../../src/telemetry/aggregate";
 import { resolveTelemetryStatus } from "../../src/telemetry/consent";
@@ -34,17 +35,25 @@ import {
   resetTelemetryInstallIdMemoForTests,
   telemetryIdPath,
 } from "../../src/telemetry/install-id";
-import { buildTelemetryPayloadV1, resolveInstallChannel } from "../../src/telemetry/payload";
+import { buildTelemetryPayloadV1, normalizeTelemetryVersion, resolveInstallChannel } from "../../src/telemetry/payload";
 import {
+  computeTelemetryIntervalDelayMs,
+  computeTelemetryStartupDelayMs,
   nudgeTelemetryScheduler,
   readTelemetryState,
+  recordTelemetryEnvOptOut,
   runTelemetryTick,
   startTelemetryScheduler,
   stopTelemetryScheduler,
   telemetryStatePath,
   writeTelemetryState,
 } from "../../src/telemetry/scheduler";
-import { sendTelemetryPayload, setTelemetrySenderOverridesForTests } from "../../src/telemetry/sender";
+import {
+  parseRetryAfterMs,
+  sendTelemetryPayload,
+  setTelemetrySenderOverridesForTests,
+} from "../../src/telemetry/sender";
+import { acquireServerBackgroundLifecycle } from "../../src/server/background-lifecycle";
 import type { OcxConfig } from "../../src/types";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 import { REQUEST_OUTCOME_CLASSES } from "../../src/usage/request-outcome";
@@ -54,6 +63,14 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 const NOW = Date.parse("2026-11-07T12:00:00.000Z");
+
+function rmIfExists(path: string): void {
+  try {
+    if (lstatSync(path)) {
+      unlinkSync(path);
+    }
+  } catch { /* ignore */ }
+}
 
 describe("telemetry contract parity and validation", () => {
   test("contract module is import-free and pins outcome and failure-cause rosters", () => {
@@ -101,11 +118,32 @@ describe("telemetry contract parity and validation", () => {
     };
 
     expect(validateTelemetryPayloadV1(base, NOW)).toEqual({ ok: true, payload: base });
-    expect(validateTelemetryPayloadV1({ ...base, env: { ...base.env, version: "2.40.1-preview.3", releaseChannel: "preview" } }, NOW).ok).toBe(true);
+    for (const validPreview of [
+      "2.6.15-preview.20260701",
+      "2.6.15-preview.20260701.1",
+      "2.7.9-preview.20260712.2",
+    ]) {
+      expect(
+        validateTelemetryPayloadV1(
+          { ...base, env: { ...base.env, version: validPreview, releaseChannel: "preview" } },
+          NOW,
+        ).ok,
+      ).toBe(true);
+      expect(normalizeTelemetryVersion(validPreview)).toEqual({
+        version: validPreview,
+        releaseChannel: "preview",
+      });
+    }
+    expect(normalizeTelemetryVersion("2.40.1")).toEqual({
+      version: "2.40.1",
+      releaseChannel: "latest",
+    });
 
     expect(validateTelemetryPayloadV1({ ...base, extra: 1 }, NOW).ok).toBe(false);
     expect(validateTelemetryPayloadV1({ ...base, env: { ...base.env, extra: 1 } }, NOW).ok).toBe(false);
     expect(validateTelemetryPayloadV1({ ...base, env: { ...base.env, version: "2.40.1+build.9" } }, NOW).ok).toBe(false);
+    expect(validateTelemetryPayloadV1({ ...base, env: { ...base.env, version: "2.6.15-preview.20260701+build.1", releaseChannel: "preview" } }, NOW).ok).toBe(false);
+    expect(validateTelemetryPayloadV1({ ...base, env: { ...base.env, version: "2.40.1-preview.3", releaseChannel: "preview" } }, NOW).ok).toBe(false);
     expect(validateTelemetryPayloadV1({ ...base, env: { ...base.env, installChannel: "brew" as never } }, NOW).ok).toBe(false);
     expect(validateTelemetryPayloadV1({ ...base, day: "2026-02-30" }, NOW).ok).toBe(false);
     expect(validateTelemetryPayloadV1({ ...base, day: "2026-10-20" }, NOW).ok).toBe(false);
@@ -352,6 +390,12 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     expect(classifyProviderKind("google-vertex")).toBe("vertex");
     expect(classifyModelFamily("deepseek/deepseek-r1")).toBe("deepseek");
     expect(aggregateTelemetryEntriesForDay(day, []).activeMinutes).toBe(0);
+
+    // D8: createDailyTelemetryAccumulator accumulates inside onEntry for target day only and retains no rows.
+    const acc = createDailyTelemetryAccumulator(day);
+    expect(Object.keys(acc).sort()).toEqual(["finalize", "onEntry"]);
+    for (const row of fixtureEntries) acc.onEntry(row);
+    expect(acc.finalize()).toEqual(agg);
   });
 
   test("disjointTelemetryTokens legacy fallback keeps 5-bucket sum equal to usageDisplayTotalTokens and ACCOUNT_SUFFIX_RE matches k + 32 hex", () => {
@@ -419,11 +463,13 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     // first tick sends 2026-11-05 (oldest post-consent day) with newInstall=true,
     // second tick sends 2026-11-06 with newInstall=false,
     // third tick finds nothing left.
+    // 2. D1: Consent given on 2026-11-04 -> 2026-11-04 (the consent day itself) and earlier are NEVER sent;
+    // only UTC days strictly AFTER 2026-11-04 (i.e. 2026-11-05, 2026-11-06) are eligible.
     const config = {
       telemetry: {
         decision: "accepted" as const,
-        decidedAt: "2026-11-05T15:30:00.000Z",
-        noticeShownAt: "2026-11-05T15:30:00.000Z",
+        decidedAt: "2026-11-04T15:30:00.000Z",
+        noticeShownAt: "2026-11-04T15:30:00.000Z",
       },
     };
     const tick1 = await runTelemetryTick({
@@ -469,6 +515,301 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
         expect(readFileSync(full, "utf8")).not.toContain(rawInstallId);
       }
     }
+
+    // Consent given on 2026-11-06 (yesterday) when today is 2026-11-07 -> 2026-11-06 is the consent day itself,
+    // so no completed UTC day is strictly after 2026-11-06 yet.
+    const sameDayHome = mkdtempSync(join(tmpdir(), "ocx-telemetry-sameday-"));
+    try {
+      const resSameDay = await runTelemetryTick({
+        configDir: sameDayHome,
+        config: {
+          telemetry: {
+            decision: "accepted",
+            decidedAt: "2026-11-06T23:59:00.000Z",
+            noticeShownAt: "2026-11-06T23:59:00.000Z",
+          },
+        },
+        env: {},
+        now: NOW,
+        fetch: mockFetch,
+      });
+      expect(resSameDay).toEqual({ sent: false, reason: "up-to-date" });
+    } finally {
+      removeTreeWithRetry(sameDayHome);
+    }
+  });
+
+  test("D2: env opt-out at startup or tick persists ineligibleThroughDay, deletes the install id, never backfills opt-out days, and mints a fresh id later", async () => {
+    const sentPayloads: TelemetryPayloadV1[] = [];
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentPayloads.push(JSON.parse(String(init?.body)) as TelemetryPayloadV1);
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const config = {
+      telemetry: {
+        decision: "accepted" as const,
+        decidedAt: "2026-11-01T10:00:00.000Z",
+        noticeShownAt: "2026-11-01T10:00:00.000Z",
+      },
+    };
+
+    // Day 2026-11-03: sends 2026-11-02 and mints initial installId
+    const day3Now = Date.parse("2026-11-03T12:00:00.000Z");
+    const firstTick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: day3Now,
+      fetch: mockFetch,
+    });
+    expect(firstTick).toMatchObject({ sent: true, day: "2026-11-02" });
+    const originalInstallId = readTelemetryInstallId(home)!.installId;
+    expect(typeof originalInstallId).toBe("string");
+
+    // User starts proxy in background-lifecycle with OCX_TELEMETRY=0 on 2026-11-03:
+    const prevTelemetry = process.env.OCX_TELEMETRY;
+    process.env.OCX_TELEMETRY = "0";
+    try {
+      const lease = acquireServerBackgroundLifecycle(() => {}, {
+        port: 0,
+        defaultProvider: "openai",
+        providers: {},
+      } as unknown as OcxConfig);
+      await lease.release();
+    } finally {
+      if (prevTelemetry === undefined) delete process.env.OCX_TELEMETRY;
+      else process.env.OCX_TELEMETRY = prevTelemetry;
+    }
+    expect(readTelemetryInstallId(home)).toBeNull();
+    expect(existsSync(telemetryIdPath(home))).toBe(false);
+    expect(readTelemetryState(home).ineligibleThroughDay).not.toBeNull();
+
+    // Reset state to simulate consecutive opt-out days 2026-11-03, 2026-11-04, 2026-11-05:
+    writeTelemetryState(
+      {
+        version: 1,
+        sentDays: { "2026-11-02": "2026-11-03T12:00:00.000Z" },
+        lastSentDay: "2026-11-02",
+        lastSentAt: "2026-11-03T12:00:00.000Z",
+        ineligibleThroughDay: null,
+        retryAfterUntil: null,
+      },
+      home,
+      day3Now,
+    );
+    ensureTelemetryInstallId(home);
+    expect(readTelemetryInstallId(home)).not.toBeNull();
+
+    for (const [dayIso, env] of [
+      ["2026-11-03T18:00:00.000Z", { OCX_TELEMETRY: "0" }],
+      ["2026-11-04T18:00:00.000Z", { DO_NOT_TRACK: "1" }],
+      ["2026-11-05T18:00:00.000Z", { OCX_TELEMETRY: "false" }],
+    ] as const) {
+      const optOutTick = await runTelemetryTick({
+        configDir: home,
+        config,
+        env,
+        now: Date.parse(dayIso),
+        fetch: mockFetch,
+      });
+      expect(optOutTick.sent).toBe(false);
+      expect(readTelemetryInstallId(home)).toBeNull();
+    }
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-05");
+
+    // User removes OCX_TELEMETRY=0 on 2026-11-06: days 2026-11-03..2026-11-05 are <= ineligibleThroughDay, so nothing is sent on 2026-11-06!
+    const day6Tick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: Date.parse("2026-11-06T12:00:00.000Z"),
+      fetch: mockFetch,
+    });
+    expect(day6Tick).toEqual({ sent: false, reason: "up-to-date" });
+    expect(sentPayloads).toHaveLength(1);
+
+    // On 2026-11-07, day 2026-11-06 (strictly after ineligibleThroughDay 2026-11-05) is sent with a fresh installId and newInstall=true:
+    const day7Tick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: NOW,
+      fetch: mockFetch,
+    });
+    expect(day7Tick).toMatchObject({ sent: true, day: "2026-11-06" });
+    expect(sentPayloads).toHaveLength(2);
+    expect(sentPayloads[1]!.day).toBe("2026-11-06");
+    expect(sentPayloads[1]!.newInstall).toBe(true);
+    const rotatedInstallId = readTelemetryInstallId(home)!.installId;
+    expect(rotatedInstallId).not.toBe(originalInstallId);
+
+    // Also verify recordTelemetryEnvOptOut replaces a symlinked telemetry-state.json without following it:
+    const victim = join(home, "optout-victim.txt");
+    writeFileSync(victim, "keep-safe", "utf8");
+    const stateFile = telemetryStatePath(home);
+    rmIfExists(stateFile);
+    symlinkSync(victim, stateFile);
+    recordTelemetryEnvOptOut(home, NOW);
+    expect(readFileSync(victim, "utf8")).toBe("keep-safe");
+    expect(lstatSync(stateFile).isSymbolicLink()).toBe(false);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-07");
+  });
+
+  test("D7: re-reads consent and env before transmission and aborts in-flight ticks on stop or nudge", async () => {
+    let fetchCalls = 0;
+    const mockFetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+
+    // 1. Consent changes to declined while aggregateDay is running -> aborts before sending or minting an id.
+    let liveDecision: "accepted" | "declined" = "accepted";
+    const abortedByDecline = await runTelemetryTick({
+      configDir: home,
+      readConfig: () => ({
+        telemetry: {
+          decision: liveDecision,
+          decidedAt: "2026-11-04T00:00:00.000Z",
+          noticeShownAt: "2026-11-04T00:00:00.000Z",
+        },
+      }),
+      env: {},
+      now: NOW,
+      aggregateDay: async day => {
+        liveDecision = "declined";
+        return aggregateTelemetryEntriesForDay(day, []);
+      },
+      fetch: mockFetch,
+    });
+    expect(abortedByDecline).toEqual({ sent: false, day: "2026-11-05", reason: "declined" });
+    expect(fetchCalls).toBe(0);
+    expect(readTelemetryInstallId(home)).toBeNull();
+
+    // 2. Env opt-out set while aggregateDay is running -> aborts before sending and records ineligibleThroughDay.
+    const envBag: Record<string, string | undefined> = {};
+    const abortedByEnv = await runTelemetryTick({
+      configDir: home,
+      config: {
+        telemetry: {
+          decision: "accepted",
+          decidedAt: "2026-11-04T00:00:00.000Z",
+          noticeShownAt: "2026-11-04T00:00:00.000Z",
+        },
+      },
+      env: envBag,
+      now: NOW,
+      aggregateDay: async day => {
+        envBag.OCX_TELEMETRY = "0";
+        return aggregateTelemetryEntriesForDay(day, []);
+      },
+      fetch: mockFetch,
+    });
+    expect(abortedByEnv).toEqual({ sent: false, day: "2026-11-05", reason: "env-ocx-telemetry" });
+    expect(fetchCalls).toBe(0);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-07");
+
+    // Reset state for signal cancellation checks:
+    writeTelemetryState(
+      {
+        version: 1,
+        sentDays: {},
+        lastSentDay: null,
+        lastSentAt: null,
+        ineligibleThroughDay: null,
+        retryAfterUntil: null,
+      },
+      home,
+      NOW,
+    );
+
+    // 3. nudgeTelemetryScheduler() cancels an in-flight tick's AbortSignal.
+    let observedSignalAborted = false;
+    const abortedByNudge = await runTelemetryTick({
+      configDir: home,
+      config: {
+        telemetry: {
+          decision: "accepted",
+          decidedAt: "2026-11-04T00:00:00.000Z",
+          noticeShownAt: "2026-11-04T00:00:00.000Z",
+        },
+      },
+      env: {},
+      now: NOW,
+      aggregateDay: async (day, opts) => {
+        nudgeTelemetryScheduler();
+        observedSignalAborted = opts?.signal?.aborted === true;
+        return aggregateTelemetryEntriesForDay(day, []);
+      },
+      fetch: mockFetch,
+    });
+    expect(observedSignalAborted).toBe(true);
+    expect(abortedByNudge).toEqual({ sent: false, day: "2026-11-05", reason: "aborted" });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("D11: honors HTTP 429 and 503 Retry-After, persists retryAfterUntil, skips ticks until elapsed, and applies jitter", async () => {
+    expect(parseRetryAfterMs("120", NOW)).toBe(120_000);
+    expect(parseRetryAfterMs(new Date(NOW + 90_000).toUTCString(), NOW)).toBe(90_000);
+    expect(parseRetryAfterMs("invalid", NOW)).toBeNull();
+    expect(computeTelemetryStartupDelayMs(() => 0.5)).toBe(60_000);
+    expect(computeTelemetryIntervalDelayMs(1000, () => 0.5)).toBe(1000 + 7.5 * 60 * 1000);
+
+    const config = {
+      telemetry: {
+        decision: "accepted" as const,
+        decidedAt: "2026-11-04T00:00:00.000Z",
+        noticeShownAt: "2026-11-04T00:00:00.000Z",
+      },
+    };
+    let calls = 0;
+    const rateLimitedTick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: NOW,
+      fetch: (async () => {
+        calls += 1;
+        return new Response("rate limited", {
+          status: 429,
+          headers: { "Retry-After": "120" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    expect(rateLimitedTick.sent).toBe(false);
+    expect(rateLimitedTick.reason).toBe("retry-after-backoff");
+    expect(calls).toBe(1);
+    const stateAfter429 = readTelemetryState(home);
+    expect(stateAfter429.retryAfterUntil).toBe(new Date(NOW + 120_000).toISOString());
+
+    // Tick before retryAfterUntil is skipped without calling fetch:
+    const skippedTick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: NOW + 60_000,
+      fetch: (async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ ok: true }), { status: 202 });
+      }) as unknown as typeof fetch,
+    });
+    expect(skippedTick).toEqual({ sent: false, reason: "retry-after-backoff" });
+    expect(calls).toBe(1);
+
+    // Tick after retryAfterUntil succeeds and clears retryAfterUntil:
+    const recoveredTick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: NOW + 121_000,
+      fetch: (async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ ok: true }), { status: 202 });
+      }) as unknown as typeof fetch,
+    });
+    expect(recoveredTick).toMatchObject({ sent: true, day: "2026-11-05" });
+    expect(calls).toBe(2);
+    expect(readTelemetryState(home).retryAfterUntil).toBeNull();
   });
 
   test("writeTelemetryState replaces a symlinked telemetry-state.json without following it", () => {

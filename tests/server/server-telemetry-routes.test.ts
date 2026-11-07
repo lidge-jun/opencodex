@@ -6,7 +6,8 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { ManagementRequestIngress } from "../../src/server/management/context";
 import { TELEMETRY_PREVIEW_HASH_PLACEHOLDER, readTelemetryInstallId, resetTelemetryInstallIdMemoForTests, telemetryIdPath } from "../../src/telemetry/install-id";
-import { runTelemetryTick } from "../../src/telemetry/scheduler";
+import { buildTelemetryStatusSnapshot } from "../../src/telemetry/routes";
+import { latestCompletedUtcDay, runTelemetryTick } from "../../src/telemetry/scheduler";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -90,14 +91,75 @@ describe("/api/telemetry management routes", () => {
       reason: "awaiting-notice",
       decision: null,
       lastSentDay: null,
+      previewEligible: false,
     });
-    const preview = res.body.preview as { installDayHash: string; schemaVersion: number };
+    const preview = res.body.preview as { installDayHash: string; schemaVersion: number; day: string };
     expect(preview.schemaVersion).toBe(1);
     expect(preview.installDayHash).toBe(TELEMETRY_PREVIEW_HASH_PLACEHOLDER);
+    expect(preview.day).toBe(latestCompletedUtcDay());
     expect(existsSync(telemetryIdPath(home))).toBe(false);
   });
 
-  test("PUT /api/telemetry and POST /api/telemetry/notice refuse admin-token and remembered-admin sessions", async () => {
+  test("D10: GET /api/telemetry preview uses the oldest eligible unsent day and marks previewEligible=false when none is eligible", async () => {
+    const now = Date.parse("2026-11-07T12:00:00.000Z");
+
+    // 1. Consent given today (2026-11-07) or yesterday (2026-11-06) -> no completed day is strictly after consent day yet.
+    const sameDaySnap = await buildTelemetryStatusSnapshot(
+      {
+        telemetry: {
+          decision: "accepted",
+          decidedAt: "2026-11-06T18:00:00.000Z",
+          noticeShownAt: "2026-11-06T18:00:00.000Z",
+        },
+      },
+      { now, env: {}, configDir: home },
+    );
+    expect(sameDaySnap.previewEligible).toBe(false);
+    expect(sameDaySnap.preview.day).toBe("2026-11-06");
+
+    // 2. Consent given on 2026-11-04 -> eligible unsent days are 2026-11-05 and 2026-11-06;
+    // preview shows 2026-11-05 (the exact day the scheduler will send next) with previewEligible=true.
+    const eligibleConfig = {
+      telemetry: {
+        decision: "accepted" as const,
+        decidedAt: "2026-11-04T18:00:00.000Z",
+        noticeShownAt: "2026-11-04T18:00:00.000Z",
+      },
+    };
+    const firstSnap = await buildTelemetryStatusSnapshot(eligibleConfig, { now, env: {}, configDir: home });
+    expect(firstSnap.previewEligible).toBe(true);
+    expect(firstSnap.preview.day).toBe("2026-11-05");
+
+    // Scheduler sends 2026-11-05; next preview moves to 2026-11-06 with previewEligible=true:
+    const tick1 = await runTelemetryTick({
+      configDir: home,
+      config: eligibleConfig,
+      env: {},
+      now,
+      fetch: (async () => new Response(JSON.stringify({ ok: true }), { status: 202 })) as unknown as typeof fetch,
+    });
+    expect(tick1).toMatchObject({ sent: true, day: "2026-11-05" });
+
+    const secondSnap = await buildTelemetryStatusSnapshot(eligibleConfig, { now, env: {}, configDir: home });
+    expect(secondSnap.previewEligible).toBe(true);
+    expect(secondSnap.preview.day).toBe("2026-11-06");
+
+    // Scheduler sends 2026-11-06; now no eligible day remains, so previewEligible=false on 2026-11-06:
+    const tick2 = await runTelemetryTick({
+      configDir: home,
+      config: eligibleConfig,
+      env: {},
+      now,
+      fetch: (async () => new Response(JSON.stringify({ ok: true }), { status: 202 })) as unknown as typeof fetch,
+    });
+    expect(tick2).toMatchObject({ sent: true, day: "2026-11-06" });
+
+    const thirdSnap = await buildTelemetryStatusSnapshot(eligibleConfig, { now, env: {}, configDir: home });
+    expect(thirdSnap.previewEligible).toBe(false);
+    expect(thirdSnap.preview.day).toBe("2026-11-06");
+  });
+
+  test("PUT /api/telemetry refuses admin-token and remembered-admin sessions, and POST /api/telemetry/notice is removed (D13)", async () => {
     for (const [principal, guiSessionIssuance] of [
       ["admin-token", null],
       ["gui-session", "remembered-admin"],
@@ -109,38 +171,24 @@ describe("/api/telemetry management routes", () => {
       });
       expect(putRes.status).toBe(403);
       expect(putRes.body.code).toBe("agent_consent_required");
-
-      const noticeRes = await call("POST", "/api/telemetry/notice", {
-        principal,
-        ingress: { trustedLoopback: true, guiSessionIssuance },
-      });
-      expect(noticeRes.status).toBe(403);
-      expect(noticeRes.body.code).toBe("agent_consent_required");
     }
     expect(config.telemetry).toBeUndefined();
-  });
 
-  test("POST /api/telemetry/notice accepts a human dashboard session and is idempotent", async () => {
-    const first = await call("POST", "/api/telemetry/notice", {
-      principal: "gui-session",
-      ingress: { trustedLoopback: true, guiSessionIssuance: "loopback-bootstrap" },
+    const noticeUrl = new URL("http://127.0.0.1:10100/api/telemetry/notice");
+    const noticeReq = new Request(noticeUrl, {
+      method: "POST",
+      headers: { host: "127.0.0.1:10100" },
     });
-    expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({
-      ok: true,
-      effective: true,
-      reason: "default-on",
-      decision: null,
-    });
-    const firstNoticeAt = first.body.noticeShownAt as string;
-    expect(typeof firstNoticeAt).toBe("string");
-
-    const second = await call("POST", "/api/telemetry/notice", {
-      principal: "gui-session",
-      ingress: { trustedLoopback: true, guiSessionIssuance: "loopback-bootstrap" },
-    });
-    expect(second.status).toBe(200);
-    expect(second.body.noticeShownAt).toBe(firstNoticeAt);
+    const noticeRes = await handleManagementAPI(
+      noticeReq,
+      noticeUrl,
+      config,
+      {},
+      "gui-session",
+      undefined,
+      { trustedLoopback: true, guiSessionIssuance: "loopback-bootstrap" },
+    );
+    expect(noticeRes).toBeNull();
   });
 
   test("PUT /api/telemetry accepts a human dashboard session and deletes telemetry-id.json on decline", async () => {

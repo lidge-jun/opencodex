@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TelemetryStatsV1 } from "../../services/telemetry-collector/src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 
+const _assertAvgDailyActiveInstallsType: TelemetryStatsV1["totals"]["avgDailyActiveInstalls"] = 0;
+
 describe("telemetry collector typecheck", () => {
   test("services/telemetry-collector typechecks cleanly with the repository toolchain", () => {
+    expect(typeof _assertAvgDailyActiveInstallsType).toBe("number");
     const proc = Bun.spawnSync(
       [
         process.execPath,

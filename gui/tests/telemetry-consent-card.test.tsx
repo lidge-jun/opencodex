@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { DesktopStarOnboarding } from "../src/components/desktop-star-onboarding";
 import { TelemetryConsentCard } from "../src/components/telemetry-consent-card";
 import { LanguageProvider } from "../src/i18n/provider";
+import * as telemetryApi from "../src/telemetry-api";
 import {
   TELEMETRY_STATUS_CHANGED_EVENT,
   type TelemetryStatusSnapshot,
@@ -54,6 +55,7 @@ function makeStatus(overrides: Partial<TelemetryStatusSnapshot> = {}): Telemetry
       models: [],
       errors: {},
     },
+    previewEligible: false,
     ...overrides,
   };
 }
@@ -100,15 +102,6 @@ beforeEach(() => {
           reason: decision,
           decision,
           decidedAt: "2026-11-07T00:00:00.000Z",
-          noticeShownAt: "2026-11-07T00:00:00.000Z",
-        };
-        return Response.json({ ok: true, ...statusResponse });
-      }
-      if (path === "/api/telemetry/notice" && method === "POST") {
-        statusResponse = {
-          ...statusResponse,
-          effective: true,
-          reason: "default-on",
           noticeShownAt: "2026-11-07T00:00:00.000Z",
         };
         return Response.json({ ok: true, ...statusResponse });
@@ -203,14 +196,28 @@ test("opens with pre-checked checkbox, shows preview JSON, and records nothing o
   const card = host.querySelector(".telemetry-consent-card");
   expect(card).toBeTruthy();
   expect(card?.querySelector("h3")?.textContent).toBe("Help improve opencodex with anonymous usage stats");
-  expect(card?.querySelector(".modal-desc")?.textContent).toContain("opencodex can share");
+  expect(card?.querySelector(".modal-desc")?.textContent).toContain(
+    "public project dashboard at opencodex.me/dashboard",
+  );
   expect(card?.querySelector("summary")?.textContent).toBe("Preview the JSON");
   const checkbox = host.querySelector<HTMLInputElement>(".telemetry-consent-checkbox")!;
   expect(checkbox).toBeTruthy();
   expect(checkbox.checked).toBe(true);
+  expect(host.querySelector(".telemetry-preview-ineligible")?.textContent).toBe(
+    "This day would not be sent",
+  );
   expect(host.querySelector(".telemetry-preview-json")?.textContent).toContain(`"day": "2026-11-06"`);
-  // Opening alone must not send POST /api/telemetry/notice or PUT /api/telemetry.
+  // Opening alone must not send any write request.
   expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
+
+  // When previewEligible is true or omitted, the ineligible note is not rendered.
+  statusResponse = makeStatus({ previewEligible: true });
+  await mountCard();
+  expect(host.querySelector(".telemetry-preview-ineligible")).toBeNull();
+
+  delete statusResponse.previewEligible;
+  await mountCard();
+  expect(host.querySelector(".telemetry-preview-ineligible")).toBeNull();
 });
 
 test("also opens after an update when reason is default-on without a recorded decision", async () => {
@@ -262,8 +269,17 @@ test("unchecking the checkbox and clicking Continue sends PUT declined", async (
   expect(host.querySelector(".telemetry-consent-card")).toBeNull();
 });
 
-test("Escape and backdrop dismiss send POST /api/telemetry/notice without recording a decision", async () => {
+test("Escape and backdrop dismiss record nothing and the popup returns on the next app start while undecided", async () => {
   setup();
+  expect("postTelemetryNotice" in telemetryApi).toBe(false);
+  expect(telemetryApi.parseTelemetryStatus({ effective: false, previewEligible: false })?.previewEligible).toBe(false);
+  expect(telemetryApi.parseTelemetryStatus({ effective: true, previewEligible: true })?.previewEligible).toBe(true);
+  expect(telemetryApi.parseTelemetryStatus({ effective: true })?.previewEligible).toBeUndefined();
+  win.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, ((event: Event) => {
+    const detail = (event as CustomEvent<TelemetryStatusSnapshot>).detail;
+    if (detail) statusEvents.push(detail);
+  }) as never);
+
   await mountCard();
   const dialog = host.querySelector("dialog.telemetry-consent-overlay")!;
   expect(dialog).toBeTruthy();
@@ -273,27 +289,44 @@ test("Escape and backdrop dismiss send POST /api/telemetry/notice without record
     dialog.dispatchEvent(new WindowEvent("cancel", { bubbles: false, cancelable: true }));
     await new Promise(r => setTimeout(r, 20));
   });
-  expect(calls).toEqual([
-    { method: "GET", path: "/api/telemetry" },
-    { method: "POST", path: "/api/telemetry/notice" },
-  ]);
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
   expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(statusEvents).toEqual([]);
 
-  // Backdrop dismiss also sends POST /api/telemetry/notice without recording a decision.
-  statusResponse = makeStatus();
+  // Escape keydown on the dialog also closes without recording anything.
   calls = [];
   await mountCard();
+  const dialogOnNextStart = host.querySelector("dialog.telemetry-consent-overlay")!;
+  expect(dialogOnNextStart).toBeTruthy();
+  await act(async () => {
+    dialogOnNextStart.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event,
+    );
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(statusEvents).toEqual([]);
+
+  // Next app start while still undecided: popup returns, and backdrop dismiss also records nothing.
+  calls = [];
+  await mountCard();
+  expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
   const backdrop = host.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!;
   expect(backdrop).toBeTruthy();
   await act(async () => {
     click(backdrop);
     await new Promise(r => setTimeout(r, 20));
   });
-  expect(calls).toEqual([
-    { method: "GET", path: "/api/telemetry" },
-    { method: "POST", path: "/api/telemetry/notice" },
-  ]);
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
   expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(statusEvents).toEqual([]);
+
+  // Subsequent app start while still undecided: popup returns again.
+  calls = [];
+  await mountCard();
+  expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
 });
 
 test("stays hidden once decided or when an environment opt-out override is active", async () => {
@@ -357,7 +390,7 @@ test("defers opening while another modal dialog is open and opens once it closes
   expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeTruthy();
 });
 
-test("handles GET, PUT, and POST failures without recording consent or trapping the user", async () => {
+test("handles GET and PUT failures without recording consent or trapping the user", async () => {
   setup();
   win.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, ((event: Event) => {
     const detail = (event as CustomEvent<TelemetryStatusSnapshot>).detail;
@@ -402,32 +435,6 @@ test("handles GET, PUT, and POST failures without recording consent or trapping 
   expect(host.querySelector(".telemetry-consent-card")).toBeNull();
   expect(statusEvents).toHaveLength(1);
   expect(statusEvents[0]?.decision).toBe("accepted");
-
-  // 3. POST /api/telemetry/notice failure on Escape dismiss still closes without emitting status change.
-  if (root) {
-    const current = root;
-    await act(async () => {
-      current.unmount();
-    });
-    root = null;
-  }
-  statusResponse = makeStatus();
-  statusEvents = [];
-  failMethods.add("POST /api/telemetry/notice");
-  calls = [];
-  await mountCard();
-  const dialog = host.querySelector("dialog.telemetry-consent-overlay")!;
-  const WindowEvent = (win as unknown as { Event: typeof Event }).Event;
-  await act(async () => {
-    dialog.dispatchEvent(new WindowEvent("cancel", { bubbles: false, cancelable: true }));
-    await new Promise(r => setTimeout(r, 20));
-  });
-  expect(calls).toEqual([
-    { method: "GET", path: "/api/telemetry" },
-    { method: "POST", path: "/api/telemetry/notice" },
-  ]);
-  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
-  expect(statusEvents).toEqual([]);
 });
 
 test("App does not enable DesktopStarOnboarding or TelemetryConsentCard on a Remote Link Child when target discovery fails", async () => {
