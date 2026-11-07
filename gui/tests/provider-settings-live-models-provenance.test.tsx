@@ -6,6 +6,7 @@ import ProviderSettings from "../src/components/provider-workspace/ProviderSetti
 import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
+import { selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -154,8 +155,9 @@ test("key-optional auth fallback remains local for unrelated providers", async (
     baseUrl: "https://example.test/v1",
     keyOptional: true,
   } as WorkspaceItem);
-  const selects = container.querySelectorAll<HTMLSelectElement>("select.input");
+  const authMode = container.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Auth mode"]');
 
-  expect(selects[1]?.value).toBe("local");
+  expect(authMode).not.toBeNull();
+  expect(selectValue(authMode!)).toBe("local");
   await act(async () => { root.unmount(); });
 });

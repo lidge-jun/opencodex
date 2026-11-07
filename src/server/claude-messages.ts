@@ -45,7 +45,7 @@ import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureAdmissionPolicy } from "./capture-admission-policy";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
-import { declaredAnthropicServerTools, replayedAnthropicServerBlocks } from "../claude/inbound-content-options";
+import { declaredAnthropicServerTools, replayedAnthropicServerBlocks, systemCachePrefix } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
@@ -1286,6 +1286,7 @@ async function handleClaudeMessagesWithBudget(
     // Out of body like the replay above: the core hands these to an Anthropic destination only.
     anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
+    anthropicSystemCachePrefix: isRec(anthropicBody) ? systemCachePrefix(anthropicBody.system) : undefined,
     // Preserve the original catalog through late fallback; only the physical adapter projects it.
     anthropicToolLoadingSource: cacheKeySource === "metadata" && isRec(anthropicBody)
       && Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0
@@ -1338,7 +1339,12 @@ async function handleClaudeMessagesWithBudget(
           || (![401, 403, 429].includes(response.status) && Boolean(nested || flat)
             && isContextOverflowError(errorObject, message));
       } catch {
-        if (text) message = `upstream error (${response.status}): ${text.slice(0, 400)}`;
+        // A plain-text gateway body carries the same verdict with no envelope to read a code from.
+        const inspected = text.trim().slice(0, 16_384);
+        const plain = inspected.slice(0, 400);
+        contextError = Boolean(inspected) && ![401, 402, 403, 429].includes(response.status)
+          && isContextOverflowError({}, inspected);
+        if (text) message = contextError ? plain : `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
     } catch { /* keep fallback message */ }
     const upstreamRetryAfter = response.headers.get("retry-after");

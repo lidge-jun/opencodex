@@ -4,6 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import AddProviderModal from "../src/components/AddProviderModal";
+import { selectValue } from "./helpers/custom-select";
 
 /**
  * `claude-cli` drives the signed-in Claude Code CLI and bills that subscription; it is not an
@@ -126,8 +127,8 @@ test("selecting claude-cli shows the subscription warning above Add, and Add sti
   expect(win.document.querySelector('input[type="password"]')).toBeNull();
 
   // The form keeps the preset's own adapter rather than falling back to the first option.
-  const adapter = win.document.querySelector("select.input") as unknown as HTMLSelectElement;
-  expect(adapter.value).toBe("claude-cli");
+  const adapter = win.document.querySelector('[role="combobox"][aria-label="Adapter"]') as unknown as HTMLButtonElement;
+  expect(selectValue(adapter)).toBe("claude-cli");
 
   const addButton = [...win.document.querySelectorAll("button.btn-primary")]
     .find(el => el.textContent === "Add provider") as unknown as HTMLButtonElement;

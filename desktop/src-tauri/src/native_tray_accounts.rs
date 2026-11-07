@@ -151,7 +151,7 @@ fn windows(quota: &Value, plan: &str) -> Vec<Value> {
 }
 
 pub fn provider(source: &Source, body: Option<&Value>, unavailable: bool) -> Value {
-    let parsed = body.and_then(parse_accounts);
+    let parsed = body.and_then(|body| parse_accounts(body, source.switch));
     let malformed = body.is_some() && parsed.is_none();
     let accounts = parsed.unwrap_or_default();
     let mut row = json!({"id":source.name,"label":source.label,
@@ -165,7 +165,7 @@ pub fn provider(source: &Source, body: Option<&Value>, unavailable: bool) -> Val
     row
 }
 
-fn parse_accounts(body: &Value) -> Option<Vec<Value>> {
+fn parse_accounts(body: &Value, kind: Option<AccountSwitchKind>) -> Option<Vec<Value>> {
     let rows = body
         .get("accounts")
         .or_else(|| body.get("keys"))?
@@ -175,9 +175,16 @@ fn parse_accounts(body: &Value) -> Option<Vec<Value>> {
         .find_map(|key| body[key].as_str());
     rows.iter().enumerate().map(|(index,row)| {
         let id = row["id"].as_str()?;
-        let email = row["email"].as_str().map(mask_email);
-        let label = [row["alias"].as_str(),row["label"].as_str(),email.as_deref(),row["logLabel"].as_str(),Some(id)]
-            .into_iter().flatten().find(|v| !v.is_empty()).unwrap_or(id);
+        let oauth = kind == Some(AccountSwitchKind::OAuth);
+        let email = if oauth { None } else { row["email"].as_str().map(mask_email) };
+        let label = if oauth {
+            [row["alias"].as_str(), row["maskedLabel"].as_str()]
+                .into_iter().flatten().map(str::trim).find(|v| !v.is_empty())
+                .map(str::to_owned).unwrap_or_else(|| format!("Account {}", index + 1))
+        } else {
+            [row["alias"].as_str(),row["label"].as_str(),email.as_deref(),row["logLabel"].as_str(),Some(id)]
+                .into_iter().flatten().find(|v| !v.is_empty()).unwrap_or(id).to_owned()
+        };
         let unavailable = row["quotaUnavailable"].as_bool()==Some(true)
             || text(row,"quotaMode")=="unsupported" || !row["quota"].is_object();
         let is_active = active.map_or(row["active"].as_bool()==Some(true),|selected|selected==id);
@@ -230,6 +237,66 @@ fn exhausted(quota: &Value, plan: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn parse_accounts(body: &Value) -> Option<Vec<Value>> {
+        super::parse_accounts(body, None)
+    }
+
+    fn oauth_accounts(body: Value) -> Vec<Value> {
+        let source = Source {
+            name: "example".into(),
+            label: "Example".into(),
+            path: None,
+            switch: Some(AccountSwitchKind::OAuth),
+        };
+        provider(&source, Some(&body), false)["accounts"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn oauth_alias_is_trimmed_and_does_not_expose_legacy_email() {
+        let rows = oauth_accounts(json!({"accounts":[{"id":"private-id","alias":"  Work  ",
+            "maskedLabel":"m•••@e•••.com","email":"person@example.com"}]}));
+        assert_eq!(rows[0]["label"], "Work");
+        assert!(rows[0]["email"].is_null());
+        assert_eq!(rows[0]["accountId"], "private-id");
+        assert_eq!(rows[0]["id"], "private-id:0");
+    }
+
+    #[test]
+    fn oauth_masked_label_follows_blank_alias() {
+        let rows = oauth_accounts(json!({"accounts":[{"id":"private-id","alias":"   ",
+            "maskedLabel":"  m•••@e•••.com  ","label":"legacy","email":"person@example.com"}]}));
+        assert_eq!(rows[0]["label"], "m•••@e•••.com");
+        assert!(rows[0]["email"].is_null());
+    }
+
+    #[test]
+    fn oauth_legacy_payload_uses_ordinal_instead_of_identifiers() {
+        let rows = oauth_accounts(json!({"accounts":[
+            {"id":"private-id","email":"person@example.com","label":"legacy", "logLabel":"legacy-log"},
+            {"id":"another-private-id","alias":" ","maskedLabel":" "}]}));
+        assert_eq!(rows[0]["label"], "Account 1");
+        assert_eq!(rows[1]["label"], "Account 2");
+        assert!(rows[0]["email"].is_null());
+        assert!(rows[1]["email"].is_null());
+        assert_eq!(rows[0]["accountId"], "private-id");
+        assert_eq!(rows[1]["accountId"], "another-private-id");
+    }
+
+    #[test]
+    fn codex_and_api_key_labels_keep_the_existing_projection() {
+        let body = json!({"accounts":[{"id":"id","label":"Legacy label",
+            "maskedLabel":"ignored","email":"person@example.com"}]});
+        for kind in [AccountSwitchKind::Codex, AccountSwitchKind::ApiKey] {
+            let rows = super::parse_accounts(&body, Some(kind)).unwrap();
+            assert_eq!(rows[0]["label"], "Legacy label");
+            assert_eq!(rows[0]["email"], "p•••@e•••.com");
+            assert_eq!(rows[0]["accountId"], "id");
+        }
+    }
+
     #[test]
     fn source_routes_are_encoded_and_never_forward_credentials() {
         let rows = sources(&json!({"providers":{

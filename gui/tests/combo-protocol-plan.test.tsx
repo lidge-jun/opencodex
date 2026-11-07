@@ -79,7 +79,8 @@ async function render(dirty = false) {
   });
   const click = async () => {
     await act(async () => {
-      container.querySelector<HTMLButtonElement>(".combo-protocol-plan button")!.click();
+      // The run button, not the client-API Select trigger (also a button) above it.
+      container.querySelector<HTMLButtonElement>(".combo-protocol-plan button.btn")!.click();
       await new Promise(resolve => setTimeout(resolve, 0));
     });
   };

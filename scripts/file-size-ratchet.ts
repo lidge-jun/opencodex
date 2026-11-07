@@ -24,6 +24,9 @@ export const EXCLUDED_PREFIXES = [
   "docs-site/public/",
   "docs-site/src/assets/",
   "gui/dist/",
+  // The classic dashboard is a frozen snapshot of the pre-redesign GUI (gui/classic/README.md).
+  // It is never edited in place, so a line cap would only measure the old design.
+  "gui/classic/",
 ] as const;
 
 export const EXCLUDED_EXACT = new Set(["bun.lock", "gui/dist"]);

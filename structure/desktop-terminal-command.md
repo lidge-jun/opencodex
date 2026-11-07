@@ -58,3 +58,15 @@ The tray and desktop-only dashboard entry beside Desktop update open `desktop/ui
 are guarded by the main window's local CLI page; Back uses `return_to_dashboard`, guarded for
 the update and CLI pages, falling back to the startup page when no dashboard is ready. Removal
 saves off first. Configuration cannot enforce selection against aliases or later PATH edits.
+
+For eligible POSIX npm/pnpm calls, `src/lib/desktop-cli-handoff.mjs` keeps a settled,
+enabled Desktop selection even when the target disappears: validation fails with
+`target-unusable`, and a synchronous or asynchronous spawn failure returns `spawn-failed`.
+Neither failure resumes package/Bun execution. Repair the Desktop command, disable it,
+or explicitly use `OCX_NO_DESKTOP_HANDOFF=1` for a package invocation. Missing/disabled
+records, maintenance exclusions and Windows PATH selection retain their existing behavior.
+The launcher's SIGINT/SIGTERM/SIGHUP forwarders (`src/lib/launcher-signal-forwarding.mjs`) are
+installed before the Desktop target or the Bun child is spawned. A signal that arrives once the
+child has started, even before `spawn()` returns, therefore reaches that child; it cannot kill the
+launcher by default action and orphan the child while the sync mutex stays held.
+`tests/cli/ocx-launcher-desktop-handoff.test.ts` exercises refusal and restored-target handoff.

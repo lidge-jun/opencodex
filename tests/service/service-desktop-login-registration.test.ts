@@ -106,6 +106,11 @@ test("the shared fixture keeps the tray's checked state equal to Startup safety'
 for (const c of cases) {
   parity(`Startup safety login credit: ${c.name}`, () => {
     const { loginEnabled, loginRegistration } = c.expect;
-    expect(judge(c)).toEqual({ loginEnabled, ...(loginRegistration ? { loginRegistration } : {}) });
+    const result = judge(c);
+    expect(result.loginEnabled).toBe(loginEnabled);
+    expect(result.loginRegistration).toBe(loginRegistration);
+    if (c.expect.tray === "disabled-by-system" || result.loginState !== undefined) {
+      expect(result.loginState).toBe(c.expect.tray === "disabled-by-system" ? "disabled" : "unknown");
+    }
   });
 }

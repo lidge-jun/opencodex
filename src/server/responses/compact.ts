@@ -1186,6 +1186,9 @@ export async function handleResponsesCompact(
         });
         const requireSendPlaintextReasoning = !isOpenAiOperatedResponsesDestination(sendProvider)
           && requiresPlaintextReasoningReplay(sendProvider);
+        // #8042: `ocx1:`/`ocx2:` are OpenCodex's own transparent envelopes, which no upstream can
+        // decode, so canonical and official sends must lower them like ordinary turns do. `false`
+        // leaves native blobs to the account-change scrub that already owns them on this path.
         let replayBody = gatewayReplayParsed ? sanitizeReasoningInputContent(scrubOcxCompactionItems(
           compactBody, destinationDecodesNativeCompactionBlob(sendProvider),
           gatewayReplayParsed._stripReasoningEncryptedContent === true,
@@ -1196,7 +1199,7 @@ export async function handleResponsesCompact(
           stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true || requireSendPlaintextReasoning,
           dropForeignItemId: gatewayReplayParsed._dropForeignReasoningItemIds === true,
           requirePlaintextReasoning: requireSendPlaintextReasoning,
-        }) : compactBody;
+        }) : scrubOcxCompactionItems(compactBody, destinationDecodesNativeCompactionBlob(sendProvider), false) as typeof compactBody;
         if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.dropResponsesReasoningItems === true) {
           replayBody = dropResponsesReasoningInputItems(replayBody) as typeof replayBody;
         }

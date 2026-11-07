@@ -1,4 +1,5 @@
 import { IconPlus, IconX } from "../icons";
+import { CodeBlock } from "../components/v2-connect/code-block";
 import { useT } from "../i18n/shared";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
@@ -257,11 +258,11 @@ export function ClaudeCodeQuickstartSection({ manualEnv }: { manualEnv: string }
   // The section title lives in ClaudeCode's CcwSection heading.
   return (
     <>
-      <p className="muted text-label" style={{ margin: "0 0 8px" }}><Trans k="claude.quickstartHint" cmd="ocx claude" /></p>
-      <pre className="mono card" style={{ padding: "10px 14px", overflowX: "auto", margin: 0 }}>ocx claude</pre>
-      <details style={{ margin: "10px 0 0" }}>
-        <summary className="muted text-label" style={{ cursor: "pointer", padding: "2px 2px" }}>{t("claude.manualEnv")}</summary>
-        <pre className="mono card text-label" style={{ padding: "10px 14px", overflowX: "auto", margin: "6px 0 0" }}>{manualEnv}</pre>
+      <p className="muted text-label claude-quickstart-hint"><Trans k="claude.quickstartHint" cmd="ocx claude" /></p>
+      <CodeBlock code="ocx claude" />
+      <details className="claude-quickstart-manual">
+        <summary className="muted text-label">{t("claude.manualEnv")}</summary>
+        <CodeBlock code={manualEnv} size="sm" />
       </details>
     </>
   );

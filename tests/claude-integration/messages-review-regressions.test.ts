@@ -1,19 +1,48 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { helperPath, repoRoot } from "../helpers/repo-root";
+import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import { encodeAdapterEventStream, isEncoderTransportFailure } from "../../src/protocols/encoders/adapter-events";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 for (const kind of ["sink", "sink-direct", "deep", "usage"]) test(`Messages delivery ${kind}`, async () => {
   const d = mkdtempSync(join(tmpdir(), "ocx-message-review-")); mkdirSync(join(d, "ocx")); mkdirSync(join(d, "codex"));
   try {
-    const child = Bun.spawn([process.execPath, helperPath("messages-proxy-refusal-case.ts"), kind], { cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: join(d, "ocx"), CODEX_HOME: join(d, "codex") }, stdout: "pipe", stderr: "pipe" });
+    const red = kind === "sink-direct" ? join(d, "red") : undefined;
+    if (red) {
+      const source = "src/claude/failure-verdict.ts";
+      const target = join(red, source);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "// L7_RED_SOURCE_MARKER\n" + readFileSync(repoPath(source), "utf8"));
+    }
+    const env = { ...process.env, OPENCODEX_HOME: join(d, "ocx"), CODEX_HOME: join(d, "codex") };
+    delete env.MESSAGES_RED_SOURCE;
+    if (red) env.MESSAGES_RED_SOURCE = red;
+    const child = Bun.spawn([process.execPath, helperPath("messages-proxy-refusal-case.ts"), kind], { cwd: repoRoot(), env, stdout: "pipe", stderr: "pipe" });
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (exit !== 0) throw new Error(`Delivery fixture failed ${exit}: ${stderr}`);
     const result = JSON.parse(stdout.split("REFUSAL_RESULT ").at(-1)!);
+    if (!red) expect(result.hooks.redInputs).toEqual([]);
     expect(result.status).toBe(200); expect(result.text.length).toBeGreaterThan(0);
-    if (kind.startsWith("sink")) expect(result.retained).toBe(0);
+    if (kind.startsWith("sink")) {
+      expect(result.retained).toBe(0);
+      expect(result.hooks.verdictLoads).toBeGreaterThan(0);
+      expect(result.streaming.admissions).toContain(false);
+      expect(result.streaming.retained).toBe(0);
+      expect(result.filterChecks).toEqual({
+        upstream: { forward: true, backward: true },
+        native: { forward: true, backward: true },
+        verdict: { forward: true, backward: true },
+      });
+      if (kind === "sink") {
+        expect(result.collected.status).toBe(502);
+        expect(result.collected.textLength).toBeGreaterThan(0);
+        expect(result.hooks.admissions).toContain(true);
+        expect(result.hooks.admittedRecords).toBeGreaterThan(0);
+        expect(result.hooks.collectedMatches).toBeGreaterThan(0);
+      }
+      if (kind === "sink-direct") expect(result.hooks.redInputs).toContainEqual({ path: "src/claude/failure-verdict.ts", marker: true });
+    }
     else expect(result.text).toBe(result.expectedBody);
     if (kind === "usage") { expect(result.usage.inputTokens).toBe(42); expect(result.usage.outputTokens).toBe(7); }
   } finally { rmSync(d, { recursive: true, force: true }); }

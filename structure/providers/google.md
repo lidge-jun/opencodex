@@ -107,6 +107,8 @@ Other Google wires without the opt-in, non-Gemini models and uninitialized adapt
 explicit wire summary none win. Eligible CCA, Vertex and direct Gemini requests use
 `includeThoughts: true` only when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
+For CCA Argon summaries, the adapter also repeats the selected wire suffix tier as `thinkingLevel`;
+when summaries are disabled, Argon and the web-search sidecar retain their suffix-only request shape.
 
 The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
 or the wording of the text. An unmarked signed text part remains ordinary assistant output;

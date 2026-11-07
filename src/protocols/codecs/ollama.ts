@@ -1,6 +1,8 @@
 /** Pure Ollama native request and Chat response projections. */
 type Obj = Record<string, unknown>;
 export type OllamaKind = "chat" | "generate";
+export const MAX_OLLAMA_TOOL_CALLS = 1_024;
+type PendingCall = { id: string; name: string; group: Set<PendingCall>; matched: boolean };
 export class OllamaCodecError extends Error {
   readonly status = 400;
   readonly code = "invalid_ollama_request";
@@ -63,7 +65,9 @@ export function ollamaToChat(kind: OllamaKind, input: unknown): Obj {
     messages.push({ role: "user", content: content(body.prompt, body.images) });
   } else {
     if (!Array.isArray(body.messages)) fail("Invalid messages");
-    const pending: { id: string; name: string; message: number; matched: boolean }[] = [];
+    const pendingById = new Map<string, PendingCall>();
+    const pendingByName = new Map<string, Set<PendingCall>[]>();
+    let callCount = 0;
     body.messages.forEach((raw, mi) => {
       const msg = object(raw, "message");
       const role = string(msg.role, "role");
@@ -72,30 +76,36 @@ export function ollamaToChat(kind: OllamaKind, input: unknown): Obj {
       const projected: Obj = { role, content: content(msg.content, role === "user" ? msg.images : undefined) };
       if (role === "assistant" && msg.tool_calls !== undefined) {
         if (!Array.isArray(msg.tool_calls)) fail("Invalid tool calls");
+        if (callCount + msg.tool_calls.length > MAX_OLLAMA_TOOL_CALLS) fail("Too many tool calls");
+        callCount += msg.tool_calls.length;
+        const groups = new Map<string, Set<PendingCall>>();
         projected.tool_calls = msg.tool_calls.map((rawCall, ci) => {
           // A replayed response call keeps the id this proxy returned for it; older clients send none.
           const call = object(rawCall, "tool call"); keys(call, ["id", "function"], "tool call");
           const fn = object(call.function, "tool call function"); keys(fn, ["name", "arguments"], "tool call function");
           const name = string(fn.name, "tool name", true); const args = object(fn.arguments, "tool arguments");
           const id = call.id === undefined ? `call_ollama_${mi}_${ci}` : string(call.id, "tool call id", true);
-          if (pending.some(p => p.id === id)) fail("Duplicate tool call id");
-          pending.push({ id, name, message: mi, matched: false });
+          if (pendingById.has(id)) fail("Duplicate tool call id");
+          const group = groups.get(name) ?? new Set<PendingCall>(); groups.set(name, group);
+          const pending: PendingCall = { id, name, group, matched: false }; group.add(pending); pendingById.set(id, pending);
           return { id, type: "function", function: { name, arguments: JSON.stringify(args) } };
         });
+        for (const [name, group] of groups) {
+          const named = pendingByName.get(name) ?? []; named.push(group); pendingByName.set(name, named);
+        }
       }
       if (role === "tool") {
         const id = msg.tool_call_id === undefined ? undefined : string(msg.tool_call_id, "tool call id", true);
         const name = msg.tool_name === undefined ? undefined : string(msg.tool_name, "tool name", true);
-        const candidates = pending.filter(p => !p.matched && (id ? p.id === id && (!name || p.name === name) : name && p.name === name));
-        if (!id && name && candidates.length) {
-          const latestMessage = candidates[candidates.length - 1]!.message;
-          const latest = candidates.filter(p => p.message === latestMessage);
-          if (latest.length !== 1) fail("Ambiguous tool result");
-          latest[0]!.matched = true; projected.tool_call_id = latest[0]!.id;
-        } else {
-          if (candidates.length !== 1) fail("Unmatched tool result");
-          candidates[0]!.matched = true; projected.tool_call_id = candidates[0]!.id;
+        let candidate: PendingCall | undefined;
+        if (id) candidate = pendingById.get(id);
+        else if (name) {
+          const groups = pendingByName.get(name); while (groups?.length && !groups.at(-1)!.size) groups.pop();
+          const group = groups?.at(-1); if (group && group.size !== 1) fail("Ambiguous tool result");
+          candidate = group?.values().next().value;
         }
+        if (!candidate || candidate.matched || (name && candidate.name !== name)) fail("Unmatched tool result");
+        candidate.matched = true; candidate.group.delete(candidate); projected.tool_call_id = candidate.id;
       }
       messages.push(projected);
     });

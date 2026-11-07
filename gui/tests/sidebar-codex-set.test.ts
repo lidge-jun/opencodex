@@ -22,7 +22,9 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    * one line. Pinning the exact destructuring made this fail the moment an
    * entry gained a field — a change it was never written to catch.
    */
-  expect(src).toContain("NAV_GROUPS.map(");
+  const nav = await Bun.file(new URL("../src/components/sidebar-nav.tsx", import.meta.url)).text();
+  expect(src).toContain("<SidebarNav");
+  expect(nav).toContain("NAV_GROUPS.filter(group => group.tier === tier)");
 
   /*
    * It stays in the nav table and remains routable for deep links. The icon
@@ -33,7 +35,8 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    * now lives in nav-groups.ts.
    */
   const groups = await Bun.file(new URL("../src/nav-groups.ts", import.meta.url)).text();
-  expect(groups).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon:');
+  // Codex Set is the "Accounts & limits" row; Providers has its own row under Route.
+  expect(groups).toContain('{ id: "accounts", tier: "daily", tkey: "shellV2.navAccounts", Icon: IconCodex, pages: ["codex-set"] }');
   expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}');
 });
 

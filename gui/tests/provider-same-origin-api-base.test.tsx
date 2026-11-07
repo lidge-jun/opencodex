@@ -7,6 +7,7 @@ import ProviderSettings from "../src/components/provider-workspace/ProviderSetti
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { acceptActionDialog } from "./helpers/action-dialog";
+import { selectOptionValues, selectTrigger, selectValue } from "./helpers/custom-select";
 
 // The packaged dashboard is served by the proxy itself and, unless it discovers another
 // target, talks to it same-origin with apiBase "" (App.tsx: VITE_API_BASE || ""). An empty
@@ -100,11 +101,9 @@ test("same-origin settings loads and renders endpoint choices and request pacing
   expect(urls).toContain("/api/provider-presets");
   expect(urls).toContain("/api/provider-request-pacing?name=local%20vendor");
   // The endpoint picker is built from the preset response and preselects the saved base URL.
-  const endpoint = Array.from(host.querySelectorAll<HTMLSelectElement>("select"))
-    .find(select => Array.from(select.options).some(option => option.value === "region-b"));
-  expect(endpoint).toBeTruthy();
-  expect(Array.from(endpoint!.options).map(option => option.value)).toEqual(["region-a", "region-b"]);
-  expect(endpoint!.value).toBe("region-a");
+  const endpoint = selectTrigger(host, '[role="combobox"][aria-label="Endpoint"]');
+  expect(await selectOptionValues(endpoint)).toEqual(["region-a", "region-b"]);
+  expect(selectValue(endpoint)).toBe("region-a");
   // The live pacing status comes from the pacing response.
   const pacing = host.querySelector(".pwi-pacing-status")!.textContent ?? "";
   expect(pacing).toContain("3");

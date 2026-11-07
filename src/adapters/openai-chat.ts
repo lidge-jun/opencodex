@@ -1,3 +1,4 @@
+import { applyChatDestinationPolicy } from "./openai-chat/destination-policy";
 import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
@@ -96,7 +97,6 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
     name: "openai-chat",
 
     formatErrorBody: formatOpenAIChatErrorBody,
-
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
       const completedToolBlocks = incoming?.completedToolBlocks === true;
@@ -236,7 +236,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           if (parallelToolCalls !== undefined) body.parallel_tool_calls = parallelToolCalls;
         }
         if (parsed.stream) body.stream_options = { include_usage: true };
-
+        applyChatDestinationPolicy(body, provider);
         const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, parsed.modelId, incoming?.providerName));
         const tierLog = createAdapterTierMetadata(
           parsed.options.tierObservation,

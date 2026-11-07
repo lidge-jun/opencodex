@@ -13,9 +13,10 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
-import { tmpdir } from "node:os";
+import { dirname, join, parse, relative, isAbsolute } from "node:path";
+import { homedir, tmpdir } from "node:os";
 import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
+import { helperPath } from "../helpers/repo-root";
 import { toNamespacedPath } from "node:path";
 import { readWindowsJobStore, withWindowsJobStoreLock } from "../../src/codex/cli-update-job-store-windows";
 import { trustWindowsTempFixtureAncestry } from "../helpers/windows-temp-ancestry";
@@ -25,6 +26,9 @@ import { FIXTURE_CONTROL_WORDS, FIXTURE_RELEASE } from "../helpers/cli-update-fi
 import { setWindowsOwnerAclAsyncRunnerForTests, windowsEntriesAclMatches, windowsOwnerAclDefaultRunnerForTests,
   type WindowsAclEntry } from "../../src/lib/windows-owner-acl";
 import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
+import { protectedHomeForTests } from "../../src/lib/test-home-guard";
+import { TEST_TEMP_OWNER_FILE } from "../../scripts/test-temp";
+import { settleIsolatedTestRoot } from "../../scripts/test";
 import { windowsCanonicalPathMatches } from "../../src/codex/windows-installation-files";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
@@ -176,6 +180,7 @@ describe("Windows CLI update job store backend", () => {
   const fixtures: string[] = [];
   const envStack: (string | undefined)[] = [];
   const fixtureOwners = new Map<string, number>();
+  let cleanupEpoch = 0;
   function holdFixture(root: string): () => void {
     fixtureOwners.set(root, (fixtureOwners.get(root) ?? 0) + 1);
     let held = true;
@@ -187,19 +192,26 @@ describe("Windows CLI update job store backend", () => {
     };
   }
 
-  afterEach(() => {
-    setWindowsOwnerAclAsyncRunnerForTests(null);
-    while (envStack.length) {
-      const previous = envStack.pop()!;
-      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
-    }
+  function cleanupFixtures(): void {
     // A timeout does not cancel an async store operation or close its Worker.
     // Keep exact roots queued until both owners have actually completed.
     for (const root of fixtures.splice(0)) {
       if (fixtureOwners.has(root)) { fixtures.push(root); continue; }
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }
+
+  function cleanupAfterEach(): void {
+    cleanupEpoch += 1;
+    setWindowsOwnerAclAsyncRunnerForTests(null);
+    while (envStack.length) {
+      const previous = envStack.pop()!;
+      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+    }
+    cleanupFixtures();
+  }
+
+  afterEach(cleanupAfterEach);
 
   const winOnly = process.platform === "win32" && process.arch === "x64";
   // The test adapter trusts ancestry above this hardened OS-temp root only.
@@ -258,6 +270,106 @@ describe("Windows CLI update job store backend", () => {
       principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
       convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
       syncClaudeAgentDefsBestEffort: async () => {} };
+  }
+
+  function assertCleanupEpoch(expected: number): void {
+    if (cleanupEpoch !== expected) throw new Error("job-store fixture outlived its test cleanup");
+  }
+
+  function assertOutsideTestSandboxes(candidate: string): void {
+    let candidateAncestor = fs.realpathSync.native(candidate);
+    for (;;) {
+      if (existsSync(join(candidateAncestor, TEST_TEMP_OWNER_FILE))) throw new Error("native temp is inside a test sandbox");
+      const parent = dirname(candidateAncestor);
+      if (parent === candidateAncestor) break;
+      candidateAncestor = parent;
+    }
+    let ancestor = fs.realpathSync.native(tmpdir());
+    for (;;) {
+      if (existsSync(join(ancestor, TEST_TEMP_OWNER_FILE))) {
+        const rel = relative(ancestor, candidate);
+        if (!rel || (rel !== ".." && !rel.startsWith("..\\") && !isAbsolute(rel))) {
+          throw new Error("native temp is inside a test sandbox");
+        }
+      }
+      const parent = dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+  }
+
+  function independentWindowsTemp(): string {
+    const realHome = process.env.OCX_REAL_HOME?.trim() || homedir();
+    const local = process.env.LOCALAPPDATA?.trim() || join(realHome, "AppData", "Local");
+    if (!isAbsolute(local)) throw new Error("LOCALAPPDATA is not absolute");
+    const candidate = fs.realpathSync.native(join(local, "Temp"));
+    if (!fs.statSync(candidate).isDirectory()) throw new Error("native temp is not a directory");
+    assertOutsideTestSandboxes(candidate);
+    return candidate;
+  }
+
+  function ownedChildEnv(outer: string, nativeTemp: string): NodeJS.ProcessEnv {
+    const local = join(outer, "AppData", "Local");
+    const temp = join(outer, "tmp");
+    const drive = parse(outer).root.slice(0, -1);
+    return { ...process.env, HOME: outer, USERPROFILE: outer, LOCALAPPDATA: local, APPDATA: join(outer, "AppData", "Roaming"),
+      HOMEDRIVE: drive, HOMEPATH: outer.slice(drive.length),
+      TEMP: temp, TMP: temp, TMPDIR: temp, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      XDG_CONFIG_HOME: join(outer, "xdg", "config"), XDG_DATA_HOME: join(outer, "xdg", "data"), XDG_CACHE_HOME: join(outer, "xdg", "cache"),
+      GIT_CONFIG_GLOBAL: join(outer, "gitconfig"), BUN_INSTALL_CACHE_DIR: join(outer, "bun-cache"),
+      OPENCODEX_HOME: join(outer, "ocx"), CODEX_HOME: join(outer, "codex"), CODEX_SQLITE_HOME: join(outer, "codex"),
+      OCX_OWNER_REGISTRY_DIR: join(outer, "ocx", "ocx-homes"), CLAUDE_CONFIG_DIR: join(outer, "claude"), GROK_HOME: join(outer, "grok"),
+      OCX_REAL_HOME: process.env.OCX_REAL_HOME?.trim() || homedir(), OCX_TEST_HOME_GUARD: "1", OCX_TEST_OWNED_ROOT: outer,
+      OCX_TEST_TEMP_PARENT: nativeTemp, OCX_TEST_PROTECTED_HOME: protectedHomeForTests() };
+  }
+
+  async function verifyFixtureHeldWhileCleanupRuns(outer: string, childEnv: NodeJS.ProcessEnv): Promise<boolean> {
+    const parentHome = process.env.OPENCODEX_HOME;
+    const expectedEpoch = cleanupEpoch;
+    const child = Bun.spawn([process.execPath, "-e", `
+      const fs = require('node:fs');
+      process.stdout.write('READY\\n');
+      for await (const chunk of Bun.stdin.stream()) { void chunk; }
+      if (!fs.existsSync(process.env.OCX_TEST_OWNED_ROOT)) throw new Error('fixture disappeared');
+      process.stdout.write('DONE\\n');
+    `], { cwd: outer, env: childEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    let signalReady!: () => void;
+    let rejectReady!: (error: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => { signalReady = resolve; rejectReady = reject; });
+    const output = (async () => {
+      let text = "";
+      const decoder = new TextDecoder();
+      for await (const chunk of child.stdout) {
+        text += decoder.decode(chunk, { stream: true });
+        if (text.includes("READY\n")) signalReady();
+      }
+      if (!text.includes("READY\n")) rejectReady(new Error("fixture child exited before readiness"));
+      return text;
+    })().catch(error => {
+      rejectReady(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    });
+    void output.catch(() => undefined);
+    const errors = new Response(child.stderr).text();
+    let released = false;
+    try {
+      await ready;
+      assertCleanupEpoch(expectedEpoch);
+      cleanupAfterEach();
+      if (!existsSync(outer) || process.env.OPENCODEX_HOME !== parentHome) throw new Error("fixture cleanup changed a held root or parent home");
+      const syntheticSandbox = fs.mkdtempSync(join(tmpdir(), "ocx-jobstore-wrapper-proof-"));
+      if (settleIsolatedTestRoot(syntheticSandbox) !== "removed" || existsSync(syntheticSandbox) || !existsSync(outer)) {
+        throw new Error("wrapper cleanup affected the independent fixture");
+      }
+      child.stdin.end();
+      released = true;
+      const [exitCode, stdout, stderr] = await Promise.all([child.exited, output, errors]);
+      if (exitCode !== 0 || !stdout.includes("DONE\n")) throw new Error(`fixture child failed: ${stderr}`);
+      return true;
+    } finally {
+      if (!released) { try { child.stdin.end(); } catch { /* child already closed stdin */ } }
+      await Promise.allSettled([child.exited, output, errors]);
+    }
   }
 
   test.skipIf(!winOnly)("private-store admission and status fence one production Worker completion", () => withOwnedFixture("ocx-winjob-worker-", async ({ outer, configDir }) => {
@@ -585,30 +697,70 @@ describe("Windows CLI update job store backend", () => {
   }), 300_000);
 
   test.skipIf(!winOnly)("HTTP apply advertises retry on a leftover lock and status reads the same durable record", async () => {
-    const { configDir } = await fixture("ocx-winjob-http-");
-    const accepted = await admitCodexCliUpdateJob({ requestId: "win-http-00001", planId: result.planId, confirmed: true, configDir });
-    useHome(configDir);
-    // Crash-shaped residue: an admission.lock the backend never wrote keeps later admission busy.
-    mkdirSync(join(configDir, "codex-cli-update-jobs", "admission.lock"));
-    const applyReq = () => new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ requestId: "win-http-other-1", planId: "e".repeat(32), confirmed: true }) });
-    const busy = await handleCodexCliUpdateRoutes(managementCtx(applyReq()));
-    expect(busy?.status).toBe(503);
-    expect(await busy?.json()).toEqual({ error: "job_store_busy" });
-    expect(busy?.headers.get("Retry-After")).toBe("1");
-    rmSync(join(configDir, "codex-cli-update-jobs", "admission.lock"), { recursive: true });
-    const status = await handleCodexCliUpdateRoutes(managementCtx(
-      new Request(`http://localhost/api/codex/cli-update/jobs/${accepted.job.jobId}`)));
-    expect(status?.status).toBe(200);
-    expect(await status?.json()).toMatchObject({ jobId: accepted.job.jobId, status: "queued", ownerState: "active" });
-    const logs: string[] = [];
-    const oldLog = console.log;
+    const parentHome = process.env.OPENCODEX_HOME;
+    const expectedEpoch = cleanupEpoch;
+    let outer = "";
+    let release: (() => void) | undefined;
+    let completed = false;
+    let lifetimeVerified = false;
+    let staleCleanupRefused = false;
     try {
-      console.log = (...values: unknown[]) => logs.push(values.map(String).join(" "));
-      expect(await handleCodexCliUpdateCommand(["status", accepted.job.jobId, "--json"])).toBe(0);
-    } finally { console.log = oldLog; }
-    expect(JSON.parse(logs[0]!)).toMatchObject({ jobId: accepted.job.jobId, status: "queued" });
+      const nativeTemp = independentWindowsTemp();
+      outer = createCodexCliTestRoot("ocx-winjob-http-", nativeTemp);
+      assertOutsideTestSandboxes(outer);
+      fixtures.push(outer);
+      release = holdFixture(outer);
+      const otherSandbox = createCodexCliTestRoot("ocx-other-sandbox-", nativeTemp);
+      try {
+        const otherTemp = join(otherSandbox, "Temp");
+        mkdirSync(otherTemp);
+        writeFileSync(join(otherSandbox, TEST_TEMP_OWNER_FILE), "{}");
+        expect(() => assertOutsideTestSandboxes(otherTemp)).toThrow("native temp is inside a test sandbox");
+        const alias = join(outer, "other-sandbox-alias");
+        fs.symlinkSync(otherTemp, alias, "junction");
+        try { expect(() => assertOutsideTestSandboxes(alias)).toThrow("native temp is inside a test sandbox"); }
+        finally { fs.unlinkSync(alias); }
+      } finally { rmSync(otherSandbox, { recursive: true, force: true }); }
+      for (const dir of [join(outer, "tmp"), join(outer, "codex"), join(outer, "AppData", "Local"), join(outer, "AppData", "Roaming")]) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const childEnv = ownedChildEnv(outer, nativeTemp);
+      lifetimeVerified = await verifyFixtureHeldWhileCleanupRuns(outer, childEnv);
+      assertCleanupEpoch(expectedEpoch + 1);
+      try { assertCleanupEpoch(expectedEpoch); }
+      catch (error) {
+        if (error instanceof Error && error.message === "job-store fixture outlived its test cleanup") staleCleanupRefused = true;
+        else throw error;
+      }
+      if (!staleCleanupRefused) throw new Error("stale cleanup generation was accepted");
+      const child = Bun.spawn([process.execPath, helperPath("windows-jobstore-pairing-case.ts")], {
+        cwd: outer, env: childEnv,
+        stdout: "pipe", stderr: "pipe",
+      });
+      const settled = await Promise.allSettled([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      const [exit, output, errors] = settled;
+      if (exit.status !== "fulfilled" || output.status !== "fulfilled" || errors.status !== "fulfilled") {
+        throw new Error("job-store child did not exit and drain its streams");
+      }
+      if (exit.value !== 0) throw new Error(`job-store child failed: ${errors.value}`);
+      if (output.value.trim() !== "WINDOWS_JOBSTORE_PAIRING_CASE_PASS") throw new Error("job-store child receipt missing");
+      if (cleanupEpoch === expectedEpoch + 1 && process.env.OPENCODEX_HOME !== parentHome) throw new Error("job-store child changed parent home");
+      completed = true;
+    } finally {
+      // Failure may leave ACL subprocesses alive; retain the owned root instead of deleting it.
+      if (completed && release) {
+        release();
+        if (fixtureOwners.has(outer)) throw new Error("fixture still has an owner");
+        rmSync(outer, { recursive: true, force: true });
+        const index = fixtures.indexOf(outer);
+        if (index >= 0) fixtures.splice(index, 1);
+      } else if (outer) {
+        console.error(`[test] retained owned job-store fixture after unverified child: ${outer}`);
+      }
+    }
+    expect(lifetimeVerified).toBe(true);
+    expect(staleCleanupRefused).toBe(true);
+    expect(existsSync(outer)).toBe(false);
   }, 180_000);
 
   test.skipIf(!winOnly)("a config path that is a file refuses before any write", async () => {

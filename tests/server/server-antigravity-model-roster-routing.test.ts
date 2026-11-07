@@ -22,6 +22,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as retry from "../../src/lib/upstream-retry";
 import * as failover from "../../src/oauth/generic-account-failover";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { recoverAntigravityAccount } from "../../src/server/responses/antigravity-model-denial-recovery";
+import * as proxyEnv from "../../src/lib/proxy-env";
 
 // #7500: an Antigravity request reaches only accounts whose own model discovery may serve it.
 const provider = "google-antigravity";
@@ -32,6 +34,9 @@ let previousHome: string | undefined;
 let codexHome: IsolatedCodexHome;
 let release: () => void;
 let originalFetch: typeof fetch;
+const inactiveFetch = (() => { throw new Error("No active in-memory Antigravity fixture"); }) as typeof fetch;
+let providerFetch = inactiveFetch;
+let configuredFetch: ReturnType<typeof spyOn>;
 let sleep: ReturnType<typeof spyOn>;
 let ids: string[];
 let sends: string[];
@@ -55,7 +60,7 @@ beforeEach(async () => {
   await setActiveAccount(provider, ids[0]!);
   sends = [];
   onSend = undefined;
-  globalThis.fetch = (async (input, init) => {
+  providerFetch = (async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.href === "https://oauth2.googleapis.com/token")
       return Response.json({ access_token: "synthetic-refreshed", expires_in: 3600, token_type: "Bearer" });
@@ -68,9 +73,13 @@ beforeEach(async () => {
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
     } });
   }) as typeof fetch;
+  globalThis.fetch = providerFetch;
+  configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => providerFetch(input, init));
 });
 
 afterEach(() => {
+  providerFetch = inactiveFetch;
+  configuredFetch.mockRestore();
   globalThis.fetch = originalFetch;
   sleep.mockRestore();
   release();
@@ -86,6 +95,7 @@ afterEach(() => {
 function config(enabled?: boolean): OcxConfig {
   const cfg = { defaultProvider: provider, providers: { [provider]: {
     adapter: "google", authMode: "oauth", baseUrl: origin, googleMode: "cloud-code-assist", models: [model],
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => providerFetch(input, init),
     ...(enabled === undefined ? {} : { oauthAccountFailover: { enabled } }),
   } } } as unknown as OcxConfig;
   saveConfig(cfg);
@@ -138,6 +148,7 @@ test("an independent request retries a discovery-owned refresh cancelled before 
     if (url.pathname.endsWith(":generateContent")) projects.push(JSON.parse(String(init?.body)).project);
     return fixtureFetch(input, init);
   }) as typeof fetch;
+  providerFetch = globalThis.fetch;
   const request = turn(cfg);
   try {
     await atJoin;
@@ -324,4 +335,24 @@ test("replacement admission failure is reported separately from no eligible acco
     expect(result.body.error?.message).toContain("could not be resolved, admitted, or sent within the request budget");
     expect(result.body.error?.message).not.toContain("No eligible stored");
   } finally { failure?.mockRestore(); }
+});
+
+for (const allowed of [false, true]) test(`generic Antigravity recovery obeys physical permit admission (${allowed})`, async () => {
+  config(true);
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    beforePhysicalSend: () => allowed, charge: () => true, refund: () => {},
+  });
+  let calls = 0, completed = false;
+  const result = await recoverAntigravityAccount({
+    nextId: ids[1]!, failedResponse: new Response("model missing", { status: 404 }),
+    reserve: () => budget.reserveDispatch({ sendClass: "auth-recovery", targetKey: "antigravity/recovery" }),
+    applyFailoverSnapshot: async snapshot => snapshot,
+    prepare: () => {}, adapterOwnsDispatch: false, setPermit: () => {},
+    refetch: async onDispatch => { onDispatch(); calls++; return new Response("recovered"); },
+    complete: () => { completed = true; },
+  });
+  expect(calls).toBe(allowed ? 1 : 0);
+  expect(completed).toBe(allowed);
+  expect(budget.used).toBe(allowed ? 1 : 0);
+  expect(result?.status ?? null).toBe(allowed ? 200 : null);
 });
