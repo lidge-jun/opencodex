@@ -87,6 +87,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /**
+   * The caller's `instructions` prefix through its last cache-marked system block. The anthropic
+   * adapter ends a system block there so the breakpoint stays off the per-turn tail.
+   */
+  _anthropicSystemCachePrefix?: string;
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
@@ -477,7 +482,8 @@ export type AdapterEvent =
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
-  | { type: "thinking_signature"; signature: string }
+  // afterOutput marks a turn-level attestation emitted after text/tools, not a new thinking block.
+  | { type: "thinking_signature"; signature: string; afterOutput?: true }
   | { type: "redacted_thinking"; data: string }
   // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
   // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope

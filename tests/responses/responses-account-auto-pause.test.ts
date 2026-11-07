@@ -1,18 +1,63 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { handleResponses } from "../../src/server/responses/core";
+import * as transport from "../../src/server/responses/request-transport";
 import { flushResponseState, clearResponseStateForTests } from "../../src/responses/state";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
+import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "../../src/server/responses/account-auto-pause-recovery";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { isPolicyCandidateRefusal, PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 
 const originalHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
+for (const outcome of ["known", "unknown", "cancelled"] as const) test(`auto-pause ${outcome} refresh failure disposes its exchange before projection`, async () => {
+  const upstream = new AbortController();
+  const caller = new AbortController();
+  let cancels = 0, unlinked = 0, mapped = 0;
+  const original = new Response(new ReadableStream({ cancel() { cancels++; } }));
+  const sentinel = new Error("unknown refresh failure");
+  const refusal = policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+  if (outcome === "cancelled") caller.abort();
+  const mapper = createAutoPauseRefreshErrorMapper(original, upstream, () => { unlinked++; },
+    error => { mapped++; return error === sentinel ? undefined : refusal; },
+    () => caller.signal.aborted, () => new Response(null, { status: 499 }));
+  const result = mapper(outcome === "unknown" ? sentinel : new PolicyCandidateUnavailableError());
+  await Promise.resolve();
+  expect(cancels).toBe(1); expect(unlinked).toBe(1); expect(upstream.signal.aborted).toBe(true);
+  if (outcome === "unknown") expect(result).toBeUndefined();
+  else expect(result?.failed.status).toBe(outcome === "cancelled" ? 499 : 409);
+  expect(mapped).toBe(outcome === "cancelled" ? 0 : 1);
+  if (outcome === "known") expect(isPolicyCandidateRefusal(result!.failed)).toBe(true);
+  await refusal.body?.cancel();
+});
+for (const mapped of [true, false]) test(`auto-pause refresh refusal ${mapped ? "maps to its local response" : "preserves unknown errors"} and refunds the unused hop`, async () => {
+  const budget = createRequestExecutionBudget();
+  const state = createResponsesSendBudget({ options: { sendBudget: budget }, logCtx: { provider: "fixture" },
+    req: new Request("http://fixture/v1/responses") });
+  if (state instanceof Response) throw new Error("fixture budget refused");
+  const error = mapped ? new PolicyCandidateUnavailableError() : new Error("unmapped refresh failure");
+  let refetches = 0;
+  const result = recoverAutoPausedAccount({ requestKey: {}, reserve: state.reserveCredentialHop,
+    refresh: async () => { expect(budget.used).toBe(1); throw error; },
+    mapRefreshError: policyCandidateRefusalResponse,
+    refetch: async () => { refetches++; return Response.json({ unexpected: true }); },
+    setPermit: permit => { state.pendingHopPermit = permit; },
+  });
+  if (mapped) {
+    const response = await result;
+    expect(response?.status).toBe(409); expect(isPolicyCandidateRefusal(response!)).toBe(true);
+    await response?.body?.cancel();
+  } else await expect(result).rejects.toBe(error);
+  expect(refetches).toBe(0); expect(budget.used).toBe(0); expect(state.pendingHopPermit).toBeUndefined();
+});
 let home: string;
 let releaseSpend: () => void;
 beforeEach(() => {
@@ -39,11 +84,52 @@ function configFor(name: string, oauth: boolean): OcxConfig {
   saveConfig(config);
   return config;
 }
-async function send(config: OcxConfig, name: string, sendBudget?: import("../../src/lib/request-execution-budget").RequestExecutionBudget) {
-  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `${name}/fixture`, input: "synthetic", stream: false, store: false }) }), config, { model: "fixture", provider: name }, { sendBudget });
+async function send(config: OcxConfig, name: string, sendBudget?: import("../../src/lib/request-execution-budget").RequestExecutionBudget, abortSignal?: AbortSignal, requestSignal?: AbortSignal) {
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `${name}/fixture`, input: "synthetic", stream: false, store: false }), signal: requestSignal }), config, { model: "fixture", provider: name }, { sendBudget, abortSignal });
   const text = await response.text();
   return { status: response.status, text };
 }
+for (const native of [false, true]) for (const outcome of ["known", "unknown", "cancelled", "request-aborted"] as const)
+test(`auto-pause ${native ? "native" : "translated"} recovery settles a ${outcome} refresh failure without another send`, async () => {
+  const config = configFor("fixture", false);
+  config.providers.fixture!.adapter = native ? "openai-responses" : "openai-chat";
+  config.providers.fixture!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+  saveConfig(config);
+  const budget = createRequestExecutionBudget(), sends: string[] = [], signals: AbortSignal[] = [];
+  const caller = new AbortController(), requestController = new AbortController(), sentinel = new Error("original refresh error");
+  globalThis.fetch = (async (_input, init) => {
+    sends.push(new Headers(init?.headers).get("authorization")!);
+    if (init?.signal) signals.push(init.signal);
+    return orgRefusal();
+  }) as typeof fetch;
+  let refreshes = 0;
+  const prepare = transport.prepareResponsesTransport;
+  const prepared = spyOn(transport, "prepareResponsesTransport").mockImplementation(async (...args) => {
+    const state = await prepare(...args);
+    if (!(state instanceof Response)) state.recoverAutoPausedSelection = async () => {
+      refreshes++;
+      if (outcome === "cancelled") caller.abort();
+      if (outcome === "request-aborted") requestController.abort();
+      throw outcome === "unknown" ? sentinel : new PolicyCandidateUnavailableError();
+    };
+    return state;
+  });
+  try {
+    const result = send(config, "fixture", budget, caller.signal, requestController.signal);
+    if (outcome === "unknown") await expect(result).rejects.toBe(sentinel);
+    else {
+      const response = await result;
+      expect(response.status).toBe(outcome === "cancelled" ? 499 : 400);
+      if (outcome !== "cancelled") expect(response.text).toContain("mandatory tool_choice cannot be preserved");
+    }
+    expect(refreshes).toBe(1); expect(sends).toEqual(["Bearer synthetic-A"]);
+    expect(signals).toHaveLength(1); expect(signals[0]!.aborted).toBe(true);
+    expect(config.providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
+    expect(budget.used).toBe(1);
+    expect(caller.signal.aborted).toBe(outcome === "cancelled");
+    expect(requestController.signal.aborted).toBe(outcome === "request-aborted");
+  } finally { prepared.mockRestore(); }
+});
 for (const oauth of [true, false]) {
   test(`${oauth ? "OAuth" : "key"} HTTP path pauses at threshold and serves the same request with its sibling`, async () => {
     const name = oauth ? "command-code" : "fixture";

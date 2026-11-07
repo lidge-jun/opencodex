@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const fr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Impossible d'enregistrer les limites de workflow.",
   "workflowBudget.saved": "Limites de workflow enregistrées.",
   ...desktopCompatibilityCopy("fr"),
+  ...shellV2Copy("fr"),
+  ...modelsV2Copy("fr"),
+  ...accountsV2Copy("fr"),
+  ...subagentsV2Copy("fr"),
+  ...usageV2Copy("fr"),
+  ...logsV2Copy("fr"),
+  ...connectV2Copy("fr"),
+  ...startupV2Copy("fr"),
+  ...proxyV2Copy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
   "claude.tierDefaults.title": "Modèles par défaut du CLI",
@@ -328,6 +346,9 @@ export const fr: Record<TKey, string> = {
   "common.remove": "Supprimer",
   "common.loading": "Chargement…",
   "common.retry": "Réessayer",
+  "prov.affinityResetPending": "Le changement de compte a été enregistré, mais la mise à jour du routage des conversations n’a pas abouti. Réessayez pour terminer.",
+  "prov.affinityResetComplete": "Le routage des conversations a été mis à jour.",
+  "prov.affinityResetRetryUnavailable": "Impossible de réessayer avec ce compte. Actualisez la liste des comptes et, si nécessaire, réactivez le compte ou reconnectez-vous.",
   "common.undo": "Annuler",
   "auth.adminTokenTitle": "Jeton d’administration OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Compte",
@@ -480,6 +501,11 @@ export const fr: Record<TKey, string> = {
   "startup.viable": "Prêt",
   "startup.unhealthy": "Installé, mais défaillant",
   "startup.desktopLoginUnverified": "En cours · démarrage à la connexion non vérifié",
+  "startup.loginUnverifiedTitle": "Démarrage à la connexion non vérifié",
+  "startup.unverified": "Non vérifié",
+  "startup.loginUnverifiedAction": "Vérifiez le démarrage à la connexion dans le menu OpenCodex. Sous Linux sans zone de notification, examinez ~/.config/autostart/OpenCodex.desktop.",
+  "startup.loginDisabled": "En cours · démarrage à la connexion désactivé",
+  "startup.desktopRunning": "OpenCodex Desktop exécute ce proxy.",
   "startup.conflict": "Conflit de service",
   "startup.installedDisabled": "Installé, mais désactivé",
   "startup.shimActivationPending": "Installé · activation non confirmée",
@@ -2127,7 +2153,7 @@ export const fr: Record<TKey, string> = {
   "modal.useOauthLogin": "← Utiliser la connexion OAuth",
 "nav.codexAuth": "Authentification Codex",
   "nav.codexSet": "Codex",
-  "nav.connect": "Connexion",
+  "nav.connect": "Routage",
   "nav.usageLogs": "Utilisation et journaux",
   "nav.sectionNavigation": "Pages de la section",
   "codexSet.tab.multiauth": "Multi-authentification",
@@ -3451,7 +3477,7 @@ export const fr: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Absent du catalogue de modèles — les capacités des membres sont incomplètes ou incompatibles (fenêtre de contexte ou métadonnées manquantes, ou intersection des modalités vide). Le routage par alias fonctionne toujours",
   "cws.attention.allTargetsExhausted": "Toutes les cibles activées ont épuisé leur quota",
   "cws.emptyTitle": "Créer votre première combinaison",
-  "cws.empty.createDesc": "Nommez un modèle virtuel et enchaînez au moins deux services principaux.",
+  "cws.empty.createDesc": "Ajoutez au moins une cible ; utilisez-en au moins deux pour le basculement.",
   "cws.backToAll": "Retour à toutes les combinaisons",
   "cws.capability.imageInputUnavailable": "Sélectionnez d'abord chaque cible dans le catalogue — les modèles inconnus ne peuvent pas être couverts par le Vision Sidecar.",
   "cws.capability.imageInputHint": "Activé par défaut lorsque toutes les cibles prennent en charge les images. Désactivez cette option pour n’accepter que du texte.",
@@ -3811,6 +3837,7 @@ export const fr: Record<TKey, string> = {
   "models.aliasStale": "obsolète",
   "connection.discovering": "Détection des cibles locale et partagée…",
   "connection.machineUnavailable": "Le plan machine local est indisponible. Les requêtes partagées n'ont pas été redirigées localement.",
+  "connection.clientStateChanged": "La connexion Remote Link enregistrée de ce Child est absente ou désigne désormais un autre propriétaire ou lien, et ne correspond plus au Child en cours d'exécution. Arrêtez ou redémarrez ce Child et vérifiez sa connexion avant de le lier à nouveau.",
   "connection.linkManaged": "Géré par le Home {home} via Remote Link ({linkId}). Ce tableau de bord affiche les paramètres et le quota du Home en lecture seule ; effectuez les modifications sur le Home.",
   "connection.linkManagedUnnamed": "Géré par son Home via Remote Link ({linkId}). Ce tableau de bord affiche les paramètres et le quota du Home en lecture seule ; effectuez les modifications sur le Home.",
   "connection.disconnect": "Déconnecter du hub",

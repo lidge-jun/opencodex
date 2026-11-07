@@ -385,7 +385,7 @@ Drives no management route.
 
 Usage: `ocx models list [--provider <name>] [--json]`
 
-List static configured models locally.
+List local configured and router-known models.
 
 State-changing: no. JSON mode: `envelope`.
 
@@ -394,9 +394,9 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--provider` | string | Limit to a configured provider. |
-| `--json` | boolean | Emit models and the static-catalog note. |
+| `--json` | boolean | Emit models and the local-catalog note. |
 
-- A bare models invocation is equivalent. Reads local config, never the live catalog; use models live for runtime discovery.
+- A bare models invocation is equivalent. Includes saved IDs, registry seeds, custom models and this process's discovery cache; use models live for the running catalog.
 
 ### `ocx models add`
 

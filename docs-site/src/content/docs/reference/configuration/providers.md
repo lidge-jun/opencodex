@@ -33,6 +33,29 @@ have a 60-second upload deadline, a 128 MiB input cap and at most two simultaneo
 provider pacing/concurrency still applies. Oversized text or unconvertible images still need
 compaction; this transport repair does not extend the model's context window.
 
+## Mistral: images per request
+
+Mistral caps how many images one API request may carry, counting every turn of the replayed
+history. Its [vision guide](https://docs.mistral.ai/capabilities/vision/) documents 8, and most
+Mistral vision models refuse a ninth with HTTP 400. Some models accept more: measured caps are
+20 for `deepseek-v4-1-flash-1017` (which answers an opaque HTTP 503, code `3800`, past it), 100
+for `mistral-large-4` and its `mistral-large-4-0` alias, and no refusal through 256 for
+`zai-glm-5-3-flash`. Without pruning, a long
+session with many screenshots fails on every turn while its token context still has room.
+
+For the first-party Chat destination (`https://api.mistral.ai/v1/chat/completions`), opencodex
+keeps the newest images within the cap and replaces older ones with a short text note in the
+outbound request only, for translated Responses turns and native Chat Completions requests
+alike. Client history and compaction stay unchanged; token usage is what Mistral reports for
+the request actually sent, after the replacement. Images promoted from tool results count like
+any other. The measured caps ship as registry
+`modelCapabilities` rows, so a provider renamed but still pointed at the Mistral destination
+keeps them; any other model uses 8. Declare a model's own cap with
+`modelCapabilities: { "mistral-small-2603": { mistralMaxImages: 8 } }` (an integer from 1 to
+1000). The declaration outranks the registry row, and PATCH `null` on the axis removes it.
+Pruning adds no separate upload or persistence. Images retained within the cap
+are sent to Mistral in the outbound request. Other destinations are unchanged.
+
 ## GPT-6.1 Terra
 
 [GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) was released on October 26, 2026 as the successor to GPT-5.6 Terra. `gpt-6.1-terra` is available alongside `gpt-5.6-terra`; no default model or sub-agent roster changes. GitHub Copilot uses Responses; OpenRouter lists `openai/gpt-6.1-terra` with 1,050,000 context and $1.00 input / $5.00 output per 1M tokens.
@@ -347,7 +370,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
 | `modelCosts?` | `Record<string, ProviderCostOverlay>` | Per-model display prices (USD per 1M tokens), keyed by that provider's exact upstream model id — not a provider identifier or a routed `provider/model` label, e.g. `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Any model id is a valid key — custom providers may target any OpenAI-compatible endpoint through the `openai-chat` adapter, and local or internal provider ids work even when they are absent from the built-in catalogs. User-configured prices win over the built-in catalogs in the Logs `~$` and Usage estimates; historical entries are repriced from the current overlay, so editing a price can move past totals. The fallback order is user `modelCosts` → exact official correction → jawcode catalog → expected-price overlay → model-level vendor fallback, and an explicit all-zero user entry means a known-zero estimate; delete that model entry to restore automatic pricing. All-zero catalog metadata still falls through. Each rate must be a non-negative finite number at most 1,000,000 (USD per 1M tokens); out-of-range rows are rejected by the management boundary and dropped on load. Display-time estimation only: overlays never affect routing, account selection, quotas, or billing. |
-| `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. Requests that ride the provider outbound wrapper — model discovery, connection tests, and other proxy-originated diagnostics such as the Ollama show probe — send `User-Agent: opencodex` unless a User-Agent is set here or by the provider preset. An experimental relay may negotiate earlier completed-tool delivery with `x-opencodex-tool-completion: block-stop-v1`; the embedding shell must supply authenticated durable turn membership, and the relay must acknowledge the same response header and implement exact call-bound completion markers. Leave it unset for other providers. Early delivery applies only to eligible structured calls; later errors or cancellation cannot retract a call already delivered. |
+| `headers?` | `Record<string, string>` | Extra upstream headers. For the classic OpenAI web-search sidecar, `x-openai-internal-codex-responses-lite` is removed case-insensitively after configured and selected headers are merged; other forwarded headers are preserved. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. Requests that ride the provider outbound wrapper — model discovery, connection tests, and other proxy-originated diagnostics such as the Ollama show probe — send `User-Agent: opencodex` unless a User-Agent is set here or by the provider preset. An experimental relay may negotiate earlier completed-tool delivery with `x-opencodex-tool-completion: block-stop-v1`; the embedding shell must supply authenticated durable turn membership, and the relay must acknowledge the same response header and implement exact call-bound completion markers. Leave it unset for other providers. Early delivery applies only to eligible structured calls; later errors or cancellation cannot retract a call already delivered. |
 | `forwardClientHeaders?` | `string[]` | `openai-responses` only: opt in to copying named inbound client metadata headers onto inference requests when the provider has not already set that header. Credential and transport-owned names such as `Authorization`, cookies, API-key headers, `Content-Type`, `Content-Length`, `Host`, and `x-oai-attestation` are rejected and also filtered at runtime. Header names are case-insensitive and may not repeat. `headers` remains authoritative; the existing caller `User-Agent` fallback still applies when neither surface sets one.  Supported names: `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`; all other names are refused. |
 | `supportsNativeCompactionTrigger?` | `boolean` | `openai-responses` only: declare support for native v2 `compaction_trigger` input items. Defaults off for noncanonical gateways; preserves native compaction rather than requesting a portable text summary. Independent of the v1 endpoint and blob replay capabilities. |
 | `supportsNativeCompactEndpoint?` | `boolean` | `openai-responses` only: declare support for native v1 `POST /responses/compact`. Defaults off for custom gateways. Key/local/forward routes use the provider's Responses URL plus `/compact` and its normal transport authentication; OAuth keeps routed compaction and its existing credential lifecycle. Does not enable v2 triggers or grant official OpenAI identity. |
@@ -1805,7 +1828,7 @@ contracts.
 
 ### Per-model capability declarations
 
-`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`) and `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
+`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`), `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)) and `mistralMaxImages` (integer 1–1000; see [Mistral images per request](#mistral-images-per-request)). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
 
 The raw provider editor and provider API expose this map. POST/PUT replace an explicitly supplied map and reject null entries. PATCH merges individual axes; null clears a map, model, axis or video processing value, while `{}` makes no change. Omitted provider overwrites preserve the existing map. Malformed hand-edited files retain valid independent axes and treat malformed explicit input modalities as text-only, with a diagnostic.
 

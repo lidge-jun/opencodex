@@ -1,4 +1,5 @@
 import { NativeSteeringError } from "./native-steering";
+import { NativeContinuationRefusalError } from "./native-continuation-refusal";
 import { mergeSteeringContinuation } from "./native-steering-settings";
 import { markNativeControlResponse } from "./native-response-control";
 import type { NativeResponseControl } from "./native-response-control";
@@ -27,6 +28,7 @@ interface ExchangeOptions {
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
   onPhysicalDispatch?: () => void;
+  onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
   /**
@@ -527,21 +529,28 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                 throw new Error("Native steering connection is no longer available");
               }
               beforeDispatch?.(new Headers(headers));
-              if (frame.type === "response.create") continuationBase = prepared.outgoing;
+              if (frame.type === "response.create") {
+                // The exact serialized successor and its body, so admission can price the
+                // reconstructed input and the successor's own output ceiling — never the
+                // opening request's stale estimate.
+                options.onContinuationDispatch?.({ body: prepared.outgoing, text: prepared.text });
+                continuationBase = prepared.outgoing;
+              }
               try { ws.send(prepared.text); } catch {
                 // A send failure has unknown delivery. Never replay or fall back.
                 failStream("Native steering send failed; delivery is unknown");
                 throw new Error("Native steering send failed; delivery is unknown");
               }
             };
-            if (frame.type === "response.create" && beforeContinuation) {
+            if (frame.type === "response.create") {
               // Explicit tool-result continuations are physical request starts;
               // they keep provider pacing and revalidate auth AFTER the wait.
               // A typed pre-send refusal (e.g. the configured upstream body limit) is a
               // known non-delivery and keeps its own message; every other failure keeps
               // the unknown-delivery wording.
-              void beforeContinuation().then(sendControl).catch(error => failStream(
-                error instanceof NativeSteeringError ? error
+              // Keep known refusals on this stream even when no pacing hook is installed.
+              void Promise.resolve().then(beforeContinuation).then(sendControl).catch(error => failStream(
+                error instanceof NativeSteeringError || error instanceof NativeContinuationRefusalError ? error
                   : new Error("Native steering continuation could not be dispatched; do not automatically replay queued input"),
               ));
             } else sendControl();

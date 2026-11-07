@@ -60,6 +60,24 @@ describe("provider config validation leaf", () => {
     });
   });
 
+  test("Mistral image caps are bounded integers that PATCH can clear", () => {
+    const base = { adapter: "openai-chat", baseUrl: "https://api.mistral.ai/v1", authMode: "key" };
+    for (const value of [{ "deepseek-v4-1-flash-1017": { mistralMaxImages: 20 } }, { "mistral-medium-latest": { mistralMaxImages: 1 } }]) {
+      const candidate = { ...base, modelCapabilities: value };
+      expect(providerConfigSchema.safeParse(candidate).success).toBe(true);
+      expect(providerManagementConfigError("mistral", candidate)).toBeNull();
+    }
+    for (const mistralMaxImages of [0, 1001, 8.5, "20", null]) {
+      const candidate = { ...base, modelCapabilities: { "m": { mistralMaxImages } } };
+      expect(providerConfigSchema.safeParse(candidate).success).toBe(false);
+      expect(providerManagementConfigError("mistral", candidate)).toContain("modelCapabilities");
+    }
+    expect(mergeModelCapabilities({ m: { mistralMaxImages: 20, contextTier: "default" } }, { m: { mistralMaxImages: null } }))
+      .toEqual({ m: { contextTier: "default" } });
+    expect(sanitizeModelCapabilitiesForLoad({ m: { mistralMaxImages: 20 }, broken: { mistralMaxImages: -1, contextTier: "default" } }))
+      .toEqual({ m: { mistralMaxImages: 20 }, broken: { contextTier: "default" } });
+  });
+
   test("accepts only credential-free HTTP(S) base URLs", () => {
     expect(providerBaseUrlConfigError("https://example.test/v1")).toBeNull();
     expect(providerBaseUrlConfigError("file:///tmp/provider")).toBe("baseUrl must be an http(s) URL");

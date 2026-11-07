@@ -1,0 +1,118 @@
+/* Quota rows: stacked overview layout + warn/exhausted states (WP070). */
+
+/* Flat warn tone, not a gradient: gradients on data bars read as an AI tell and break the
+   flat-surface grammar (FE-GRADIENT-02). Warn matches the amber label/value tones. */
+.bar-warn {
+  background: var(--amber);
+}
+
+.quota-row--warn .quota-label {
+  color: var(--amber);
+}
+
+.quota-val--warn {
+  color: var(--amber);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.quota-stacked,
+.quota-stacked--pending {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 64px;
+}
+
+.quota-stacked-row--skeleton .quota-stacked-bar-row {
+  min-height: 18px;
+}
+
+.quota-stacked-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quota-stacked-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.quota-stacked-limit {
+  font-weight: 600;
+}
+
+.quota-stacked-limit-group {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.quota-window-partial {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  border-radius: 999px;
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.quota-stacked-reset {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.quota-stacked-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quota-stacked-bar {
+  flex: 1;
+}
+
+.quota-stacked-used {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.quota-stacked-used--warn {
+  color: var(--amber);
+}
+
+.quota-stacked-limit-reached {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--amber);
+  font-size: 12px;
+}
+
+/* Long subscription labels and reset/value text need separate rows in narrow cards. */
+.quota-compact { container: quota-compact / inline-size; }
+@container quota-compact (max-width: 440px) {
+  .quota-row--credits {
+    grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
+    row-gap: 4px;
+  }
+  .quota-row--credits .quota-label { grid-column: 1 / -1; grid-row: 1; }
+  .quota-row--credits .quota-reset-label { grid-column: 1; grid-row: 2; }
+  .quota-row--credits .quota-reset-day { grid-column: 2; grid-row: 2; }
+  .quota-row--credits .quota-reset-time { grid-column: 3 / -1; grid-row: 2; }
+  .quota-row--credits .bar { grid-column: 1 / 4; grid-row: 3; }
+  .quota-row--credits .quota-val { grid-column: 4; grid-row: 3; white-space: nowrap; }
+}

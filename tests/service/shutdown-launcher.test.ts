@@ -166,6 +166,9 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
           );
         }
         expect(existsSync(join(home, "ocx.pid"))).toBe(true);
+        // An omitted configured hostname binds and publishes the default loopback address.
+        const published = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+        expect(published.hostname).toBe("127.0.0.1");
         const injected = readFileSync(codexConfig, "utf8");
         if (approved) {
           expect(injected).toContain(`base_url = "http://127.0.0.1:${port}/v1"`);

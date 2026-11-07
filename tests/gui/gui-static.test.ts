@@ -308,3 +308,30 @@ test("the Linux bundle directory and the resource path follow the desktop Tauri 
   expect(config.productName).toBe(DESKTOP_PRODUCT_NAME);
   expect(Object.values(config.bundle?.resources ?? {})).toContain("gui/dist");
 });
+
+test("a directory with its own index.html is served as a separate app with the session bootstrap", async () => {
+  const guiDist = temporaryRoot("ocx-gui-static-classic-");
+  writeFileSync(join(guiDist, "index.html"), "<!doctype html><html><head><title>main</title></head><body></body></html>");
+  mkdirSync(join(guiDist, "classic"), { recursive: true });
+  writeFileSync(join(guiDist, "classic", "index.html"), "<!doctype html><html><head><title>classic</title></head><body></body></html>");
+  const session: GuiSessionBootstrap = {
+    token: "fixture-token",
+    csrfToken: "fixture-csrf",
+    serverOrigin: "http://127.0.0.1:10100",
+    browserOrigin: "http://127.0.0.1:10100",
+    expiresAt: Date.now() + 60_000,
+    issuance: "loopback",
+  };
+  for (const pathname of ["/classic", "/classic/"]) {
+    const response = serveGuiFile(pathname, guiDist, session);
+    expect(response).not.toBeNull();
+    expect(response!.headers.get("Cache-Control")).toBe("no-store");
+    const html = await response!.text();
+    expect(html).toContain("<title>classic</title>");
+    expect(html).toContain('<meta name="opencodex-session-token" content="fixture-token">');
+  }
+  // Any other extensionless path, including one under the classic directory, is still the main SPA.
+  for (const pathname of ["/models", "/classic/models"]) {
+    expect(await serveGuiFile(pathname, guiDist, session)!.text()).toContain("<title>main</title>");
+  }
+});

@@ -537,10 +537,10 @@ test("disconnect failure opens force confirmation and sends force body", async (
   const dialogs = [...host.querySelectorAll("dialog")];
   const confirm = dialogs.at(-1) as HTMLDialogElement;
   expect(confirm.textContent).toContain("Disconnect");
-  await act(async () => { (confirm.querySelector(".btn-danger") as HTMLButtonElement).click(); });
+  await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(confirm.textContent).toContain("Remove here only");
-  await act(async () => { (confirm.querySelector(".btn-danger") as HTMLButtonElement).click(); });
+  await act(async () => { (confirm.querySelector('[data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   expect(calls.some(call => call.method === "DELETE" && call.body === JSON.stringify({ force: true }))).toBe(true);
 });
@@ -665,7 +665,7 @@ test("probe failure stays visible and Retry probes the failed alias", async () =
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
-  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
   await flush();
   await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
@@ -697,7 +697,7 @@ test("apply failure stays retryable and Retry reapplies the confirmed alias", as
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
-  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
   await flush();
   await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
@@ -761,7 +761,7 @@ test("disconnect confirmation restores focus on cancel, Escape, and completion",
   const host = await mount();
   const disconnect = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Disconnect")) as HTMLButtonElement;
   await act(async () => { disconnect.click(); });
-  await act(async () => { (host.querySelector(".remote-link-confirm-dialog .btn-ghost") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('.remote-link-confirm-dialog [data-action="cancel"]') as HTMLButtonElement).click(); });
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(win.document.activeElement).toBe(disconnect);
   await act(async () => { disconnect.click(); });
@@ -769,7 +769,7 @@ test("disconnect confirmation restores focus on cancel, Escape, and completion",
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(win.document.activeElement).toBe(disconnect);
   await act(async () => { disconnect.click(); });
-  await act(async () => { (host.querySelector(".remote-link-confirm-dialog .btn-danger") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('.remote-link-confirm-dialog [data-action="confirm"]') as HTMLButtonElement).click(); });
   await flush();
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(win.document.activeElement).toBe(disconnect);
@@ -797,7 +797,7 @@ test("cancelling a failed apply leaves no dead Retry behind", async () => {
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
-  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
   await flush();
   await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
@@ -858,7 +858,7 @@ test("cancelling candidates prevents a late response from appearing in a new att
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
-  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Cancel")?.click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
   await flush();
@@ -870,7 +870,7 @@ test("cancelling candidates prevents a late response from appearing in a new att
 
 async function openHomeSheet(host: HTMLElement): Promise<HTMLDialogElement> {
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
-  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector('[data-action="continue"]') as HTMLButtonElement).click(); });
   return host.querySelector(".remote-link-sheet") as HTMLDialogElement;
 }
 

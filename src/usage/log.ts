@@ -10,6 +10,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { normalizeRecordedClient, type UsageClient } from "./client";
 import {
   normalizePersistedJevDecision,
   type PersistedJevDecisionV1,
@@ -304,6 +305,8 @@ export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | u
 export interface PersistedUsageEntry {
   requestedAlias?: string;
   requestId: string;
+  /** Best-effort classified client; absent only for records predating attribution. */
+  client?: UsageClient;
   /**
    * Identity of the ONE logical request this row belongs to (#4546), minted by
    * `createRequestExecutionBudget` at ingress. `requestId` identifies a log row; a retry layer,
@@ -1035,6 +1038,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   const normalized: PersistedUsageEntry = {
     requestId: entry.requestId,
+    ...(Object.hasOwn(entry, "client") ? { client: normalizeRecordedClient(entry.client) ?? "unknown" } : {}),
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
     provider: entry.provider,

@@ -27,11 +27,11 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 14 |
 | [providers-models](01_surface_providers-models.md) | 50 |
-| [accounts](01_surface_accounts.md) | 42 |
+| [accounts](01_surface_accounts.md) | 43 |
 | [agents-routing](01_surface_agents-routing.md) | 68 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 99 |
-| [access-remote](01_surface_access-remote.md) | 33 |
+| [access-remote](01_surface_access-remote.md) | 34 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -554,6 +554,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx models order reset`
 
 [State-changing task](01_surface_providers-models.md#ocx-models-order-reset)
+
+### `ocx account reset-affinity`
+
+[State-changing task](01_surface_accounts.md#ocx-account-reset-affinity)
 
 ### `ocx account preserve-signed-in`
 
@@ -1367,6 +1371,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_observe-system.md#ocx-companion-timeline)
 
+### `ocx disconnect`
+
+[State-changing task](01_surface_access-remote.md#ocx-disconnect)
+
 ### `ocx hub disable`
 
 [State-changing task](01_surface_access-remote.md#ocx-hub-disable)
@@ -1521,6 +1529,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 368
-- of those, state-changing: 226
+- declared capabilities: 370
+- of those, state-changing: 228
 - head-resolved invocations: 2

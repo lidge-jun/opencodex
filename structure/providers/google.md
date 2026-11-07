@@ -107,6 +107,8 @@ Other Google wires without the opt-in, non-Gemini models and uninitialized adapt
 explicit wire summary none win. Eligible CCA, Vertex and direct Gemini requests use
 `includeThoughts: true` only when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
+For CCA Argon summaries, the adapter also repeats the selected wire suffix tier as `thinkingLevel`;
+when summaries are disabled, Argon and the web-search sidecar retain their suffix-only request shape.
 
 The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
 or the wording of the text. An unmarked signed text part remains ordinary assistant output;
@@ -148,8 +150,11 @@ An upstream rejection clears the session's replay entry whether it arrives insid
 stream or as a real HTTP 400: the Antigravity/Vertex `fetchResponse` wrapper in
 `src/adapters/google.ts` reads a clone of the final 400 body and runs the same clear-on-invalid
 check, because the dispatcher reports a non-ok response without calling the adapter parsers. The
-next turn therefore signs its first call with the sentinel instead of replaying the rejected value
-until TTL expiry (#8054). The rejected request itself is not resent; `payload-rejected` stays
+next turn therefore signs its first call with the sentinel instead of replaying a session-cached
+rejected value until TTL expiry (#8054). Durable-store eviction keeps its narrower gate: only a
+rejection whose text names a signature evicts the injected call ids, so a generic tool-schema
+`INVALID_ARGUMENT` cannot destroy valid durable signatures, and a durable entry behind a generic
+rejection stays until its TTL. The rejected request itself is not resent; `payload-rejected` stays
 resend-is-futile. `tests/adapters/google/google-signature-history-roundtrip.test.ts` drives the
 400 through `fetchResponse` on both modes.
 

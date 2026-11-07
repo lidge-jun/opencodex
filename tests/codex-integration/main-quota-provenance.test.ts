@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { isCodexAccountHeldForCredits } from "../../src/codex/account-credit-use";
 import { hasSpendableCodexCredits } from "../../src/codex/quota-types";
@@ -361,7 +362,7 @@ describe("main policy quota durability and lifecycle", () => {
     { name: "startup file replacement", account: "fixture-main-b", tag: "known", selected: true, source: "file" },
     { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file", refusal: "CodexMainAccountHardLockError" },
   ]) {
-    test(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, async () => {
+    test.skipIf(hostedWindowsQuarantine && scenario.name === "invalid quota tag")(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, async () => {
       const writer = writerFor("fixture-main-a");
       setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: Date.now() / 1000 + 3600 }, undefined, writer);
       setAccountQuotaFromParsed("fixture-stored", { weeklyPercent: 33 });

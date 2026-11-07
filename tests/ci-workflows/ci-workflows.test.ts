@@ -176,11 +176,18 @@ describe("GitHub Actions hardening", () => {
     // green — the worst failure available here. Pin them to each other.
     const linuxShards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
       ?.strategy?.matrix?.shard ?? [];
-    expect(linuxShards).toEqual([1, 2, 3, 4]);
+    expect(linuxShards).toEqual([1, 2, 3, 4, 5]);
     // The Linux shards pass their divisor through TEST_SHARD to the batch runner. Before
     // Windows sharded differently, this assertion matched the Windows step's --shard
     // literal by coincidence; pin the Linux env line so it observes the Linux job.
-    expect(workflow).toContain(`TEST_SHARD: \${{ matrix.shard }}/${linuxShards.length}`);
+    const linuxJob = ci.jobs?.test as {
+      name?: string;
+      steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;
+    };
+    const linuxTest = linuxJob.steps?.find(step => step.name === "Test in fresh-process batches");
+    expect(linuxJob.name).toBe(`test \${{ matrix.shard }}/${linuxShards.length}`);
+    expect(linuxTest?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${linuxShards.length}`);
+    expect(linuxTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
 
     // Every job that runs tests/ must fetch tags, because one of those tests reads
     // them. tests/ci-workflows/release-version-line.test.ts compares package.json against the

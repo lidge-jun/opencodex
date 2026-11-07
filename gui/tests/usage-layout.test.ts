@@ -9,7 +9,7 @@ import { interpolate } from "../src/i18n/shared";
 import { ru } from "../src/i18n/ru";
 import Usage from "../src/pages/Usage";
 
-test("Usage renders every section in one scrollable column with a sticky strip", async () => {
+test("Usage reads top to bottom: headline figures, the daily chart, then the breakdowns", async () => {
   const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
@@ -18,32 +18,30 @@ test("Usage renders every section in one scrollable column with a sticky strip",
   expect(page).not.toContain("readViewMode");
   expect(page).not.toContain("ocx-usage-view");
   expect(page).toContain("UsageWorkspaceBody");
-  expect(page).toContain("UsageWorkspaceSection");
   expect(page).toContain("usage-workspace-");
   expect(page).toContain("usw-");
   // Sections are anchors in one document, not a swapped panel: the old `selectedSection`
   // state rendered exactly one section, which is why the page could not be read by scrolling.
   expect(page).not.toContain("selectedSection");
-  expect(page).toContain("<SectionTabs");
+  // The jump strip is gone: the report leads with its figures instead of a second tab row,
+  // and every section keeps its `#usage-section-<id>` anchor so links still land.
+  expect(page).not.toContain("<SectionTabs");
   expect(page).toContain("sectionAnchorId");
 
-  expect(app).toContain('<Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />');
+  expect(app).toContain('apiKeyId={targets.apiKeyId} topology=');
   expect(css).toContain("styles-usage-workspace.css");
-  // The strip has to stay reachable while reading down the page.
-  expect(css).toContain(".section-tabs");
-  expect(css).toContain("position: sticky");
 });
 
 test("Usage report section strip excludes companion settings", async () => {
   const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
-  const workspace = page.slice(page.indexOf("function UsageWorkspaceBody"), page.indexOf("const usageMemoryCache"));
+  const workspace = page.slice(page.indexOf("function UsageWorkspaceBody"), page.indexOf("type UsageScope"));
   expect(workspace).not.toContain('id: "companion"');
   expect(page).toContain('id="usage-panel-companion"');
   expect(page).toContain('<UsageCompanionView apiBase={apiBase} providers={data?.providers ?? []} />');
 });
 
 test("the usage models table scrolls sideways with model and provider pinned", async () => {
-  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const page = await Bun.file(new URL("../src/components/v2-usage/usage-breakdown.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles-usage-workspace.css", import.meta.url)).text();
 
   // The table opts into the rules below by class. Without it `.tbl`'s `width: 100%` divides the
@@ -68,10 +66,13 @@ test("the usage models table scrolls sideways with model and provider pinned", a
 
 test("connected Usage defaults to the exact machine key and can toggle hub-wide without local fallback", async () => {
   const src = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const toolbar = await Bun.file(new URL("../src/components/v2-usage/usage-toolbar.tsx", import.meta.url)).text();
   expect(src).toContain('useState<UsageScope>("machine")');
-  expect(src).toContain('query.set("apiKeyId", apiKeyId)');
-  expect(src).toContain('setScope("hub")');
-  expect(src).toContain('connected ? "connected" : "standalone"');
+  expect(src).toContain('{ kind: "key", id: apiKeyId }');
+  // The scope switch lives in the toolbar and only renders when connected.
+  expect(src).toContain('connected && topology === "hub"');
+  expect(toolbar).toContain('(["machine", "hub"] as const)');
+  expect(src).toContain('topology === "link" || topology === "unknown"');
   expect(src).toContain('t("usage.hubOffline")');
   expect(src).not.toContain("/api/machine/usage");
 });
@@ -84,6 +85,7 @@ test("Usage workspace sections mount report panels in order", async () => {
     "<UsageHeatmapPanel",
     "<UsageModelsTable",
     "<UsageProvidersTable",
+    "<UsageAppsTable",
     "<UsageCoveragePanel",
   ];
   let cursor = -1;
@@ -149,6 +151,7 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
   globalThis.fetch = (async () => Response.json({
     range: "30d",
     surface: "all",
+    sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     since: null,
     generatedAt: Date.now(),
     summary: {
@@ -260,6 +263,7 @@ test("Usage renders Available history and a persistent qualification when histor
   globalThis.fetch = (async () => Response.json({
     range: "30d",
     surface: "all",
+    sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     since: null,
     generatedAt: Date.now(),
     summary: {
@@ -331,7 +335,7 @@ test("Usage names the loaded window when history is truncated", async () => {
   expect(page).toContain('<Notice tone="warn">');
 });
 
-test("Usage falls back to the generic caveat when a reported bound is unrenderable", async () => {
+test("Usage rejects a report whose timestamp exceeds the safe numeric range", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
@@ -349,6 +353,7 @@ test("Usage falls back to the generic caveat when a reported bound is unrenderab
   globalThis.fetch = (async () => Response.json({
     range: "30d",
     surface: "all",
+    sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     since: null,
     generatedAt: Date.now(),
     summary: {
@@ -385,8 +390,8 @@ test("Usage falls back to the generic caveat when a reported bound is unrenderab
       root.render(createElement(LanguageProvider, null, createElement(Usage, { apiBase: "http://usage-invalid-window-test" })));
     });
     const deadline = Date.now() + 1_000;
-    while (!(container.textContent ?? "").includes("Totals cover available history only")) {
-      if (Date.now() >= deadline) throw new Error("Usage fallback qualification did not render");
+    while (!(container.textContent ?? "").includes("Could not load usage data")) {
+      if (Date.now() >= deadline) throw new Error("Usage invalid response was not rejected");
       await act(async () => {
         await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10));
       });
@@ -403,25 +408,4 @@ test("Usage falls back to the generic caveat when a reported bound is unrenderab
       Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
     }
   }
-});
-
-test("Usage source marks keep brand colors and invert only the monochrome Grok mark", async () => {
-  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
-  const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
-
-  // Claude and Codex ship brand-colored SVGs and must not carry the mono modifier.
-  expect(page).toContain('src="/provider-icons/claude-color.svg"');
-  expect(page).not.toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/claude-color.svg"');
-  expect(page).toContain('src="/provider-icons/openai.svg"');
-  expect(page).not.toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/openai.svg"');
-
-  // Grok ships a black monochrome mark: it is the only one that needs dark-theme inversion.
-  expect(page).toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg"');
-
-  // Dark-theme inversion must be scoped to the mono modifier so brand hues survive.
-  expect(css).toContain(':root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }');
-  expect(css).not.toContain(':root[data-theme="dark"] .usage-source-mark { filter: invert(1); }');
-  // The OS dark-mode (prefers-color-scheme) path must keep the same scoping.
-  expect(css).toContain(':root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }');
-  expect(css).not.toContain(':root:not([data-theme="light"]) .usage-source-mark { filter: invert(1); }');
 });

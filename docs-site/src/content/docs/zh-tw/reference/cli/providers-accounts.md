@@ -86,7 +86,7 @@ ocx login anthropic
 透過執行中的代理列出並切換供應商帳號與 API-key 池。隨附的說明介面如下：
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex 帳號池、OAuth 帳號與 API 金鑰（識別碼依 API 回傳遮罩顯示）。
 history openai <pool-account-id> [--limit <1-200>]  單一 Codex 帳號池帳號的近期路由決策。
@@ -101,6 +101,7 @@ pause <provider> <id|alias|main>  將帳號移出自動選擇。
 resume <provider> <id|alias|main>  將暫停的帳號放回自動選擇。
 pause-exhausted <provider>  暫停所有配額已用盡的帳號。
 clear-cooldown <openai|anthropic> <id|alias|main>  清除上游失敗後設定的冷卻。
+reset-affinity <anthropic|anthropic2> [--json]  確認所有工作階段綁定均已清除，即使沒有帳號也適用；帳號選擇與暫停狀態保持不變。請在 Home 執行；Remote Link Child 只會指出 Home，不會傳送請求。
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  帳號池放置策略；省略取值即讀取目前值。
 sticky <provider> [<1-100>]  已綁定執行緒在同一帳號上保留的請求數；省略取值即讀取目前值。
 remove <provider> <id|alias|main> --yes  在存在檢查後移除已儲存的帳號或金鑰。
@@ -114,7 +115,7 @@ main <doctor|list|register|add|reauth|switch|recover>  管理帳號池稱為 'ma
 Codex 池選擇套用於清除既有親和性後的下一個請求；進行中的請求保留其擷取的帳號。
 ```
 
-除 `import-orca` 外，子指令都需要代理正在執行，CLI 自動解析其記錄的 runtime 連接埠；`import-orca` 的預覽完全在本機進行，而 `import-orca --apply` 需要代理已停止。成功的操作離開 0。無效用法、未知供應商或帳號／金鑰 id、不可達的代理或 API 失敗則離開 1。憑證欄位完全依管理 API 回傳的方式顯示（包含其遮罩）；原始 API 金鑰與 OAuth token 永不回傳。顯示便利性在客戶端合成，與儀表板相同：`main` 是 `openai` 帳號池中 Codex App 登入的 CLI 別名，無電子郵件的 OAuth 帳號顯示為 `Account N`，而 plan／label 欄位在 plan、遮罩電子郵件、label 與遮罩金鑰之間回退。
+除 `import-orca` 外，子指令都需要代理正在執行，CLI 自動解析其記錄的 runtime 連接埠；`import-orca` 的預覽完全在本機進行，而 `import-orca --apply` 需要代理已停止。成功的操作離開 0。無效用法、未知供應商或帳號／金鑰 id、不可達的代理或 API 失敗通常以 1 結束。但 `reset-affinity` 遇到 HTTP 404 時結束碼為 4，遇到 HTTP 409 時為 5；其他 API 失敗或未確認的結果則為 1。憑證欄位完全依管理 API 回傳的方式顯示（包含其遮罩）；原始 API 金鑰與 OAuth token 永不回傳。顯示便利性在客戶端合成，與儀表板相同：`main` 是 `openai` 帳號池中 Codex App 登入的 CLI 別名，無電子郵件的 OAuth 帳號顯示為 `Account N`，而 plan／label 欄位在 plan、遮罩電子郵件、label 與遮罩金鑰之間回退。
 
 `--json` 帳號列使用此通用結構（不可用時省略可選欄位）：
 
@@ -352,13 +353,15 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` 是 `ocx models` 的別名。無子指令時，列出已設定供應商中靜態播種的模型。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
+`ocx model` 是 `ocx models` 的別名。無子指令時，列出已儲存及路由器已知的模型 ID，包括 registry 預設、自訂模型和目前 CLI 程序的探索快取。新 CLI 程序的快取可能為空，這不是執行中代理的目錄。部分舊版金鑰預設在變更連線位址後仍可能保留 registry 預設。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
+
+`reasoningEfforts` 清單僅在使用 `--json` 時顯示。`null` 表示清單未知或未查詢，包括查詢需要開啟系統鑰匙圈的情況。空陣列 `[]` 表示明確設定了空清單，或該模型的推理強度已停用，例如透過 `noReasoningModels` 停用。使用 `ocx models live` 查看執行中代理的目錄。
 
 `add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
-| `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
+| `list`（預設） | `--provider <name>`, `--json` | 列出本機已儲存及路由器已知的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本機註冊自訂模型，或使用 `--live` 在執行中的代理上註冊。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |
