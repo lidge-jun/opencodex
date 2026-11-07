@@ -30,6 +30,7 @@ const USAGE = `Usage:
       [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->]
       [--description <text|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
+      [--jev-effort-mode <decide|client>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
       [--session-pin <duration|->] (e.g. 20m; keeps a session on JEV's target while active)
@@ -210,6 +211,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (additional.allowMeteredTargets !== undefined) combo.allowMeteredTargets = additional.allowMeteredTargets;
   if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
   if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
+  if (additional.jevEffortMode !== undefined) combo.jevEffortMode = additional.jevEffortMode;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
   if (description !== undefined) combo.description = description === "-" ? "" : description;
   if (decisionProvider !== undefined) combo.decisionProvider = decisionProvider === "-" ? null : decisionProvider;
