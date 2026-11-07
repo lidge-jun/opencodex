@@ -24,7 +24,7 @@ describe("external signed update metadata", () => {
       const otherFingerprint = createHash("sha256").update(otherRaw).digest("hex");
       const otherPublicKey = Buffer.from(`untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), otherId, otherRaw]).toString("base64")}\n`).toString("base64");
       const otherKey = { keyId: otherFingerprint, algorithm: "minisign-ed25519-blake2b512/1", publicKey: otherPublicKey };
-      const root = Buffer.from(JSON.stringify({ schema: "ocx.update.root/1", revision: 1, expiresAt: "2030-01-01T00:00:00Z", rootKeys: [key], rootThreshold: 1, releaseKeys: [{ ...key, channels: ["latest"], roles: ["release", "tree", "guardian-artifact", "standalone-artifact"] }, { ...otherKey, channels: ["latest"], roles: ["release"] }], releaseThreshold: 1, channels: ["latest"] }));
+      const root = Buffer.from(JSON.stringify({ schema: "ocx.update.root/1", revision: 1, expiresAt: "2030-01-01T00:00:00Z", rootKeys: [key], rootThreshold: 1, releaseKeys: [{ ...key, channels: ["latest"], roles: ["release", "tree", "guardian-artifact", "standalone-artifact", "desktop-artifact"] }, { ...otherKey, channels: ["latest"], roles: ["release"] }], releaseThreshold: 1, channels: ["latest"] }));
       writeFileSync(join(dir, "update-trust-anchor.mjs"), `export const EMBEDDED_ROOT_SHA256 = "${createHash("sha256").update(root).digest("hex")}";\n`);
       const fixture = await import(pathToFileURL(join(dir, "signed-supply.mjs")).href);
       const signBox = (bytes: Buffer, privateKey = pair.privateKey, packetId = id, version = "1.2.3") => {
@@ -172,6 +172,44 @@ describe("external signed update metadata", () => {
       const wrongTreeCandidate = fixture.selectTargetEvidence(fixture.verifyReleaseEvidence(wrongTreeReleaseBytes, envelope(wrongTreeReleaseBytes), basis, "latest", now), selection);
       const wrongTreeReceiptEvidence = fixture.verifyExternalMetadataEvidence(wrongTreeCandidate, { kind: "receipt", bytes: wrongTreeReceiptBytes }, basis, now);
       expect(() => fixture.verifyExternalMetadataEvidence(wrongTreeCandidate, { kind: "tree", bytes: wrongTree, signatureEnvelopeBytes: wrongTreeEnvelope, receiptEvidence: wrongTreeReceiptEvidence }, basis, now)).toThrow(/Tree target mismatch/);
+
+      // Every supported tuple gets its own signed artifact and exact receipt /
+      // metadata chain. These synthetic bytes do not prove payload layout.
+      const tuples: { platform: string; arch: string; owner: string; artifactKind: string; bundleKind: string; id: string }[] = [];
+      for (const [platform, arch] of [["macos", "x64"], ["macos", "arm64"], ["windows", "x64"], ["linux", "x64"], ["linux", "arm64"]]) {
+        const prefix = `${platform}-${arch}`;
+        const add = (owner: string, artifactKind: string, bundleKind: string, id: string) => tuples.push({ platform, arch, owner, artifactKind, bundleKind, id });
+        if (platform === "macos") add("desktop", "tauri", "app-tar-gz", `${prefix}-desktop-tauri`);
+        if (platform === "windows") add("desktop", "tauri", "msi", `${prefix}-desktop-tauri`);
+        if (platform === "linux" && arch === "x64") for (const bundle of ["appimage", "deb"]) add("desktop", "tauri", bundle, `${prefix}-desktop-${bundle}`);
+        add("standalone", "standalone", platform === "windows" ? "zip" : "tar-gz", `${prefix}-standalone`);
+        for (const owner of ["npm", "pnpm", "bun"]) add(owner, "tree", "tar-gz", `${prefix}-${owner}`);
+        if (!(platform === "linux" && arch === "arm64")) add("desktop", "guardian", "binary", `${prefix}-desktop-guardian`);
+        add("standalone", "guardian", "binary", `${prefix}-standalone-guardian`);
+      }
+      expect(tuples).toHaveLength(34);
+      for (const tuple of tuples) {
+        const metadataPrefix = `ocx-update-1.2.3-latest-${tuple.id}`;
+        const targetAsset = tuple.artifactKind === "tree" || tuple.artifactKind === "guardian"
+          ? `${metadataPrefix}${tuple.artifactKind === "tree" ? ".tar.gz" : ""}`
+          : tuple.artifactKind === "standalone" ? `ocx-1.2.3-bun-${tuple.platform === "macos" ? "darwin" : tuple.platform}-${tuple.arch}.${tuple.platform === "windows" ? "zip" : "tar.gz"}`
+            : `OpenCodex-1.2.3-${tuple.platform === "macos" ? "macos.app.tar.gz" : tuple.platform === "windows" ? "windows-x64.msi" : tuple.bundleKind === "deb" ? "linux-amd64.deb" : "linux-x86_64.AppImage"}`;
+        const targetCapability = Buffer.from(JSON.stringify({ ...JSON.parse(capability.toString()), target: tuple.id }));
+        const hasTree = tuple.artifactKind === "tree" || tuple.artifactKind === "standalone";
+        const targetTree = Buffer.from(JSON.stringify({ ...JSON.parse(tree.toString()), target: tuple.id }));
+        const targetTreeEnvelope = envelope(targetTree);
+        const targetAssets: [string, Buffer][] = [[targetAsset, artifact], [`${metadataPrefix}.capabilities.json`, targetCapability]];
+        if (hasTree) targetAssets.push([`${metadataPrefix}.tree.json`, targetTree], [`${metadataPrefix}.tree.json.signatures.json`, targetTreeEnvelope]);
+        const targetProof = { assetName: targetAsset, artifactSha256: digest(artifact).sha256, inspectionSha256: "e".repeat(64) };
+        const targetReceipt = Buffer.from(JSON.stringify({ ...JSON.parse(receipt.toString()), assets: targetAssets.map(([name, bytes]) => ({ name, ...digest(bytes) })).sort((a, b) => a.name < b.name ? -1 : 1), universalProofs: tuple.platform === "macos" && tuple.artifactKind === "tauri" ? [{ ...targetProof, architectures: ["arm64", "x64"] }] : [], architectureProofs: tuple.platform === "macos" && tuple.artifactKind !== "tauri" ? [{ ...targetProof, targetId: tuple.id, arch: tuple.arch }] : [] }));
+        const targetRelease = Buffer.from(JSON.stringify({ ...JSON.parse(release.toString()), receipt: digest(targetReceipt), targets: [{ ...tuple, assetName: targetAsset, artifact: { ...digest(artifact), signatureBox: signBox(artifact), signerFingerprint: fingerprint }, tree: hasTree ? digest(targetTree) : null, capabilities: digest(targetCapability) }] }));
+        const targetReleaseEvidence = fixture.verifyReleaseEvidence(targetRelease, envelope(targetRelease), basis, "latest", now);
+        const targetCandidate = fixture.selectTargetEvidence(targetReleaseEvidence, { platform: tuple.platform, arch: tuple.arch, owner: tuple.owner, artifactKind: tuple.artifactKind, bundleKind: tuple.bundleKind });
+        expect(() => fixture.verifyArtifactEvidence(targetCandidate, artifact, basis, now)).not.toThrow();
+        const targetReceiptEvidence = fixture.verifyExternalMetadataEvidence(targetCandidate, { kind: "receipt", bytes: targetReceipt }, basis, now);
+        expect(() => fixture.verifyExternalMetadataEvidence(targetCandidate, { kind: "capability", bytes: targetCapability, receiptEvidence: targetReceiptEvidence }, basis, now)).not.toThrow();
+        if (hasTree) expect(() => fixture.verifyExternalMetadataEvidence(targetCandidate, { kind: "tree", bytes: targetTree, signatureEnvelopeBytes: targetTreeEnvelope, receiptEvidence: targetReceiptEvidence }, basis, now)).not.toThrow();
+      }
 
       // Desktop's shared macOS archive requires universal proof for either target.
       for (const arch of ["x64", "arm64"]) {
