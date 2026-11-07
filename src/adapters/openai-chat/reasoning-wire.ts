@@ -178,6 +178,11 @@ export function applyExplicitChatReasoningWirePolicy(options: {
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
   if (requestedEffort === "none") {
+    if (omitIndependentEffort) {
+      delete body.reasoning_effort;
+      delete body.reasoning;
+      return { handled: true };
+    }
     if (nativeOpenAI) {
       delete body.reasoning;
       body.reasoning_effort = "none";
