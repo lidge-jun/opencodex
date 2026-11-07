@@ -210,7 +210,6 @@ function notifyProviderQuotaSnapshot(
       // here also keeps the chain alive — a rejected link would poison every later one.
     });
 }
-
 /** Await the observation chain. Tests only: production never needs to join it. */
 export function flushProviderQuotaObservationsForTests(): Promise<void> {
   return pendingProviderObservation;
@@ -401,12 +400,14 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
   return flight;
 }
 async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderConfig, liveConfig: OcxConfig): Promise<ProviderQuotaProbeResult> {
-  const id = getAccountSet(provider)?.activeAccountId;
+  const selection = getAccountSet(provider), id = selection?.activeAccountId;
   if (!id) return null;
   const read = await readExplicitAccountQuota(provider, id, config);
   if (!read) return null;
-  const isCurrent = () => liveConfig.providers[provider] === config
-    && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id;
+  const isCurrent = () => {
+    const current = getAccountSet(provider);
+    return liveConfig.providers[provider] === config && read.isCurrent() && current?.activeAccountId === id && current.selectionRevision === selection.selectionRevision;
+  };
   if (!isCurrent()) return TERMINAL_QUOTA_FAILURE;
   if (read.result && typeof read.result !== "symbol") accountReportCurrent.set(read.result, isCurrent);
   return read.result;

@@ -22,6 +22,7 @@ import { publishCredentialSync } from "../local-credentials/generation";
  */
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { observeAntigravityReportStore } from "./antigravity-quota-owner";
+import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
@@ -381,6 +382,11 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
 }
 
 export function loadAuthStore(): AuthStore {
+  // Passive ownership checks must see external replacements without hardening, repair,
+  // or publishing a roster. Unreadable stores cannot establish ownership.
+  if (isPassiveRead()) {
+    try { return peekAuthStore(); } catch { return {}; }
+  }
   return loadAuthStoreInternal().store;
 }
 

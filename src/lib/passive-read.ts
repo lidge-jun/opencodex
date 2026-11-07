@@ -30,6 +30,11 @@ export function runPassiveRead<T>(run: () => Promise<T>, options: { onDiagnostic
   return passive.run(options, run);
 }
 
+/** The same boundary for synchronous cache projections. */
+export function runPassiveReadSync<T>(run: () => T): T {
+  return passive.run(passive.getStore() ?? {}, run);
+}
+
 export function isPassiveRead(): boolean {
   return passive.getStore() !== undefined;
 }

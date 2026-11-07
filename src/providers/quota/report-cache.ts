@@ -8,6 +8,7 @@ import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-ca
 import { codexPlanKey } from "../../codex/plan";
 import { isKeychainReference, resolveProviderApiKey } from "../key-store";
 import { resolveEnvValue } from "../../config/proxy-env";
+import { runPassiveReadSync } from "../../lib/passive-read";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../registry";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../openai-tiers";
 import { CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityAggregation, type CodexCapacityQuota } from "../codex-capacity";
@@ -436,13 +437,15 @@ export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], co
  * dashboard and traffic keep the cache current.
  */
 export function heldProviderQuotaReports(config: OcxConfig): ProviderQuotaResponse {
-  const held = getProviderQuotaReportCache()?.response;
-  return {
-    generatedAt: held?.generatedAt ?? Date.now(),
-    reports: (held?.reports ?? []).filter(item => {
-      const provider = config.providers[item.provider];
-      return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
-        && providerReportCurrentForConfig(item, provider, true);
-    }),
-  };
+  return runPassiveReadSync(() => {
+    const held = getProviderQuotaReportCache()?.response;
+    return {
+      generatedAt: held?.generatedAt ?? Date.now(),
+      reports: (held?.reports ?? []).filter(item => {
+        const provider = config.providers[item.provider];
+        return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
+          && providerReportCurrentForConfig(item, provider, true);
+      }),
+    };
+  });
 }
