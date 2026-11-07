@@ -62,6 +62,8 @@ import {
 import {
   fetchAnthropicQuota,
   fetchChatGptForwardQuota,
+  fetchClaudeCliObservedQuota,
+  refreshClaudeCliSignIn,
   fetchCursorQuota,
   fetchKiroQuota,
   fetchMuseKeyQuota,
@@ -120,6 +122,7 @@ async function maybeFetchProviderQuota(
 ): Promise<ProviderQuotaProbeResult> {
   if (provider.disabled === true) return null;
   try {
+    if (provider.adapter === "claude-cli") return await fetchClaudeCliObservedQuota(name, forceRefresh);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
@@ -201,11 +204,13 @@ function notifyProviderQuotaSnapshot(
   if (reports.length === 0) return;
   // Resolved here, synchronously, while the identity is still the one that produced these
   // reports.
-  const observations = reports.map(report => ({
+  // Claude CLI rows are display-only: one reset key would span every account that signs in.
+  const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config),
     quota: report.quota,
   }));
+  if (observations.length === 0) return;
   pendingProviderObservation = pendingProviderObservation
     .then(async () => {
       const observer = await import("../quota/reset-observer");
@@ -243,6 +248,8 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const key = typeof keyCandidate === "string" ? keyCandidate : await keyCandidate;
   const writerGeneration = captureConfigGeneration();
   const providerEpochs = captureProviderReportEpochs();
+  const claudeSignIn = forceRefresh ? undefined : refreshClaudeCliSignIn(config);
+  if (claudeSignIn) await claudeSignIn;
   const now = Date.now();
   // The cache fast path must not extend a preserved last-good row past its 30-minute bound:
   // a row preserved at age 29:59 plus a full 5-minute TTL would otherwise serve until ~35min.

@@ -9,6 +9,7 @@ import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-accoun
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
+import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../claude-cli-usage-state";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -22,6 +23,7 @@ import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TI
 import { providerCodexAccountMode } from "../registry";
 import {
   accountReportCurrent,
+  AUTHORITATIVE_EMPTY_QUOTA,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -424,6 +426,47 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
   const built = report(provider, `${provider}:subscription-observation`, entry.quota);
   // Tagged here rather than inside report(), which every probed path shares.
   return built ? { ...built, observed: true } : null;
+}
+
+/**
+ * Provider-level row for the Claude Code CLI subscription: the signed-in account's last usage the
+ * admission recorded, in the same shape `fetchPassiveProviderQuota` returns.
+ *
+ * Cache-only. OpenCodex stores no Claude credential and this path must never spawn the CLI or
+ * probe an endpoint on a dashboard load; the admission already reads Anthropic's usage endpoint
+ * before a launch. A forced quota refresh re-reads the local sign-in and this snapshot, not the
+ * upstream. `updatedAt` stays the observation time, which is the age the quota card renders.
+ *
+ * The row belongs to one account. Signed out, an unreadable sign-in, or a sign-in with no recorded
+ * snapshot is authoritative empty, which clears another account's cached row. A cached row stops
+ * being current as soon as any later sign-in read (a turn's admission included) names another account.
+ */
+export async function fetchClaudeCliObservedQuota(provider: string, forceRefresh: boolean): Promise<ProviderQuotaProbeResult> {
+  // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
+  const { currentClaudeIdentityKey } = await import("../../adapters/claude-cli/usage-admission");
+  const identity = await currentClaudeIdentityKey(forceRefresh);
+  if (!identity) return AUTHORITATIVE_EMPTY_QUOTA;
+  const observation = peekClaudeUsageObservation({ identity });
+  if (!observation?.quota) return AUTHORITATIVE_EMPTY_QUOTA;
+  const built = report(provider, `${provider}:subscription-observation`, observation.quota);
+  if (!built) return AUTHORITATIVE_EMPTY_QUOTA;
+  // Tagged here rather than inside report(), which every probed path shares.
+  const row = { ...built, observed: true };
+  accountReportCurrent.set(row, () => claudeSignedInIdentity() === identity);
+  return row;
+}
+
+/**
+ * Before the provider-report cache fast path: re-read the Claude Code sign-in (the admission's
+ * one-minute identity cache bounds this to one Keychain read a minute), so a cached Claude CLI
+ * row stops being current within a minute of a sign-out or account switch. Returns undefined when
+ * no Claude CLI provider is enabled: awaiting even a resolved promise would add a tick to every
+ * other read and reorder its in-flight join.
+ */
+export function refreshClaudeCliSignIn(config: OcxConfig): Promise<unknown> | undefined {
+  if (!Object.values(config.providers).some(provider => provider.adapter === "claude-cli" && provider.disabled !== true)) return undefined;
+  // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
+  return import("../../adapters/claude-cli/usage-admission").then(admission => admission.currentClaudeIdentityKey());
 }
 
 // ---------------------------------------------------------------------------

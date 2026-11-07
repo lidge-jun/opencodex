@@ -31,9 +31,14 @@ every caller, and reads only caches other paths filled:
 - Per-account OAuth quota (Anthropic instances, Kiro, Antigravity, xAI, Cursor, Kimi, Command Code,
   Devin, DSH, Meta): the last-good per-account cache. A current `QuotaFailureCode` becomes
   `failure`.
-- Claude CLI: `peekClaudeUsageObservation` in `src/adapters/claude-cli/usage-admission.ts`, which
-  reads the admission snapshot from memory or its file without resolving the sign-in. A parsed CLI
-  limit refusal is a `custom` window `refusal` with `exhausted: true` and source `estimated`.
+- Claude CLI: `peekClaudeUsageObservation` in `src/providers/claude-cli-usage-state.ts`, which
+  reads the admission snapshot from memory or its file without resolving the sign-in. Only the
+  snapshot of the identity the last sign-in read recorded (`claudeSignedInIdentity`) produces a row.
+  The pool is a passive read and may not read the Keychain, so it lags the sign-in: after an external
+  sign-out or account switch it keeps the previous account's row until the Home's dashboard or a turn
+  records the new sign-in, and after a restart (no identity recorded yet) it has no row until such a
+  read, and then only if that account has a snapshot. A parsed CLI limit refusal is a `custom`
+  window `refusal` with `exhausted: true` and source `estimated`.
 - Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They are the
   `pooled` windows only where account rows do not serve the configured provider: a provider with
   no account rows (an API-key provider's credits, for example) or a per-account provider configured
