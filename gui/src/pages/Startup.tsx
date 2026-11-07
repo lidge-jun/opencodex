@@ -7,6 +7,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { Banner, CopyButton, PageHeader } from "../components/v2-startup/primitives";
+import { startupPresentation } from "../startup-health-ui";
 import {
   StartupHeroSection,
   StartupOptionsSection,
@@ -251,6 +252,7 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
   // warm revisits where `data` is already seeded from session cache.
   const loading = loadState.refreshing;
   const failed = Boolean(data?.diagnosticStale) || loadState.showError;
+  const unverified = data !== null && startupPresentation(data, failed) === "unverified";
 
   useEffect(() => {
     if (!data?.diagnosticStale) return;
@@ -345,8 +347,8 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
         </Banner>
       ) : data ? (
         <>
-          {loadState.showError && <Banner tone="err">{t("startup.error")}</Banner>}
-          {failed && <Banner tone="warn" role="alert">{t("startup.staleData")}</Banner>}
+          {loadState.showError && !unverified && <Banner tone="err">{t("startup.error")}</Banner>}
+          {failed && !unverified && <Banner tone="warn" role="alert">{t("startup.staleData")}</Banner>}
           {(runtimeNoticePending || codexRuntimeWarning) && (
             <div
               className={cn("startup-runtime-slot", runtimeNoticePending && !codexRuntimeWarning && "min-h-[60px]")}

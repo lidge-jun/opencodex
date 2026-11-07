@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { ClientLinkSupervisorStatus } from "../../src/client/link-tunnel";
+import * as clientState from "../../src/client/state";
 
 let root = "";
 let previousHome: string | undefined;
@@ -353,6 +354,75 @@ describe("client machine listener in link mode", () => {
   });
   const writeKey = () => writeFileSync(join(root, "service-api-token"), `${LINK_KEY}\n`, { mode: 0o600 });
 
+  test("readiness reports durable connection divergence even when the tunnel is ready", async () => {
+    const state = linkConnection();
+    const save = (client: unknown, runtimeRole: string | undefined = "client") => {
+      writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole, client }));
+    };
+    save(state);
+    const server = startMachineListener(0, {
+      state, managementAuthState: authState(), linkReadiness: () => ({ ready: true }),
+    });
+    servers.push(server);
+    expect((await fetch(new URL("/readyz", server.url))).status).toBe(200);
+    const headers = await guiHeaders(server);
+    expect((await fetch(new URL("/api/machine/status", server.url), { headers })).status).toBe(200);
+    for (const next of [undefined, { ...state, link: { ...state.link!, linkId: `lnk_${"c".repeat(16)}` } },
+      { ...state, connectedAt: "2026-09-27T00:00:00.000Z" }]) {
+      save(next, next ? "client" : undefined);
+      const response = await fetch(new URL("/readyz", server.url));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ status: "pending", link: { state: "unavailable", reason: "client_state_changed" } });
+      for (const path of ["/api/machine/status", "/api/machine/clients", "/api/link/status"]) {
+        const status = await fetch(new URL(path, server.url), { headers });
+        expect(status.status).toBe(503);
+        expect(await status.json()).toEqual({ error: "client_state_changed" });
+      }
+    }
+  });
+
+  test("readiness rechecks durable ownership after an in-flight tunnel probe", async () => {
+    const state = linkConnection();
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: state }));
+    let resolveProbe!: () => void;
+    let notifyProbe!: () => void;
+    const started = new Promise<void>(resolve => { notifyProbe = resolve; });
+    const pending = new Promise<void>(resolve => { resolveProbe = resolve; });
+    const server = startMachineListener(0, {
+      state, managementAuthState: authState(), linkReadiness: async () => { notifyProbe(); await pending; return { ready: true }; },
+    });
+    servers.push(server);
+    const reads = spyOn(clientState, "readClientConnectionState");
+    try {
+      const responsePromise = fetch(new URL("/readyz", server.url));
+      await started;
+      writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {} }));
+      resolveProbe();
+      const response = await responsePromise;
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ link: { state: "unavailable", reason: "client_state_changed" } });
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally { resolveProbe(); reads.mockRestore(); }
+  });
+
+  test("durable state is read once per readiness and never for unrelated machine routes", async () => {
+    const state = linkConnection();
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: state }));
+    const server = startMachineListener(0, { state, managementAuthState: authState(), linkReadiness: () => ({ ready: true }) });
+    servers.push(server);
+    const headers = await guiHeaders(server);
+    const reads = spyOn(clientState, "readClientConnectionState");
+    try {
+      expect((await fetch(new URL("/readyz", server.url))).status).toBe(200);
+      expect(reads).toHaveBeenCalledTimes(1);
+      reads.mockClear();
+      expect((await fetch(new URL("/api/machine/not-a-route", server.url), { headers })).status).toBe(404);
+      expect(reads).not.toHaveBeenCalled();
+      expect((await fetch(new URL("/api/machine/status", server.url), { headers })).status).toBe(200);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally { reads.mockRestore(); }
+  });
+
   function linkListener(options: {
     fingerprint?: string;
     linkStatus?: () => ClientLinkSupervisorStatus;
@@ -360,6 +430,9 @@ describe("client machine listener in link mode", () => {
     reply?: () => Response;
   } = {}) {
     const upstream: Request[] = [];
+    writeFileSync(join(root, "config.json"), JSON.stringify({
+      port: 0, providers: {}, runtimeRole: "client", client: linkConnection(options.fingerprint),
+    }));
     const server = startMachineListener(0, {
       state: linkConnection(options.fingerprint),
       managementAuthState: authState(),

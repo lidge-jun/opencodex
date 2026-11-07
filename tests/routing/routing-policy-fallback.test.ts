@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
 import { formatErrorResponse } from "../../src/bridge";
+import { isProxyError } from "../../src/lib/client-error-body";
+import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
+import { MandatoryToolChoiceUnavailableError, PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { fetchWithTransientRetry, isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
 import type { OcxConfig } from "../../src/types";
-import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
+import { beginRequestAttempt, noteAttemptSend, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
+import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
 import {
@@ -61,6 +65,139 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([false, true])("upstream failure body settles when the next policy hop is refused=%s", async denied => {
+    const config = fixtureConfig();
+    if (denied) config.fallback = { routes: { "policy/daily": { provider: false } } };
+    let calls = 0, released = 0;
+    const original = finalizeAccountLease(formatErrorResponse(503, "upstream_error", "synthetic failure"), () => { released++; });
+    const success = Response.json({ status: "completed" });
+    const response = await handleResponsesWithPolicyFallback(request(), config, {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls++;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return calls === 1 ? original : success;
+      },
+    });
+    try {
+      expect(calls).toBe(denied ? 1 : 2);
+      expect(response.status).toBe(denied ? 503 : 200);
+      expect(original.bodyUsed).toBe(true);
+      expect(released).toBe(1);
+      expect(response.bodyUsed).toBe(false);
+      const body = await response.json();
+      if (denied) expect(body.error.code).toBe("fallback_refused");
+      else expect(body.status).toBe("completed");
+      expect(released).toBe(1);
+    } finally { await original.body?.cancel().catch(() => {}); await response.body?.cancel().catch(() => {}); await success.body?.cancel().catch(() => {}); }
+  });
+  test.each([
+    [["tool", "tool", "tool"], 400],
+    [["tool", "generic", "tool"], 409],
+    [["generic", "tool", "tool"], 409],
+    [["tool", "upstream", "tool"], 500],
+    [["upstream", "tool", "tool"], 500],
+  ] as const)("exhaustion preserves mixed failures and settles discarded local bodies (%s)", async (kinds, status) => {
+    let calls = 0;
+    const released = [0, 0, 0], bodies: Response[] = [];
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        const index = calls++, kind = kinds[index];
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        const source = kind === "upstream" ? formatErrorResponse(500, "upstream_error", "synthetic failure")
+          : policyCandidateRefusalResponse(kind === "tool" ? new MandatoryToolChoiceUnavailableError() : new PolicyCandidateUnavailableError())!;
+        const body = finalizeAccountLease(source, () => { released[index]++; });
+        bodies.push(body);
+        return body;
+      },
+    });
+    expect(calls).toBe(3);
+    expect(response.status).toBe(status);
+    const text = await response.text();
+    expect(text.includes("mandatory tool_choice")).toBe(status === 400);
+    if (status === 400) expect(isProxyError(response)).toBe(true);
+    expect(released).toEqual([1, 1, 1]);
+    expect(bodies.every(body => body.bodyUsed)).toBe(true);
+  });
+  test("a refusal minted after a physical send is a taken hop, not a skip", async () => {
+    // A re-negotiated destination can refuse only after its send — a Copilot credential or
+    // account recovery settles the wire mid-dispatch. That refusal is not a local skip: the
+    // hop it rode commits, and the sent destination becomes the next hop's source, which is
+    // where a provider-scoped fallback refusal keys on.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      fallback: { providers: { "provider-b": { provider: false } } },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    clearFallbackEventsForTests();
+    const response = await handleResponsesWithPolicyFallback(request(), config, logCtx, {}, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        if (seenModels.length === 1) {
+          seedAttempt(childLog, "provider-a", "model-a");
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        seedAttempt(childLog, "provider-b", "model-b");
+        noteAttemptSend(childLog.activeAttempt, undefined);
+        return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
+    const body = await response.json() as { error: { code: string; fallback?: Record<string, unknown> } };
+    expect(body.error.code).toBe("fallback_refused");
+    expect(body.error.fallback).toMatchObject({
+      kind: "provider", scope: "provider", scopeKey: "provider-b",
+      from: "provider-b/model-b", to: "provider-c/model-c",
+    });
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome }))).toEqual([
+      { from: "provider-a/model-a", to: "provider-b/model-b", outcome: "taken" },
+      { from: "provider-b/model-b", to: "provider-c/model-c", outcome: "refused" },
+    ]);
+  });
+  test("a refusal minted before any send still skips without committing its hop", async () => {
+    // Behavior pin for the seam's other side: a candidate refused before its first physical
+    // send remains a local skip. Its hop is never committed, the prior failure is retained,
+    // and the next hop is still evaluated from the candidate that actually failed before it.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      fallback: { providers: { "provider-b": { provider: false } } },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    clearFallbackEventsForTests();
+    const response = await handleResponsesWithPolicyFallback(request(), config, logCtx, {}, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        if (seenModels.length === 1) {
+          seedAttempt(childLog, "provider-a", "model-a");
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        if (seenModels.length === 2) {
+          seedAttempt(childLog, "provider-b", "model-b");
+          return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b", "provider-c/model-c"]);
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome }))).toEqual([
+      { from: "provider-a/model-a", to: "provider-c/model-c", outcome: "taken" },
+    ]);
+  });
   test.each([400, 422])("HTTP %s reflected free-tier prose does not authorize a policy fallback", async status => {
     let calls = 0;
     const failure = formatErrorResponse(status, "invalid_request_error", "Invalid value: free tier allows a single request", {
@@ -738,6 +875,160 @@ describe("policy candidate fallback", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("hello");
+    expect(calls).toBe(1);
+  });
+
+  test("a shadow-intercepted policy route retries the next candidate with the original body", async () => {
+    // The intercept rewrites the model AFTER the body-parsed hook, so the snapshot gate cannot
+    // key on the destination. Without the snapshot this request's captured policy route loses
+    // traversal entirely and the caller receives the internal 409 instead of the next candidate.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const seenIsolated: boolean[] = [];
+    const seenCandidates: Array<string | undefined> = [];
+    let retriedBody: Record<string, unknown> | undefined;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "shadow-helper-x", input: "hello", stream: false,
+        tool_choice: { type: "function", name: "get_value" },
+        tools: [{ type: "function", name: "get_value" }],
+      }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as Record<string, unknown> & { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        seenIsolated.push(options.shadowCallIntercepted === true);
+        seenCandidates.push(options.policyFallbackCandidate === undefined
+          ? undefined : `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}`);
+        ctx.routeDecision = trace;
+        if (seenModels.length === 1) {
+          // What preparation records when interception rewrites to a policy target: the shared
+          // log carries the configured source prefix, the scope carries the captured decision.
+          ctx.shadowCallRewrittenFrom = "shadow-helper";
+          seedAttempt(ctx, "provider-a", "model-a");
+          // Emulate preparation's in-place normalization on the parsed body: the retry must
+          // replay the immutable snapshot, never these mutations.
+          body.model = "policy/daily";
+          body.input = "mutated by preparation";
+          (body.tools as unknown[]).push({ type: "function", name: "injected_tool" });
+          return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+        }
+        retriedBody = body;
+        seedAttempt(ctx, "provider-b", "model-b");
+        return Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b"]);
+    expect(seenCandidates).toEqual([undefined, "provider-b/model-b"]);
+    // The replay is the immutable caller body — original tools and tool_choice, not the
+    // post-interception mutations the first attempt's preparation made in place.
+    expect(retriedBody).toMatchObject({
+      model: "provider-b/model-b",
+      input: "hello",
+      tool_choice: { type: "function", name: "get_value" },
+    });
+    expect(retriedBody!.tools).toEqual([{ type: "function", name: "get_value" }]);
+    // The retried candidate keeps helper isolation and the suppressed selector label through
+    // the existing option; the first-party attempt left it unset.
+    expect(seenIsolated).toEqual([false, true]);
+  });
+
+  test("a shadow-intercepted policy route exhausts candidates to the client-facing 400", async () => {
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        ctx.routeDecision = trace;
+        ctx.shadowCallRewrittenFrom = "shadow-helper";
+        seedAttempt(ctx, "provider", body.model);
+        return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+      },
+    });
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b", "provider-c/model-c"]);
+    expect(response.status).toBe(400);
+    expect((await response.text()).includes("mandatory tool_choice")).toBe(true);
+    expect(isProxyError(response)).toBe(true);
+  });
+
+  test("a shadow-intercepted policy route keeps declared failover for upstream failures", async () => {
+    // The missing snapshot suppressed every retry on an intercepted policy route, not only the
+    // tool-choice refusal: an operator-approved failover target must still take the next
+    // eligible candidate after an ordinary retryable failure.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        ctx.routeDecision = trace;
+        ctx.shadowCallRewrittenFrom = "shadow-helper";
+        seedAttempt(ctx, "provider", body.model);
+        return seenModels.length === 1
+          ? Response.json({ error: { type: "rate_limit_error" } }, { status: 429 })
+          : Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b"]);
+  });
+
+  test("a shadow-source request without a policy decision takes no candidate retry", async () => {
+    // The widened snapshot only arms traversal; a source request that was not intercepted into
+    // a policy route still returns its first response untouched.
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "provider-a/model-a", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", attempts: [] } as unknown as RequestLogContext;
+    let calls = 0;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const failure = Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        calls += 1;
+        options.onRequestBodyParsed?.(await attempt.json());
+        return failure;
+      },
+    });
+    expect(response).toBe(failure);
     expect(calls).toBe(1);
   });
 });

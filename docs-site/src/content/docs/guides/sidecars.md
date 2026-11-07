@@ -37,6 +37,12 @@ a missing credential produces no sidecar plan and the request takes the normal r
 
 ## Web-search sidecar
 
+Anthropic search-model calls and their connection-reset retries also consume the logical request's
+shared model-send and token allowances on routed Responses, including RunTurn adapters and the
+passthrough search bridge. `maxSearchesPerTurn` does not grant extra model sends. If admission is
+exhausted, that search returns an error result without contacting Anthropic. Helper admission does
+not spend the routed model's final-recovery reserve. Standalone `/v1/alpha/search` keeps its existing behavior.
+
 When Codex requests hosted `web_search` for a non-passthrough routed model, opencodex:
 
 1. **Drops** the hosted `web_search` tool and exposes a synthetic `web_search(query)` function tool

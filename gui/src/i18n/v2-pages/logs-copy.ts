@@ -5,6 +5,9 @@ import { copyTable, type Row } from "./copy-table";
  * Keys render as `logsV2.<key>`.
  */
 const rows = {
+  client: ["Client", "클라이언트", "Client", "Application cliente", "客户端", "用戶端", "Клиент", "クライアント", "İstemci", "Ứng dụng", "Cliente"],
+  clientUnknown: ["Unknown", "알 수 없음", "Unbekannt", "Inconnu", "未知", "未知", "Неизвестно", "不明", "Bilinmiyor", "Không xác định", "Desconhecido"],
+  clientOther: ["Other", "기타", "Andere", "Autre", "其他", "其他", "Другое", "その他", "Diğer", "Khác", "Outro"],
   requests: ["Requests", "요청", "Anfragen", "Requêtes", "请求", "請求", "Запросы", "リクエスト", "İstekler", "Yêu cầu", "Requisições"],
   live: ["Live", "실시간", "Live", "En direct", "实时", "即時", "В эфире", "ライブ", "Canlı", "Trực tiếp", "Ao vivo"],
   paused: ["Paused", "일시 정지됨", "Pausiert", "En pause", "已暂停", "已暫停", "Пауза", "一時停止中", "Duraklatıldı", "Đã tạm dừng", "Pausado"],

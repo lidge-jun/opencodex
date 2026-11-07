@@ -19,7 +19,7 @@ test("transport rejects remote URLs and unsupported platforms without opening a 
 });
 
 test("importing the unactivated subsystem allocates no listener, timer, child or socket", async () => {
-  const modules = ["types", "budget", "socket", "rpc", "discovery", "envelope", "input", "send", "mcp-queue-rpc", "mcp-queue-tools", "mcp-queue-server"].map(name => repoPath("src", "messaging", `${name}.ts`));
+  const modules = ["types", "budget", "socket", "rpc", "discovery", "envelope", "input", "send", "mcp-queue-rpc", "mcp-queue-tools", "mcp-queue-server", "mcp-reply-tools", "mcp-reply-cursor"].map(name => repoPath("src", "messaging", `${name}.ts`));
   const script = `
     const forbidden = () => { throw new Error("unexpected messaging resource allocation"); };
     globalThis.setTimeout = forbidden;

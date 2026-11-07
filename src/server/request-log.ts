@@ -5,6 +5,7 @@ import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
+export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
 import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -58,7 +59,6 @@ import {
   usageStatusForFinalLog,
   usageTotalTokens,
   type AttemptRecoveryKind,
-  type AttemptRecoveryWithheld,
   type CacheTelemetryProvenance,
   type PersistedRequestSpend,
   type PersistedUsageAttempt,
@@ -1789,13 +1789,15 @@ export function noteProviderAttemptSend(
   provider: OcxProviderConfig,
   inputTokenEstimate: number | undefined,
   recovery?: AttemptRecoveryKind,
+  resolved?: { model: string; adapter: string },
 ): void {
   const attempt = logCtx.activeAttempt;
   const previous = attempt?.accountLogLabel;
   stampApiKeyAccountLabel(logCtx, providerName, provider);
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
-  if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
+  if (attempt && attempt.sendCount > 0 && (attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)
+    || resolved && (attempt.model !== resolved.model || attempt.adapter !== resolved.adapter))) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
     // An account-scoped recovery kind names the status the sealed account answered.
@@ -1827,6 +1829,7 @@ export function noteProviderAttemptSend(
     logCtx.activeAttemptStartedAt = Date.now();
   }
   if (attempt) {
+    if (resolved) { attempt.model = resolved.model; attempt.adapter = resolved.adapter; }
     sealRequestAttemptIdentity(attempt, logCtx.provider, attempt.adapter, next);
     recordAttemptCredentialSource(attempt, providerName, provider, attempt.adapter);
   }
@@ -1883,22 +1886,6 @@ export function noteAttemptSend(
   if (recovery && !attempt.recoveryKinds.includes(recovery)) {
     attempt.recoveryKinds.push(recovery);
   }
-}
-
-/**
- * Record that a recovery this attempt was eligible for did not happen.
- *
- * Deliberately NOT `noteAttemptSend`: nothing was sent, so `sendCount` must not move. The two
- * together are what make a one-send log readable — no kind and no withheld reason means nothing
- * was eligible, a withheld reason means something was and the budget refused it (#5044).
- */
-export function noteAttemptRecoveryWithheld(
-  attempt: PersistedUsageAttempt | undefined,
-  reason: AttemptRecoveryWithheld,
-): void {
-  if (!attempt) return;
-  if (!attempt.recoveryWithheld) attempt.recoveryWithheld = [];
-  if (!attempt.recoveryWithheld.includes(reason)) attempt.recoveryWithheld.push(reason);
 }
 
 export function finishRequestAttempt(

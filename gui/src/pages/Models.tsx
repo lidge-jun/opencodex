@@ -3,8 +3,8 @@ import ModelCatalogSettingsPanels from "../components/ModelCatalogSettingsPanels
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
 import ModelSettingsDialog from "../components/ModelSettingsDialog";
-import { fetchCodexAppServerState } from "../codex-app-server-state";
-import type { AppServerStateOutcome } from "../codex-app-server-state";
+import { fetchCodexAppServerState, type AppServerStateOutcome } from "../codex-app-server-state";
+import { ModelsReloadFocusBoundary } from "./models-reload-focus-boundary";
 import { useCodexRestart } from "../use-codex-restart";
 import { confirmAction } from "../action-dialogs";
 import { editModelAlias, editProviderAlias } from "./models-alias-editing";
@@ -137,6 +137,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   // catalog route here would register a phantom endpoint with the CLI parity
   // sweep, which reads GUI sources for api paths.)
   const [appServerState, setAppServerState] = useState<AppServerStateOutcome["state"]>(null);
+  const reloadHeadRef = useRef<HTMLButtonElement>(null), reloadBannerRef = useRef<HTMLButtonElement>(null);
   // A restart request outlives a navigation away from this page, so its completion
   // callback must not set state after unmount.
   const appServerMounted = useRef(true);
@@ -177,7 +178,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   // onSettled, not a per-button callback: the sidebar control knows nothing about
   // this page, and a restart succeeding there must still clear the banner here.
   const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
-    onSettled: () => { void reloadAppServerState(); },
+    onSettled: () => { void reloadAppServerState(); }, restoreFocusFallback: previous => previous?.hasAttribute("data-models-reload-action") ? reloadBannerRef.current ?? reloadHeadRef.current : null,
     // Reported through the shell, not this page's toast: a restart takes up to 30s and
     // outlives a navigation away, and an outcome that says app-servers are still running
     // must not be discarded because the user moved on while waiting for it.
@@ -191,9 +192,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     void reloadAppServerState();
     return cancelAppServerRead;
   }, [apiBase, cancelAppServerRead, reloadAppServerState, restartEpoch]);
-
-
-
   /*
    * Tab state. The hash is the source of truth, so refresh, bookmark, and
    * Back/Forward keep the choice — same contract as `#logs` / `#logs/debug`.
@@ -1523,7 +1521,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
           <ProviderMark name={provider} />
           <span className="text-body font-semibold" style={{ whiteSpace: "nowrap" }}>{providerDisplaySlug(provider)}</span>
-          {aliases.providers[provider] && <span className="models-chip mono text-caption">{aliases.providers[provider]}</span>}
+          {aliases.providers[provider] && <span className="models-chip models-chip--identifier mono text-caption">{aliases.providers[provider]}</span>}
           {nativeProviderGroup && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
@@ -2576,25 +2574,27 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         description and the catalog's delivery process open from "?", rendered here rather
         than in the panel because hidden panels stay mounted.
       */}
-      <div className="page-head">
-        <div className="ui-v2 flex min-w-0 flex-col gap-1">
-          <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{t("nav.models")}</h2>
-          <p className="m-0 text-[14px] leading-5 text-fg-muted">{t(SUBTITLE_TKEY[tab][0])}</p>
+      <ModelsReloadFocusBoundary stale={appServerState === "stale"} headRef={reloadHeadRef} bannerRef={reloadBannerRef}>
+        <div className="page-head">
+          <div className="ui-v2 flex min-w-0 flex-col gap-1">
+            <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{t("nav.models")}</h2>
+            <p className="m-0 text-[14px] leading-5 text-fg-muted">{t(SUBTITLE_TKEY[tab][0])}</p>
+          </div>
+          <div className="page-head-actions">
+            {SUBTITLE_TKEY[tab][1] && <ModelsAbout key={tab} text={t(SUBTITLE_TKEY[tab][1])}>
+              {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
+            </ModelsAbout>}
+            {appServerState !== "stale" && <Button data-models-reload-action ref={reloadHeadRef} variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
+              <span className={codexRestarting ? "inline-flex animate-spin" : "inline-flex"}><IconRefresh aria-hidden="true" /></span>
+              {codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
+            </Button>}
+          </div>
         </div>
-        <div className="page-head-actions">
-          {SUBTITLE_TKEY[tab][1] && <ModelsAbout key={tab} text={t(SUBTITLE_TKEY[tab][1])}>
-            {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
-          </ModelsAbout>}
-          <Button variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
-            <span className={codexRestarting ? "inline-flex animate-spin" : "inline-flex"}><IconRefresh aria-hidden="true" /></span>
-            {codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
-          </Button>
-        </div>
-      </div>
-      <CodexStaleBanner
-        state={appServerState}
-        controller={{ restarting: codexRestarting, restart: handleCodexRestart }}
-      />
+        <CodexStaleBanner
+          state={appServerState} actionRef={reloadBannerRef}
+          controller={{ restarting: codexRestarting, restart: handleCodexRestart }}
+        />
+      </ModelsReloadFocusBoundary>
       <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />
 
       {/*
