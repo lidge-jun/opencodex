@@ -5,13 +5,17 @@ import {
   TELEMETRY_STATUS_CHANGED_EVENT,
   fetchTelemetryStatus,
   formatTelemetryPreviewJson,
+  hasOtherOpenModalDialog,
   putTelemetryDecision,
+  subscribeModalDialogChanges,
   type TelemetryDecision,
   type TelemetryStatusSnapshot,
 } from "../telemetry-api";
 import { Notice, Switch } from "../ui";
 import { startVisibilityPoll } from "../visibility-poll";
 import { SettingsRow } from "./v2-proxy/settings-layout";
+
+const PREVIEW_DIALOG_SELECTOR = "dialog.telemetry-preview-overlay";
 
 /**
  * Proxy details row and preview dialog for anonymous daily usage telemetry.
@@ -29,11 +33,15 @@ export function TelemetrySettingsPanel({
   const [saveFailed, setSaveFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [, setModalRevision] = useState(0);
   const savingRef = useRef(false);
   const seqRef = useRef(0);
   const previewTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = useRef<HTMLButtonElement | null>(null);
   const previewDialogRef = useRef<HTMLDialogElement>(null);
+  const previewCloseBtnRef = useRef<HTMLButtonElement>(null);
   const previewTitleId = useId();
+  const previewDescId = useId();
 
   const load = useCallback(async () => {
     if (savingRef.current) return;
@@ -76,15 +84,50 @@ export function TelemetrySettingsPanel({
 
   useEffect(() => {
     if (!previewOpen) return;
+    let lastBlocked = hasOtherOpenModalDialog(PREVIEW_DIALOG_SELECTOR);
+    const check = () => {
+      const nextBlocked = hasOtherOpenModalDialog(PREVIEW_DIALOG_SELECTOR);
+      if (nextBlocked !== lastBlocked) {
+        lastBlocked = nextBlocked;
+        setModalRevision(rev => rev + 1);
+      }
+    };
+    check();
+    return subscribeModalDialogChanges(check);
+  }, [previewOpen]);
+
+  const blockedByOtherModal = previewOpen && hasOtherOpenModalDialog(PREVIEW_DIALOG_SELECTOR);
+  const showPreviewDialog = Boolean(previewOpen && status && !blockedByOtherModal);
+
+  useEffect(() => {
+    if (!showPreviewDialog) return;
     const dialog = previewDialogRef.current;
     if (dialog && !dialog.open) {
-      dialog.showModal?.();
+      if (typeof dialog.showModal === "function") {
+        dialog.showModal();
+      } else {
+        dialog.setAttribute("open", "");
+      }
     }
+    previewCloseBtnRef.current?.focus();
+    return () => {
+      if (dialog?.open) dialog.close?.();
+    };
+  }, [showPreviewDialog]);
+
+  useEffect(() => {
+    if (previewOpen) return;
+    const trigger = restoreFocusRef.current;
+    if (!trigger) return;
+    restoreFocusRef.current = null;
+    if (trigger.isConnected) trigger.focus();
   }, [previewOpen]);
 
   const closePreview = useCallback(() => {
+    if (previewDialogRef.current?.open) {
+      previewDialogRef.current.close?.();
+    }
     setPreviewOpen(false);
-    previewTriggerRef.current?.focus();
   }, []);
 
   const effective = status?.effective ?? false;
@@ -146,8 +189,11 @@ export function TelemetrySettingsPanel({
               className="btn btn-ghost btn-sm telemetry-preview-trigger"
               disabled={!status}
               aria-haspopup="dialog"
-              aria-expanded={previewOpen}
-              onClick={() => setPreviewOpen(true)}
+              aria-expanded={showPreviewDialog}
+              onClick={() => {
+                restoreFocusRef.current = previewTriggerRef.current;
+                setPreviewOpen(true);
+              }}
             >
               {t("proxyV2.telemetryWhatIsSent")}
             </button>
@@ -169,10 +215,11 @@ export function TelemetrySettingsPanel({
         {saveFailed && <Notice tone="err">{t("proxyV2.telemetrySaveFailed")}</Notice>}
       </SettingsRow>
 
-      {previewOpen && status && (
+      {showPreviewDialog && status && (
         <dialog
           ref={previewDialogRef}
           aria-labelledby={previewTitleId}
+          aria-describedby={previewDescId}
           className="modal-overlay telemetry-preview-overlay"
           onCancel={event => {
             event.preventDefault();
@@ -216,10 +263,18 @@ export function TelemetrySettingsPanel({
                 <span className="text-fg-muted">{t("proxyV2.telemetryNeverItems")}</span>
               </div>
             </div>
-            <p className="modal-desc m-0">{t("proxyV2.telemetryPreviewHint")}</p>
+            <p id={previewDescId} className="modal-desc m-0">
+              {t("proxyV2.telemetryPreviewHint")}
+            </p>
             <pre className="log-detail-json telemetry-preview-json">{formatTelemetryPreviewJson(status)}</pre>
             <div className="modal-actions">
-              <button type="button" className="btn btn-primary" onClick={closePreview}>
+              <button
+                ref={previewCloseBtnRef}
+                type="button"
+                className="btn btn-primary"
+                onClick={closePreview}
+                autoFocus
+              >
                 {t("common.close")}
               </button>
             </div>

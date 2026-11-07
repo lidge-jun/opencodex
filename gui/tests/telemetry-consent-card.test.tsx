@@ -5,7 +5,10 @@ import type { Root } from "react-dom/client";
 import { DesktopStarOnboarding } from "../src/components/desktop-star-onboarding";
 import { TelemetryConsentCard } from "../src/components/telemetry-consent-card";
 import { LanguageProvider } from "../src/i18n/provider";
-import type { TelemetryStatusSnapshot } from "../src/telemetry-api";
+import {
+  TELEMETRY_STATUS_CHANGED_EVENT,
+  type TelemetryStatusSnapshot,
+} from "../src/telemetry-api";
 
 const DESKTOP_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) OpenCodexDesktop/2.64.0";
@@ -19,6 +22,8 @@ let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let statusResponse: TelemetryStatusSnapshot;
 let calls: Array<{ method: string; path: string; body?: unknown }>;
+let failMethods: Set<string>;
+let statusEvents: TelemetryStatusSnapshot[];
 
 function makeStatus(overrides: Partial<TelemetryStatusSnapshot> = {}): TelemetryStatusSnapshot {
   return {
@@ -72,6 +77,8 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   statusResponse = makeStatus();
   calls = [];
+  failMethods = new Set();
+  statusEvents = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -79,6 +86,9 @@ beforeEach(() => {
       const path = new URL(String(input), "http://127.0.0.1").pathname;
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
       calls.push(body !== undefined ? { method, path, body } : { method, path });
+      if (failMethods.has(`${method} ${path}`)) {
+        return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+      }
       if (path === "/api/github/star") {
         return Response.json({ state: "not-starred", url: "https://github.com/lidge-jun/opencodex" });
       }
@@ -192,6 +202,9 @@ test("opens with pre-checked checkbox, shows preview JSON, and records nothing o
   await mountCard();
   const card = host.querySelector(".telemetry-consent-card");
   expect(card).toBeTruthy();
+  expect(card?.querySelector("h3")?.textContent).toBe("Help improve opencodex with anonymous usage stats");
+  expect(card?.querySelector(".modal-desc")?.textContent).toContain("opencodex can share");
+  expect(card?.querySelector("summary")?.textContent).toBe("Preview the JSON");
   const checkbox = host.querySelector<HTMLInputElement>(".telemetry-consent-checkbox")!;
   expect(checkbox).toBeTruthy();
   expect(checkbox.checked).toBe(true);
@@ -304,4 +317,163 @@ test("stays hidden once decided or when an environment opt-out override is activ
       root = null;
     }
   }
+});
+
+test("subscribes to TELEMETRY_STATUS_CHANGED_EVENT and closes when a decision is recorded elsewhere", async () => {
+  setup();
+  await mountCard();
+  expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
+
+  const CustomEventCtor = (win as unknown as { CustomEvent: typeof CustomEvent }).CustomEvent;
+  const decided = makeStatus({
+    effective: false,
+    reason: "declined",
+    decision: "declined",
+    decidedAt: "2026-11-07T00:00:00.000Z",
+  });
+  await act(async () => {
+    win.dispatchEvent(new CustomEventCtor(TELEMETRY_STATUS_CHANGED_EVENT, { detail: decided }));
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
+});
+
+test("defers opening while another modal dialog is open and opens once it closes", async () => {
+  setup();
+  const otherDialog = win.document.createElement("dialog") as unknown as HTMLDialogElement;
+  otherDialog.className = "modal-overlay other-modal";
+  otherDialog.setAttribute("open", "");
+  win.document.body.appendChild(otherDialog as never);
+
+  await mountCard();
+  expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeNull();
+
+  await act(async () => {
+    otherDialog.removeAttribute("open");
+    otherDialog.remove();
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeTruthy();
+});
+
+test("handles GET, PUT, and POST failures without recording consent or trapping the user", async () => {
+  setup();
+  win.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, ((event: Event) => {
+    const detail = (event as CustomEvent<TelemetryStatusSnapshot>).detail;
+    if (detail) statusEvents.push(detail);
+  }) as never);
+
+  // 1. GET /api/telemetry failure keeps the consent card closed and writes nothing.
+  failMethods.add("GET /api/telemetry");
+  await mountCard();
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
+  expect(statusEvents).toEqual([]);
+
+  // 2. PUT /api/telemetry failure keeps the card open, shows error notice, and emits no status change.
+  if (root) {
+    const current = root;
+    await act(async () => {
+      current.unmount();
+    });
+    root = null;
+  }
+  failMethods.clear();
+  failMethods.add("PUT /api/telemetry");
+  calls = [];
+  await mountCard();
+  const continueBtn = host.querySelector<HTMLButtonElement>(".telemetry-consent-card .btn-primary")!;
+  await act(async () => {
+    click(continueBtn);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
+  expect(host.querySelector(".notice-err")?.textContent).toContain("Could not save telemetry preference.");
+  expect(continueBtn.disabled).toBe(false);
+  expect(statusEvents).toEqual([]);
+
+  // Retry after clearing failure succeeds and closes the dialog.
+  failMethods.clear();
+  await act(async () => {
+    click(continueBtn);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(statusEvents).toHaveLength(1);
+  expect(statusEvents[0]?.decision).toBe("accepted");
+
+  // 3. POST /api/telemetry/notice failure on Escape dismiss still closes without emitting status change.
+  if (root) {
+    const current = root;
+    await act(async () => {
+      current.unmount();
+    });
+    root = null;
+  }
+  statusResponse = makeStatus();
+  statusEvents = [];
+  failMethods.add("POST /api/telemetry/notice");
+  calls = [];
+  await mountCard();
+  const dialog = host.querySelector("dialog.telemetry-consent-overlay")!;
+  const WindowEvent = (win as unknown as { Event: typeof Event }).Event;
+  await act(async () => {
+    dialog.dispatchEvent(new WindowEvent("cancel", { bubbles: false, cancelable: true }));
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(calls).toEqual([
+    { method: "GET", path: "/api/telemetry" },
+    { method: "POST", path: "/api/telemetry/notice" },
+  ]);
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(statusEvents).toEqual([]);
+});
+
+test("App does not enable DesktopStarOnboarding or TelemetryConsentCard on a Remote Link Child when target discovery fails", async () => {
+  setup(DESKTOP_UA);
+  win.localStorage.setItem("ocx-desktop-star-onboarding", "seen");
+  for (const [name, content] of [
+    ["opencodex-runtime-role", "client"],
+    ["opencodex-session-token", "ocx_session_test"],
+    ["opencodex-session-csrf", "test-csrf"],
+    ["opencodex-session-origin", "http://127.0.0.1:10100"],
+    ["opencodex-session-server-origin", "http://127.0.0.1:10100"],
+  ] as const) {
+    const meta = win.document.createElement("meta");
+    meta.setAttribute("name", name);
+    meta.setAttribute("content", content);
+    win.document.head.appendChild(meta);
+  }
+  (globalThis as Record<string, unknown>).__APP_VERSION__ = "0.0.0-test";
+  failMethods.add("GET /api/machine/status");
+
+  const [{ createRoot }, { default: App }, { resetApiAuthFetchForTests, installApiAuthFetch, installApiSessionFromHtml }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/App"),
+    import("../src/api"),
+  ]);
+  resetApiAuthFetchForTests();
+  Object.defineProperty(win, "fetch", { configurable: true, value: globalThis.fetch });
+  installApiAuthFetch();
+  installApiSessionFromHtml(
+    "shared",
+    '<meta name="opencodex-session-token" content="ocx_session_test"><meta name="opencodex-session-csrf" content="test-csrf"><meta name="opencodex-session-origin" content="http://127.0.0.1:10100"><meta name="opencodex-session-server-origin" content="http://127.0.0.1:10100">',
+  );
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: win.fetch });
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <App />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => {
+    await new Promise(r => setTimeout(r, 60));
+  });
+  resetApiAuthFetchForTests();
+  expect(host.querySelector(".star-onboarding")).toBeNull();
+  expect(calls.some(c => c.path === "/api/telemetry")).toBe(false);
+  expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeNull();
 });

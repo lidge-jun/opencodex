@@ -95,10 +95,59 @@ export function formatTelemetryPreviewJson(status: TelemetryStatusSnapshot | nul
 function notifyTelemetryStatusChanged(snapshot: TelemetryStatusSnapshot): void {
   if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
   try {
-    window.dispatchEvent(new CustomEvent(TELEMETRY_STATUS_CHANGED_EVENT, { detail: snapshot }));
+    const CustomEventCtor =
+      (window as Window & { CustomEvent?: typeof CustomEvent }).CustomEvent ?? CustomEvent;
+    window.dispatchEvent(new CustomEventCtor(TELEMETRY_STATUS_CHANGED_EVENT, { detail: snapshot }));
   } catch {
     // Best-effort cross-component notification.
   }
+}
+
+/**
+ * True when another modal `<dialog>` in `document` is currently open.
+ * Used by telemetry dialogs so two modal overlays never stack.
+ */
+export function hasOtherOpenModalDialog(ownSelector?: string): boolean {
+  if (typeof document === "undefined") return false;
+  const dialogs = document.querySelectorAll("dialog");
+  for (const dialog of dialogs) {
+    if (ownSelector && dialog.matches(ownSelector)) continue;
+    const isOpen =
+      dialog.open ||
+      dialog.hasAttribute("open") ||
+      (dialog.classList.contains("modal-overlay") && dialog.style.display !== "none");
+    if (isOpen) return true;
+  }
+  return false;
+}
+
+export function subscribeModalDialogChanges(onChange: () => void): () => void {
+  if (typeof document === "undefined") return () => {};
+  const target = document.body ?? document.documentElement;
+  const ObserverCtor =
+    (typeof window !== "undefined"
+      ? (window as Window & { MutationObserver?: typeof MutationObserver }).MutationObserver
+      : undefined) ??
+    (typeof MutationObserver !== "undefined" ? MutationObserver : undefined);
+  const observer =
+    ObserverCtor && target
+      ? new ObserverCtor(() => {
+          onChange();
+        })
+      : null;
+  observer?.observe(target, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["open", "style", "class"],
+  });
+  document.addEventListener("close", onChange, true);
+  document.addEventListener("cancel", onChange, true);
+  return () => {
+    observer?.disconnect();
+    document.removeEventListener("close", onChange, true);
+    document.removeEventListener("cancel", onChange, true);
+  };
 }
 
 export async function fetchTelemetryStatus(

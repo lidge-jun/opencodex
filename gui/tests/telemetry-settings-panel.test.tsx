@@ -3,10 +3,14 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import TelemetrySettingsPanel from "../src/components/TelemetrySettingsPanel";
+import { TelemetryConsentCard } from "../src/components/telemetry-consent-card";
 import { LanguageProvider } from "../src/i18n/provider";
 import AdvancedHub from "../src/pages/AdvancedHub";
 import { PROXY_SECTION_IDS } from "../src/pages/dashboard-section-ids";
-import type { TelemetryStatusSnapshot } from "../src/telemetry-api";
+import {
+  TELEMETRY_STATUS_CHANGED_EVENT,
+  type TelemetryStatusSnapshot,
+} from "../src/telemetry-api";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -16,6 +20,8 @@ let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let statusResponse: TelemetryStatusSnapshot;
 let calls: Array<{ method: string; path: string; body?: unknown }>;
+let failMethods: Set<string>;
+let statusEvents: TelemetryStatusSnapshot[];
 
 function makeStatus(overrides: Partial<TelemetryStatusSnapshot> = {}): TelemetryStatusSnapshot {
   return {
@@ -66,6 +72,8 @@ beforeEach(() => {
   win.document.body.appendChild(host as never);
   statusResponse = makeStatus();
   calls = [];
+  failMethods = new Set();
+  statusEvents = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -73,6 +81,9 @@ beforeEach(() => {
       const path = new URL(String(input), "http://127.0.0.1").pathname;
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
       calls.push(body !== undefined ? { method, path, body } : { method, path });
+      if (failMethods.has(`${method} ${path}`)) {
+        return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+      }
       if (path === "/api/telemetry" && method === "PUT") {
         const decision = (body as { decision: "accepted" | "declined" }).decision;
         statusResponse = {
@@ -80,6 +91,15 @@ beforeEach(() => {
           effective: decision === "accepted",
           reason: decision,
           decision,
+        };
+        return Response.json({ ok: true, ...statusResponse });
+      }
+      if (path === "/api/telemetry/notice" && method === "POST") {
+        statusResponse = {
+          ...statusResponse,
+          effective: true,
+          reason: "default-on",
+          noticeShownAt: "2026-11-07T00:00:00.000Z",
         };
         return Response.json({ ok: true, ...statusResponse });
       }
@@ -201,26 +221,118 @@ test("disables switch in readOnly mode for Remote Link children", async () => {
   expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
 });
 
-test("What is sent button opens the preview dialog with the exact JSON payload and closes cleanly", async () => {
+test("Preview the JSON button opens the preview dialog with autoFocus on Close and restores focus after unmount", async () => {
   await mountPanel();
   expect(host.querySelector("dialog.telemetry-preview-overlay")).toBeNull();
 
   const trigger = host.querySelector<HTMLButtonElement>(".telemetry-preview-trigger")!;
   expect(trigger).toBeTruthy();
+  expect(trigger.textContent).toBe("Preview the JSON");
   await act(async () => {
     click(trigger);
   });
 
-  const dialog = host.querySelector("dialog.telemetry-preview-overlay");
+  const dialog = host.querySelector<HTMLDialogElement>("dialog.telemetry-preview-overlay");
   expect(dialog).toBeTruthy();
+  const descId = dialog?.getAttribute("aria-describedby");
+  expect(descId).toBeTruthy();
+  expect(dialog?.querySelector(`#${descId}`)?.classList.contains("modal-desc")).toBe(true);
   const pre = dialog?.querySelector("pre.telemetry-preview-json");
   expect(pre?.textContent).toBe(JSON.stringify(statusResponse.preview, null, 2));
 
   const closeBtn = dialog?.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!;
+  expect(win.document.activeElement).toBe(closeBtn as unknown as Element);
+
+  let dialogPresentDuringFocusRestore = true;
+  const origFocus = trigger.focus.bind(trigger);
+  trigger.focus = () => {
+    dialogPresentDuringFocusRestore = host.querySelector("dialog.telemetry-preview-overlay") !== null;
+    origFocus();
+  };
   await act(async () => {
     click(closeBtn);
   });
   expect(host.querySelector("dialog.telemetry-preview-overlay")).toBeNull();
+  expect(dialogPresentDuringFocusRestore).toBe(false);
+  expect(win.document.activeElement).toBe(trigger as unknown as Element);
+});
+
+test("never stacks preview dialog over an open TelemetryConsentCard and opens once the consent dialog closes", async () => {
+  statusResponse = makeStatus({
+    effective: false,
+    reason: "awaiting-notice",
+    decision: null,
+    decidedAt: null,
+    noticeShownAt: null,
+  });
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <TelemetryConsentCard apiBase="" enabled />
+        <TelemetrySettingsPanel apiBase="" />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => {
+    await new Promise(r => setTimeout(r, 30));
+  });
+
+  expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeTruthy();
+  expect(host.querySelector("dialog.telemetry-preview-overlay")).toBeNull();
+
+  const trigger = host.querySelector<HTMLButtonElement>(".telemetry-preview-trigger")!;
+  await act(async () => {
+    click(trigger);
+  });
+  // Preview dialog must defer while the consent modal is open.
+  expect(host.querySelectorAll("dialog")).toHaveLength(1);
+  expect(host.querySelector("dialog.telemetry-preview-overlay")).toBeNull();
+
+  // Dismissing the consent dialog allows the deferred preview dialog to open alone.
+  const backdrop = host.querySelector<HTMLButtonElement>("dialog.telemetry-consent-overlay .modal-backdrop-dismiss")!;
+  await act(async () => {
+    click(backdrop);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeNull();
+  expect(host.querySelector("dialog.telemetry-preview-overlay")).toBeTruthy();
+  expect(host.querySelectorAll("dialog")).toHaveLength(1);
+});
+
+test("surfaces GET and PUT failures with error notices and preserves switch state on write failure", async () => {
+  win.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, ((event: Event) => {
+    const detail = (event as CustomEvent<TelemetryStatusSnapshot>).detail;
+    if (detail) statusEvents.push(detail);
+  }) as never);
+
+  // 1. GET /api/telemetry failure renders error notice, disables switch, and recovers on Retry.
+  failMethods.add("GET /api/telemetry");
+  await mountPanel();
+  expect(toggleSwitch().disabled).toBe(true);
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("false");
+  expect(host.querySelector(".notice-err")?.textContent).toContain("Could not load telemetry status.");
+
+  failMethods.clear();
+  const retryBtn = host.querySelector<HTMLButtonElement>(".telemetry-settings-row .btn-ghost")!;
+  await act(async () => {
+    click(retryBtn);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector(".notice-err")).toBeNull();
+  expect(toggleSwitch().disabled).toBe(false);
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("true");
+
+  // 2. PUT /api/telemetry failure preserves aria-checked, renders error notice, and emits no status change.
+  failMethods.add("PUT /api/telemetry");
+  await act(async () => {
+    click(toggleSwitch());
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelector(".notice-err")?.textContent).toContain("Could not save telemetry preference.");
+  expect(statusEvents).toEqual([]);
 });
 
 test("PROXY_SECTION_IDS registers proxy-telemetry and AdvancedHub matches telemetry and privacy search queries", async () => {

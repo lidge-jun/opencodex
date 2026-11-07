@@ -472,12 +472,12 @@ export default function App() {
     <div ref={appRef} className={`app${desktopShell ? " app--desktop" : ""}${desktopMac ? " app--macos" : ""}${navCollapsed ? " app--nav-collapsed" : ""}`}>
       <DesktopStarOnboarding
         apiBase={sharedBase}
-        enabled={targetsSettled && !targets.connected}
+        enabled={targetsSettled && !targets.connected && !isConnectedRuntime() && !targetError}
         onSettled={handleStarOnboardingSettled}
       />
       <TelemetryConsentCard
         apiBase={sharedBase}
-        enabled={targetsSettled && !targets.connected && sharedSessionReady && starOnboardingSettled}
+        enabled={targetsSettled && !targets.connected && !isConnectedRuntime() && !targetError && sharedSessionReady && starOnboardingSettled}
       />
       {actionFeedback && (
         <ToastNotice tone={actionFeedback.tone} onDismiss={() => setActionFeedback(null)} dismissLabel={t("common.close")}>

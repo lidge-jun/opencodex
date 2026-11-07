@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import {
+  TELEMETRY_STATUS_CHANGED_EVENT,
   fetchTelemetryStatus,
   formatTelemetryPreviewJson,
+  hasOtherOpenModalDialog,
   postTelemetryNotice,
   putTelemetryDecision,
   shouldShowTelemetryConsentPrompt,
+  subscribeModalDialogChanges,
   type TelemetryStatusSnapshot,
 } from "../telemetry-api";
 import { Notice } from "../ui";
+
+const CONSENT_DIALOG_SELECTOR = "dialog.telemetry-consent-overlay";
 
 /**
  * First-run and post-update telemetry disclosure dialog.
@@ -27,13 +32,31 @@ export function TelemetryConsentCard({
 }) {
   const [status, setStatus] = useState<TelemetryStatusSnapshot | null>(null);
   const [closed, setClosed] = useState(false);
+  const [, setModalRevision] = useState(0);
+  const externalUpdateRef = useRef(false);
+
+  useEffect(() => {
+    const onStatusChanged = (event: Event) => {
+      const detail = (event as CustomEvent<TelemetryStatusSnapshot | undefined>).detail;
+      if (!detail) return;
+      externalUpdateRef.current = true;
+      setStatus(detail);
+      if (!shouldShowTelemetryConsentPrompt(detail)) {
+        setClosed(true);
+      }
+    };
+    window.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, onStatusChanged);
+    return () => {
+      window.removeEventListener(TELEMETRY_STATUS_CHANGED_EVENT, onStatusChanged);
+    };
+  }, []);
 
   useEffect(() => {
     if (!enabled || closed) return;
     const controller = new AbortController();
     void fetchTelemetryStatus(apiBase, controller.signal)
       .then(snapshot => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || externalUpdateRef.current) return;
         if (!shouldShowTelemetryConsentPrompt(snapshot)) {
           setClosed(true);
           return;
@@ -46,11 +69,30 @@ export function TelemetryConsentCard({
     return () => controller.abort();
   }, [apiBase, closed, enabled]);
 
+  const wantsOpen = Boolean(
+    enabled && !closed && status && shouldShowTelemetryConsentPrompt(status),
+  );
+  const blockedByOtherModal = wantsOpen && hasOtherOpenModalDialog(CONSENT_DIALOG_SELECTOR);
+
+  useEffect(() => {
+    if (!wantsOpen) return;
+    let lastBlocked = hasOtherOpenModalDialog(CONSENT_DIALOG_SELECTOR);
+    const check = () => {
+      const nextBlocked = hasOtherOpenModalDialog(CONSENT_DIALOG_SELECTOR);
+      if (nextBlocked !== lastBlocked) {
+        lastBlocked = nextBlocked;
+        setModalRevision(rev => rev + 1);
+      }
+    };
+    check();
+    return subscribeModalDialogChanges(check);
+  }, [wantsOpen]);
+
   const handleClose = useCallback(() => {
     setClosed(true);
   }, []);
 
-  if (!enabled || closed || !status) return null;
+  if (!wantsOpen || blockedByOtherModal || !status) return null;
   return <TelemetryConsentDialog apiBase={apiBase} status={status} onClose={handleClose} />;
 }
 
@@ -75,8 +117,15 @@ function TelemetryConsentDialog({
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) {
-      dialog.showModal?.();
+      if (typeof dialog.showModal === "function") {
+        dialog.showModal();
+      } else {
+        dialog.setAttribute("open", "");
+      }
     }
+    return () => {
+      if (dialog?.open) dialog.close?.();
+    };
   }, []);
 
   const handleContinue = useCallback(async () => {
