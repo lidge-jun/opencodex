@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoRoot } from "../helpers/repo-root";
@@ -8,11 +8,11 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 // Run the real enrollment and injector with every native path bound to a disposable home.
-function scenario(setup = "") {
+function scenario(setup = "", testRunner = false) {
   const home = mkdtempSync(join(tmpdir(), "ocx-route-codex-connect-disabled-"));
   mkdirSync(join(home, ".codex"));
   try {
-    const child = spawnSync(process.execPath, ["--eval", `
+    const script = `
       import { writeFileSync, readFileSync, existsSync } from 'node:fs';
       import { join } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig } from './src/config';
@@ -60,7 +60,18 @@ function scenario(setup = "") {
         journal:existsSync(join(process.env.CODEX_HOME,'opencodex-journal.json')),
         token:readServiceApiTokenState().kind,state:readClientConnectionState().kind,
         settings:readHomeCodexSettingsRecord(options.link.linkId),receipt:readRouteIntentReceipt(),requests,observedEnabled,observedInjected}));
-    `], {
+    `;
+    let args = ["--eval", script];
+    if (testRunner) {
+      const fixturePath = join(home, "post-publication.test.ts");
+      const resolved = script.replace(/from '(\.\/src\/[^']+)'/g,
+        (_match, relative: string) => `from ${JSON.stringify(join(repoRoot(), relative))}`);
+      const start = resolved.indexOf("      const configPath =");
+      writeFileSync(fixturePath, `import { test } from "bun:test";\n${resolved.slice(0, start)}\n`
+        + `test("isolated enrollment", async () => {\n${resolved.slice(start)}\n}, ${SPAWN_BUDGET_MS - 5_000});\n`);
+      args = ["test", "--preload", join(repoRoot(), "tests/preload.ts"), fixturePath];
+    }
+    const child = spawnSync(process.execPath, args, {
       cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
       env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: join(home, ".codex"),
         CODEX_SQLITE_HOME: join(home, ".codex"), OPENCODEX_HOME: join(home, ".opencodex"),
@@ -73,6 +84,30 @@ function scenario(setup = "") {
     return JSON.parse(child.stdout.trim().split("\n").at(-1)!);
   } finally { removeTreeWithRetry(home); }
 }
+
+test("post-publication failure rolls back the disabled flag before removing enrollment authority", () => {
+  const result = scenario(`
+    const {spyOn}=await import('bun:test');
+    const registries=await import(${JSON.stringify(join(repoRoot(), "src/config/derived-registries.ts"))});
+    const refresh=registries.refreshConfigDerivedRegistries;
+    let failed=false;
+    const failure=spyOn(registries,'refreshConfigDerivedRegistries').mockImplementation(config=>{
+      if(!failed && config.clientIntegrations?.codex===true){
+        failed=true;observedEnabled=JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME,'config.json'),'utf8')).clientIntegrations.codex;
+        throw new Error('fixture post-publication bookkeeping failure');
+      }
+      return refresh(config);
+    });
+    cleanup=()=>failure.mockRestore();
+  `, true);
+  expect(result.error).toContain("Config was published");
+  expect(result.observedEnabled).toBe(true);
+  expect(result.enabled).toBe(false);
+  expect(result.after).toBe(result.original);
+  expect(result.journal).toBe(false);
+  expect(result.token).toBe("absent");
+  expect(result.state).toBe("disconnected");
+}, SPAWN_BUDGET_MS);
 
 test("fresh Link connect lets Home Codex on override a disabled standalone flag", () => {
   const result = scenario();

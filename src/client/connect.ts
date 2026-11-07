@@ -770,10 +770,10 @@ async function connectClientUnlocked(
         // compensation field-scoped: a failed enrollment must not enable standalone Codex
         // or replace disjoint config changes made while injection was awaiting its locks.
         const wasDisabled = loadConfig().clientIntegrations?.codex === false;
-        persistNativeRouteIntent("codex", true, beforeCodexWrite, injectConfig);
         if (wasDisabled) restoreCodexIntent = () => {
           persistNativeRouteIntent("codex", false, () => assertConnectingState(persisted.fingerprint), loadConfig());
         };
+        persistNativeRouteIntent("codex", true, beforeCodexWrite, injectConfig);
       }), deps.lifecycleLockDeps);
     }
     const preflight = !selectedClients.includes("codex") || (routeIntent && !existsSync(getCodexHome()))
