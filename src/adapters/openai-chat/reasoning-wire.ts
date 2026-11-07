@@ -1,6 +1,7 @@
 import { resolveThinkingEnabled } from "../../clients/reasoning-controls";
 import { declaredModelCapabilities, resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { registryEntryForProviderDestination } from "../../providers/registry";
+import { configuredReasoningEfforts, resolveEffortAtOrBelow } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
 import type { AdapterRequest } from "../base";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
@@ -27,6 +28,21 @@ export function declaresIndependentChatReasoningControls(provider: OcxProviderCo
   const registry = declaredModelCapabilities(registryEntryForProviderDestination(provider)?.modelCapabilities, modelId);
   return (["supportsThinkingToggle", "supportsReasoningEffort"] as const)
     .some(axis => typeof (explicit?.[axis] ?? registry?.[axis]) === "boolean");
+}
+
+/**
+ * Wire value for a native Chat caller's `ultra`. It is a Codex picker level, not an upstream
+ * Chat value: codex-rs folds it to `max` before every provider request and the translated path
+ * does the same in `mapReasoningEffort`, but OpenCode and Kilo send it verbatim, and Mistral
+ * answers it with HTTP 422 (#8254). The fold lands on `max`, clamped at or below it to the
+ * model's declared ladder (Mistral Large 4 tops out at `high`). A declared ladder that lists
+ * `ultra` itself is the provider's own claim and keeps it.
+ */
+export function nativeChatUltraWireEffort(provider: OcxProviderConfig, modelId: string): string {
+  const ladder = configuredReasoningEfforts(provider, modelId);
+  if (ladder === undefined) return "max";
+  if (ladder.includes("ultra")) return "ultra";
+  return resolveEffortAtOrBelow("max", ladder) ?? "max";
 }
 
 /**

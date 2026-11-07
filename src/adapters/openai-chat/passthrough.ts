@@ -16,7 +16,8 @@ import { modelInList, type OcxProviderConfig } from "../../types";
 import { mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
 import { resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
-import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningControls } from "./reasoning-wire";
+import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningControls,
+  nativeChatUltraWireEffort } from "./reasoning-wire";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
 import { planNativeChatReasoningReplay } from "./reasoning-replay";
 import type { OcxReasoningReplayScopeRef } from "../../types";
@@ -101,6 +102,7 @@ export function buildOpenAIChatPassthroughRequest(
   if (reasoningDisabled) {
     delete body.reasoning_effort;
   }
+  if (body.reasoning_effort === "ultra") body.reasoning_effort = nativeChatUltraWireEffort(provider, modelId);
   const hasTools = Array.isArray(rawBody.tools) && rawBody.tools.length > 0;
   const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
   const explicitThinkingEnabled = rawBody.reasoning !== null && typeof rawBody.reasoning === "object"

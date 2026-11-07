@@ -56,6 +56,28 @@ keeps them; any other model uses 8. Declare a model's own cap with
 Pruning adds no separate upload or persistence. Images retained within the cap
 are sent to Mistral in the outbound request. Other destinations are unchanged.
 
+## Mistral: reasoning effort per model
+
+Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
+rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry
+`modelReasoningEfforts` rows, so the Codex catalog clamps to them and client exports such as
+`ocx export --client opencode` offer only these variants:
+
+| Model | Efforts |
+|---|---|
+| `zai-glm-5-3`, `zai-glm-5-3-flash` | `low`, `high`, `max` |
+| `mistral-large-4`, `mistral-large-4-0` | `low`, `medium`, `high` |
+| `deepseek-v4-1-flash-1017` | `low`, `high`, `xhigh`, `max` |
+
+The GLM and Large 4 rows follow [Mistral's reasoning guide](https://docs.mistral.ai/capabilities/reasoning).
+Mistral documents no values for DeepSeek V4.1 Flash 1017, so its row is the set measured to
+answer HTTP 200 in November 2026 and may change. A `modelReasoningEfforts` entry of your own
+for a model replaces its row.
+
+On native Chat Completions, a caller's `ultra` is sent as `max`, or as the model's highest
+declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
+unless the model's declared ladder lists `ultra` itself. Other caller values are forwarded as sent.
+
 ## GPT-6.1 Terra
 
 [GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) was released on October 26, 2026 as the successor to GPT-5.6 Terra. `gpt-6.1-terra` is available alongside `gpt-5.6-terra`; no default model or sub-agent roster changes. GitHub Copilot uses Responses; OpenRouter lists `openai/gpt-6.1-terra` with 1,050,000 context and $1.00 input / $5.00 output per 1M tokens.

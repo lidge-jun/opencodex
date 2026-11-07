@@ -1209,7 +1209,7 @@
   "quota-scoring.test.ts": "usage", "qwen-cloud-endpoints.test.ts": "gui",
   "qwen38-preserve-reasoning.test.ts": "providers", "rate-limit-reset-credits.test.ts": "gui",
   "rate-limit-retry.test.ts": "providers",
-  "mistral-recovery.test.ts": "providers", "raycast-client.test.ts": "clients",
+  "mistral-recovery.test.ts": "providers", "mistral-reasoning-efforts.test.ts": "providers", "raycast-client.test.ts": "clients",
   "raycast-detect.test.ts": "clients", "reasoning-effort-summary-default.test.ts": "responses",
   "reasoning-effort.test.ts": "codex-integration", "reasoning-envelope.test.ts": "responses",
   "reasoning-retention.test.ts": "responses", "reasoning-retention-quota.test.ts": "responses", "reasoning-archive-http.test.ts": "responses", "reasoning-archive-ws.test.ts": "responses", "reasoning-retention-routing.test.ts": "responses", "reasoning-retention-v2.test.ts": "responses",
