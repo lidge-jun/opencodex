@@ -324,13 +324,16 @@ describe("client link connection contracts", () => {
           const directory = join(serviceHome, ".config", "systemd", "user");
           mkdirSync(directory, { recursive: true });
           const definition = join(directory, "opencodex-proxy.service");
-          const command = buildServiceShellCommand("/usr/bin/bun", null, 12345, tokenPath);
-          writeFileSync(definition, `[Service]\nEnvironment="OPENCODEX_HOME=${home}"\nExecStart=${command}\n`);
+          const simulatedHome = "/home/fixture/.opencodex";
+          const simulatedTokenPath = `${simulatedHome}/service-api-token`;
+          const command = buildServiceShellCommand("/usr/bin/bun", null, 12345, simulatedTokenPath);
+          writeFileSync(definition, `[Service]\nEnvironment="OPENCODEX_HOME=${simulatedHome}"\nExecStart=${command}\n`);
           expect(command).toContain("OPENCODEX_API_AUTH_TOKEN");
-          expect(command).toContain(tokenPath);
+          expect(command).toContain(simulatedTokenPath);
           const inspection = inspectServiceManagerInstallation({ platform: "linux", home: serviceHome,
             run: () => ({ status: 0, stdout: `LoadState=loaded\nActiveState=inactive\nFragmentPath=${definition}\nNeedDaemonReload=no\n`, stderr: "", timedOut: false, spawnFailed: false }) });
           expect(inspection.kind).toBe("present");
+          if (inspection.kind === "present") expect(inspection.claims[0]?.homes.opencodexHome).toBe(simulatedHome);
           inspectServiceManager = (() => inspection) as typeof noService;
         }
         if (scenario === "service-unknown") inspectServiceManager = (() => ({ kind: "unknown", reason: "fixture" })) as unknown as typeof noService;

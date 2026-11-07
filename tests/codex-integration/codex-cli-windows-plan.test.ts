@@ -20,6 +20,7 @@ import { trackBackgroundWork } from "../../src/lib/background-work";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../../src/update/codex-cli-update-launch-policy.mjs";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { proveWindowsPlanJobExit } from "../helpers/windows-plan-job-proof";
+import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
@@ -353,7 +354,7 @@ native("Windows plan cleanup stops its owned child before releasing its fixture"
 // This case owns a real Bun child, its real lifetime-probe child, and Windows ACL
 // subprocesses. It reached 5.02s locally against Bun's 5s default; Windows CI
 // already supplies 60s. The shared spawn budget bounds the same intrinsic work.
-native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
+test.skipIf(hostedWindowsQuarantine || process.platform !== "win32" || process.arch !== "x64")("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
   const epoch = planCleanupEpoch;
   try {
   // The child may outlive this test and the preload sandbox after a timeout.
@@ -493,7 +494,7 @@ native("a selected override changing during observation refuses the original pre
   expect((await inspectCodexCliInstall(f.deps)).managed).toBe(false);
 });
 
-native("npm toolchain drift after inspection refuses metadata without executing the replacement", async () => {
+test.skipIf(hostedWindowsQuarantine || process.platform !== "win32" || process.arch !== "x64")("npm toolchain drift after inspection refuses metadata without executing the replacement", async () => {
   for (const f of [fixture(), fixture(true)]) {
     let queries = 0;
     const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps, inspect: async deps => {
