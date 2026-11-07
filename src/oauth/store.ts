@@ -869,6 +869,9 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
 export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void; withConfigLock?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
+    const museSet = store["meta-muse"];
+    const museCredentials = new Map(museSet?.accounts.map(account => [account.id,
+      { credential: createHash("sha256").update(JSON.stringify(account.credential)).digest("hex"), loginId: account.loginId }]) ?? []);
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
       set,
       accountId: set.activeAccountId,
@@ -876,6 +879,13 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       accountIds: set.accounts.map(account => account.id),
     }]));
     const result = await fn(store);
+    // Retained Muse quota evidence must not revive when a credential changes A→B→A.
+    // Persist the incarnation with each managed replacement, including a recreated slot.
+    for (const account of store["meta-muse"]?.accounts ?? []) {
+      const before = museCredentials.get(account.id);
+      if (museSet !== store["meta-muse"] || !before || before.credential !== createHash("sha256").update(JSON.stringify(account.credential)).digest("hex") || before.loginId !== account.loginId)
+        account.loginId = randomUUID();
+    }
     // Only providers whose credentials this mutation actually removed leave the downgrade
     // backup; a no-op removal names none. The result decides, so it is read here.
     const scrubbedProviders = options?.scrubLegacyBackup?.(result) ?? [];
@@ -1324,7 +1334,7 @@ export async function saveAccountCredential(
     if (!set || !account) return;
     account.credential = safe;
     written = true;
-    if (opts.rotateLoginId) account.loginId = randomUUID();
+    if (opts.rotateLoginId || provider === "meta-muse") account.loginId = randomUUID();
     delete account.needsReauth;
     delete account.needsReauthReason;
     delete account.refreshAttentionGeneration;

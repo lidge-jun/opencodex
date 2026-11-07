@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { getAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount, removeAccount } from "../../src/oauth/store";
 import {
   clearAccountQuotaCache,
   getCachedProviderAccountQuota,
   hasPassiveAccountQuota,
   readPassiveProviderAccountQuotas,
-  recordPassiveAccountQuota,
+  recordPassiveAccountQuota as recordWithOwner,
   resetProviderQuotaReconcileStateForTests,
   setCachedProviderAccountQuotaForTests,
   supportsPerAccountQuota,
@@ -17,12 +17,19 @@ import { hasHeadroomEvidence, rankAccountsByHeadroom } from "../../src/oauth/acc
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import type { ProviderQuota } from "../../src/providers/quota-types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { captureMuseQuotaOwner, type MuseQuotaOwner } from "../../src/providers/quota/muse-owner";
+import { sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
 
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 let opencodexHome: string;
 
 const FIRST = { accountId: "muse-first", email: "first@example.com" };
 const SECOND = { accountId: "muse-second", email: "second@example.com" };
+
+function recordPassiveAccountQuota(provider: string, id: string, quota: ProviderQuota, generation: number,
+  owner: MuseQuotaOwner | null = captureMuseQuotaOwner(provider, id)): void {
+  recordWithOwner(provider, id, quota, generation, owner);
+}
 
 function quotaAt(fiveHour: number, updatedAt = Date.now()): ProviderQuota {
   return { fiveHourPercent: fiveHour, weeklyPercent: 10, updatedAt };
@@ -95,6 +102,12 @@ describe("passive Muse quota cache", () => {
     expect(readPassiveProviderAccountQuotas("meta-muse")).toEqual([]);
   });
 
+  test("a write without a captured owner fails closed", async () => {
+    const [id] = await seedAccounts(FIRST);
+    recordWithOwner("meta-muse", id!, quotaAt(42), captureConfigGeneration());
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+  });
+
   test("discards a write whose config generation has been superseded", () => {
     // Generation 0 predates any reconciliation; a stale writer must not commit.
     const { reconcileStateGeneration } = require("../../src/lib/state-store-sweeper");
@@ -162,6 +175,83 @@ describe("passive Muse quota cache", () => {
     const rows = readPassiveProviderAccountQuotas("meta-muse");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.quota?.fiveHourPercent).toBe(19);
+  });
+
+  test("an observation schedules its disk write after the response path", async () => {
+    const [id] = await seedAccounts(FIRST);
+    const path = join(opencodexHome, "provider-account-quota-cache.json");
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(19), captureConfigGeneration());
+    expect(existsSync(path)).toBe(false);
+    await Bun.sleep(PERSIST_SETTLE_MS);
+    expect(readPersistedAccountQuotas().get(`meta-muse\u0000${id!}`)?.fiveHourPercent).toBe(19);
+  });
+
+  test("real per-account observations survive selection and hydration for quota ranking", async () => {
+    const [firstId, secondId] = await seedAccounts(FIRST, SECOND);
+    await setActiveAccount("meta-muse", firstId!);
+    recordPassiveAccountQuota("meta-muse", firstId!, quotaAt(10), captureConfigGeneration());
+    await setActiveAccount("meta-muse", secondId!);
+    recordPassiveAccountQuota("meta-muse", secondId!, quotaAt(90), captureConfigGeneration());
+    const ids = [secondId!, firstId!];
+    expect(readPassiveProviderAccountQuotas("meta-muse")).toHaveLength(2);
+    expect(hasHeadroomEvidence("meta-muse", ids)).toBe(true);
+    expect(rankAccountsByHeadroom("meta-muse", ids)[0]).toBe(firstId);
+    await Bun.sleep(PERSIST_SETTLE_MS);
+    clearAccountQuotaCache();
+    expect(hasHeadroomEvidence("meta-muse", ids)).toBe(true);
+    expect(rankAccountsByHeadroom("meta-muse", ids)[0]).toBe(firstId);
+    expect(readPassiveProviderAccountQuotas("meta-muse")).toHaveLength(2);
+    expect(rankAccountsByHeadroom("meta-muse", ids)[0]).toBe(firstId);
+  });
+
+  test("same-account reselection fences a delayed write but retains an accepted row", async () => {
+    const [id] = await seedAccounts(FIRST);
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(10), captureConfigGeneration());
+    const owner = captureMuseQuotaOwner("meta-muse", id!);
+    await setActiveAccount("meta-muse", id!);
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(90), captureConfigGeneration(), owner);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)?.fiveHourPercent).toBe(10);
+  });
+
+  test("credential ABA cannot revive an accepted or hydrated row or a delayed write", async () => {
+    const [id] = await seedAccounts(FIRST);
+    const original = getAccountSet("meta-muse")!.accounts[0]!.credential;
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(10), captureConfigGeneration());
+    const owner = captureMuseQuotaOwner("meta-muse", id!);
+    await Bun.sleep(PERSIST_SETTLE_MS);
+    await saveAccountCredential("meta-muse", id!, { ...original, access: "synthetic-replacement" });
+    await saveAccountCredential("meta-muse", id!, original);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(90), captureConfigGeneration(), owner);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+    clearAccountQuotaCache();
+    expect(readPassiveProviderAccountQuotas("meta-muse")).toEqual([]);
+  });
+
+  test("pause ABA, removal and cache reset retire old observations and delayed writes", async () => {
+    const [id] = await seedAccounts(FIRST);
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(10), captureConfigGeneration());
+    const owner = captureMuseQuotaOwner("meta-muse", id!);
+    await setAccountPaused("meta-muse", id!, true);
+    await setAccountPaused("meta-muse", id!, false);
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(90), captureConfigGeneration(), owner);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(15), captureConfigGeneration());
+    const removedOwner = captureMuseQuotaOwner("meta-muse", id!);
+    await removeAccount("meta-muse", id!);
+    await seedAccounts(FIRST);
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(90), captureConfigGeneration(), removedOwner);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(20), captureConfigGeneration());
+    clearAccountQuotaCache("meta-muse");
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+  });
+
+  test("expired rows are evicted", async () => {
+    const [id] = await seedAccounts(FIRST);
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(10), captureConfigGeneration());
+    expect(sweepExpiredProviderAccountQuotaRows(Date.now() + 24 * 60 * 60_000)).toBeGreaterThan(0);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
   });
 });
 

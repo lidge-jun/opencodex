@@ -410,11 +410,13 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
     || !mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) return null;
   // Hydrate before writing: persistence serializes the whole in-memory map.
   hydrateAccountQuotaCache();
-  accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, identity: owner.identity,
-    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent() });
+  const entry = { ts: Date.now(), quota, identity: owner.identity,
+    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent() };
+  accountQuotaCache.set(probedAccountKey, entry);
   persistAccountQuotaCache();
   return bindMuseReport(report(provider, `${provider}:key-endpoint`, quota), {
-    ...owner, isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent(),
+    ...owner, isCurrent: () => accountQuotaCache.get(probedAccountKey) === entry
+      && epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent(),
   });
 }
 /**
@@ -433,12 +435,13 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
   // Idempotent; without it a proxy restart shows nothing until the next streaming turn
   // even though the last observation is on disk.
   hydrateAccountQuotaCache();
-  const entry = accountQuotaCache.get(accountCacheKey(provider, owner.accountId));
+  const key = accountCacheKey(provider, owner.accountId);
+  const entry = accountQuotaCache.get(key);
   if (!entry?.quota || entry.identity !== owner.identity || !entry.isCurrent?.()) return null;
   const built = report(provider, `${provider}:subscription-observation`, entry.quota);
   // Tagged here rather than inside report(), which every probed path shares.
   return bindMuseReport(built ? { ...built, observed: true } : null, {
-    ...owner, isCurrent: () => entry.isCurrent?.() === true && owner.isCurrent(),
+    ...owner, isCurrent: () => accountQuotaCache.get(key) === entry && entry.isCurrent?.() === true && owner.isCurrent(),
   });
 }
 

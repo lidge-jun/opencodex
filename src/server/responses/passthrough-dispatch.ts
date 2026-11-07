@@ -69,11 +69,6 @@ import type { AdapterRequest } from "../../adapters/base";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { CODE_MODE_EXEC_TOOL_NAME } from "../../types";
 import type { ResponsesTerminalStatus } from "../../bridge";
-import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
-import {
-  isMuseSubscriptionUsagePayload,
-  parseMuseSubscriptionUsage,
-} from "../../providers/muse-subscription-usage";
 import { restoreMuseToolNames } from "../../responses/muse-tool-name-alias";
 import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v2-agent-messages";
 import {
@@ -205,7 +200,7 @@ export async function preparePassthroughExchange(
     ResponsesTransport,
     | "adapter"
     | "genericFailoverAccountId"
-    | "passiveQuotaWriterGeneration" | "passiveQuotaOwner" | "passiveQuotaEpoch"
+    | "createPassiveQuotaObserver"
     | "oauthDispatch"
     | "recoverAutoPausedSelection"
     | "resolveSelectionAdapter"
@@ -270,7 +265,6 @@ export async function preparePassthroughExchange(
     callerAuthHeaders,
   } = requestState;
   const {
-    passiveQuotaWriterGeneration,
     oauthDispatch,
     resolveSelectionAdapter,
     resolveCopilotSelection,
@@ -557,8 +551,7 @@ export async function preparePassthroughExchange(
     let inspectedTerminal: ResponsesTerminalStatus | null = null;
     let inspectedCompletionSeen = false;
     let firstTerminalAllowsRecall = false;
-    const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
-      && route.provider.authMode === "oauth";
+    let observePassiveQuota: (payload: unknown) => void = () => {};
     const noteInspectedPayload = (payload: unknown) => {
       // First terminal stays authoritative even in metadata-only inspection, which
       // intentionally continues parsing after a failed/incomplete terminal.
@@ -583,15 +576,7 @@ export async function preparePassthroughExchange(
       // Placed BEFORE the undeclared-tool early return below, which is load-bearing: that
       // guard latches for the rest of the turn once it fires, and a turn that tripped it
       // still legitimately reports usage.
-      if (passiveQuotaObserved && isMuseSubscriptionUsagePayload(payload)) {
-        const quota = parseMuseSubscriptionUsage(payload);
-        // Read at EVENT time, not at handler construction: failover rebinds this, and the
-        // quota belongs to the account that actually served the turn.
-        const servingAccountId = transportState.passiveQuotaOwner?.accountId;
-        if (quota && servingAccountId) {
-          recordPassiveAccountQuota(route.providerName, servingAccountId, quota, passiveQuotaWriterGeneration, transportState.passiveQuotaOwner, transportState.passiveQuotaEpoch);
-        }
-      }
+      observePassiveQuota(payload);
       // Gated on the same flag as the guard itself: with no readable catalog (or a forward-auth
       // provider) every name looks undeclared, and flipping this would stop recording continuation
       // state for exactly the passthrough traffic the guard deliberately stands down for.
@@ -1947,6 +1932,7 @@ export async function preparePassthroughExchange(
   upstreamResponse = await guardPassthroughCompletion(
     upstreamResponse, request, config, upstream.signal, logCtx, rebuildAndRefetch,
   );
+  observePassiveQuota = transportState.createPassiveQuotaObserver();
   // Where this relay dials upstream. Local infrastructure (loopback / private / `.local` / `.lan`)
   // is operator-trusted and its silent phases are normal. Use the refreshed serving URL.
   const localUpstream = isLocalUpstream(request.url);

@@ -58,12 +58,14 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
-export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void): Record<symbol, unknown> {
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void,
+  onFinalSend?: (sameDestination: boolean, headers: Headers) => void): Record<symbol, unknown> {
   const physical = observer?.physical;
   let noted = false;
-  return physical || onPhysicalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
+  return physical || onPhysicalSend || onFinalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
     if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
     physical?.(destination === target, headers);
+    onFinalSend?.(destination === target, headers);
   } } : {};
 }
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
