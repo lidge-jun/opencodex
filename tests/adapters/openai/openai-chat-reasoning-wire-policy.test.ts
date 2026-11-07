@@ -316,6 +316,40 @@ describe("toggle-only Chat reasoning capability", () => {
     }
   });
 
+  test.each([
+    [undefined, undefined], [undefined, false], [undefined, true],
+    ["gateway-object", undefined], ["gateway-object", false], ["gateway-object", true],
+  ] as const)("dual-axis %s omits ultra before ladder clamping with thinking override %s", (reasoningWireFormat, thinkingEnabled) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["low", "high"] },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const effort of ["max", "ultra"]) {
+      for (const body of Object.values(finalToggleBodies(request(effort), target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning_effort).toBeUndefined();
+        expect(body.reasoning).toBeUndefined();
+      }
+    }
+  });
+
+  test.each([undefined, "gateway-object"] as const)("dual-axis %s still clamps ultra when max has no omission alias", reasoningWireFormat => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["low", "high"] },
+    };
+    for (const thinkingEnabled of [undefined, false, true]) {
+      for (const body of Object.values(finalToggleBodies(request("ultra"), target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning_effort).toBe(reasoningWireFormat ? undefined : "high");
+        expect(body.reasoning).toEqual(reasoningWireFormat ? { enabled: thinkingEnabled !== false, effort: "high" } : undefined);
+      }
+    }
+  });
+
   test("native dual-axis wire preserves explicitly supported ultra despite the max omission alias", () => {
     const target: OcxProviderConfig = {
       ...toggleProvider,
@@ -323,9 +357,15 @@ describe("toggle-only Chat reasoning capability", () => {
       modelReasoningEfforts: { [toggleModel]: ["high", "max", "ultra"] },
       modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
     };
-    const body = JSON.parse(buildOpenAIChatPassthroughRequest(target, request("ultra"), toggleModel, false).body);
-    expect(body.reasoning_effort).toBe("ultra");
-    expect(body.thinking).toEqual({ type: "enabled" });
+    for (const thinkingEnabled of [undefined, false, true]) {
+      const bodies = finalToggleBodies(request("ultra"), target, toggleModel, thinkingEnabled);
+      expect(bodies.native.reasoning_effort).toBe("ultra");
+      expect(bodies.translated.reasoning_effort).toBeUndefined();
+      for (const body of Object.values(bodies)) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning).toBeUndefined();
+      }
+    }
   });
 
   test.each([
