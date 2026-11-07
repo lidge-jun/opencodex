@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
-import { isKeychainReference, passiveKeychainGeneration, resolveProviderApiKeyPassively } from "./api-key-resolve";
+import { isKeychainReference, passiveKeychainGeneration, peekResolvedProviderKey, resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 import { extractPassiveWireModel } from "./quota/passive-wire-model";
 
@@ -84,6 +84,9 @@ function remember(name: string, id: string, owner: string): void {
 function currentOwner(name: string, provider: OcxProviderConfig, id: string, reference: string): string | undefined {
   const existing = incarnations.get(accountScope(name, id));
   if (!existing) return undefined;
+  // A cache clear suspends proof until routing rereads the account. Keep the bounded
+  // observation for a matching reread, but never expose it while unverified.
+  if (isKeychainReference(reference) && peekResolvedProviderKey(reference) === undefined) return undefined;
   try {
     const key = isKeychainReference(reference) ? undefined : currentKey(reference);
     const owner = (key || isKeychainReference(reference)) && identity(name, provider, id, reference, key);

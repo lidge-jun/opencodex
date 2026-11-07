@@ -139,7 +139,9 @@ is visible) and never forces an upstream refresh.
   These display-only readings do not trigger probes or affect routing. For a keychain-backed key,
   the reading is tied to the credential already cached by routing and is withheld when that identity
   cannot be verified. An external keychain replacement is not visible until routing's cache is
-  invalidated; until then routing and the reading still use the cached credential.
+  invalidated; until then routing and the reading still use the cached credential. When that cache
+  is cleared, readings are withheld until routing rereads each key. A matching reread can restore
+  retained readings; responses received while the key is unverified are discarded.
 - Providers with neither a quota report nor a retained passive key observation are left out. The bar
   is hidden when neither is available.
 - The right edge shows when the dashboard last read the reports. It turns amber when the latest

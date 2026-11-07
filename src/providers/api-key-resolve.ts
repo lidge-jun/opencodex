@@ -58,7 +58,9 @@ function credentialDigest(value: string): string {
 /** Return the observed account incarnation, optionally requiring a match to the wire key. */
 export function passiveKeychainGeneration(reference: string, key?: string): number | undefined {
   if (!isKeychainReference(reference)) return undefined;
-  const proof = passiveProofs.get(keychainAccount(reference));
+  const account = keychainAccount(reference);
+  const proof = passiveProofs.get(account);
+  if (!resolvedCache.has(account)) return undefined;
   return proof && (key === undefined || proof.digest === credentialDigest(key)) ? proof.generation : undefined;
 }
 
@@ -143,10 +145,14 @@ function readKeychain(account: string, quiet = false, useCache = true): string |
     // fall through to the single warning below
   }
   if (typeof value === "string" && value.trim()) {
-    if (isGcpCredentialMaterial(value)) throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
+    if (isGcpCredentialMaterial(value)) {
+      if (useCache) passiveProofs.delete(account);
+      throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
+    }
     if (useCache) { resolvedCache.set(account, value); rememberPassiveProof(account, value); }
     return value;
   }
+  if (useCache) passiveProofs.delete(account);
   if (!quiet && !warnedAccounts.has(account)) {
     warnedAccounts.add(account);
     console.warn(`[opencodex] provider key reference keychain:${account} could not be read from the OS keychain; requests for this provider have no credential until the keychain is available (no plaintext fallback)`);
