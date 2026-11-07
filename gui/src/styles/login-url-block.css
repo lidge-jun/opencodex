@@ -23,5 +23,4 @@
    coexist — dropping either one silently unstyles that feature. */
 .open-browser-pref { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; margin: 2px 0; }
 .open-browser-pref .toggle { margin-top: 2px; }
-.open-browser-pref-copy label { cursor: pointer; }
 .open-browser-pref-copy { display: flex; flex-direction: column; gap: 2px; }

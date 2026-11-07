@@ -36,8 +36,9 @@ test("browser-open preference is an accessible switch and persists the inverse c
   expect(input).toBeTruthy();
   expect(input.checked).toBe(false);
   expect(openBrowserRequestField()).toEqual({});
-  const label = host.querySelector<HTMLLabelElement>(`label[for="${input.id}"]`)!;
+  const label = host.querySelector<HTMLLabelElement>(`label.open-browser-pref[for="${input.id}"]`)!;
   expect(label.textContent).toContain("Don't open a browser on the proxy machine");
+  expect(win.document.getElementById(input.getAttribute("aria-labelledby")!)?.textContent).toBe("Don't open a browser on the proxy machine");
   expect(win.document.getElementById(input.getAttribute("aria-describedby")!)?.textContent).toContain("different browser profile");
   act(() => { label.click(); });
   expect(input.checked).toBe(true);

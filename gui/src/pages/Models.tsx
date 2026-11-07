@@ -1523,7 +1523,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
           <ProviderMark name={provider} />
           <span className="text-body font-semibold" style={{ whiteSpace: "nowrap" }}>{providerDisplaySlug(provider)}</span>
-          {aliases.providers[provider] && <span className="models-chip mono text-caption">{aliases.providers[provider]}</span>}
+          {aliases.providers[provider] && <span className="models-chip models-chip--identifier mono text-caption">{aliases.providers[provider]}</span>}
           {nativeProviderGroup && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
@@ -2585,10 +2585,10 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           {SUBTITLE_TKEY[tab][1] && <ModelsAbout key={tab} text={t(SUBTITLE_TKEY[tab][1])}>
             {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
           </ModelsAbout>}
-          <Button variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
+          {appServerState !== "stale" && <Button variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
             <span className={codexRestarting ? "inline-flex animate-spin" : "inline-flex"}><IconRefresh aria-hidden="true" /></span>
             {codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
-          </Button>
+          </Button>}
         </div>
       </div>
       <CodexStaleBanner

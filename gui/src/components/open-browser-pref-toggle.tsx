@@ -29,17 +29,19 @@ import { readOpenBrowserPref, writeOpenBrowserPref } from "../oauth-open-browser
 export function OpenBrowserPrefToggle({ serverDefault = true }: { serverDefault?: boolean }) {
   const t = useT();
   const id = useId();
-  const hintId = `${id}-hint`;
+  const labelId = useId();
+  const hintId = useId();
   const [choice, setChoice] = useState<boolean | undefined>(readOpenBrowserPref);
   const open = choice ?? serverDefault;
 
   return (
-    <div className="open-browser-pref">
-      <label className="toggle">
+    <label className="open-browser-pref" htmlFor={id}>
+      <span className="toggle">
         <input
           id={id}
           type="checkbox"
           role="switch"
+          aria-labelledby={labelId}
           aria-describedby={hintId}
           checked={!open}
           onChange={e => {
@@ -49,11 +51,11 @@ export function OpenBrowserPrefToggle({ serverDefault = true }: { serverDefault?
           }}
         />
         <span className="slider" aria-hidden="true" />
-      </label>
+      </span>
       <span className="open-browser-pref-copy">
-        <label htmlFor={id} className="text-label">{t("prov.dontOpenBrowser")}</label>
+        <span id={labelId} className="text-label">{t("prov.dontOpenBrowser")}</span>
         <span id={hintId} className="muted text-label">{t("prov.dontOpenBrowserHint")}</span>
       </span>
-    </div>
+    </label>
   );
 }
