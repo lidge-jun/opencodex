@@ -1,4 +1,5 @@
 import { projectLocalModelRefusalLog } from "./request-log-failure-detail";
+import { carryWorkflowRefusal } from "./workflow-refusal";
 import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
 import { wasAccountAutoPaused } from "../lib/account-auto-pause-response";
 import { ownedChatErrorPayload, isProxyError, LOCAL_CHAT_ERROR_MESSAGES } from "../lib/client-error-body";
@@ -587,6 +588,7 @@ async function handleChatCompletionsWithBudget(
     ...(envelope && nativeChatCombos ? {
       protocolSource: createNativeChatComboSource({
         req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
+        workflowRefusalContext: logCtx,
         // Children run without logIds; the request's admission rides the source so their
         // replay scope resolves the same caller principal as every other surface.
         ...(admission ? { admission } : {}),
@@ -736,6 +738,7 @@ async function handleChatCompletionsWithBudget(
       },
     });
     if (replayRefusal) retainReplayRefusal(rewritten);
+    carryWorkflowRefusal(upstream, rewritten);
     return logIds
       // Deferred logging re-wraps this response and carries the verdict with it.
       ? responseWithDeferredRequestLog(rewritten, logIds.requestId, logIds.start, logCtx, undefined, legacyEnvelope)

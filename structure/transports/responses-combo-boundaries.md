@@ -198,3 +198,15 @@ The Devin direct chat adapter (`src/adapters/devin/cloud-direct/chat.ts`) maps a
 Coverage: `tests/routing/router-combo-failover-classification.test.ts`, `tests/providers/devin-hardening.test.ts`, `tests/server/error-fidelity.test.ts`, `tests/codex-integration/combo-codex-exhaustion-cooldown.test.ts`, `tests/server/server-combo-quota-code-provenance.test.ts`, and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.
 
 Native Chat child error bodies follow [the owned client-body contract](../data-planes/error-detail.md#client-error-bodies-chat). Combo classification consumes the retained legacy envelope through the ordinary bounded reader, while headers and response identity retain their original owners.
+
+## Local workflow send refusals
+
+A root workflow send ceiling stops the entire Combo ladder before another target is dispatched.
+`src/server/workflow-refusal.ts` marks that locally constructed response as non-replayable;
+`src/server/responses/core-combo-failure.ts` and `src/server/chat-completions.ts` preserve its
+`x-opencodex-local-refusal` header and browser exposure when rebuilding the response. This propagation
+requires the in-process proxy-error marker as well as the header: an upstream 429 cannot stop
+ordinary failover by supplying the same header. The wire body remains `rate_limit_exceeded`.
+The message says no additional provider request was sent when the current request already has
+physical sends; an admission refusal before its first send retains the no-provider wording.
+Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.

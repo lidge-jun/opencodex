@@ -122,9 +122,10 @@ import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrap
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
+import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
-import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+import { unboundPoolSpendRefusalResponse, workflowSendCeilingRefusalResponse } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -403,7 +404,7 @@ export async function prepareAdapterExchange(
   const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
-  const genericRefetchCountsSends = () => options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
+  const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
     || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
@@ -524,7 +525,7 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+          ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
@@ -580,7 +581,7 @@ export async function prepareAdapterExchange(
     // blaming the provider makes the caller send the whole turn again -- the amplification this
     // budget exists to stop. The passthrough path has answered 429 here since #4546.
     if (err instanceof SendBudgetExhaustedError) {
-      return unboundPoolSpendRefusalResponse(logCtx)
+      return unboundPoolSpendRefusalResponse(logCtx) ?? workflowSendCeilingRefusalResponse(logCtx, sendBudgetState.workflowRootId)
         ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message));
     }
     const msg = describeUpstreamConnectFailure(err, connectMs);
@@ -637,15 +638,14 @@ export async function prepareAdapterExchange(
       onDispatch?: () => void,
       preserveFailureResponse?: Response,
     ): Promise<Response | { failed: Response }> => {
-      let replacementAdmitted = false;
-      // The repair permit books the request ledger, but only the transient helper reports
-      // that send to the root workflow. The other two dispatch paths confirm it here, at
-      // their physical-send boundary, without booking the request ledger again.
+      let replacementAdmitted = false, dispatchConfirmed = false;
+      // Only budgets without a physical observer need this legacy workflow report.
       let fastDowngradeWorkflowCharged = false;
       const chargeFastDowngradeWorkflowSend = (): void => {
         if (recovery !== "anthropic-fast-downgrade" || fastDowngradeWorkflowCharged) return;
         fastDowngradeWorkflowCharged = true;
-        chargeWorkflowSends(sendBudgetState.workflowRootId, 1);
+        if (!sendBudgetState.adapterSendBudget || !hasWorkflowSendObserver(sendBudgetState.adapterSendBudget))
+          chargeWorkflowSends(sendBudgetState.workflowRootId, 1);
       };
       let retryRequest: AdapterRequest;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === parsed && transportState.sameTargetToken === transportState.transportToken) {
@@ -713,7 +713,7 @@ export async function prepareAdapterExchange(
               // an abort, a saturated queue, an expired slot or a removed provider, and none of
               // those reach the wire. Confirming earlier would hold the charge for a send that the
               // pacer refused.
-              onDispatch?.();
+              if (!dispatchConfirmed) { onDispatch?.(); dispatchConfirmed = true; }
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
                 abortSignal: upstream.signal,
@@ -778,14 +778,14 @@ export async function prepareAdapterExchange(
                 // counters and permits still wait for the physical executor after pacing.
                 if (pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                 const confirmDispatch = () => {
-                  if (refetchAllowance?.permit && !refetchPermitUsed) {
+                  if (refetchAllowance?.permit && !refetchPermitUsed && (!onDispatch || refetchAllowance.permit !== prepaid)) {
                     if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(retryRequest.url));
                     refetchPermitUsed = true;
                   }
                   if (!pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                   // Counted Combo/pool sends confirm at the physical executor; legacy
                   // helper paths retain their existing thunk admission boundary.
-                  onDispatch?.();
+                  if (!dispatchConfirmed) { onDispatch?.(); dispatchConfirmed = true; }
                   if (preserveFailureResponse) replacementAdmitted = true;
                   if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
                 };
@@ -870,7 +870,7 @@ export async function prepareAdapterExchange(
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
         if (err instanceof SendBudgetExhaustedError) {
-          return { failed: unboundPoolSpendRefusalResponse(logCtx)
+          return { failed: unboundPoolSpendRefusalResponse(logCtx) ?? workflowSendCeilingRefusalResponse(logCtx, sendBudgetState.workflowRootId)
             ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message)) };
         }
         const msg = describeUpstreamConnectFailure(err, connectMs);
@@ -1013,7 +1013,7 @@ export async function prepareAdapterExchange(
                       route.provider, transportState.activeAdapter.name);
                     sendBudgetState.pendingHopPermit = hop.permit;
                     const result = await rebuildAndRefetch("oauth-account-429", () => {
-                      if (!adapterOwnsDispatch) hop.permit?.use();
+                      if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
                     });
                     if ("failed" in result) return result.failed;
                     upstreamResponse = result;
@@ -1133,7 +1133,7 @@ export async function prepareAdapterExchange(
           });
           if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
           const result = await rebuildAndRefetch("key-401",
-            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+            billingHop ? () => { if (billingHop.permit?.use() === false) throw new SendBudgetExhaustedError(); } : undefined, failedResponse);
           if ("failed" in result) {
             if (result.failed !== failedResponse) return result.failed;
             break;
@@ -1171,7 +1171,7 @@ export async function prepareAdapterExchange(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy), config.cacheRetention);
           bindRouteReasoningReplayScope({ parsed, providerName: route.providerName, provider: route.provider, adapterName: transportState.activeAdapter.name });
           sendBudgetState.pendingHopPermit = hop.permit;
-          const result = await rebuildAndRefetch("key-401", () => { hop.permit?.use(); }, failedResponse);
+          const result = await rebuildAndRefetch("key-401", () => { if (hop.permit?.use() === false) throw new SendBudgetExhaustedError(); }, failedResponse);
           if ("failed" in result) {
             if (result.failed !== failedResponse) return result.failed;
             break;
@@ -1214,7 +1214,7 @@ export async function prepareAdapterExchange(
           let result: Response | { failed: Response };
           try {
             result = await rebuildAndRefetch("anthropic-fast-downgrade", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             });
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1334,7 +1334,7 @@ export async function prepareAdapterExchange(
           });
           if (billingHop) sendBudgetState.pendingHopPermit = billingHop.permit;
           const result = await rebuildAndRefetch("key-429",
-            billingHop ? () => { billingHop.permit?.use(); } : undefined, failedResponse);
+            billingHop ? () => { if (billingHop.permit?.use() === false) throw new SendBudgetExhaustedError(); } : undefined, failedResponse);
           if ("failed" in result) {
             if (result.failed !== failedResponse) return result.failed;
             break;
@@ -1413,7 +1413,7 @@ export async function prepareAdapterExchange(
           try {
             result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401"
               : upstreamResponse.status === 403 ? "oauth-account-403" : "anthropic-oauth-429",
-              () => { if (!adapterOwnsDispatch) hop.permit?.use(); });
+              () => { if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError(); });
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
           }
@@ -1520,7 +1520,7 @@ export async function prepareAdapterExchange(
             // and settling here first would hand it a dead permit, which it reads as an
             // exhausted request and stops sending on.
             result = await rebuildAndRefetch("oauth-account-429", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             }, upstreamResponse);
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1625,7 +1625,7 @@ export async function prepareAdapterExchange(
             // and settling here first would hand it a dead permit, which it reads as an
             // exhausted request and stops sending on.
             result = await rebuildAndRefetch("oauth-account-429", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             });
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
@@ -1737,7 +1737,7 @@ export async function prepareAdapterExchange(
           let result: Response | { failed: Response };
           try {
             result = await rebuildAndRefetch("oauth-account-403", () => {
-              if (!adapterOwnsDispatch) hop.permit?.use();
+              if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
             }, failedResponse);
           } finally {
             sendBudgetState.pendingHopPermit = undefined;
