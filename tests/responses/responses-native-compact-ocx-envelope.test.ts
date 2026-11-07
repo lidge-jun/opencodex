@@ -66,3 +66,22 @@ test.each([
     nativeItem(),
   ]);
 });
+
+test("malformed ocx2 compact input is rejected locally as a caller error", async () => {
+  const settings = getDefaultConfig(); delete settings.compactionRouting; settings.defaultProvider = "openai"; settings.providers = {
+    openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" },
+  };
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => { fetchCalls++; return Response.json({}); }) as typeof fetch;
+  const req = new Request("http://localhost/v1/responses/compact", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}` },
+    body: JSON.stringify({ model: "gpt-6-luna", input: [{ type: "compaction", encrypted_content: "ocx2:invalid" }] }),
+  });
+
+  const response = await handleResponsesCompact(req, settings, { model: "", provider: "" });
+
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+  expect(fetchCalls).toBe(0);
+});

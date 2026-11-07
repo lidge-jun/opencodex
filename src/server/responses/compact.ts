@@ -152,6 +152,7 @@ import { requiresPlaintextReasoningReplay } from "../../adapters/openai-response
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
+import { InvalidRetainedCompactionEnvelopeError } from "../../responses/retained-compaction";
 import { nativeCompactResponseSchema } from "../../responses/schema";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
@@ -1305,7 +1306,9 @@ export async function handleResponsesCompact(
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
       const cause = unwrapUpstreamRetryEvidenceError(error);
-      const response = requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
+      const response = cause instanceof InvalidRetainedCompactionEnvelopeError
+        ? formatErrorResponse(400, "invalid_request_error", cause.message)
+        : requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
         ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
         : mapCodexAuthContextErrorToResponse(cause, {
           now: Date.now(), accountSelector: route.codexAccountNamespace,

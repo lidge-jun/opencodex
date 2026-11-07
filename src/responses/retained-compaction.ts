@@ -8,6 +8,13 @@ export interface RetainedCompaction {
   reasoning: string[];
 }
 
+export class InvalidRetainedCompactionEnvelopeError extends Error {
+  constructor() {
+    super("Invalid OpenCodex retained compaction envelope");
+    this.name = "InvalidRetainedCompactionEnvelopeError";
+  }
+}
+
 export function encodeRetainedCompaction(summary: string, reasoning: string[]): string {
   return RETAINED_COMPACTION_PREFIX + Buffer.from(JSON.stringify({ version: 2, summary, reasoning }), "utf-8").toString("base64");
 }
@@ -37,7 +44,7 @@ export function expandRetainedCompactionInput(input: unknown): unknown {
     if (!item || typeof item !== "object" || !["compaction", "compaction_summary", "context_compaction"].includes(item.type)
       || typeof item.encrypted_content !== "string" || !item.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX)) return [item];
     const data = decodeRetainedCompaction(item.encrypted_content);
-    if (!data) throw new Error("Invalid OpenCodex retained compaction envelope");
+    if (!data) throw new InvalidRetainedCompactionEnvelopeError();
     return [
       { ...item, encrypted_content: "ocx1:" + Buffer.from(data.summary, "utf-8").toString("base64") },
       ...data.reasoning.map(text => ({ type: "message", role: "user", content: [{ type: "input_text", text }] })),
