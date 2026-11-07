@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
-import { isKeychainReference, resolveProviderApiKeyPassively } from "./api-key-resolve";
+import { isKeychainReference, peekResolvedProviderKey, providerKeyResolutionGeneration, resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 import { extractPassiveWireModel } from "./quota/passive-wire-model";
 
@@ -56,7 +56,12 @@ function keyId(reference: string): string {
 }
 
 function identity(name: string, provider: OcxProviderConfig, id: string, reference: string, key: string): string {
-  return new Bun.CryptoHasher("sha256").update(JSON.stringify([name, provider.adapter, provider.baseUrl, id, reference, key])).digest("hex");
+  const generation = isKeychainReference(reference) ? providerKeyResolutionGeneration() : null;
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify([name, provider.adapter, provider.baseUrl, id, reference, key, generation])).digest("hex");
+}
+
+function currentKey(reference: string): string | undefined {
+  return isKeychainReference(reference) ? peekResolvedProviderKey(reference) : resolveProviderApiKeyPassively(reference);
 }
 
 function remember(name: string, id: string, owner: string): void {
@@ -78,8 +83,7 @@ function currentOwner(name: string, provider: OcxProviderConfig, id: string, ref
   const existing = incarnations.get(accountScope(name, id));
   if (!existing) return undefined;
   try {
-    if (isKeychainReference(reference)) { clearPassiveKeyAccount(name, id); return undefined; }
-    const key = resolveProviderApiKeyPassively(reference);
+    const key = currentKey(reference);
     const owner = key && identity(name, provider, id, reference, key);
     if (owner === existing.owner) return owner;
   } catch { /* A malformed account cannot invalidate another account's projection. */ }
@@ -95,14 +99,12 @@ function stillConfigured(config: OcxConfig, name: string, snapshot: OcxProviderC
     || (current.authMode !== undefined && current.authMode !== "key")
     || current.adapter !== snapshot.adapter || current.baseUrl !== snapshot.baseUrl) return false;
   const reference = selection.reference;
-  // An external keychain replacement is not observable without another OS read.
-  if (isKeychainReference(reference)) return false;
   if (current.apiKeyPool?.length) {
     const row = current.apiKeyPool.find(entry => entry.id === selection.entryId && entry.key === reference);
     if (!row || row.disabled) return false;
   } else if (current.apiKey !== reference) return false;
   const id = selection.entryId ?? keyId(reference);
-  const key = resolveProviderApiKeyPassively(reference);
+  const key = currentKey(reference);
   if (key !== snapshot.apiKey) {
     currentOwner(name, current, id, reference);
     return false;
@@ -139,6 +141,7 @@ export function passiveKeyPhysicalFetch(
     }
     const model = owned ? extractPassiveWireModel(init?.body) : undefined;
     const attempt = ++sequence;
+    const generation = isKeychainReference(snapshot._apiKeyAttempt!.reference!) ? providerKeyResolutionGeneration() : undefined;
     let reservation: ReturnType<typeof passiveKeyLimits.reserve>;
     try {
       if (owned && vendor && model) {
@@ -154,7 +157,7 @@ export function passiveKeyPhysicalFetch(
       const reused = seenResponses.has(response);
       seenResponses.add(response);
       try {
-        if (reservation && !reused && stillConfigured(config, name, snapshot)) {
+        if (reservation && !reused && (generation === undefined || generation === providerKeyResolutionGeneration()) && stillConfigured(config, name, snapshot)) {
           reservation.record(response.headers, Date.now());
         }
       } catch { /* Passive display evidence must not fail the proxied response. */ }

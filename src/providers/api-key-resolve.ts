@@ -51,6 +51,11 @@ export function providerKeyResolutionGeneration(): number {
   return resolutionGeneration;
 }
 
+/** Inspect a resolved routing credential without reading the OS, modifying the cache or publishing evidence. */
+export function peekResolvedProviderKey(value: string): string | undefined {
+  return isKeychainReference(value) ? resolvedCache.get(keychainAccount(value)) : undefined;
+}
+
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
 export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
   entryFactory = factory ?? defaultEntryFactory;

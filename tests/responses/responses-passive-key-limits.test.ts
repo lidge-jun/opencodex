@@ -21,6 +21,41 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
+test("keychain-backed Responses account reports its wire limits without additional OS reads", async () => {
+  const config = getDefaultConfig();
+  config.defaultProvider = "keychain-fixture";
+  config.defaultModel = "wire-model";
+  config.providers = { "keychain-fixture": { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1",
+    authMode: "key", apiKey: "keychain:keychain-fixture", models: ["wire-model"], liveModels: false } };
+  let reads = 0, readsAtSend = 0;
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { reads++; return "synthetic-keychain-secret"; }, setPassword: () => {}, deletePassword: () => false }));
+  try {
+    globalThis.fetch = (async (_input, init) => {
+      readsAtSend = reads;
+      expect(new Headers(init?.headers).get("authorization")).toBe(["Bearer", "synthetic-keychain-secret"].join(" "));
+      return Response.json({ id: "synthetic", object: "chat.completion", model: "wire-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] },
+      { headers: { "x-ratelimit-remaining-requests": "42" } });
+    }) as typeof fetch;
+    const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "keychain-fixture/wire-model", input: "hi", stream: false, store: false }) });
+    const response = await handleResponses(request, config, { provider: "", model: "" }, {});
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(readsAtSend).toBeGreaterThan(0);
+    expect(reads).toBe(readsAtSend);
+    const url = new URL("http://localhost/api/provider-quotas");
+    for (let i = 0; i < 3; i++) {
+      const report = await handleManagementAPI(new ManagementRequest(url), url, config);
+      expect(report!.status).toBe(200);
+      const json = await report!.json();
+      expect(json.passiveKeyLimits).toMatchObject([{ provider: "keychain-fixture", model: "wire-model", windows: [{ remaining: 42 }, { dimension: "tokens" }] }]);
+      expect(JSON.stringify(json)).not.toContain("synthetic-keychain-secret");
+      expect(reads).toBe(readsAtSend);
+    }
+  } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
+});
+
 test("provider quotas isolate a malformed unobserved keychain account", async () => {
   const config = getDefaultConfig();
   config.providers = { fixture: { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authMode: "key",
