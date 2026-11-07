@@ -16,6 +16,12 @@ export function Fixture() {
   return <I18nContext.Provider value={{ locale, setLocale: () => {}, t }}>
     <main style={{ padding: 24 }}><h1>Strategy geometry</h1>
       <div className="cwi-form-grid" style={{ width: "calc(100% - 200px)" }}><div className="cwi-field"><StrategySeg value={strategy} onChange={setStrategy} /></div></div>
+      <div id="models-panel-combos" style={{ width: 180 }}>
+        <div className="combos-workspace-rail-header">
+          <div className="combos-workspace-rail-heading"><div className="combos-workspace-rail-title">{t("nav.combos")}</div><div className="combos-workspace-rail-count">0</div></div>
+          <button type="button" className="btn btn-primary btn-sm" style={{ fontSize: 20 }}>{t("cws.add")}</button>
+        </div>
+      </div>
     </main>
   </I18nContext.Provider>;
 }

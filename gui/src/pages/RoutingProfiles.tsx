@@ -171,10 +171,10 @@ function fmtExclusion(code: string, t: ReturnType<typeof useT>): string {
 
 
 function parseProfiles(raw: unknown): RoutingProfileDto[] {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid-profiles-response");
   const profiles = (raw as { profiles?: unknown }).profiles;
-  if (!Array.isArray(profiles)) return [];
-  return profiles.filter((profile): profile is RoutingProfileDto => {
+  if (!Array.isArray(profiles)) throw new Error("invalid-profiles-response");
+  const valid = profiles.filter((profile): profile is RoutingProfileDto => {
     if (!isPlainObject(profile)) return false;
     // Validate the complete DTO shape: routingProfileDraftFromDto dereferences
     // these nested objects, so a management response that omits any of them
@@ -187,7 +187,9 @@ function parseProfiles(raw: unknown): RoutingProfileDto[] {
       && isPlainObject(profile.optimize)
       && isPlainObject(profile.limits)
       && isPlainObject(profile.unknownEvidence);
-  }).map(profile => {
+  });
+  if (profiles.length > 0 && valid.length === 0) throw new Error("invalid-profiles-response");
+  return valid.map(profile => {
     const compatibility = normalizeCompatibilityDto(
       "compatibility" in profile ? profile.compatibility : undefined,
     );
@@ -346,6 +348,7 @@ export default function RoutingProfiles({
     loadAbortRef.current = controller;
     const { signal } = controller;
     const generation = ++loadGenerationRef.current;
+    setLoaded(false);
     setLoadError("");
     try {
       const [profilesRes, analyticsRes, configRes, modelsRes, catalogRes] = await Promise.all([

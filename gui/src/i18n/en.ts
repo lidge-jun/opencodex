@@ -3559,7 +3559,7 @@ export const en = {
   "cws.attention.catalogOmitted": "Missing from the model catalog — member capabilities are incomplete or incompatible (missing context window / metadata, or empty modality intersection). Routing by alias still works",
   "cws.attention.allTargetsExhausted": "All enabled targets are out of quota",
   "cws.emptyTitle": "Create your first combo",
-  "cws.empty.createDesc": "Name a virtual model and chain two or more backends.",
+  "cws.empty.createDesc": "Add at least one target; use two or more for failover.",
   "cws.backToAll": "Back to all combos",
   "cws.allCombos": "All combos",
   "cws.copyModel": "Copy id",

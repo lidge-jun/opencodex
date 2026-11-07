@@ -30,18 +30,23 @@ try {
       const button = buttons.nth(i);
       const result = await button.evaluate((element: HTMLElement) => {
         const bounds = element.getBoundingClientRect(), range = document.createRange();
+        const segment = element.closest('.cwi-strategy-seg')!.getBoundingClientRect();
         range.selectNodeContents(element);
         const text = range.getBoundingClientRect();
         const fragments = Array.from(range.getClientRects())
           .filter(rect => rect.width > 0 && rect.height > 0)
           .map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
         return { label: element.textContent ?? "", left: bounds.left, right: bounds.right,
-          top: bounds.top, bottom: bounds.bottom, textWidth: text.width, fragments };
+          top: bounds.top, bottom: bounds.bottom, segmentLeft: segment.left, segmentRight: segment.right, textWidth: text.width, fragments };
       });
       if (!maxima.has(i) || maxima.get(i)!.width < result.textWidth) maxima.set(i, { locale, text: result.label, width: result.textWidth });
       if (!result.fragments.length) {
         failures++;
         console.error(`FAIL ${width}/${locale}/${i}: no measurable text fragments`);
+      }
+      if (result.left < result.segmentLeft - 0.5 || result.right > result.segmentRight + 0.5) {
+        failures++;
+        console.error(`FAIL ${width}/${locale}/${i}: button exceeds segment bounds`);
       }
       for (const fragment of result.fragments) {
         const contained = fragment.left >= result.left - 0.5 && fragment.right <= result.right + 0.5
@@ -58,6 +63,24 @@ try {
           console.error(`FAIL ${width}/${locale}/${i}: ${JSON.stringify({ ...result, fragment, contained, clicked })}`);
         }
       }
+    }
+    const rowTops = await buttons.evaluateAll((elements: HTMLElement[]) => elements.map(element => Math.round(element.getBoundingClientRect().top)));
+    if (width === 720 && new Set(rowTops).size < 2) {
+      failures++;
+      console.error(`FAIL ${width}/${locale}: strategy buttons do not wrap`);
+    }
+    const header = await page.locator('.combos-workspace-rail-header').evaluate((element: HTMLElement) => {
+      const bounds = element.getBoundingClientRect();
+      const heading = element.querySelector('.combos-workspace-rail-heading')!.getBoundingClientRect();
+      const button = element.querySelector('button')!;
+      const b = button.getBoundingClientRect();
+      return { contained: b.left >= bounds.left - 0.5 && b.right <= bounds.right + 0.5,
+        overlap: heading.left < b.right && heading.right > b.left && heading.top < b.bottom && heading.bottom > b.top,
+        textFits: button.scrollWidth <= button.clientWidth + 1 };
+    });
+    if (!header.contained || header.overlap || !header.textFits) {
+      failures++;
+      console.error(`FAIL ${width}/${locale}: rail header ${JSON.stringify(header)}`);
     }
     if (screenshots && ((width === 720 && locale === "fr") || (width === 1024 && locale === "vi"))) {
       await page.screenshot({ path: join(screenshots, `strategy-${width}-${locale}.png`) });
