@@ -1837,7 +1837,7 @@
     "umans-provider.test.ts": "providers",
     "uninstall.test.ts": "cli",
     "update-async-routes.test.ts": "server",
-    "update-badge.test.ts": "update", "update-candidate-id.test.ts": "update", "update-minisign.test.ts": "update", "update-trust-root.test.ts": "update", "update-bun-ownership-lease.test.ts": "update",
+    "update-badge.test.ts": "update", "update-bounded-json.test.ts": "update", "update-candidate-id.test.ts": "update", "update-minisign.test.ts": "update", "update-trust-root.test.ts": "update", "update-bun-ownership-lease.test.ts": "update",
     "update-desktop-badge.test.ts": "update", "update-desktop-owner.test.ts": "update", "update-supervised-recovery.test.ts": "update",
     "update-job.test.ts": "update", "update-recovery-host-free.test.ts": "update", "update-job-supervised-restart.test.ts": "update", "update-standalone.test.ts": "update", "update-worker-launch.test.ts": "update",
     "update-notify.test.ts": "update", "update-npm-cache-preflight.test.ts": "update",
