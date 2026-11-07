@@ -108,6 +108,7 @@ function presetSeed(name: string, payload: unknown): Record<string, unknown> | u
   return seed;
 }
 
+/** Live add: an unoffered preset without --adapter/--base-url is a usage error (exit 2) before any write. */
 async function add(name: string, options: ReturnType<typeof parseAdd>, wantsJson: boolean, deps: RuntimeApiDeps): Promise<number> {
   const roster = await runtimeRequest<unknown>("/api/providers", { redirect: "error" }, deps);
   if (!Array.isArray(roster) || roster.some(row => !record(row) || typeof row.name !== "string" || !isValidProviderName(row.name))) {

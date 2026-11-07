@@ -140,13 +140,16 @@ describe("explicit live provider lifecycle", () => {
       expect(f.calls.map(call => call.method)).toEqual(["GET", "GET"]);
       expect(output).not.toHaveBeenCalled();
       expect(errors.mock.calls[0]?.[0]).toBe('Error: The selected target does not offer a "kimi-responses" preset. Custom providers require --adapter and --base-url.');
+      expect(errors.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining(["Usage:", expect.stringContaining("ocx provider add <name> --live")]));
     });
   }
   test("canonical OpenAI missing from the target is a usage error (#8087)", async () => {
     const f = fixture({ presets: { providers: [] } });
     expect(await lifecycle("add", ["openai", "--json"], f.deps)).toBe(2);
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls.map(call => call.method)).toEqual(["GET", "GET"]);
+    expect(output).not.toHaveBeenCalled();
     expect(errors.mock.calls[0]?.[0]).toBe("Error: The selected target does not offer the canonical openai preset.");
+    expect(errors.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining(["Usage:", expect.stringContaining("ocx provider add <name> --live")]));
   });
   for (const seed of [undefined, {}, { ...canonicalSeed, apiKey: SENTINEL }, { ...canonicalSeed, baseUrl: "https://wrong.test" }, { ...canonicalSeed, codexAccountMode: "wrong" }]) {
     test("missing/malformed canonical seed cannot fall back to custom flags", async () => {
