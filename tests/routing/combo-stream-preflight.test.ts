@@ -56,6 +56,8 @@ describe("combo stream preflight", () => {
     expect(comboStreamPayloadCommitsOutput({ type: "response.heartbeat" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.failed" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.incomplete" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta", delta: "" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta", delta: "x" })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "response.output_item.added", item: { type: "function_call" } })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "provider.future_event" })).toBe(true);
@@ -755,5 +757,36 @@ describe("combo stream preflight", () => {
     const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
     expect(result.kind).toBe("accepted");
     expect(await result.response.text()).toBe(expected);
+  });
+
+  test("converts a zero-output incomplete with max_output_tokens after empty delta into a retryable failure", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_text.delta", delta: "" },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "zero_output_token_limit",
+        message: "Provider reached its output token limit before producing output",
+      },
+      response: {
+        usage: { input_tokens: 25, output_tokens: 0 },
+      },
+    });
   });
 });

@@ -247,11 +247,12 @@ export async function preflightAdapterEvents(
         return { stream: replay(buffered, iterator), empty: !hasMeaningful, replayUnsafe };
       }
       if (next.value.type === "heartbeat") {
+        const wasUnsafe = replayUnsafe;
         replayUnsafe ||= next.value.replayUnsafe === true;
         // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
         buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
         retainedHeartbeats += 1;
-        if (replayUnsafe) {
+        if (replayUnsafe && !wasUnsafe) {
           for (let i = 0; i < buffered.length; i++) {
             const ev = buffered[i];
             if (ev.type === "heartbeat" && !ev.replayUnsafe) {

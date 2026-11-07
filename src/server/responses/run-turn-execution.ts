@@ -1050,15 +1050,18 @@ export async function executeResponsesRunTurn(
         const terminalIndex = events.findIndex(event => event.type === "done" || event.type === "incomplete");
         const firstContentIndex = events.findIndex(isContentEvent);
         const preBoundaryIndex = firstContentIndex !== -1 ? firstContentIndex : (terminalIndex !== -1 ? terminalIndex : events.length);
+        const preOutputEvents = events.slice(0, firstContentIndex !== -1 ? firstContentIndex : events.length);
+        const firstTool = preOutputEvents.find(event => event.type === "tool_call_start");
+        const toolCheckIndex = firstTool ? events.indexOf(firstTool) + 1 : preBoundaryIndex;
         const replayUnsafe = events
-          .slice(0, preBoundaryIndex)
-          .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+          .slice(0, Math.max(preBoundaryIndex, toolCheckIndex))
+          .some(event => event.type === "heartbeat" && event.replayUnsafe === true)
+          || events.some(event => event.type === "heartbeat" && event.replayUnsafe === true);
         const sawContent = events.some(isContentEvent);
         const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
         const zeroOutputLimit = (!sawContent || routedCompaction) && terminalEvent
           ? classifyZeroOutputTokenLimit(terminalEvent, { allowCompactionWithContent: routedCompaction })
           : undefined;
-        const firstTool = events.find(event => event.type === "tool_call_start");
         const classifiedError = !replayUnsafe
           ? (zeroOutputLimit ?? (firstTool ? classifyUndeclaredFirstTool(firstTool) : undefined) ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;

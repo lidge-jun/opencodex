@@ -503,6 +503,94 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(hits).toEqual(["a"]);
   });
 
+  test("buffered undeclared tool call after text and replay-unsafe heartbeat never replays on backup", async () => {
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      if (parsed.modelId === "m1") {
+        emit({ type: "text_delta", text: "already visible text" });
+        emit({ type: "heartbeat", replayUnsafe: true });
+        emit({ type: "tool_call_start", id: "call_stale", name: "stale_tool" });
+        emit({ type: "tool_call_delta", arguments: "{}" });
+        emit({ type: "tool_call_end" });
+        emit({ type: "done" });
+        return;
+      }
+      emit({ type: "text_delta", text: "must not run" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/free",
+        input: "hello",
+        stream: false,
+        tools: [{ type: "function", name: "current_tool", parameters: { type: "object" } }],
+      }),
+    }), config, { model: "", provider: "" });
+    const body = await response.text();
+    expect(hits).toEqual(["m1"]);
+    expect(body).not.toContain("must not run");
+  });
+
+  test("direct-SSE empty response.output_text.delta before max_output_tokens fails over to backup target", async () => {
+    const hits: string[] = [];
+    const encoder = new TextEncoder();
+    const frame = (event: unknown) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+    const a = serve(() => {
+      hits.push("a");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(frame({ type: "response.created", response: { id: "r1", status: "in_progress" } }));
+          controller.enqueue(frame({ type: "response.output_text.delta", delta: "" }));
+          controller.enqueue(frame({
+            type: "response.incomplete",
+            response: {
+              id: "r1",
+              status: "incomplete",
+              incomplete_details: { reason: "max_output_tokens" },
+              output: [],
+              usage: { input_tokens: 15, output_tokens: 0, total_tokens: 15 },
+            },
+          }));
+          controller.close();
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(frame({ type: "response.created", response: { id: "r2", status: "in_progress" } }));
+          controller.enqueue(frame({ type: "response.output_text.delta", delta: "direct-sse backup answer" }));
+          controller.enqueue(frame({ type: "response.completed", response: responsesSuccess("direct-sse backup answer", "m2") }));
+          controller.close();
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+    }), config, { model: "", provider: "" });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("direct-sse backup answer");
+    expect(hits).toEqual(["a", "b"]);
+  });
+
   for (const stream of [false, true]) {
     test(`${stream ? "streaming" : "non-streaming"} zero-output max_output_tokens terminal fails over to backup target`, async () => {
       const hits: string[] = [];
@@ -919,7 +1007,7 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(response.status).toBe(200);
       expect(hits).toEqual(["m1"]);
       const body = await response.text();
-      expect(body).toContain("incomplete");
+      expect(body).toContain("max_output_tokens");
       expect(hits).not.toContain("m2");
     });
   }

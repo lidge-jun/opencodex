@@ -161,6 +161,10 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
       if (Array.isArray(output) && output.length > 0) return true;
     }
   }
+  if (type === "response.output_text.delta") {
+    const delta = (payload as { delta?: unknown }).delta;
+    if (delta === undefined || (typeof delta === "string" && delta.length === 0)) return false;
+  }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);
 }
 
