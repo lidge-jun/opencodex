@@ -135,6 +135,8 @@ privacy), `tests/responses/responses-combo-fallback-off.test.ts`, `tests/routing
 `tests/server/fallback-routes.test.ts`, `tests/clients/client-home-unreachable.test.ts`, `tests/cli/cli-fallback.test.ts`
 and `gui/tests/fallback-panel.test.tsx`.
 
+Combo target cooldowns persist across restarts: `src/combos/cooldown-store.ts` backs the map in `src/combos/failover.ts` with `<config dir>/combo-cooldowns.json`, storing absolute expiry epochs (debounced atomic writes, expired or corrupt rows dropped on load), covered by `tests/routing/combo-cooldown-persistence.test.ts`.
+
 The opt-in [all-cooled Combo recovery](runtime.md#scoped-provider-quota-for-combo-selection) can reserve saved combo cooldowns in `src/combos/resolve.ts`; only that request bypasses its reserved writes until a successful dispatch conditionally clears its unchanged target, with throwing predicates treated as ineligible during recovery preparation and available siblings preferred without probing cooled targets. Route-level picks and in-flight retry-after-cooldown selections disable reprobes. Recovery does not authorize a fallback hop or bypass the configured fallback policy.
 
 Local combo refusals name target indices and validated provider labels with closed exclusion reasons.

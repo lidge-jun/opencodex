@@ -5,6 +5,7 @@ import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusa
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
+import { PersistedCooldownMap } from "./cooldown-store";
 import { isDefiniteContextOverflow } from "../lib/context-overflow-verdict";
 
 // The verdict lives in a dependency-free leaf so the presentation classifier can share it.
@@ -48,9 +49,10 @@ const HTTP_MONTH_INDEX: Record<string, number> = {
 };
 
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
-const targetCooldowns = new Map<string, TargetCooldown>();
 // Never reset: an in-flight reservation may still refer to an entry cleared from the map.
 let nextCooldownRevision = 0;
+// Disk-backed (combo-cooldowns.json): a restart keeps every live, reset-aware cooldown.
+const targetCooldowns = new PersistedCooldownMap<TargetCooldown>(() => ++nextCooldownRevision);
 let lastReconciledGeneration = 0;
 let liveComboTargets = new Set<string>();
 
