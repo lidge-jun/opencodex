@@ -8,10 +8,10 @@ const modulePath = process.env.PLAYWRIGHT_MODULE_PATH;
 if (!modulePath?.startsWith("/")) throw new Error("PLAYWRIGHT_MODULE_PATH must be an absolute path");
 const { webkit } = await import(pathToFileURL(modulePath).href);
 const base = process.env.GUI_TEST_BASE ?? "http://127.0.0.1:15174";
-const browser = await webkit.launch({ headless: true });
 const screenshots = process.env.RAIL_SCREENSHOT_DIR;
 if (screenshots && !screenshots.startsWith("/")) throw new Error("RAIL_SCREENSHOT_DIR must be absolute");
 if (screenshots) await mkdir(screenshots, { recursive: true });
+const browser = await webkit.launch({ headless: true });
 let failures = 0;
 try {
   const context = await browser.newContext({ viewport: { width: 860, height: 1000 }, colorScheme: "dark" });
