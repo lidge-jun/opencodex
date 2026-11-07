@@ -53,12 +53,13 @@ test("every role=switch control uses one of the sanctioned switch classes", asyn
 
 test("the bridge draws every sanctioned switch from one spec", async () => {
   const bridge = await Bun.file(new URL("../src/design/bridge.css", import.meta.url)).text();
-  expect(bridge).toContain(":is(.switch, .toggle, .remote-link-switch) {");
+  // A labeled button must size around its text; only its pseudo-element is a track.
+  expect(bridge).toContain(":is(.switch:not(.switch-labeled), .toggle, .remote-link-switch) {");
   expect(bridge).toContain("width: 34px;");
   expect(bridge).toContain("height: 20px;");
   // The spec outranks v1's own state fills, so the on state must be restated for every class.
-  expect(bridge).toContain(':is(.switch.on, .toggle.on, .remote-link-switch[aria-checked="true"]) { background: var(--toggle-on-bg);');
-  expect(bridge).toContain(".switch.mixed { background: var(--amber-soft);");
+  expect(bridge).toContain(':is(.switch.on:not(.switch-labeled), .toggle.on, .remote-link-switch[aria-checked="true"]) { background: var(--toggle-on-bg);');
+  expect(bridge).toContain(".switch.mixed:not(.switch-labeled) { background: var(--amber-soft);");
 });
 
 test("badges carry words, so they are not set in monospace", async () => {
