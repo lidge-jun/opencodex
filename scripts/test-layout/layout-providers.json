@@ -1,4 +1,5 @@
 {
+  "provider-passive-wire-model.test.ts": "providers",
   "passive-key-observation.test.ts": "providers",
   "claude-chat-gateway-tool-schema.test.ts": "providers",
   "provider-anthropic-usage-windows.test.ts": "providers",
