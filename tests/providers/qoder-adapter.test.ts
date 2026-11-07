@@ -99,7 +99,7 @@ describe("qoder adapter", () => {
     expect(child.killed).toBe(true);
   });
 
-  test.each([undefined, null, 7, "", " ", "bad,name", "bad\nname", "bad\ud800", "mcp__opencodex__undeclared"])("invalid partial tool name %j is refused before any lease", async name => {
+  test.each([undefined, null, 7, "", " ", "bad,name", "bad\nname", "bad\ud800", "mcp__opencodex__undeclared", "excluded"])("invalid partial tool name %j is refused before any lease", async name => {
     const child = fakeChild([
       JSON.stringify({ type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] }) + "\n",
       JSON.stringify({ type: "stream_event", event: { type: "content_block_start", index: 0,
@@ -112,7 +112,9 @@ describe("qoder adapter", () => {
     let openedLeases = 0;
     budget.openCall = leaseId => { openedLeases++; openCall(leaseId); };
     const events: AdapterEvent[] = [];
-    await adapter.runTurn!(toolRequest(), { headers: new Headers(), translatorBudget: budget }, e => events.push(e));
+    const request = toolRequest(["probe_echo", "excluded"]);
+    request.options.toolChoice = { allowedTools: ["probe_echo"], mode: "auto" };
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: budget }, e => events.push(e));
     expect(events).toEqual([expect.objectContaining({ type: "error", code: "protocol_error", status: 502 })]);
     expect(openedLeases).toBe(0);
     expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, highWaterBytes: 0, overflows: 0 });
@@ -183,12 +185,14 @@ describe("qoder adapter", () => {
   });
 
   for (const order of ["complete-first", "partial-first"] as const) {
-    for (const reuse of ["duplicate", "name", "input"] as const) {
+    for (const reuse of ["duplicate", "mcp-to-wire", "wire-to-mcp", "name", "input", "alias-input"] as const) {
       test(`mixed ${order} call-id ${reuse} reuse is checked against one emitted identity`, async () => {
         const first = { type: "tool_use", id: "call_mixed_identity", name: "mcp__opencodex__probe_echo", input: { value: "A" } };
         const second = structuredClone(first);
-        if (reuse === "name") second.name = "mcp__opencodex__probe_other";
-        if (reuse === "input") second.input.value = "B";
+        if (reuse === "mcp-to-wire" || reuse === "alias-input") second.name = "probe_echo";
+        if (reuse === "wire-to-mcp") first.name = "probe_echo";
+        if (reuse === "name") second.name = "probe_other";
+        if (reuse === "input" || reuse === "alias-input") second.input.value = "B";
         const complete = (call: typeof first, stop = false) => ({ type: "assistant", message: { stop_reason: stop ? "tool_use" : null, content: [call] } });
         const partial = (call: typeof first) => [
           { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: call.id, name: call.name } } },
@@ -207,7 +211,7 @@ describe("qoder adapter", () => {
         await adapter.runTurn!(toolRequest(["probe_echo", "probe_other"]), { headers: new Headers(), translatorBudget: budget }, e => events.push(e));
         expect(events.filter(e => e.type === "tool_call_start")).toEqual([{ type: "tool_call_start", id: first.id, name: "probe_echo" }]);
         expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
-        if (reuse === "duplicate") {
+        if (reuse === "duplicate" || reuse === "mcp-to-wire" || reuse === "wire-to-mcp") {
           expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
           const output = buildResponseJSON(events, "fixture-model").output as Array<Record<string, unknown>>;
           expect(output.filter(item => item.type === "function_call")).toHaveLength(1);
@@ -336,7 +340,19 @@ describe("qoder adapter", () => {
     expect(state.completedToolCalls).toBe(1);
   });
 
-  test("advertises only the selected client catalog and forwards the stdout ID as Responses call_id", async () => {
+  test.each(["https://qoder.com", "https://qoder.cn"])("rejects ambiguous selected wire identities before spawn (%s)", async baseUrl => {
+    let spawns = 0;
+    const adapter = createQoderAdapter(provider({ baseUrl }), { which: () => "/bin/qoder", spawn: () => { spawns++; return fakeChild([]); } });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(toolRequest(["bash", "mcp__opencodex__bash"]), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(events).toEqual([{ type: "error", status: 400, code: "tool_catalog_invalid", errorType: "invalid_request_error", retryable: false, message: "Invalid Qoder tool catalog." }]);
+    expect(spawns).toBe(0);
+  });
+
+  test.each([
+    ["bash", "mcp__opencodex__bash"], ["bash", "bash"],
+    ["mcp__opencodex__bash", "mcp__opencodex__mcp__opencodex__bash"], ["mcp__opencodex__bash", "mcp__opencodex__bash"],
+  ])("advertises only %s and preserves call_id (CLI name=%s)", async (selected, name) => {
     const callId = "call_42cfba72566547bda98a74bc";
     let cliArgs: readonly string[] = [];
     let catalog: Array<{ name: string; inputSchema: Record<string, unknown> }> = [];
@@ -351,32 +367,47 @@ describe("qoder adapter", () => {
         return fakeChild([
           JSON.stringify({ type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] }) + "\n",
           JSON.stringify({ type: "assistant", message: { stop_reason: "tool_use", content: [{ type: "tool_use", id: callId,
-            name: "mcp__opencodex__probe_echo", input: { value: "FACT1" } }] } }) + "\n",
+            name, input: { value: "FACT1" } }] } }) + "\n",
         ], { parked: true });
       },
       killGraceMs: 10,
     });
     const request = parsed({
-      options: { toolChoice: { allowedTools: ["probe_echo"], mode: "auto" } },
+      options: { toolChoice: { allowedTools: [selected], mode: "auto" } },
       context: { messages: [{ role: "user", content: "call probe_echo", timestamp: 0 }], tools: [
-        { name: "probe_echo", description: "Return a marker", parameters: { type: "object", properties: { value: { type: "string" } } } },
-        { name: "excluded", description: "Not allowed", parameters: { type: "object" } },
+        ...["bash", "mcp__opencodex__bash"].map(name => ({ name, description: "Return a marker", parameters: { type: "object", properties: { value: { type: "string" } } } })),
       ] },
     });
     const events: AdapterEvent[] = [];
     await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
-    expect(cliArgs[cliArgs.indexOf("--allowed-tools") + 1]).toBe("mcp__opencodex__probe_echo");
+    expect(cliArgs[cliArgs.indexOf("--allowed-tools") + 1]).toBe(`mcp__opencodex__${selected}`);
     // H7 regression pin: the bridge must keep the single-turn guard when tools are present.
     expect(cliArgs[cliArgs.indexOf("--tools") + 1]).toBe("");
     expect(cliArgs[cliArgs.indexOf("--max-turns") + 1]).toBe("1");
-    expect(catalog).toEqual([{ name: "probe_echo", description: "Return a marker",
+    expect(catalog).toEqual([{ name: selected, description: "Return a marker",
       inputSchema: { type: "object", properties: { value: { type: "string" } } } }]);
-    expect(events).toContainEqual({ type: "tool_call_start", id: callId, name: "probe_echo" });
+    expect(events).toContainEqual({ type: "tool_call_start", id: callId, name: selected });
     expect(events).toContainEqual({ type: "tool_call_delta", arguments: '{"value":"FACT1"}' });
     expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
-    const response = buildResponseJSON(events, request.modelId, { declaredToolNames: new Set(["probe_echo"]) });
+    const response = buildResponseJSON(events, request.modelId, { declaredToolNames: new Set([selected]) });
     expect(response.output).toContainEqual(expect.objectContaining({ type: "function_call", call_id: callId,
-      name: "probe_echo", arguments: '{"value":"FACT1"}' }));
+      name: selected, arguments: '{"value":"FACT1"}' }));
+  });
+
+  test("accepts a selected wire name in partial tool blocks", async () => {
+    const frames = [
+      { type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] },
+      { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "alias", name: "probe_echo", input: {} } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"value":"A"}' } } },
+      { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+      { type: "assistant", message: { stop_reason: "tool_use", content: [] } },
+    ];
+    const adapter = createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => fakeChild(frames.map(frame => JSON.stringify(frame) + "\n"), { parked: true }) });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(toolRequest(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(events.filter(event => event.type === "tool_call_start")).toEqual([{ type: "tool_call_start", id: "alias", name: "probe_echo" }]);
+    expect(events.filter(event => event.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: '{"value":"A"}' }]);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
   });
 
   test("keeps valid wire identities, order, schema and emitted names without aliases or hashing", () => {
@@ -1154,10 +1185,12 @@ describe("qoder authoritative tool-turn completion", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
-  test("undeclared tool call before authoritative stop fails closed", async () => {
+  test.each(["mcp__opencodex__undeclared", "excluded"])("undeclared tool before authoritative stop fails closed (%s)", async name => {
     const { spawned, clock, parked, adapter } = setupParkedQoder();
     const events: AdapterEvent[] = [];
-    const turnPromise = adapter.runTurn!(toolRequest(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    const request = toolRequest(["probe_echo", "excluded"]);
+    request.options.toolChoice = { allowedTools: ["probe_echo"], mode: "auto" };
+    const turnPromise = adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
 
     await spawned.promise;
     parked.pushFrame({ type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] });
@@ -1170,13 +1203,14 @@ describe("qoder authoritative tool-turn completion", () => {
 
     parked.pushFrame({
       type: "assistant",
-      message: { content: [{ type: "tool_use", id: "call_decl_2", name: "mcp__opencodex__undeclared", input: {} }] },
+      message: { content: [{ type: "tool_use", id: "call_decl_2", name, input: {} }] },
     });
     await new Promise(r => setImmediate(r));
     await new Promise(r => setImmediate(r));
     await turnPromise;
 
     expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call", status: 502 });
+    expect(events.filter(event => event.type === "tool_call_start").map(event => event.name)).toEqual(["probe_echo"]);
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
