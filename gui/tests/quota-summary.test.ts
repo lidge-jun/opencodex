@@ -20,6 +20,8 @@ describe("quota summary", () => {
     expect([formatQuotaPercent(89.6), quotaSeverity(89.6)]).toEqual(["89%", "warn"]);
     expect([formatQuotaPercent(90), quotaSeverity(90)]).toEqual(["90%", "critical"]);
     expect(formatQuotaPercent(undefined)).toBe("-");
+    expect(formatQuotaPercent(89.6, "nearest")).toBe("90%");
+    expect(formatQuotaPercent(89.4, "nearest")).toBe("89%");
   });
 
   test("headline prefers weekly, then monthly, then 5h, then provider windows", () => {
@@ -62,8 +64,8 @@ describe("quota summary", () => {
       { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 75, 25) } },
       { provider: "frozen", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 0, 0, 100) } },
       { provider: "fractional", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(9, 8.1, 9 - 8.1) } },
-      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.999, 10.001) } },
-      { provider: "close-below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.999999999, 10.000000001) } },
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.4, 10.6) } },
+      { provider: "close-below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.99999999999, 10.00000000001) } },
       { provider: "zero-total", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0, 0, 0) } },
       { provider: "malformed", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: { total: 100, used: 0 } } },
     ], now);
@@ -71,15 +73,17 @@ describe("quota summary", () => {
     expect(rows.map(row => [row.provider, row.headline.labelKey, row.headline.percent, row.severity])).toEqual([
       ["workbuddy-ai", "quotaSummary.creditsUnavailable", 75, "normal"],
       ["frozen", "quotaSummary.creditsUnavailable", 100, "normal"],
-      ["fractional", "quotaSummary.creditsUnavailable", 90, "normal"],
+      ["fractional", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
       ["below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
       ["close-below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
     ]);
-    expect(formatQuotaPercent(rows[2]!.headline.percent)).toBe("90%");
-    expect(rows[3]!.headline.percent).toBeCloseTo(89.999, 9);
+    expect(rows[2]!.headline.rounding).toBe("nearest");
+    expect(formatQuotaPercent(rows[2]!.headline.percent, rows[2]!.headline.rounding)).toBe("90%");
+    expect(rows[3]!.headline.percent).toBeCloseTo(89.4, 9);
     expect(rows[3]!.headline.percent!).toBeLessThan(90);
-    expect(formatQuotaPercent(rows[3]!.headline.percent)).toBe("89%");
-    expect(formatQuotaPercent(rows[4]!.headline.percent)).toBe("89%");
+    expect(formatQuotaPercent(rows[3]!.headline.percent, rows[3]!.headline.rounding)).toBe("89%");
+    expect(rows[4]!.headline.percent!).toBeLessThan(90);
+    expect(formatQuotaPercent(rows[4]!.headline.percent, rows[4]!.headline.rounding)).toBe("90%");
     expect(rows[0]!.headline.resetAt).toBeUndefined();
   });
 
@@ -92,7 +96,7 @@ describe("quota summary", () => {
       { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits } },
     ], now);
     const [row] = buildQuotaSummary(reports, name);
-    expect(formatQuotaPercent(row!.headline.percent)).toBe("90%");
+    expect(formatQuotaPercent(row!.headline.percent, row!.headline.rounding)).toBe("90%");
   });
 
   test("critical credits override a noncritical headline, but not a critical one", () => {

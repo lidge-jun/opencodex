@@ -69,6 +69,17 @@ test("WorkBuddy chip names unavailable credits so frozen funds are not called us
   await view.unmount();
 });
 
+test("WorkBuddy chip rounds its informational percentage to the nearest whole number", async () => {
+  const workbuddy = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: {
+      updatedAt: now, workbuddyCredits: { total: 100, used: 89.6, remaining: 10.4, frozen: 0, groups: [] },
+    } },
+  ], now), provider => provider);
+  const view = await mount(workbuddy);
+  expect(view.chip("WorkBuddy AI").textContent).toContain("90%");
+  await view.unmount();
+});
+
 async function click(element: Element) {
   await act(async () => {
     element.dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }) as unknown as Event);

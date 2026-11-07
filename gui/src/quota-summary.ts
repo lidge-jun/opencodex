@@ -23,6 +23,8 @@ export interface QuotaSummaryWindow {
   /** Provider-named window label, shown verbatim. */
   label?: string;
   percent?: number;
+  /** Informational balances have no severity threshold and may round to the nearest percent. */
+  rounding?: "nearest";
   resetAt?: number;
   severity: QuotaSummarySeverity;
 }
@@ -46,9 +48,9 @@ export function quotaSeverity(percent: number | undefined): QuotaSummarySeverity
   return "normal";
 }
 
-// Flooring keeps the displayed number on the same side of the 70/90 thresholds as the color.
-export function formatQuotaPercent(percent: number | undefined): string {
-  return finite(percent) ? `${Math.floor(percent)}%` : "-";
+// Threshold-bearing windows floor to keep the displayed number on the same side as the color.
+export function formatQuotaPercent(percent: number | undefined, rounding?: "nearest"): string {
+  return finite(percent) ? `${rounding === "nearest" ? Math.round(percent) : Math.floor(percent)}%` : "-";
 }
 
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
@@ -84,14 +86,12 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   const workbuddy = quota.workbuddyCredits;
   if (workbuddy && workbuddy.total > 0) {
     // Remaining is authoritative and includes frozen credits; the meter is informational.
-    const raw = (1 - Math.min(workbuddy.remaining / workbuddy.total, 1)) * 100;
-    const integer = Math.round(raw);
-    // The provider sums at most 512 packages into both total and remaining.
-    const percent = Math.abs(raw - integer) <= Number.EPSILON * 100 * 1024 ? integer : raw;
+    const percent = (1 - Math.min(workbuddy.remaining / workbuddy.total, 1)) * 100;
     windows.push({
       id: "quotaSummary.creditsUnavailable",
       labelKey: "quotaSummary.creditsUnavailable",
       percent,
+      rounding: "nearest",
       severity: "normal",
     });
   }

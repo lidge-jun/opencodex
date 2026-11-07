@@ -1405,7 +1405,8 @@ balances, and the next expiring non-daily credits when available. Refresh reads 
 account's billing summary; an unavailable read is not a zero balance. These credits are
 informational and do not disable free models when paid credits run out.
 When the reported total is positive, the header quota summary shows the unavailable percentage,
-including frozen credits, without an exhaustion warning: free models may still work. An individual
+including frozen credits, rounded to the nearest whole percent. It gives no exhaustion warning:
+free models may still work. An individual
 credit expiry is not shown as a reset of the entire balance.
 
 This uses an unofficial subscription protocol based on
