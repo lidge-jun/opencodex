@@ -22,5 +22,5 @@
    No selector is shared with the block above, so the two tails simply
    coexist — dropping either one silently unstyles that feature. */
 .open-browser-pref { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; margin: 2px 0; }
-.open-browser-pref input { margin-top: 2px; flex-shrink: 0; }
+.open-browser-pref .toggle { margin-top: 2px; }
 .open-browser-pref-copy { display: flex; flex-direction: column; gap: 2px; }

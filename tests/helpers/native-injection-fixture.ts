@@ -28,6 +28,12 @@ let nextId = 0;
 export class InjectionSocket extends EventTarget {
   static OPEN = 1;
   static all: InjectionSocket[] = [];
+  /**
+   * Set before the opening send when a test needs the socket's first inbound frame to be
+   * its own emit (for example a pre-output upstream refusal) rather than the synthetic
+   * response.created this class would otherwise queue.
+   */
+  static suppressAutoCreated = false;
   readyState = 0;
   frames: Frame[] = [];
   readonly root = `inject-${++nextId}`;
@@ -40,7 +46,7 @@ export class InjectionSocket extends EventTarget {
     const frame = JSON.parse(text);
     if (frame.type === "response.inject" && this.throwOnInject) throw new Error("fixture send failure");
     this.frames.push(frame);
-    if (this.frames.length === 1) queueMicrotask(() => this.emit({ type: "response.created", response: { id: this.root, status: "in_progress", output: [] } }));
+    if (this.frames.length === 1 && !InjectionSocket.suppressAutoCreated) queueMicrotask(() => this.emit({ type: "response.created", response: { id: this.root, status: "in_progress", output: [] } }));
   }
   emit(frame: Frame) {
     const lane = this.frames[0]?.stream_id;
@@ -58,11 +64,17 @@ export const waitForInjection = async (condition: () => boolean) => {
   for (let i = 0; i < 1000; i++) { if (condition()) return; await Bun.sleep(1); }
   throw new Error("injection fixture condition timed out");
 };
-export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
+/** Pair with installInjectionFixture: its afterEach releases this writer after client cleanup. */
+export function prepareInjectionSpendHome(): void {
   releaseSpendHome ??= acquireOwnedSpendHome();
+}
+export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test", requestHeaders?: HeadersInit) {
+  prepareInjectionSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
-  const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" }) } as WsData,
+  const headers = new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" });
+  new Headers(requestHeaders).forEach((value, name) => headers.set(name, value));
+  const ws = { readyState: 1, data: { headers } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws, 1000, "fixture close"); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
@@ -71,8 +83,8 @@ export function injectionClient(fields: Frame = {}, settings = injectionConfig()
     tools: [{ type: "function", name: "get_value", parameters: { type: "object", properties: {} } }], ...fields });
   return { ws, sent, send, handler };
 }
-export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
-  const client = injectionClient(fields, settings, credential);
+export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test", requestHeaders?: HeadersInit) {
+  const client = injectionClient(fields, settings, credential, requestHeaders);
   await waitForInjection(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = InjectionSocket.all.at(-1)!;
   expect(socket).toBeDefined();
@@ -102,7 +114,7 @@ export function acknowledgeInjection(socket: InjectionSocket, sequence = 100, id
 }
 export function installInjectionFixture() {
   beforeEach(() => {
-    nextId = 0; fallbackCalls = 0;
+    nextId = 0; fallbackCalls = 0; InjectionSocket.suppressAutoCreated = false;
     savedProxy = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
     for (const key of proxyKeys) delete process.env[key];
     globalThis.WebSocket = InjectionSocket as unknown as typeof WebSocket;

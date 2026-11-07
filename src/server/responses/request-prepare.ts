@@ -8,7 +8,7 @@ import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -74,6 +74,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { formatErrorResponse } from "../../bridge";
+import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
@@ -1460,12 +1461,20 @@ export async function prepareResponsesRequest(
   });
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
+    const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
+    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+      && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
+      // Combo children carry the refusal's local identity too, so a compatible sibling target
+      // can still be tried; a direct request keeps the client-facing 400 below.
+      if (policyScope.eligibility || options.comboAttempt) throw new MandatoryToolChoiceUnavailableError();
+      return mandatoryToolChoiceUnavailableResponse();
+    }
   } catch (error) {
     const policyRefusal = policyCandidateRefusalResponse(error);
     if (policyRefusal) return policyRefusal;
     throw error;
   }
-  // Normalization is the last thing that can move the destination: resolving an
+  // Static normalization can move the destination: resolving an
   // OpenAI virtual model rewrites route.modelId to the wire id that will
   // actually be billed. A scope checked only before this would authorize the
   // public selector and send the wire model, so the settled route is checked

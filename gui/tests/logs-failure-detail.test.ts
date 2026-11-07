@@ -32,3 +32,10 @@ describe("failure detail renders as proxy-owned localized text", () => {
   });
 });
 
+
+test("validation detail names only closed fields and causes in the dashboard", () => {
+  expect(failureDetailLabel({ code: "provider_error", type: "invalid_request_error", validation: [
+    { field: "max_completion_tokens", type: "extra_forbidden" }, { field: "messages.role", type: "union_tag_invalid" },
+    { field: PROVIDER_KEY, type: "extra_forbidden" },
+  ] }, t)).toBe("The provider returned an error (invalid_request_error): max_completion_tokens [extra_forbidden]; messages.role [union_tag_invalid]");
+});

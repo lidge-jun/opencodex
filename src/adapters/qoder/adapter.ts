@@ -266,6 +266,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   };
 }
 
+/** Build the regional Qoder adapter with a request-scoped capture-only tool catalog. */
 export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapterDeps = {}): ProviderAdapter {
   return {
     name: "qoder",
@@ -287,6 +288,12 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
       try {
         catalog = buildCodingAgentToolCatalog(parsed, QODER_MCP_SERVER_NAME);
+        for (const wireName of catalog.emittedNameMap.values()) {
+          const restored = catalog.emittedNameMap.get(wireName);
+          if (restored !== undefined && restored !== wireName) {
+            throw new CodingAgentToolCatalogError("ambiguous selected tool identity");
+          }
+        }
       } catch (error) {
         if (!(error instanceof CodingAgentToolCatalogError)) throw error;
         emit({
@@ -305,6 +312,8 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
             serverModulePath: QODER_MCP_SERVER_PATH,
             tools: catalog.tools,
             emittedNameMap: catalog.emittedNameMap,
+            // Qoder can mix exact client wire names with MCP names in one reply.
+            acceptWireToolNames: true,
             maxTurnToolCalls: MAX_TOOL_BLOCK_STARTS,
             projectHistoryToolNames: true,
             completeAssistantToolUse: true,

@@ -146,8 +146,11 @@ v1 토큰 `--radius-xs`, `--radius-sm`, `--radius-lg`는 Tailwind의 `rounded-xs
 | `--radius-card` / `rounded-card` | 10px | 카드, 타일 |
 | `--radius-panel` / `rounded-panel` | 12px | 패널, 섹션 |
 | `--radius-sheet` | 16px | 대화상자 |
+| `--radius-full` / `rounded-full` | 9999px | 알약, 원형 버튼·점 |
 
-알약(999px)은 상태 배지와 스위치에만 쓴다.
+알약(999px)은 상태 배지와 스위치에만 쓴다. v1 스타일시트의 `--radius-pill`은 999px 그대로다.
+`rounded-full`은 Tailwind 기본값 `calc(infinity * 1px)` 대신 유한한 9999px로 고정한다. 기본값은
+2147483647px로 빌드되고, macOS WKWebView가 이 값을 각진 모서리로 그릴 수 있다(#8281).
 
 ### Type
 

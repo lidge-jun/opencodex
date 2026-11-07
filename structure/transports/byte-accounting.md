@@ -143,13 +143,22 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
+total, measuring only the arriving fragment instead of remeasuring retained chunks.
+Each new call starts at zero; transient replacement admission, per-call limits and
+close/cancellation release remain unchanged. `tests/providers/kiro/kiro-tool-byte-accounting.test.ts`
+bounds measurement work and covers Unicode byte limits and consecutive-call reset.
+
 Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
 its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
 removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps
 the previous charge owned until `finally` releases it, without releasing other owners' bytes.
 The turn limit and transport-read accounting remain in force. `tests/providers/command-code-buffer-budget.test.ts`
 covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
-one-byte overflow, another retained owner, consumer return and upstream cancellation.
+one-byte overflow, another retained owner, consumer return and upstream cancellation. Byte sizing
+measures only new decoded text, including EOF replacement bytes; newline searches run only when
+new text contains a newline, and only a drained residual is remeasured. The same tests bound total
+measurement and search input by wire size for both newline and EOF termination.
 
 Devin Connect-RPC in `src/adapters/devin/cloud-direct/chat.ts` compacts surviving chunks in place
 and truncates the queue, or clears it when no bytes remain. No deleted-chunk

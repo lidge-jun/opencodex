@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ollamaToChat, ollamaBufferedResponse, createOllamaStreamState, consumeOllamaChatChunk, ollamaStreamTerminal, OllamaCodecError } from "../../src/protocols/codecs/ollama";
+import { ollamaToChat, ollamaBufferedResponse, createOllamaStreamState, consumeOllamaChatChunk, ollamaStreamTerminal, OllamaCodecError, MAX_OLLAMA_TOOL_CALLS } from "../../src/protocols/codecs/ollama";
 
 const png = "iVBORw0KGgo=";
 const schema = { type: "object", properties: { q: { type: "string", enum: ["a", "b"] } }, required: ["q"], additionalProperties: false };
@@ -39,6 +39,47 @@ describe("Ollama codec", () => {
     const duplicate = [{ role: "assistant", content: "", tool_calls: [{ id: "same", function: { name: "f", arguments: {} } }, { id: "same", function: { name: "g", arguments: {} } }] }];
     expect(() => ollamaToChat("chat", { model: "m", messages: duplicate })).toThrow(OllamaCodecError);
     expect(() => ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: [{ id: 7, function: { name: "f", arguments: {} } }] }] })).toThrow(OllamaCodecError);
+  });
+  test("bounds aggregate tool-call validation work", () => {
+    expect(MAX_OLLAMA_TOOL_CALLS).toBe(1_024);
+    const calls = Array.from({ length: MAX_OLLAMA_TOOL_CALLS }, (_, i) => ({ id: `id${i}`, function: { name: "f", arguments: {} } }));
+    expect((ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: calls }] }).messages as any[])[0].tool_calls).toHaveLength(MAX_OLLAMA_TOOL_CALLS);
+    calls.push({ id: "overflow", function: { name: "f", arguments: {} } });
+    expect(() => ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: calls }] })).toThrow("Too many tool calls");
+  });
+  test("counts calls across assistant messages even after their results are matched", () => {
+    const calls = Array.from({ length: 1_024 }, (_, i) => ({ id: `id${i}`, function: { name: "f", arguments: {} } }));
+    const laterCalls = calls.slice(512);
+    const messages = [
+      { role: "assistant", content: "", tool_calls: calls.slice(0, 512) },
+      ...calls.slice(0, 512).map(call => ({ role: "tool", content: "done", tool_call_id: call.id })),
+      { role: "assistant", content: "", tool_calls: laterCalls },
+    ];
+    const accepted = ollamaToChat("chat", { model: "m", messages }).messages as { tool_calls?: unknown[] }[];
+    expect(accepted.at(-1)!.tool_calls).toHaveLength(512);
+    laterCalls.push({ id: "overflow", function: { name: "f", arguments: {} } });
+    expect(() => ollamaToChat("chat", { model: "m", messages })).toThrow("Too many tool calls");
+  });
+  test("matches the latest unambiguous name group before falling back to earlier calls", () => {
+    const call = (id: string) => ({ id, function: { name: "f", arguments: {} } });
+    const history = [
+      { role: "assistant", content: "", tool_calls: [call("older")] },
+      { role: "assistant", content: "", tool_calls: [call("newer-a"), call("newer-b")] },
+    ];
+    const byName = { role: "tool", content: "done", tool_name: "f" };
+    expect(() => ollamaToChat("chat", { model: "m", messages: [...history, byName] })).toThrow("Ambiguous tool result");
+    const messages = [...history, { role: "tool", content: "done", tool_call_id: "newer-b" }, byName, byName];
+    const matched = ollamaToChat("chat", { model: "m", messages }).messages as { tool_call_id?: string }[];
+    expect(matched.slice(2).map(message => message.tool_call_id)).toEqual(["newer-b", "newer-a", "older"]);
+  });
+  test("keeps duplicate IDs reserved after a result and refuses mismatched explicit IDs", () => {
+    const assistant = { role: "assistant", content: "", tool_calls: [{ id: "stable", function: { name: "f", arguments: {} } }] };
+    const result = { role: "tool", content: "done", tool_call_id: "stable" };
+    expect(() => ollamaToChat("chat", { model: "m", messages: [assistant, result, assistant] })).toThrow("Duplicate tool call id");
+    for (const unmatched of [
+      { ...result, tool_name: "other" },
+      { ...result, tool_call_id: "missing", tool_name: "f" },
+    ]) expect(() => ollamaToChat("chat", { model: "m", messages: [assistant, unmatched] })).toThrow("Unmatched tool result");
   });
   test("rejects unsupported and malformed shapes with bounded errors", () => {
     for (const body of [

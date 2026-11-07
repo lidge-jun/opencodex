@@ -134,6 +134,28 @@ for (const [size, cap, type, code] of [[1000, 250, "request_too_large", "transla
   expect(error.type).toBe(type); expect(error.code).toBe(code);
 });
 
+type SourceUses = { path: string; constructors: boolean[]; writers: number };
+let sourceUses: Promise<SourceUses[]> | undefined;
+/** Scan every source once with bounded reads; retain only oracle facts, not all source text. */
+function readSourceUses(): Promise<SourceUses[]> {
+  return sourceUses ??= (async () => {
+    const paths = [...new Bun.Glob("src/**/*.ts").scanSync(repoRoot())];
+    const uses = new Array<SourceUses>(paths.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(8, paths.length) }, async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= paths.length) return;
+        const path = paths[index]!, source = await Bun.file(repoPath(path)).text();
+        uses[index] = { path: path.replaceAll("\\", "/"),
+          constructors: [...source.matchAll(/new AnthropicRequestError\(/g)].map(call => source.slice(0, call.index).endsWith("markProxyError(")),
+          writers: source.split("\n").filter(line => /anthropicError(Response|Body)\(/.test(line)).length };
+      }
+    }));
+    return uses.filter(row => row.constructors.length || row.writers);
+  })();
+}
+
 const ingressProducerRows: [string, number, string[]][] = [
   ["src/claude/inbound.ts", 10, ["File-backed images require native Anthropic passthrough", "tool_result requires tool_use_id", "tool_use requires id and name", "malformed ocxr1 reasoning signature", "OpenCodex reasoning continuity cannot be replayed as an Anthropic signature", "each message must be an object", "unsupported message role: unsupported", "request body must be a JSON object", "model is required", "messages must be a non-empty array"]],
   ["src/protocols/codecs/messages-ir.ts", 9, ["tool_result requires tool_use_id", "tool_use requires id and name", "MALFORMED_REASONING_SIGNATURE", "OpenCodex reasoning continuity cannot be replayed as an Anthropic signature", "each message must be an object", "unsupported message role: unsupported", "request body must be a JSON object", "model is required", "messages must be a non-empty array"]],
@@ -144,11 +166,9 @@ const ingressProducerRows: [string, number, string[]][] = [
 ];
 test("C1/C2 ingress constructors have explicit producer rows and local identity", async () => {
   const actual: Record<string, number> = {};
-  for (const path of new Bun.Glob("src/**/*.ts").scanSync(repoRoot())) {
-    const source = readFileSync(repoPath(path), "utf8");
-    const calls = [...source.matchAll(/new AnthropicRequestError\(/g)];
-    if (calls.length) actual[path.replaceAll("\\", "/")] = calls.length;
-    for (const call of calls) expect(source.slice(0, call.index).endsWith("markProxyError(")).toBe(true);
+  for (const { path, constructors } of await readSourceUses()) {
+    if (constructors.length) actual[path] = constructors.length;
+    for (const marked of constructors) expect(marked).toBe(true);
   }
   expect(actual).toEqual(Object.fromEntries(ingressProducerRows.map(([path, count]) => [path, count])));
   for (const [path, , diagnostics] of ingressProducerRows) {
@@ -163,17 +183,15 @@ test("C1/C2 ingress constructors have explicit producer rows and local identity"
 const envelopeWriterRows = [
   ["src/claude/outbound.ts", 6, "shared baseline helpers, original verdict and incomplete/unfinished presentation construction"],
   ["src/protocols/encoders/messages.ts", 4, "original verdict construction and fixed local collection failures"],
-  ["src/server/messages-native.ts", 4, "local/evidence legacy formatters, original combo and fold envelopes"],
+  ["src/server/messages-native.ts", 5, "local/evidence legacy formatters, original combo and fold envelopes, owned workflow refusal projection"],
   ["src/server/claude-messages.ts", 30, "mapped local ingress/bypass constructors, original combo and defensive JSON presentation envelopes"],
   ["src/server/index/serve-options.ts", 4, "fixed endpoint auth/origin bypasses"],
   ["src/server/messages-native-tool-guard.ts", 1, "deferred local guard terminal"],
 ] as const;
-test("W1/W3 envelope writers are covered by explicit dispositions", () => {
+test("W1/W3 envelope writers are covered by explicit dispositions", async () => {
   const actual: Record<string, number> = {};
-  for (const path of new Bun.Glob("src/**/*.ts").scanSync(repoRoot())) {
-    const lines = readFileSync(repoPath(path), "utf8").split("\n");
-    const count = lines.filter(line => /anthropicError(Response|Body)\(/.test(line)).length;
-    if (count) actual[path.replaceAll("\\", "/")] = count;
+  for (const { path, writers } of await readSourceUses()) {
+    if (writers) actual[path] = writers;
   }
   expect(actual).toEqual(Object.fromEntries(envelopeWriterRows.map(([path, count]) => [path, count])));
   const bypassRows = [
@@ -256,7 +274,7 @@ const nativeFailRows = [
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
-    "call": "if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, \"send_budget_exhausted\", \"send_budget_exhausted\");",
+    "call": "return fail(429, sendError.message, \"send_budget_exhausted\", \"send_budget_exhausted\");",
     "disposition": "bounded typed local exception or producer-marked dispatch diagnostic"
   },
   {
