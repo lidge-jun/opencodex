@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
-import { resolveProviderApiKey } from "./api-key-resolve";
+import { resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 
 const destinations = new Map<string, PassiveKeyProvider>([
@@ -54,7 +54,7 @@ function stillConfigured(config: OcxConfig, name: string, snapshot: OcxProviderC
     const row = current.apiKeyPool.find(entry => entry.id === selection.entryId && entry.key === reference);
     if (!row || row.disabled) return false;
   } else if (current.apiKey !== reference) return false;
-  return resolveProviderApiKey(reference) === snapshot.apiKey;
+  return resolveProviderApiKeyPassively(reference) === snapshot.apiKey;
 }
 
 /** Parse bounded serialized bodies only; large sends are accepted when model is first. */
@@ -113,7 +113,7 @@ export function passiveKeyPhysicalFetch(
 export function getPassiveKeyLimits(config: OcxConfig, name: string, model: string) {
   const provider = config.providers[name];
   if (!provider || (provider.authMode !== undefined && provider.authMode !== "key") || !provider.apiKey) return [];
-  const key = resolveProviderApiKey(provider.apiKey);
+  const key = resolveProviderApiKeyPassively(provider.apiKey);
   if (!key) return [];
   let vendor: PassiveKeyProvider | undefined;
   try { vendor = destinations.get(new URL(provider.baseUrl).origin); } catch { return []; }
@@ -134,7 +134,7 @@ export function listPassiveKeyLimits(config: OcxConfig) {
       ? [{ id: keyId(provider.apiKey), key: provider.apiKey }] : [];
     for (const entry of entries) {
       if ("disabled" in entry && entry.disabled) continue;
-      const key = resolveProviderApiKey(entry.key);
+      const key = resolveProviderApiKeyPassively(entry.key);
       if (!key || (vendor === "openai" && !key.startsWith("sk-"))) continue;
       for (const reading of passiveKeyLimits.list(identity(name, provider, entry.id, entry.key, key), vendor, Date.now())) {
         result.push({ provider: name, keyId: entry.id, ...reading });

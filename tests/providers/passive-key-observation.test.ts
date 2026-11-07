@@ -4,6 +4,9 @@ import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof
 import * as observations from "../../src/providers/passive-key-observation";
 const { getPassiveKeyLimits, listPassiveKeyLimits, passiveKeyPhysicalFetch } = observations;
 import type { OcxConfig } from "../../src/types";
+import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
+import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
+import * as decision from "../../src/providers/quota-decision-snapshot";
 
 function fixture(name: string): OcxConfig {
   return { port: 0, defaultProvider: name, providers: { [name]: { adapter: "openai-chat", authMode: "key",
@@ -88,4 +91,114 @@ test("retiring one provider does not clear another provider's observation", asyn
   observations.clearPassiveKeyLimits("provider-a");
   expect(getPassiveKeyLimits(a, "provider-a", "model")).toEqual([]);
   expect(getPassiveKeyLimits(b, "provider-b", "model")).toMatchObject([{ remaining: 5 }]);
+});
+
+test.each(["get", "list", "send"] as const)("passive %s does not observe or invalidate decision credentials after an env replacement", async operation => {
+  const name = `passive-env-${operation}`;
+  const config = fixture(name);
+  const provider = config.providers[name]!;
+  provider.apiKey = "${OCX_TEST_PASSIVE_KEY}";
+  process.env.OCX_TEST_PASSIVE_KEY = "synthetic-key";
+  let observed = 0, invalidated = 0;
+  const detach = registerDecisionQuotaSink({
+    observeKeyCredential: (reference, value) => { observed++; decision.observeDecisionKeyCredential(reference, value); },
+    invalidateKeyQuotas: () => { invalidated++; decision.invalidateDecisionKeyQuotas(); },
+  } as DecisionQuotaSink);
+  try {
+    const routed = routedProviderConfig(name, provider);
+    const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, name, routed);
+    await send("https://api.groq.com/openai/v1/chat/completions", init);
+    expect(getPassiveKeyLimits(config, name, "model")).toHaveLength(1);
+    expect(listPassiveKeyLimits(config)).toHaveLength(1);
+    const windows = [{ window: "5h" as const, percent: 25, observedAt: Date.now() }];
+    decision.publishDecisionKeyQuota(name, provider, windows);
+    expect(decision.readLoadedDecisionKeyQuota(name, provider)).toEqual(windows);
+    const before = { observed, invalidated };
+    process.env.OCX_TEST_PASSIVE_KEY = "replacement-synthetic-key";
+    if (operation === "get") expect(getPassiveKeyLimits(config, name, "model")).toEqual([]);
+    if (operation === "list") expect(listPassiveKeyLimits(config)).toEqual([]);
+    if (operation === "send") {
+      await send("https://api.groq.com/openai/v1/chat/completions", init);
+      expect(listPassiveKeyLimits(config)).toEqual([]);
+    }
+    expect({ observed, invalidated }).toEqual(before);
+    expect(decision.readLoadedDecisionKeyQuota(name, provider)).toEqual(windows);
+    resolveProviderApiKey(provider.apiKey);
+    expect(observed).toBe(before.observed + 1);
+    expect(decision.readLoadedDecisionKeyQuota(name, provider)).toBeUndefined();
+  } finally {
+    detach();
+    delete process.env.OCX_TEST_PASSIVE_KEY;
+    observations.clearPassiveKeyLimits();
+  }
+});
+
+test("keychain replacement retires passive ownership while normal credential reads retain decision invalidation", async () => {
+  const config = fixture("passive-keychain");
+  const provider = config.providers["passive-keychain"]!;
+  provider.apiKey = "keychain:passive-keychain";
+  let stored = "synthetic-key";
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => stored, setPassword: value => { stored = value; }, deletePassword: () => false }));
+  let observed = 0, invalidated = 0;
+  const detach = registerDecisionQuotaSink({
+    observeKeyCredential: (reference, value) => { observed++; decision.observeDecisionKeyCredential(reference, value); },
+    invalidateKeyQuotas: () => { invalidated++; decision.invalidateDecisionKeyQuotas(); },
+  } as DecisionQuotaSink);
+  try {
+    const routed = routedProviderConfig("passive-keychain", provider);
+    const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "passive-keychain", routed);
+    await send("https://api.groq.com/openai/v1/chat/completions", init);
+    expect(getPassiveKeyLimits(config, "passive-keychain", "model")).toHaveLength(1);
+    stored = "replacement-synthetic-key";
+    invalidateResolvedProviderKeyCache();
+    const windows = [{ window: "5h" as const, percent: 25, observedAt: Date.now() }];
+    decision.publishDecisionKeyQuota("passive-keychain", provider, windows);
+    const before = { observed, invalidated };
+    expect(getPassiveKeyLimits(config, "passive-keychain", "model")).toEqual([]);
+    expect(listPassiveKeyLimits(config)).toEqual([]);
+    await send("https://api.groq.com/openai/v1/chat/completions", init);
+    expect({ observed, invalidated }).toEqual(before);
+    expect(decision.readLoadedDecisionKeyQuota("passive-keychain", provider)).toEqual(windows);
+    resolveProviderApiKey(provider.apiKey);
+    expect(decision.readLoadedDecisionKeyQuota("passive-keychain", provider)).toBeUndefined();
+  } finally {
+    detach();
+    setProviderKeychainEntryFactoryForTests(null);
+    observations.clearPassiveKeyLimits();
+  }
+});
+
+test("an env key replaced during a send cannot publish passive limits or change decision evidence", async () => {
+  const name = "passive-env-in-flight";
+  const config = fixture(name);
+  const provider = config.providers[name]!;
+  provider.apiKey = "${OCX_TEST_PASSIVE_IN_FLIGHT}";
+  process.env.OCX_TEST_PASSIVE_IN_FLIGHT = "synthetic-key";
+  let observed = 0;
+  const detach = registerDecisionQuotaSink({
+    observeKeyCredential: (reference, value) => { observed++; decision.observeDecisionKeyCredential(reference, value); },
+    invalidateKeyQuotas: decision.invalidateDecisionKeyQuotas,
+  } as DecisionQuotaSink);
+  try {
+    const routed = routedProviderConfig(name, provider);
+    const windows = [{ window: "5h" as const, percent: 25, observedAt: Date.now() }];
+    decision.publishDecisionKeyQuota(name, provider, windows);
+    const before = observed;
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    const send = passiveKeyPhysicalFetch(trusted(async () => { await wait; return response(); }), config, name, routed);
+    const pending = send("https://api.groq.com/openai/v1/chat/completions", init);
+    delete process.env.OCX_TEST_PASSIVE_IN_FLIGHT;
+    release();
+    await pending;
+    expect(listPassiveKeyLimits(config)).toEqual([]);
+    expect(observed).toBe(before);
+    expect(decision.readLoadedDecisionKeyQuota(name, provider)).toEqual(windows);
+    resolveProviderApiKey(provider.apiKey);
+    expect(decision.readLoadedDecisionKeyQuota(name, provider)).toBeUndefined();
+  } finally {
+    detach();
+    delete process.env.OCX_TEST_PASSIVE_IN_FLIGHT;
+    observations.clearPassiveKeyLimits();
+  }
 });

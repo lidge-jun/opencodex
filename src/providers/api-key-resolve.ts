@@ -135,10 +135,16 @@ export function resolveProviderApiKey(value: string | undefined): string | undef
   return resolved;
 }
 
+/** Resolve for passive display ownership without publishing routing evidence or warnings. */
+export function resolveProviderApiKeyPassively(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return isKeychainReference(value) ? readKeychain(keychainAccount(value), true) : resolveEnvValue(value);
+}
+
 /** The same resolution without the unreadable-reference warning, for observe-only callers. */
 export function resolveProviderApiKeyQuietly(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value), true) : resolveEnvValue(value);
+  const resolved = resolveProviderApiKeyPassively(value);
   // A quiet read still sees a replaced secret; advisory key evidence published under the old one must not outlive it.
   observeDecisionKeyCredential(value, resolved);
   return resolved;
