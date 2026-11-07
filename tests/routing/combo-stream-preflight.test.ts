@@ -697,6 +697,116 @@ describe("combo stream preflight", () => {
     expect(seen).toEqual([]);
   });
 
+  test("a clean prelude-only EOF offers one replacement before relaying the prefix", async () => {
+    const original = sse({ type: "response.created", response: { id: "first", output: [] } });
+    const stages: RequestFailureStage[] = [];
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async (_error, stage) => {
+      stages.push(stage);
+      return sse({ type: "response.completed", response: { id: "replacement", status: "completed" } });
+    });
+    const text = await wrapped.text();
+    expect(stages).toEqual(["protocol-prelude"]);
+    expect(text).toContain("replacement");
+    expect(text).not.toContain('"first"');
+  });
+
+  test("declined clean EOF recovery preserves the original prelude", async () => {
+    const original = sse({ type: "response.created", response: { id: "first", output: [] } });
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+      calls++;
+      return null;
+    });
+    expect(await wrapped.text()).toContain('"first"');
+    expect(calls).toBe(1);
+  });
+
+  test.each([
+    [{ type: "response.completed", response: { status: "completed", output: [] } }],
+    [{ type: "response.output_text.delta", delta: "visible" }],
+    [{ error: { type: "server_error", message: "fixture" } }],
+    [{ type: "response.created", response: { output: [{ type: "message" }] } }],
+  ])("terminal, output or explicit error never offers EOF recovery (%j)", async payload => {
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(sse(payload), { model: "m1", provider: "a" }, async () => {
+      calls++;
+      return null;
+    });
+    await wrapped.text();
+    expect(calls).toBe(0);
+  });
+
+  test.each(["data: {not-json}\n\n", 'data: {"type":"response.output'])(
+    "opaque or truncated payload never offers EOF recovery", async payload => {
+      let calls = 0;
+      const source = new Response(payload, { headers: { "content-type": "text/event-stream" } });
+      const wrapped = deferProtocolSafeResetRecovery(source, { model: "m1", provider: "a" }, async () => { calls++; return null; });
+      expect(await wrapped.text()).toBe(payload);
+      expect(calls).toBe(0);
+    },
+  );
+
+  test("downstream cancellation while the prelude is held never starts a replacement", async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let onPull!: () => void;
+    const pulled = new Promise<void>(resolve => { onPull = resolve; });
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; },
+      pull() { onPull(); },
+    });
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(new Response(upstream, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => { calls++; return null; });
+    const reader = wrapped.body!.getReader();
+    const pending = reader.read();
+    await pulled;
+    await reader.cancel();
+    try { source.close(); } catch { /* a correct wrapper may already cancel the source */ }
+    await pending;
+    await Bun.sleep(0);
+    expect(calls).toBe(0);
+  });
+
+  test("downstream cancellation aborts a replacement already in flight", async () => {
+    let started!: (signal: AbortSignal) => void;
+    const recoveryStarted = new Promise<AbortSignal>(resolve => { started = resolve; });
+    const wrapped = deferProtocolSafeResetRecovery(
+      sse({ type: "response.created", response: { id: "first", output: [] } }),
+      { model: "m1", provider: "a" },
+      async (_error, _stage, signal) => {
+        started(signal);
+        return new Promise(resolve => signal.addEventListener("abort", () => resolve(null), { once: true }));
+      },
+    );
+    const reader = wrapped.body!.getReader();
+    const pending = reader.read();
+    const signal = await recoveryStarted;
+    await reader.cancel();
+    await pending;
+    expect(signal.aborted).toBe(true);
+  });
+
+  test("held prelude sends bounded keepalive comments while upstream is silent", async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const upstream = new ReadableStream<Uint8Array>({ start(controller) { source = controller; }, pull() {} });
+    const wrapped = deferProtocolSafeResetRecovery(new Response(upstream, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => null, { heartbeatIntervalMs: 5 });
+    const reader = wrapped.body!.getReader();
+    try {
+      for (let i = 0; i < 2; i++) {
+        const result = await Promise.race([reader.read(), Bun.sleep(150).then(() => null)]);
+        expect(result).not.toBeNull();
+        if (result && !result.done) expect(new TextDecoder().decode(result.value)).toMatch(/^:.*\n\n$/);
+      }
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'));
+      source.close();
+      const result = await reader.read();
+      expect(result.done).toBe(false);
+      if (!result.done) expect(new TextDecoder().decode(result.value)).toContain("response.completed");
+      expect((await reader.read()).done).toBe(true);
+    } finally { await reader.cancel(); }
+  });
+
   test("a response.created carrying output is not a prelude", () => {
     expect(comboStreamPayloadCommitsOutput({
       type: "response.created", response: { id: "r1", output: [] },

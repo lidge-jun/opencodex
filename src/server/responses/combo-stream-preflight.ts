@@ -10,10 +10,12 @@ import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
+import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 // Required-tool reasoning may delay delivery, but never for an unbounded/trickling prelude.
 const COMBO_REQUIRED_TOOL_REASONING_HOLD_MS = 1_000;
+const RESET_PREFLIGHT_HEARTBEAT_MS = 15_000;
 // Keep retained object count proportional to the same byte budget used by the
 // shared SSE framer. Tiny or empty upstream reads must not bypass the byte cap.
 const COMBO_STREAM_PREFLIGHT_MAX_CHUNKS = Math.max(
@@ -281,7 +283,9 @@ export type ComboStreamPreflightResult =
    * a projected terminal can treat this exactly as `accepted`, which is what it was before
    * the stage became observable.
    */
-  | { kind: "read-error"; response: Response; error: unknown; stage: RequestFailureStage };
+  | { kind: "read-error"; response: Response; error: unknown; stage: RequestFailureStage }
+  /** A clean EOF after control frames, retained for an explicitly opted-in recovery owner. */
+  | { kind: "pre-output-eof"; response: Response; error: ProtocolPreOutputEof; stage: RequestFailureStage };
 
 /**
  * Buffer a Responses SSE only until the request becomes unsafe to replay or reaches a
@@ -294,7 +298,7 @@ export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
   retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
-  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal },
+  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; replayCleanEof?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal },
 ): Promise<ComboStreamPreflightResult> {
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
@@ -376,6 +380,14 @@ export async function preflightComboStreamResponse(
       }
       if (next.done) {
         inspector.finish();
+        if (options?.replayCleanEof && !outputCommitted && terminalStatus === undefined) {
+          return {
+            kind: "pre-output-eof",
+            response: replayBufferedResponse(response, reader, buffered),
+            error: new ProtocolPreOutputEof(),
+            stage: observedResponsesStage({ outputCommitted, terminalStatus, responseCreated }),
+          };
+        }
       } else {
         if (bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES) {
           // Keep the cap about memory the preflight allocates. The upstream chunk already exists;
@@ -420,6 +432,7 @@ export async function preflightComboStreamResponse(
 export type ProtocolSafeResetRecovery = (
   error: unknown,
   stage: RequestFailureStage,
+  signal: AbortSignal,
 ) => Promise<Response | null>;
 
 /**
@@ -434,13 +447,19 @@ export function deferProtocolSafeResetRecovery(
   response: Response,
   logCtx: RequestLogContext,
   recover: ProtocolSafeResetRecovery,
-  options?: { allowMissingContentType?: boolean },
+  options?: { allowMissingContentType?: boolean; heartbeatIntervalMs?: number },
 ): Response {
   if (!response.body) return response;
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let initialization: Promise<void> | undefined;
+  let initializationResult: { kind: "ready" } | { kind: "failed"; error: unknown } | undefined;
+  let notifyInitialization: (() => void) | undefined;
   let closed = false;
+  const preflightAbort = new AbortController();
+  const requestedHeartbeatMs = options?.heartbeatIntervalMs;
+  const heartbeatMs = requestedHeartbeatMs !== undefined && Number.isFinite(requestedHeartbeatMs) && requestedHeartbeatMs > 0
+    ? requestedHeartbeatMs : RESET_PREFLIGHT_HEARTBEAT_MS;
 
   const cancelBody = (body: ReadableStream<Uint8Array> | null, reason?: unknown): void => {
     try { void body?.cancel(reason).catch(() => {}); } catch { /* already locked or closed */ }
@@ -450,11 +469,12 @@ export function deferProtocolSafeResetRecovery(
       response,
       logCtx,
       () => false,
-      { allowMissingContentType: options?.allowMissingContentType === true, replayReadErrors: true },
+      { allowMissingContentType: options?.allowMissingContentType === true, replayReadErrors: true,
+        replayCleanEof: true, signal: preflightAbort.signal },
     );
     let selected = preflight.response;
-    if (preflight.kind === "read-error") {
-      const replacement = await recover(preflight.error, preflight.stage);
+    if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
+      const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal);
       if (replacement) {
         cancelBody(selected.body, "using protocol-safe replacement stream");
         selected = replacement;
@@ -470,9 +490,22 @@ export function deferProtocolSafeResetRecovery(
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        initialization ??= initialize();
-        await initialization;
+        initialization ??= initialize().then(
+          () => { initializationResult = { kind: "ready" }; notifyInitialization?.(); },
+          error => { initializationResult = { kind: "failed", error }; notifyInitialization?.(); },
+        );
+        // Keep only one waiter on the initialization; racing it afresh for every heartbeat
+        // would retain one promise callback per interval until a quiet upstream settles.
+        const initialized = initializationResult !== undefined || await new Promise<boolean>(resolve => {
+          const timer = setTimeout(() => { notifyInitialization = undefined; resolve(false); }, heartbeatMs);
+          notifyInitialization = () => { clearTimeout(timer); notifyInitialization = undefined; resolve(true); };
+        });
         if (closed) return;
+        if (!initialized) {
+          controller.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+          return;
+        }
+        if (initializationResult?.kind === "failed") throw initializationResult.error;
         if (!reader) {
           closed = true;
           controller.close();
@@ -499,6 +532,7 @@ export function deferProtocolSafeResetRecovery(
     cancel(reason) {
       if (closed) return;
       closed = true;
+      preflightAbort.abort(reason);
       if (reader) {
         try { void reader.cancel(reason).catch(() => {}); } catch { /* already closed */ }
         try { reader.releaseLock(); } catch { /* already released */ }
@@ -507,10 +541,8 @@ export function deferProtocolSafeResetRecovery(
         // Nothing has read the upstream yet, so this body is still ours to cancel.
         cancelBody(response.body, reason);
       }
-      // A cancel while the preflight is mid-flight falls through deliberately. That body is
-      // locked by the preflight's own reader, so cancelling it here would reject and be
-      // swallowed; `initialize` sees `closed` when it settles and releases whichever body it
-      // ended up selecting, which is the one that actually has to be let go.
+      // Aborting cancels the preflight's locked reader or the in-flight replacement. Once
+      // initialization settles, it releases whichever body was selected.
     },
   }, { highWaterMark: 0 });
 

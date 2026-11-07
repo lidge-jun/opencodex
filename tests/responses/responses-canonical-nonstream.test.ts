@@ -351,6 +351,37 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
   });
 
   test.each([
+    ["self-contained buffered", false, false, true, false, 2],
+    ["self-contained streaming", true, false, true, false, 2],
+    ["no opt-in", false, false, false, false, 1],
+    ["stored request", false, true, true, false, 1],
+    ["persistent EOF", false, false, true, true, 2],
+  ] as const)("clean prelude EOF recovery: %s", async (_name, stream, store, enabled, persistent, expectedSends) => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      const first = sseEvent("response.created", { response: { id: "resp_first", status: "in_progress", output: [] } });
+      const completed = sseEvent("response.completed", { response: {
+        id: "resp_replacement", status: "completed", model: "gpt-5.6-sol", output: [],
+      } });
+      return new Response(sends === 1 || persistent ? first : completed, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const resetConfig: OcxConfig = {
+      ...config, providers: { openai: { ...provider, ...(enabled ? { retryOnReset: {} } : {}) } },
+    };
+    const response = await call(requestBody(stream, store), {}, resetConfig);
+    const text = await response.text();
+    expect(sends).toBe(expectedSends);
+    if (expectedSends === 2 && !persistent) {
+      expect(response.status).toBe(200);
+      expect(text).toContain("resp_replacement");
+      expect(text).not.toContain("resp_first");
+    } else {
+      expect(text).not.toContain("resp_replacement");
+    }
+  });
+
+  test.each([
     ["clean EOF", sseEvent("response.created", { response: { id: "resp_eof", status: "in_progress", output: [] } })],
     ["malformed payload", [
       "data: {not-json}\n\n",

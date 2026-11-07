@@ -1920,11 +1920,11 @@ export async function preparePassthroughExchange(
       upstreamResponse = deferProtocolSafeResetRecovery(
         upstreamResponse,
         { model: logCtx.model, provider: logCtx.provider },
-        (error, stage) => refetchAfterProtocolSafeReset(
+        (error, stage, signal) => refetchAfterProtocolSafeReset(
           (signal = upstream.signal) => sendAmbiguousReplacement(signal).then(adoptObservedResponse),
           error,
           {
-            abortSignal: upstream.signal,
+            abortSignal: AbortSignal.any([upstream.signal, signal]),
             label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url),
             attempts: remainingTransientSendBudget(transientSendAttempts()),
             // The whole decision, including the stage the preflight observed and the grant the
