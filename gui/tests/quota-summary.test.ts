@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildQuotaSummary, formatQuotaPercent, quotaSeverity } from "../src/quota-summary";
 import { accountQuotaFromReport, freshQuotaReportsFromResponse } from "../src/provider-workspace/report";
+import { parseWorkBuddyCredits } from "../../src/providers/workbuddy-credit-balance";
 
 const now = Date.UTC(2026, 8, 23, 3);
 const name = (provider: string) => provider;
@@ -62,6 +63,7 @@ describe("quota summary", () => {
       { provider: "frozen", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 0, 0, 100) } },
       { provider: "fractional", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(9, 8.1, 9 - 8.1) } },
       { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.999, 10.001) } },
+      { provider: "close-below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.999999999, 10.000000001) } },
       { provider: "zero-total", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0, 0, 0) } },
       { provider: "malformed", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: { total: 100, used: 0 } } },
     ], now);
@@ -71,12 +73,26 @@ describe("quota summary", () => {
       ["frozen", "quotaSummary.creditsUnavailable", 100, "normal"],
       ["fractional", "quotaSummary.creditsUnavailable", 90, "normal"],
       ["below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
+      ["close-below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
     ]);
     expect(formatQuotaPercent(rows[2]!.headline.percent)).toBe("90%");
     expect(rows[3]!.headline.percent).toBeCloseTo(89.999, 9);
     expect(rows[3]!.headline.percent!).toBeLessThan(90);
     expect(formatQuotaPercent(rows[3]!.headline.percent)).toBe("89%");
+    expect(formatQuotaPercent(rows[4]!.headline.percent)).toBe("89%");
     expect(rows[0]!.headline.resetAt).toBeUndefined();
+  });
+
+  test("summed decimal WorkBuddy packages display their exact integer percentage", () => {
+    const workbuddyCredits = parseWorkBuddyCredits({ Packages: Array.from({ length: 54 }, () => ({
+      CycleTotalCapacity: 0.91, CycleUsedCapacity: 0.819, CycleRemainCapacity: 0.091,
+    })) });
+    expect(workbuddyCredits).toBeDefined();
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits } },
+    ], now);
+    const [row] = buildQuotaSummary(reports, name);
+    expect(formatQuotaPercent(row!.headline.percent)).toBe("90%");
   });
 
   test("critical credits override a noncritical headline, but not a critical one", () => {

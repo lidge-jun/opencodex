@@ -86,7 +86,8 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
     // Remaining is authoritative and includes frozen credits; the meter is informational.
     const raw = (1 - Math.min(workbuddy.remaining / workbuddy.total, 1)) * 100;
     const integer = Math.round(raw);
-    const percent = Math.abs(raw - integer) <= Number.EPSILON * 100 ? integer : raw;
+    // The provider sums at most 512 packages into both total and remaining.
+    const percent = Math.abs(raw - integer) <= Number.EPSILON * 100 * 1024 ? integer : raw;
     windows.push({
       id: "quotaSummary.creditsUnavailable",
       labelKey: "quotaSummary.creditsUnavailable",
