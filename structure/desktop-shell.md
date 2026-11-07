@@ -426,6 +426,10 @@ trusted-comment convention; the strict primitive verifies exact comment bytes
 and grants no update or installation authority by itself. It decodes Tauri’s outer-base64 minisign box, checks the
 `ED` signature over the BLAKE2b-512 digest against the pinned key, and verifies the
 trusted-comment signature. Missing or malformed fields fail before publication.
+`scripts/generate-update-trust-root.ts` derives identical offline root files at
+`src/update/trust-root.json` and `desktop/src-tauri/update-trust-root.json` from
+the pinned public key; `--check` detects drift. These files do not yet authorize
+updates or change the Tauri updater's existing trust configuration.
 On macOS, in-app updates download `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for
 the first installation.
 
