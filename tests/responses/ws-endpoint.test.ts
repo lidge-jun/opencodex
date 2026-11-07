@@ -302,16 +302,19 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(terminals).toEqual(["failed"]);
   });
 
-  test("preserves original client identity through the WebSocket handoff to a key-auth provider", () => {
+  test.each(["key", "forward"] as const)("preserves original client identity through the WebSocket handoff to a custom %s provider", authMode => {
     const userAgent = "T3 Code/0.166.0 (Mac OS; arm64) unknown (T3 Code; 0.1.6)";
     const inbound = new Headers({
       "user-agent": userAgent,
       originator: "T3 Code",
       "x-codex-app-version": "0.1.6",
       "x-codex-window-id": "original-window",
+      "x-codex-installation-id": "original-installation",
       authorization: "Bearer caller-secret",
       cookie: "session=caller-secret",
       "chatgpt-account-id": "caller-account",
+      "x-oai-attestation": "caller-attestation",
+      "x-openai-agent-assertion": "caller-assertion",
       "x-unrelated-client-header": "do-not-forward",
     });
     const selected = selectForwardHeaders(inbound);
@@ -319,25 +322,37 @@ describe("WS endpoint re-framer (120/132)", () => {
       method: "POST", headers: selected, body: "{}",
     });
     const built = buildResponsesTransport({
-      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode: "key",
-      forwardClientHeaders: ["originator", "user-agent", "x-codex-app-version", "x-codex-window-id"],
+      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode,
+      forwardClientHeaders: ["originator", "user-agent", "x-codex-app-version", "x-codex-window-id", "x-codex-installation-id"],
     }, { headers: incoming.headers });
     const outgoing = new Headers(built.headers);
     expect(outgoing.get("user-agent")).toBe(userAgent);
     expect(outgoing.get("originator")).toBe("T3 Code");
     expect(outgoing.get("x-codex-app-version")).toBe("0.1.6");
     expect(outgoing.get("x-codex-window-id")).toBe("original-window");
-    expect(outgoing.get("authorization")).toBe("Bearer provider-secret");
-    for (const name of ["cookie", "chatgpt-account-id", "x-unrelated-client-header"]) {
+    expect(outgoing.get("x-codex-installation-id")).toBe("original-installation");
+    expect(outgoing.get("authorization")).toBe(authMode === "key" ? "Bearer provider-secret" : null);
+    for (const name of ["cookie", "chatgpt-account-id", "x-oai-attestation", "x-openai-agent-assertion", "x-unrelated-client-header"]) {
       expect(outgoing.has(name)).toBe(false);
     }
     const defaultTransport = buildResponsesTransport({
-      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode: "key",
+      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode,
     }, { headers: selected });
     const defaultHeaders = new Headers(defaultTransport.headers);
     expect(defaultHeaders.get("user-agent")).toBe(userAgent);
     expect(defaultHeaders.has("x-codex-app-version")).toBe(false);
     expect(defaultHeaders.has("x-codex-window-id")).toBe(false);
+    expect(defaultHeaders.has("x-codex-installation-id")).toBe(false);
+    for (const name of ["x-codex-window-id", "x-codex-installation-id"]) {
+      const single = buildResponsesTransport({
+        adapter: "openai-responses", baseUrl: "https://other.example.com/v1", authMode,
+        forwardClientHeaders: [name],
+      }, { headers: selected });
+      const singleHeaders = new Headers(single.headers);
+      expect(singleHeaders.get(name)).toBe(inbound.get(name));
+      const other = name === "x-codex-window-id" ? "x-codex-installation-id" : "x-codex-window-id";
+      expect(singleHeaders.has(other)).toBe(false);
+    }
     const absent = selectForwardHeaders(new Headers());
     expect(absent.has("user-agent")).toBe(false);
     expect(absent.has("x-codex-app-version")).toBe(false);
