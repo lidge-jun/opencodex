@@ -2,7 +2,7 @@ import { validateTelemetryPayloadV1 } from "../../../src/telemetry/contract";
 import type { CollectorEnv, D1PreparedStatement } from "./types";
 
 export const MAX_INGEST_BODY_BYTES = 16 * 1024;
-export const MAX_REPORTS_PER_HOUR = 30;
+export const MAX_REPORTS_PER_HOUR = 120;
 export const MAX_VERSION_LENGTH = 32;
 export const MAX_REPORT_REQUEST_COUNT = 10_000_000;
 export const MAX_REPORT_TOKEN_COUNT = 1_000_000_000_000;
@@ -262,15 +262,17 @@ export async function handleIngest(
   ];
 
   for (const row of payload.models) {
+    if (row.requests <= 0) continue;
     rollupStatements.push(
       env.DB
         .prepare(
           "INSERT INTO daily_models (" +
-          "day, provider_kind, model_family, requests, " +
+          "day, provider_kind, model_family, installs, requests, " +
           "input, cache_read, cache_write, output, reasoning" +
-          ") SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 " +
+          ") SELECT ?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9 " +
           "WHERE NOT EXISTS (SELECT 1 FROM daily_installs WHERE day = ?1 AND install_day_hash = ?10) " +
           "ON CONFLICT(day, provider_kind, model_family) DO UPDATE SET " +
+          `installs = ${clampedAddSql("installs", "1")}, ` +
           `requests = ${clampedAddSql("requests", "excluded.requests")}, ` +
           `input = ${clampedAddSql("input", "excluded.input")}, ` +
           `cache_read = ${clampedAddSql("cache_read", "excluded.cache_read")}, ` +
@@ -298,10 +300,12 @@ export async function handleIngest(
       rollupStatements.push(
         env.DB
           .prepare(
-            "INSERT INTO daily_errors (day, cause, count) " +
-            "SELECT ?1, ?2, ?3 " +
+            "INSERT INTO daily_errors (day, cause, installs, count) " +
+            "SELECT ?1, ?2, 1, ?3 " +
             "WHERE NOT EXISTS (SELECT 1 FROM daily_installs WHERE day = ?1 AND install_day_hash = ?4) " +
-            `ON CONFLICT(day, cause) DO UPDATE SET count = ${clampedAddSql("count", "excluded.count")}`,
+            "ON CONFLICT(day, cause) DO UPDATE SET " +
+            `installs = ${clampedAddSql("installs", "1")}, ` +
+            `count = ${clampedAddSql("count", "excluded.count")}`,
           )
           .bind(payload.day, cause, count, payload.installDayHash),
       );

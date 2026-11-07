@@ -145,17 +145,17 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `telemetry.decision?` | `"accepted" \| "declined"` | 未設定（未決定） | 使用者的明確選擇。`"declined"` 會停用遙測並立即刪除 `<OPENCODEX_HOME>/telemetry-id.json`；`"accepted"` 會啟用每日報告。 |
-| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | 記錄 `decision` 的 UTC 時間戳記。早於 `decidedAt ?? noticeShownAt` 所在 UTC 日期的已完成 UTC 日曆日絕不會補送。 |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | 記錄 `decision` 的 UTC 時間戳記。僅傳送嚴格晚於 `decidedAt ?? noticeShownAt` 所在 UTC 日期的已完成 UTC 日曆日（`day > formatUtcDay(decidedAt ?? noticeShownAt)`）；同意當天及更早的日期絕不會補送。 |
 | `telemetry.noticeShownAt?` | `string` (ISO 8601) | 未設定 | 人類使用者在網頁儀表板或互動式終端機中看到告知提示的 UTC 時間戳記。當 `decision` 未設定時，僅在已設定 `noticeShownAt` 時才會傳送遙測（`default-on`）；否則代理保持在 `awaiting-notice` 狀態。 |
 
 收集器端點（`https://telemetry.opencodex.me/v1/events`）是程式碼常數，無法在 `config.json` 中設定。
 
-兩個環境變數會覆寫 `config.json` 並立即停用遙測，且不會修改已儲存的設定檔：
+兩個環境變數會覆寫 `config.json` 並立即停用遙測，且不會修改已儲存的 `config.json`（在代理啟動或排程器週期偵測到任一變數時，還會在 `<OPENCODEX_HOME>/telemetry-state.json` 中記錄當日 UTC 日期為 `ineligibleThroughDay` 並刪除 `<OPENCODEX_HOME>/telemetry-id.json`，因此移除變數後不會補送這些日期，並會產生新的安裝 ID）：
 
 - `OCX_TELEMETRY=0`（不分大小寫，也接受 `false`、`off` 或 `no`）
 - `DO_NOT_TRACK=1`（不分大小寫，也接受 `true` 或 `yes`）
 
-`ocx config set telemetry` 與 `ocx config unset telemetry` 會被拒絕，以防自動化呼叫方透過通用設定寫入記錄同意；請改用 `ocx telemetry enable`、`ocx telemetry disable`、`ocx telemetry status [--json]` 或儀表板 **Proxy details** 中的開關。完整負載結構與保留政策請參閱[遙測與隱私](/zh-tw/guides/telemetry/)。
+`ocx config set telemetry` 與 `ocx config unset telemetry` 會被拒絕，且 `ocx config import` 對所有呼叫方都會忽略匯入的 `telemetry` 區塊並保留已持久化的同意狀態；請改用 `ocx telemetry enable`（需要互動式終端機並確認告知提示，否則以 `agent_consent_required` / `tty_required` 結束）、`ocx telemetry disable`、`ocx telemetry status [--json]` 或儀表板 **Proxy details** 中的開關。完整負載結構與保留政策請參閱[遙測與隱私](/zh-tw/guides/telemetry/)。
 
 ## 儲存清理
 

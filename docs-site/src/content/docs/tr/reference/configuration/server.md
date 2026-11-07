@@ -188,17 +188,17 @@ Anonim günlük kullanım telemetrisi yalnızca bir kişi açıklama bildirimini
 | Alan | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `telemetry.decision?` | `"accepted" \| "declined"` | ayarlanmamış (kararsız) | Açık kullanıcı seçimi. `"declined"` telemetriyi devre dışı bırakır ve `<OPENCODEX_HOME>/telemetry-id.json` dosyasını siler; `"accepted"` günlük raporları etkinleştirir. |
-| `telemetry.decidedAt?` | `string` (ISO 8601) | ayarlanmamış | `decision` değerinin kaydedildiği UTC zaman damgası. `decidedAt ?? noticeShownAt` UTC gününden önceki tamamlanmış UTC takvim günleri geriye dönük olarak gönderilmez. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | ayarlanmamış | `decision` değerinin kaydedildiği UTC zaman damgası. Yalnızca `decidedAt ?? noticeShownAt` UTC gününden kesin olarak sonraki tamamlanmış UTC takvim günleri (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) gönderilir; onay günü ve önceki günler asla gönderilmez. |
 | `telemetry.noticeShownAt?` | `string` (ISO 8601) | ayarlanmamış | Bir insanın web kontrol panelinde veya etkileşimli bir terminalde bildirimi gördüğü UTC zaman damgası. `decision` ayarlanmadığında telemetri yalnızca `noticeShownAt` ayarlanmışsa (`default-on`) gönderim yapar; aksi halde proxy `awaiting-notice` durumunda kalır. |
 
 Toplayıcı uç noktası (`https://telemetry.opencodex.me/v1/events`) bir kod sabitidir ve `config.json` içinde yapılandırılamaz.
 
-İki ortam değişkeni `config.json` dosyasını geçersiz kılar ve kaydedilmiş yapılandırmayı değiştirmeden telemetriyi hemen devre dışı bırakır:
+İki ortam değişkeni `config.json` dosyasını geçersiz kılar ve kaydedilmiş `config.json` dosyasını değiştirmeden telemetriyi hemen devre dışı bırakır (proxy başlangıcında veya zamanlayıcı adımında algılandığında `<OPENCODEX_HOME>/telemetry-state.json` içine bugünün UTC gününü `ineligibleThroughDay` olarak kaydeder ve `<OPENCODEX_HOME>/telemetry-id.json` dosyasını siler; değişken kaldırıldığında bu günler gönderilmez ve yeni bir kimlik üretilir):
 
 - `OCX_TELEMETRY=0` (büyük/küçük harf duyarsız olarak `false`, `off` veya `no` da kabul eder)
 - `DO_NOT_TRACK=1` (büyük/küçük harf duyarsız olarak `true` veya `yes` de kabul eder)
 
-Otomatik arayanların genel yapılandırma yazmalarıyla onay kaydedememesi için `ocx config set telemetry` ve `ocx config unset telemetry` reddedilir; bunun yerine `ocx telemetry enable`, `ocx telemetry disable`, `ocx telemetry status [--json]` veya kontrol panelindeki **Proxy ayrıntıları** anahtarını kullanın. Tam yük şeması ve saklama politikası için [Telemetri ve Gizlilik](/tr/guides/telemetry/) sayfasına bakın.
+`ocx config set telemetry` ve `ocx config unset telemetry` reddedilir ve `ocx config import` tüm çağrılarda içe aktarılan `telemetry` bloğunu yoksayarak mevcut durumu korur; bunun yerine `ocx telemetry enable` (etkileşimli insan terminali ve onay istemi gerektirir, aksi halde `agent_consent_required` / `tty_required` ile çıkar), `ocx telemetry disable`, `ocx telemetry status [--json]` veya kontrol panelindeki **Proxy ayrıntıları** anahtarını kullanın. Tam yük şeması ve saklama politikası için [Telemetri ve Gizlilik](/tr/guides/telemetry/) sayfasına bakın.
 
 ## Depolama temizliği
 

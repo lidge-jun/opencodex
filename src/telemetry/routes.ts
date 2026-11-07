@@ -15,12 +15,18 @@ import {
   readTelemetryInstallId,
 } from "./install-id";
 import { buildTelemetryPayloadV1, resolveInstallChannel } from "./payload";
-import { latestCompletedUtcDay, nudgeTelemetryScheduler, readTelemetryState } from "./scheduler";
+import {
+  latestCompletedUtcDay,
+  nudgeTelemetryScheduler,
+  readTelemetryState,
+  resolveNextEligibleTelemetryDay,
+} from "./scheduler";
 
 export interface TelemetryStatusSnapshot extends TelemetryConsentStatus {
   installChannel: TelemetryInstallChannel;
   lastSentDay: string | null;
   lastSentAt: string | null;
+  previewEligible: boolean;
   preview: TelemetryPayloadV1;
 }
 
@@ -34,7 +40,9 @@ export async function buildTelemetryStatusSnapshot(
   const status = resolveTelemetryStatus(config, env);
   const installChannel = resolveInstallChannel({ env });
   const state = readTelemetryState(configDir);
-  const day = latestCompletedUtcDay(now);
+  const { day: nextEligibleDay } = resolveNextEligibleTelemetryDay(status, state, now);
+  const previewEligible = nextEligibleDay !== null;
+  const day = nextEligibleDay ?? latestCompletedUtcDay(now);
   const aggregate = await aggregateTelemetryForDay(day);
   const identity = readTelemetryInstallId(configDir);
   const installDayHash = identity
@@ -55,6 +63,7 @@ export async function buildTelemetryStatusSnapshot(
     installChannel,
     lastSentDay: state.lastSentDay,
     lastSentAt: state.lastSentAt,
+    previewEligible,
     preview,
   };
 }
@@ -129,43 +138,6 @@ export async function handlePutTelemetryRoute(ctx: ManagementContext): Promise<R
   if (decision === "declined") {
     deleteTelemetryInstallId();
   }
-  nudgeTelemetryScheduler();
-  const snapshot = await buildTelemetryStatusSnapshot(ctx.config);
-  return jsonResponse({ ok: true, ...snapshot }, 200, ctx.req, ctx.config);
-}
-
-export async function handlePostTelemetryNoticeRoute(ctx: ManagementContext): Promise<Response> {
-  if (!hasHumanDashboardSession(ctx)) {
-    return consentRefusedResponse(ctx);
-  }
-  const nowIso = new Date().toISOString();
-  let committed: OcxTelemetryConfig | undefined;
-  const outcome = await withConfigDirHardeningSettled(getConfigDir(), () =>
-    mutatePersistedConfig(fresh => {
-      const prev = fresh.telemetry;
-      if (prev?.noticeShownAt && !Number.isNaN(Date.parse(prev.noticeShownAt))) {
-        committed = structuredClone(prev);
-        return { changed: false, value: prev };
-      }
-      const next: OcxTelemetryConfig = {
-        ...(prev?.decision ? { decision: prev.decision } : {}),
-        ...(prev?.decidedAt ? { decidedAt: prev.decidedAt } : {}),
-        noticeShownAt: nowIso,
-      };
-      fresh.telemetry = next;
-      committed = structuredClone(next);
-      return { changed: true, value: next };
-    }),
-  );
-  if (outcome.status === "unavailable") {
-    return jsonResponse(
-      { error: `Configuration is ${outcome.reason}`, code: "config_unavailable" },
-      503,
-      ctx.req,
-      ctx.config,
-    );
-  }
-  adoptPersistedTelemetry(ctx.config, committed);
   nudgeTelemetryScheduler();
   const snapshot = await buildTelemetryStatusSnapshot(ctx.config);
   return jsonResponse({ ok: true, ...snapshot }, 200, ctx.req, ctx.config);

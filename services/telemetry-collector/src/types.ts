@@ -47,6 +47,7 @@ export type TelemetryStatsV1 = {
   range: TelemetryStatsRange;
   totals: {
     activeInstalls: number;
+    avgDailyActiveInstalls: number;
     newInstalls: number;
     activeMinutes: number;
     requests: number;

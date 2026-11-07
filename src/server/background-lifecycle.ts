@@ -33,6 +33,7 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { recordTelemetryEnvOptOut } from "../telemetry/scheduler";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -143,6 +144,8 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
         .catch(() => {
           // Optional background loop.
         });
+    } else {
+      try { recordTelemetryEnvOptOut(); } catch { /* best-effort */ }
     }
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {

@@ -337,6 +337,24 @@ describe("telemetry collector worker + D1", () => {
         },
       ]);
 
+      const modelInstalls = h.sqlite
+        .query("SELECT provider_kind, model_family, installs FROM daily_models ORDER BY provider_kind ASC")
+        .all() as Array<{ provider_kind: string; model_family: string; installs: number }>;
+      expect(modelInstalls).toEqual([
+        { provider_kind: "chatgpt", model_family: "gpt-5", installs: 1 },
+        { provider_kind: "claude-subscription", model_family: "claude-opus", installs: 1 },
+        { provider_kind: "deepseek", model_family: "deepseek", installs: 1 },
+        { provider_kind: "google", model_family: "gemini-3", installs: 1 },
+      ]);
+      const errorInstalls = h.sqlite
+        .query("SELECT cause, installs, count FROM daily_errors ORDER BY cause ASC")
+        .all() as Array<{ cause: string; installs: number; count: number }>;
+      expect(errorInstalls).toEqual([
+        { cause: "client-cancelled", installs: 1, count: 1 },
+        { cause: "empty-output", installs: 1, count: 1 },
+        { cause: "rate-limit", installs: 1, count: 1 },
+      ]);
+
       // Privacy check: dump every row of every table and ensure no raw installId, batchId, or IP appears.
       const tables = ["daily_installs", "daily_totals", "daily_models", "daily_errors", "rate_limits"] as const;
       for (const table of tables) {
@@ -428,7 +446,8 @@ describe("telemetry collector worker + D1", () => {
     }
   });
 
-  test("enforces 16 KiB body cap with 413 and 30/hour IP hash rate limit with 429 + Retry-After", async () => {
+  test("enforces 16 KiB body cap with 413 and 120/hour IP hash rate limit with 429 + Retry-After", async () => {
+    expect(MAX_REPORTS_PER_HOUR).toBe(120);
     const h = createInMemoryD1("rate-salt");
     try {
       const day = "2026-11-06";
@@ -464,7 +483,7 @@ describe("telemetry collector worker + D1", () => {
       );
       expect(res413Header.status).toBe(413);
 
-      // Send 30 valid reports from the same IP in the same hour; all 30 succeed.
+      // Send 120 valid reports from the same IP in the same hour; all 120 succeed.
       const clientIp = "198.51.100.77";
       for (let i = 0; i < MAX_REPORTS_PER_HOUR; i++) {
         const res = await handleCollectorFetch(
@@ -476,7 +495,7 @@ describe("telemetry collector worker + D1", () => {
         expect(res.status).toBe(200);
       }
 
-      // 31st report in the same hour returns 429 with Retry-After.
+      // 121st report in the same hour returns 429 with Retry-After.
       const res429 = await handleCollectorFetch(
         postEventRequest(JSON.stringify(basePayload), { ip: clientIp }),
         h.env,
@@ -578,9 +597,9 @@ describe("telemetry collector worker + D1", () => {
   test("serves TelemetryStatsV1 across 7d, 30d, 90d, and 365d with every field and a 365-day heatmap", async () => {
     const h = createInMemoryD1();
     try {
-      const ingestAt = async (
+      const ingestCohortAt = async (
         dayOffset: number,
-        installUuid: string,
+        cohortPrefix: string,
         options: {
           newInstall: boolean;
           version: string;
@@ -591,48 +610,51 @@ describe("telemetry collector worker + D1", () => {
       ) => {
         const eventNow = NOW - (dayOffset - 1) * DAY_MS;
         const day = new Date(NOW - dayOffset * DAY_MS).toISOString().slice(0, 10);
-        const payload = buildTelemetryPayloadV1({
-          aggregate: makeAggregate(day),
-          installDayHash: computeInstallDayHash(installUuid, day),
-          newInstall: options.newInstall,
-          version: options.version,
-          os: options.os,
-          arch: options.arch,
-          installChannel: options.installChannel,
-          now: eventNow,
-        });
-        const res = await handleCollectorFetch(
-          postEventRequest(JSON.stringify(payload), { ip: `10.0.0.${dayOffset}` }),
-          h.env,
-          undefined,
-          eventNow,
-        );
-        expect(res.status).toBe(200);
+        for (let i = 0; i < 10; i++) {
+          const installUuid = `${cohortPrefix}-0000-4000-8000-${String(i).padStart(12, "0")}`;
+          const payload = buildTelemetryPayloadV1({
+            aggregate: makeAggregate(day),
+            installDayHash: computeInstallDayHash(installUuid, day),
+            newInstall: options.newInstall && i === 0,
+            version: options.version,
+            os: options.os,
+            arch: options.arch,
+            installChannel: options.installChannel,
+            now: eventNow,
+          });
+          const res = await handleCollectorFetch(
+            postEventRequest(JSON.stringify(payload), { ip: `10.0.${dayOffset}.${i + 1}` }),
+            h.env,
+            undefined,
+            eventNow,
+          );
+          expect(res.status).toBe(200);
+        }
       };
 
-      // Seed reports at 1d ago (in 7d), 20d ago (in 30d), 60d ago (in 90d), and 200d ago (in 365d)
-      await ingestAt(1, "10000000-0000-4000-8000-000000000001", {
+      // Seed 10 reports per day at 1d ago (in 7d), 20d ago (in 30d), 60d ago (in 90d), and 200d ago (in 365d)
+      await ingestCohortAt(1, "10000001", {
         newInstall: true,
         version: "2.41.0",
         os: "darwin",
         arch: "arm64",
         installChannel: "npm-global",
       });
-      await ingestAt(20, "10000000-0000-4000-8000-000000000002", {
+      await ingestCohortAt(20, "10000002", {
         newInstall: false,
         version: "2.40.0",
         os: "linux",
         arch: "x64",
         installChannel: "standalone",
       });
-      await ingestAt(60, "10000000-0000-4000-8000-000000000003", {
+      await ingestCohortAt(60, "10000003", {
         newInstall: true,
         version: "2.39.0",
         os: "win32",
         arch: "x64",
         installChannel: "desktop",
       });
-      await ingestAt(200, "10000000-0000-4000-8000-000000000004", {
+      await ingestCohortAt(200, "10000004", {
         newInstall: false,
         version: "2.35.0",
         os: "darwin",
@@ -640,16 +662,21 @@ describe("telemetry collector worker + D1", () => {
         installChannel: "npm-global",
       });
 
-      const expectedReportsByRange: Record<"7d" | "30d" | "90d" | "365d", number> = {
-        "7d": 1,
-        "30d": 2,
-        "90d": 3,
-        "365d": 4,
+      const expectedByRange: Record<
+        "7d" | "30d" | "90d" | "365d",
+        { reports: number; days: number; avgDaily: number }
+      > = {
+        "7d": { reports: 10, days: 7, avgDaily: 1.4 },
+        "30d": { reports: 20, days: 30, avgDaily: 0.7 },
+        "90d": { reports: 30, days: 90, avgDaily: 0.3 },
+        "365d": { reports: 40, days: 365, avgDaily: 0.1 },
       };
 
-      for (const [range, expectedReports] of Object.entries(expectedReportsByRange) as Array<
-        ["7d" | "30d" | "90d" | "365d", number]
+      for (const [range, expected] of Object.entries(expectedByRange) as Array<
+        ["7d" | "30d" | "90d" | "365d", { reports: number; days: number; avgDaily: number }]
       >) {
+        const expectedReports = expected.reports;
+        const expectedDays = expected.reports / 10;
         const res = await handleCollectorFetch(
           new Request(`https://telemetry.opencodex.me/v1/stats?range=${range}`, {
             method: "GET",
@@ -669,6 +696,7 @@ describe("telemetry collector worker + D1", () => {
         expect(stats.generatedAt).toBe(new Date(NOW).toISOString());
         expect(stats.totals).toEqual({
           activeInstalls: expectedReports,
+          avgDailyActiveInstalls: expected.avgDaily,
           newInstalls: range === "7d" || range === "30d" ? 1 : 2,
           activeMinutes: expectedReports * 3,
           requests: expectedReports * 4,
@@ -680,15 +708,15 @@ describe("telemetry collector worker + D1", () => {
             reasoning: expectedReports * 50,
           },
         });
-        expect(stats.daily).toHaveLength(expectedReports);
+        expect(stats.daily).toHaveLength(expectedDays);
         expect(stats.daily[0]).toMatchObject({
-          activeInstalls: 1,
-          activeMinutes: 3,
-          requests: 4,
-          failed: 1,
-          tokens: 1950,
+          activeInstalls: 10,
+          activeMinutes: 30,
+          requests: 40,
+          failed: 10,
+          tokens: 19500,
         });
-        expect(stats.dailyByProvider.length).toBe(expectedReports * 4);
+        expect(stats.dailyByProvider.length).toBe(expectedDays * 4);
         expect(stats.heatmap).toHaveLength(365);
         expect(stats.heatmap[0]?.day).toBe("2025-11-08");
         expect(stats.heatmap[364]?.day).toBe("2026-11-07");
@@ -1118,8 +1146,8 @@ describe("telemetry collector worker + D1", () => {
         .run(day, nearMax);
       h.sqlite
         .query(
-          "INSERT INTO daily_models (day, provider_kind, model_family, requests, input, cache_read, cache_write, output, reasoning) " +
-          "VALUES (?1, 'claude-subscription', 'claude-opus', ?2, ?2, ?2, ?2, ?2, ?2)",
+          "INSERT INTO daily_models (day, provider_kind, model_family, installs, requests, input, cache_read, cache_write, output, reasoning) " +
+          "VALUES (?1, 'claude-subscription', 'claude-opus', 10, ?2, ?2, ?2, ?2, ?2, ?2)",
         )
         .run(day, nearMax);
 
@@ -1131,14 +1159,16 @@ describe("telemetry collector worker + D1", () => {
       );
       expect(clampRes.status).toBe(200);
 
-      // Also seed 60 distinct versions in daily_installs to verify LIMIT 50 in /v1/stats.
+      // Also seed 60 distinct versions (>= 10 installs each) in daily_installs to verify LIMIT 50 in /v1/stats.
       for (let i = 0; i < 60; i++) {
-        h.sqlite
-          .query(
-            "INSERT INTO daily_installs (day, install_day_hash, version, release_channel, os, arch, install_channel, new_install, active_minutes) " +
-            "VALUES (?1, ?2, ?3, 'latest', 'linux', 'x64', 'standalone', 0, 1)",
-          )
-          .run(day, i.toString(16).padStart(64, "0"), "2.0." + String(i));
+        for (let j = 0; j < 10; j++) {
+          h.sqlite
+            .query(
+              "INSERT INTO daily_installs (day, install_day_hash, version, release_channel, os, arch, install_channel, new_install, active_minutes) " +
+              "VALUES (?1, ?2, ?3, 'latest', 'linux', 'x64', 'standalone', 0, 1)",
+            )
+            .run(day, `${i.toString(16).padStart(32, "0")}${j.toString(16).padStart(32, "0")}`, "2.0." + String(i));
+        }
       }
 
       const statsRes = await handleCollectorFetch(
@@ -1286,5 +1316,359 @@ describe("telemetry collector worker + D1", () => {
     } finally {
       h.close();
     }
+  });
+
+  test("folds cohorts with fewer than 10 install-days into 'other', drops 'other' below 10, and keeps totals/daily/heatmap unchanged", async () => {
+    const h = createInMemoryD1("cohort-salt");
+    try {
+      const day1 = "2026-11-05";
+      const day2 = "2026-11-06";
+
+      // Verify schema.sql migration-safe DEFAULT 0 on daily_models.installs and daily_errors.installs
+      h.sqlite
+        .query(
+          "INSERT INTO daily_models (day, provider_kind, model_family, requests, input, cache_read, cache_write, output, reasoning) " +
+          "VALUES ('2026-10-01', 'openai', 'gpt-5', 1, 10, 0, 0, 5, 0)",
+        )
+        .run();
+      h.sqlite
+        .query("INSERT INTO daily_errors (day, cause, count) VALUES ('2026-10-01', 'rate-limit', 1)")
+        .run();
+      const defaultModelRow = h.sqlite
+        .query("SELECT installs FROM daily_models WHERE day = '2026-10-01'")
+        .get() as { installs: number };
+      const defaultErrorRow = h.sqlite
+        .query("SELECT installs FROM daily_errors WHERE day = '2026-10-01'")
+        .get() as { installs: number };
+      expect(defaultModelRow.installs).toBe(0);
+      expect(defaultErrorRow.installs).toBe(0);
+
+      const ingestCustom = async (opts: {
+        day: string;
+        count: number;
+        prefix: string;
+        version: string;
+        os: "darwin" | "linux" | "win32";
+        arch: "arm64" | "x64";
+        installChannel: "npm-global" | "standalone" | "desktop" | "docker";
+        newInstallCount?: number;
+        providerKind: "anthropic" | "openai" | "google" | "xai";
+        modelFamily: "claude-opus" | "gpt-5" | "gemini-3" | "grok";
+        requests: number;
+        inputTokens: number;
+        errorCause: "rate-limit" | "empty-output" | "client-cancelled" | "upstream-fault";
+        errorCount: number;
+      }) => {
+        for (let i = 0; i < opts.count; i++) {
+          const uuid = `${opts.prefix}-0000-4000-8000-${String(i).padStart(12, "0")}`;
+          const payload = buildTelemetryPayloadV1({
+            aggregate: {
+              day: opts.day,
+              activeMinutes: 5,
+              requests: {
+                completed: opts.requests,
+                failed: opts.errorCount,
+                incomplete: 0,
+                aborted: 0,
+              },
+              models: [
+                {
+                  providerKind: opts.providerKind,
+                  modelFamily: opts.modelFamily,
+                  requests: opts.requests,
+                  inputTokens: opts.inputTokens,
+                  cacheReadTokens: 0,
+                  cacheWriteTokens: 0,
+                  outputTokens: 0,
+                  reasoningTokens: 0,
+                },
+              ],
+              errors: {
+                [opts.errorCause]: opts.errorCount,
+              },
+            },
+            installDayHash: computeInstallDayHash(uuid, opts.day),
+            newInstall: i < (opts.newInstallCount ?? 0),
+            version: opts.version,
+            os: opts.os,
+            arch: opts.arch,
+            installChannel: opts.installChannel,
+            now: NOW,
+          });
+          const res = await handleCollectorFetch(
+            postEventRequest(JSON.stringify(payload), { ip: `198.18.${opts.prefix.slice(-2)}.${i + 1}` }),
+            h.env,
+            undefined,
+            NOW,
+          );
+          expect(res.status).toBe(200);
+        }
+      };
+
+      // Day 1:
+      // - Major cohort (12 installs >= 10): anthropic / claude-opus / 2.41.0 / darwin-arm64 / npm-global / rate-limit
+      // - Two small cohorts (6 + 5 = 11 installs >= 10 when folded into 'other'):
+      //   * 6 installs: openai / gpt-5 / 2.40.0 / linux-x64 / standalone / empty-output
+      //   * 5 installs: google / gemini-3 / 2.39.0 / win32-x64 / desktop / client-cancelled
+      // - Multi-day cohort (5 installs on day1 + 5 installs on day2 = 10 install-days in 7d range, < 10 per day):
+      //   * 5 installs on day1: xai / grok / 2.38.0 / linux-arm64 / docker / upstream-fault
+      await ingestCustom({
+        day: day1,
+        count: 12,
+        prefix: "aaaa0001",
+        version: "2.41.0",
+        os: "darwin",
+        arch: "arm64",
+        installChannel: "npm-global",
+        newInstallCount: 3,
+        providerKind: "anthropic",
+        modelFamily: "claude-opus",
+        requests: 10,
+        inputTokens: 1000,
+        errorCause: "rate-limit",
+        errorCount: 2,
+      });
+      await ingestCustom({
+        day: day1,
+        count: 6,
+        prefix: "aaaa0002",
+        version: "2.40.0",
+        os: "linux",
+        arch: "x64",
+        installChannel: "standalone",
+        newInstallCount: 2,
+        providerKind: "openai",
+        modelFamily: "gpt-5",
+        requests: 5,
+        inputTokens: 500,
+        errorCause: "empty-output",
+        errorCount: 3,
+      });
+      await ingestCustom({
+        day: day1,
+        count: 5,
+        prefix: "aaaa0003",
+        version: "2.39.0",
+        os: "win32",
+        arch: "x64",
+        installChannel: "desktop",
+        newInstallCount: 1,
+        providerKind: "google",
+        modelFamily: "gemini-3",
+        requests: 4,
+        inputTokens: 400,
+        errorCause: "client-cancelled",
+        errorCount: 1,
+      });
+      await ingestCustom({
+        day: day1,
+        count: 5,
+        prefix: "aaaa0004",
+        version: "2.38.0",
+        os: "linux",
+        arch: "arm64",
+        installChannel: "docker",
+        newInstallCount: 1,
+        providerKind: "xai",
+        modelFamily: "grok",
+        requests: 2,
+        inputTokens: 200,
+        errorCause: "upstream-fault",
+        errorCount: 1,
+      });
+
+      // Day 2: 5 more installs of the xai/grok cohort (bringing its 7d range total to 10 install-days,
+      // while day2 alone has only 5 installs < 10 so day2's 'other' is < 10 and dropped on day2).
+      await ingestCustom({
+        day: day2,
+        count: 5,
+        prefix: "aaaa0005",
+        version: "2.38.0",
+        os: "linux",
+        arch: "arm64",
+        installChannel: "docker",
+        newInstallCount: 1,
+        providerKind: "xai",
+        modelFamily: "grok",
+        requests: 2,
+        inputTokens: 200,
+        errorCause: "upstream-fault",
+        errorCount: 1,
+      });
+
+      const resFolded = await handleCollectorFetch(
+        new Request("https://telemetry.opencodex.me/v1/stats?range=7d"),
+        h.env,
+        undefined,
+        NOW,
+      );
+      expect(resFolded.status).toBe(200);
+      const statsFolded = (await resFolded.json()) as TelemetryStatsV1;
+
+      // Total install-days = 28 (day1) + 5 (day2) = 33; avgDailyActiveInstalls = round((33 / 7) * 10) / 10 = 4.7
+      expect(statsFolded.totals.activeInstalls).toBe(33);
+      expect(statsFolded.totals.avgDailyActiveInstalls).toBe(4.7);
+      expect(statsFolded.daily.map(d => ({ day: d.day, activeInstalls: d.activeInstalls }))).toEqual([
+        { day: day1, activeInstalls: 28 },
+        { day: day2, activeInstalls: 5 },
+      ]);
+
+      // Range breakdowns: anthropic (12) and xai (5 + 5 = 10) are kept; openai (6) + google (5) fold into 'other' (11 >= 10)
+      expect(statsFolded.providers).toEqual([
+        { providerKind: "anthropic", requests: 120, tokens: 12000 },
+        { providerKind: "other", requests: 50, tokens: 5000 },
+        { providerKind: "xai", requests: 20, tokens: 2000 },
+      ]);
+      expect(statsFolded.models).toEqual([
+        { modelFamily: "claude-opus", requests: 120, tokens: 12000 },
+        { modelFamily: "other", requests: 50, tokens: 5000 },
+        { modelFamily: "grok", requests: 20, tokens: 2000 },
+      ]);
+      expect(statsFolded.versions).toEqual([
+        { version: "2.41.0", installs: 12, newInstalls: 3 },
+        { version: "other", installs: 11, newInstalls: 3 },
+        { version: "2.38.0", installs: 10, newInstalls: 2 },
+      ]);
+      expect(statsFolded.platforms).toEqual([
+        { os: "darwin", arch: "arm64", installs: 12 },
+        { os: "other", arch: "other", installs: 11 },
+        { os: "linux", arch: "arm64", installs: 10 },
+      ]);
+      expect(statsFolded.channels).toEqual([
+        { installChannel: "npm-global", installs: 12, newInstalls: 3 },
+        { installChannel: "other", installs: 11, newInstalls: 3 },
+        { installChannel: "docker", installs: 10, newInstalls: 2 },
+      ]);
+      expect(statsFolded.errors).toEqual([
+        { cause: "rate-limit", count: 24 },
+        { cause: "other", count: 23 },
+        { cause: "upstream-fault", count: 10 },
+      ]);
+
+      // dailyByProvider per day:
+      // - On day1: anthropic (12 >= 10) is kept; openai (6) + google (5) + xai (5) fold into 'other' (16 >= 10).
+      // - On day2: xai has only 5 installs (< 10), so 'other' on day2 has 5 (< 10) and is dropped!
+      expect(statsFolded.dailyByProvider).toEqual([
+        { day: day1, providerKind: "anthropic", requests: 120, tokens: 12000 },
+        { day: day1, providerKind: "other", requests: 60, tokens: 6000 },
+      ]);
+
+      // Now test dropping 'other' when 'other' itself has fewer than 10 install-days in a fresh DB:
+      const hDrop = createInMemoryD1("drop-salt");
+      try {
+        // 12 installs of anthropic + 4 installs of openai + 5 installs of google -> 'other' has 9 < 10 -> dropped!
+        await hDrop.db
+          .prepare(
+            "INSERT INTO daily_totals (day, reports, new_installs, active_minutes, completed, failed, incomplete, aborted, input, cache_read, cache_write, output, reasoning) " +
+            "VALUES (?1, 21, 2, 105, 160, 15, 0, 0, 16000, 0, 0, 0, 0)",
+          )
+          .bind(day1)
+          .run();
+        await hDrop.db
+          .prepare(
+            "INSERT INTO daily_models (day, provider_kind, model_family, installs, requests, input, cache_read, cache_write, output, reasoning) " +
+            "VALUES (?1, 'anthropic', 'claude-opus', 12, 120, 12000, 0, 0, 0, 0), (?1, 'openai', 'gpt-5', 4, 20, 2000, 0, 0, 0, 0), (?1, 'google', 'gemini-3', 5, 20, 2000, 0, 0, 0, 0)",
+          )
+          .bind(day1)
+          .run();
+        await hDrop.db
+          .prepare(
+            "INSERT INTO daily_errors (day, cause, installs, count) " +
+            "VALUES (?1, 'rate-limit', 12, 24), (?1, 'empty-output', 4, 8), (?1, 'client-cancelled', 5, 5)",
+          )
+          .bind(day1)
+          .run();
+        for (let i = 0; i < 21; i++) {
+          const isMajor = i < 12;
+          const isOpenai = i >= 12 && i < 16;
+          await hDrop.db
+            .prepare(
+              "INSERT INTO daily_installs (day, install_day_hash, version, release_channel, os, arch, install_channel, new_install, active_minutes) " +
+              "VALUES (?1, ?2, ?3, 'latest', ?4, ?5, ?6, 0, 5)",
+            )
+            .bind(
+              day1,
+              i.toString(16).padStart(64, "0"),
+              isMajor ? "2.41.0" : isOpenai ? "2.40.0" : "2.39.0",
+              isMajor ? "darwin" : isOpenai ? "linux" : "win32",
+              isMajor ? "arm64" : "x64",
+              isMajor ? "npm-global" : isOpenai ? "standalone" : "desktop",
+            )
+            .run();
+        }
+
+        const resDropped = await handleCollectorFetch(
+          new Request("https://telemetry.opencodex.me/v1/stats?range=7d"),
+          hDrop.env,
+          undefined,
+          NOW,
+        );
+        expect(resDropped.status).toBe(200);
+        const statsDropped = (await resDropped.json()) as TelemetryStatsV1;
+
+        // Totals, daily, heatmap, and outcomes stay unfiltered (all 21 reports counted).
+        expect(statsDropped.totals.activeInstalls).toBe(21);
+        expect(statsDropped.totals.avgDailyActiveInstalls).toBe(3);
+        expect(statsDropped.totals.requests).toBe(175);
+        expect(statsDropped.daily[0]?.activeInstalls).toBe(21);
+        expect(statsDropped.heatmap.find(d => d.day === day1)?.activeInstalls).toBe(21);
+
+        // Every breakdown drops 'other' because 4 + 5 = 9 < 10.
+        expect(statsDropped.providers).toEqual([{ providerKind: "anthropic", requests: 120, tokens: 12000 }]);
+        expect(statsDropped.models).toEqual([{ modelFamily: "claude-opus", requests: 120, tokens: 12000 }]);
+        expect(statsDropped.versions).toEqual([{ version: "2.41.0", installs: 12, newInstalls: 0 }]);
+        expect(statsDropped.platforms).toEqual([{ os: "darwin", arch: "arm64", installs: 12 }]);
+        expect(statsDropped.channels).toEqual([{ installChannel: "npm-global", installs: 12, newInstalls: 0 }]);
+        expect(statsDropped.errors).toEqual([{ cause: "rate-limit", count: 24 }]);
+        expect(statsDropped.dailyByProvider).toEqual([
+          { day: day1, providerKind: "anthropic", requests: 120, tokens: 12000 },
+        ]);
+
+        // If a native 'other' row exists (e.g. 6 installs of providerKind='other') alongside
+        // 4 installs of openai and 5 installs of google, all merge into a single 'other' row (15 >= 10).
+        await hDrop.db
+          .prepare(
+            "INSERT INTO daily_models (day, provider_kind, model_family, installs, requests, input, cache_read, cache_write, output, reasoning) " +
+            "VALUES (?1, 'other', 'other', 6, 30, 3000, 0, 0, 0, 0)",
+          )
+          .bind(day1)
+          .run();
+        const resMergedOther = await handleStats(
+          new Request("https://telemetry.opencodex.me/v1/stats?range=7d"),
+          hDrop.env,
+          NOW,
+          { bypassCache: true },
+        );
+        const statsMergedOther = (await resMergedOther.json()) as TelemetryStatsV1;
+        expect(statsMergedOther.providers).toEqual([
+          { providerKind: "anthropic", requests: 120, tokens: 12000 },
+          { providerKind: "other", requests: 70, tokens: 7000 },
+        ]);
+        expect(statsMergedOther.models).toEqual([
+          { modelFamily: "claude-opus", requests: 120, tokens: 12000 },
+          { modelFamily: "other", requests: 70, tokens: 7000 },
+        ]);
+        expect(statsMergedOther.dailyByProvider).toEqual([
+          { day: day1, providerKind: "anthropic", requests: 120, tokens: 12000 },
+          { day: day1, providerKind: "other", requests: 70, tokens: 7000 },
+        ]);
+      } finally {
+        hDrop.close();
+      }
+    } finally {
+      h.close();
+    }
+  });
+
+  test("README documents collector-first rollout, D1 installs column migration, 120/hour rate limit, and residual subtraction risk", () => {
+    const readme = readFileSync(
+      repoPath("services", "telemetry-collector", "README.md"),
+      "utf8",
+    );
+    expect(readme).toContain("120 reports/hour");
+    expect(readme).toContain("ALTER TABLE daily_models ADD COLUMN installs INTEGER NOT NULL DEFAULT 0");
+    expect(readme).toContain("ALTER TABLE daily_errors ADD COLUMN installs INTEGER NOT NULL DEFAULT 0");
+    expect(readme.toLowerCase()).toContain("before a client release");
+    expect(readme.toLowerCase()).toContain("subtraction");
   });
 });
