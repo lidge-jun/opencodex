@@ -239,3 +239,9 @@ contracts preserved. On that combined tree the GUI suite passed 3,965 tests;
 typecheck, GUI lint and i18n lint, structure check and file-size ratchet passed.
 Final-head CI, refreshed browser observations and the fresh GOAT review are still
 required before integration.
+
+Exact-head Ubuntu shard 5 on `91f86939c4` found three Windows fixture assertions
+that omitted the additive `loginState: "unknown"` field. The Windows supervision
+suite reproduced all three failures locally; after updating those expectations,
+all 17 tests passed, including the conservative claim-only cases. The failed CI
+run remains failed evidence and must be replaced by checks on the corrected head.
