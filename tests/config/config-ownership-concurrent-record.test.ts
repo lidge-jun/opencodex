@@ -44,10 +44,11 @@ const spawnChild = (dir: string, rel: string, gate?: { ready: string; go: string
   Bun.spawn([process.execPath, "-e", childScript(dir, rel, gate)], { stderr: "inherit" });
 
 /** Complete the owner's JSON at the first creation poll, without relying on process scheduling. */
-function observeOwnerPublication(dir: string, completedOwner: string | null): string {
+function observeOwnerPublication(dir: string, completedOwner: string | null, cacheUnowned = false): string {
   const script = [
     "import { writeFileSync } from \"node:fs\";",
-    "import { registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+    "import { initializeConfigOwnership, registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+    cacheUnowned ? "if (initializeConfigOwnership(" + JSON.stringify(dir) + ")) throw new Error(\"fixture unexpectedly owned before publication\");" : "",
     "const completedOwner = " + JSON.stringify(completedOwner) + ";",
     "const realNow = Date.now; let reads = 0;",
     "Date.now = () => {",
@@ -818,26 +819,28 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(manifest(dir).paths).toContain("later");
   }));
 
-  test("a first registration waits for an existing owner file whose JSON is still being published", withHome(dir => {
-    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    const ownerPath = join(dir, ".opencodex-owner.json");
-    const owner = readFileSync(ownerPath, "utf8");
-    // Exclusive create exposes the file name before writeFileSync finishes its bytes.
-    writeFileSync(ownerPath, "");
-    expect(observeOwnerPublication(dir, owner)).toBe("recorded");
-    expect(readFileSync(ownerPath, "utf8")).toBe(owner);
-    expect(manifest(dir).paths).toContain("after-publication");
-  }));
+  for (const cached of [false, true]) for (const state of ["empty", "mismatched"] as const) {
+    const context = cached ? "cached-unowned" : "uncached";
+    test(`${context} registration waits for ${state} owner publication`, withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const ownerPath = join(dir, ".opencodex-owner.json");
+      const owner = readFileSync(ownerPath, "utf8");
+      // Exclusive create exposes the file name before writeFileSync finishes its bytes.
+      const incomplete = state === "empty" ? "" : JSON.stringify({ ...JSON.parse(owner), ownerId: "00000000-0000-4000-8000-000000000000" });
+      writeFileSync(ownerPath, incomplete);
+      expect(observeOwnerPublication(dir, owner, cached)).toBe("recorded");
+      expect(readFileSync(ownerPath, "utf8")).toBe(owner);
+      expect(manifest(dir).paths).toContain("after-publication");
+    }));
 
-  for (const state of ["empty", "mismatched"] as const) {
-    test(`an unfinished ${state} owner publication stays unowned and unchanged`, withHome(dir => {
+    test(`${context} unfinished ${state} owner publication stays unowned and unchanged`, withHome(dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       const ownerPath = join(dir, ".opencodex-owner.json");
       const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
       const invalid = state === "empty" ? "" : JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" });
       writeFileSync(ownerPath, invalid);
       const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
-      expect(observeOwnerPublication(dir, null)).toBe("unowned");
+      expect(observeOwnerPublication(dir, null, cached)).toBe("unowned");
       expect(readFileSync(ownerPath, "utf8")).toBe(invalid);
       expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
       expect(existsSync(join(dir, "after-publication"))).toBe(false);
