@@ -1,4 +1,12 @@
-import * as echarts from "echarts";
+import type * as Echarts from "echarts";
+
+type EchartsModule = typeof import("echarts");
+let echartsLoad: Promise<EchartsModule> | null = null;
+// Loaded on first chart render: keeps ECharts out of the initial page script and lets
+// helpers in this module be imported where the docs-site dependencies are not installed.
+function loadEcharts(): Promise<EchartsModule> {
+  return (echartsLoad ??= import("echarts"));
+}
 import type { TelemetryDashboardCopy } from "../../data/telemetry-dashboard-i18n";
 import {
   DEFAULT_STATS_REQUEST_TIMEOUT_MS,
@@ -49,7 +57,7 @@ export function mountTelemetryDashboard(
   );
   let activeChartMetric: DailyChartMetric = "tokens";
   let latestStats: TelemetryStatsV1 | null = null;
-  let chartInstance: echarts.ECharts | null = null;
+  let chartInstance: Echarts.ECharts | null = null;
   let currentHeatmapCells: HeatmapCell[] = [];
   let focusedHeatmapDate: string | null = null;
   const statsSequencer = createStatsRequestSequencer(DEFAULT_STATS_REQUEST_TIMEOUT_MS);
@@ -135,47 +143,52 @@ export function mountTelemetryDashboard(
       }
     }
 
-    if (!chartInstance) {
-      chartInstance = echarts.init(chartEl);
-    }
-    chartInstance.setOption(
-      {
-        textStyle: { color: textColor },
-        tooltip: {
-          trigger: "axis",
-          axisPointer: { type: "shadow" },
-        },
-        legend: {
-          top: 0,
-          textStyle: { color: textColor, fontSize: 11 },
-        },
-        grid: { left: 52, right: 16, top: 34, bottom: 28 },
-        xAxis: {
-          type: "category",
-          data: model.days,
-          axisLabel: { color: textColor, fontSize: 11 },
-          axisLine: { lineStyle: { color: borderColor } },
-        },
-        yAxis: {
-          type: "value",
-          axisLabel: {
-            color: textColor,
-            fontSize: 11,
-            formatter: (val: number) => formatCompactNumber(val),
+    const applyChart = (echarts: EchartsModule) => {
+      if (!chartInstance) {
+        chartInstance = echarts.init(chartEl);
+      }
+      chartInstance.setOption(
+        {
+          textStyle: { color: textColor },
+          tooltip: {
+            trigger: "axis",
+            axisPointer: { type: "shadow" },
           },
-          splitLine: { lineStyle: { color: borderColor } },
+          legend: {
+            top: 0,
+            textStyle: { color: textColor, fontSize: 11 },
+          },
+          grid: { left: 52, right: 16, top: 34, bottom: 28 },
+          xAxis: {
+            type: "category",
+            data: model.days,
+            axisLabel: { color: textColor, fontSize: 11 },
+            axisLine: { lineStyle: { color: borderColor } },
+          },
+          yAxis: {
+            type: "value",
+            axisLabel: {
+              color: textColor,
+              fontSize: 11,
+              formatter: (val: number) => formatCompactNumber(val),
+            },
+            splitLine: { lineStyle: { color: borderColor } },
+          },
+          series: model.series.map((s) => ({
+            name: s.providerKind,
+            type: "bar",
+            stack: "daily",
+            itemStyle: { color: s.color },
+            emphasis: { focus: "series" },
+            data: s.values,
+          })),
         },
-        series: model.series.map((s) => ({
-          name: s.providerKind,
-          type: "bar",
-          stack: "daily",
-          itemStyle: { color: s.color },
-          emphasis: { focus: "series" },
-          data: s.values,
-        })),
-      },
-      { notMerge: true },
-    );
+        { notMerge: true },
+      );
+    };
+    void loadEcharts().then(applyChart).catch(() => {
+      chartEl.dataset.chartUnavailable = "true";
+    });
   };
 
   const renderHeatmap = (stats: TelemetryStatsV1 | null) => {
