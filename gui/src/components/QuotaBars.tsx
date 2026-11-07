@@ -109,7 +109,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   }
   for (const w of displayQuota.customWindows ?? []) {
     const customLabel = canonicalCustomWindowLabel(w.label);
-    const localized = localizeCustomQuotaLabel(customLabel, t);
+    const localized = w.displayLabel ?? localizeCustomQuotaLabel(customLabel, t);
     ranked.push({
       rank: rawCustomWindowRank(customLabel),
       row: {

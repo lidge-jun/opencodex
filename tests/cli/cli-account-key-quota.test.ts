@@ -60,6 +60,27 @@ test("unknown budget windows survive CLI projection and have no fabricated perce
   expect(providerQuotaLine("mistral", { provider: "mistral", quota })).toContain("API budget (EDU) unknown");
 });
 
+test("measured budget display details survive both CLI quota views", () => {
+  const quota = { updatedAt: 1, customWindows: [
+    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5 },
+    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2 },
+  ] };
+  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
+  for (const text of [apiKeyQuotaText(result.rows[0]!), providerQuotaLine("mistral", { provider: "mistral", quota })]) {
+    expect(text).toContain("API budget (EUR 2.50 of EUR 20.00 used; EDU)");
+    expect(text).toContain("Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)");
+  }
+});
+
+test("display labels cannot inject terminal lines into CLI quota output", () => {
+  const quota = { updatedAt: 1, customWindows: [{ label: "API budget", displayLabel: "budget\nunsafe", percent: 10 }] };
+  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
+  for (const text of [apiKeyQuotaText(result.rows[0]!), providerQuotaLine("mistral", { provider: "mistral", quota })]) {
+    expect(text).not.toContain("\n");
+  }
+  expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 1, customWindows: [{ label: "x", percent: 1, displayLabel: 4 }] } })]), "mistral")).toThrow("Malformed");
+});
+
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   const deps: AccountDeps = { ...depsFor(body()), loadConfigImpl: () => config("team/key +"),

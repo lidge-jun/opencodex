@@ -27,6 +27,8 @@ export type ProviderRoutingQuota =
 
 export interface ProviderQuotaWindow {
   label: string;
+  /** Presentation text only; identity and routing use label and structured fields. */
+  displayLabel?: string;
   percent: number;
   resetAt?: number;
   /**

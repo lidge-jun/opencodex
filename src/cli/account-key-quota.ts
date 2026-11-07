@@ -27,6 +27,8 @@ function windowProjection(value: unknown): ProviderQuotaWindow {
   const label = optionalString(row, "label");
   if (label === undefined) throw new Error("Malformed API-key quota response.");
   const result: ProviderQuotaWindow = { label, percent: finite(row.percent) };
+  const displayLabel = optionalString(row, "displayLabel");
+  if (displayLabel !== undefined) result.displayLabel = displayLabel;
   if (row.resetAt !== undefined) result.resetAt = finite(row.resetAt);
   if (row.passiveObservedAt !== undefined) result.passiveObservedAt = finite(row.passiveObservedAt);
   if (row.scope !== undefined) {
@@ -118,7 +120,7 @@ export function apiKeyQuotaText(row: AccountRow): string {
   }
   for (const window of quota.customWindows ?? []) {
     // Labels are upstream text: keep terminal controls out of the human table.
-    const label = terminalSafeText(window.label);
+    const label = terminalSafeText(window.displayLabel ?? window.label);
     const resetAt = window.resetAt === undefined ? undefined : new Date(window.resetAt);
     const reset = resetAt && Number.isFinite(resetAt.getTime()) ? `; resets ${resetAt.toISOString()}` : "";
     parts.push(`${label} ${window.percent}%${window.rejected ? " (rejected)" : ""}${reset}`);

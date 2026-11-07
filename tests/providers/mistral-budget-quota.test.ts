@@ -7,6 +7,8 @@ import { classifyUpstreamCondition } from "../../src/lib/upstream-condition";
 import type { OcxConfig } from "../../src/types";
 import { saveConfig } from "../../src/config";
 import { selectProactiveApiKey, clearKeyCooldowns } from "../../src/providers/key-failover";
+import { providerWindowObservations } from "../../src/quota/window-mapping";
+import { detectQuotaResets } from "../../src/quota/reset-detector";
 
 const originalFetch = globalThis.fetch;
 const provider = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "test-mistral-key" } as const;
@@ -26,19 +28,43 @@ beforeEach(() => {
 });
 afterEach(() => { globalThis.fetch = originalFetch; clearProviderQuotaCache(); });
 
+test("successive Mistral budget payloads retain reset identities across usage and plan changes", async () => {
+  const now = Date.parse("2026-12-01T00:01:00Z");
+  let after = false;
+  globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription")
+    ? { ...subscription, plan_name: after ? "TEAM" : "EDU" }
+    : { api_budget: { ...budget.api_budget, usage_percentage: after ? 2 : 90, reset_at: after ? "2027-01-01T00:00:00Z" : "2026-12-01T00:00:00Z" },
+        vibe_budget: { ...budget.vibe_budget, usage_percentage: after ? 1 : 80, reset_at: after ? "2027-01-01T00:00:00Z" : "2026-12-01T00:00:00Z" } })) as typeof fetch;
+  const before = (await fetchProviderQuotaReports(config, true)).reports[0]!.quota;
+  after = true;
+  const next = (await fetchProviderQuotaReports(config, true)).reports[0]!.quota;
+  const events = detectQuotaResets({ scope: "provider", accountTag: "fixture", previous: providerWindowObservations(before), next: providerWindowObservations(next), now });
+  expect(events.map(event => [event.window, event.kind])).toEqual([["custom:API budget", "scheduled"], ["custom:Vibe budget", "scheduled"]]);
+});
+
 test("Mistral reports both budget windows and plan and caches the paired read", async () => {
   const first = await fetchProviderQuotaReports(config, false);
   const report = first.reports.find(row => row.provider === "mistral");
   expect(report?.source).toBe("mistral:budget");
   expect(JSON.stringify(first)).not.toContain("test-mistral-key");
   expect(report?.quota.customWindows).toEqual([
-    { label: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5, resetAt: Date.parse("2026-12-01T00:00:00Z") },
-    { label: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2, resetAt: Date.parse("2026-12-01T00:00:00Z") },
+    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5, resetAt: Date.parse("2026-12-01T00:00:00Z") },
+    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2, resetAt: Date.parse("2026-12-01T00:00:00Z") },
   ]);
   await fetchProviderQuotaReports(config, false);
   expect(calls.sort()).toEqual(["https://api.mistral.ai/v1/billing/budget", "https://api.mistral.ai/v1/billing/subscription"]);
   await fetchProviderQuotaReports(config, true);
   expect(calls).toHaveLength(4);
+});
+
+test("unrecognized plan and currency text never enters budget display data", async () => {
+  globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription")
+    ? { ...subscription, plan_name: "PRIVATE-CANARY\nmalicious" }
+    : { ...budget, api_budget: { ...budget.api_budget, currency: "EUR\nPRIVATE-CANARY" } })) as typeof fetch;
+  const result = await fetchProviderQuotaReports(config, true);
+  expect(JSON.stringify(result)).not.toContain("PRIVATE-CANARY");
+  expect(result.reports[0]?.quota.unknownBudgetWindows?.[0]?.label).toBe("API budget");
+  expect(result.reports[0]?.quota.customWindows?.[0]?.displayLabel).toBe("Vibe budget (EUR 0.20 of EUR 10.00 used)");
 });
 
 test("lookalike destinations cannot receive a key", () => {

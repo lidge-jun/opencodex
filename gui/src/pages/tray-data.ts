@@ -108,7 +108,7 @@ export function quotaWindows(quota: AccountQuota | null) {
     { id: 'quota.monthlyLimit', key: 'quota.monthlyLimit' as const, percent: quota.monthlyPercent, reset: quota.monthlyResetAt },
     // A provider-named window is identified by its own label; the de-duplication below is what
     // keeps that unique, including against the fixed keys above.
-    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, modelId: w.modelId, percent: w.percent, reset: w.resetAt })) : []),
+    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.displayLabel ?? w.label, modelId: w.modelId, percent: w.percent, reset: w.resetAt })) : []),
     ...(quota.unknownBudgetWindows ?? []).map(w => ({ id: w.label, label: w.label, percent: undefined, reset: w.resetAt, unknownBudget: true })),
   ];
   // Ordinary windows are listed only when they report a percentage or a reset time. Plans
