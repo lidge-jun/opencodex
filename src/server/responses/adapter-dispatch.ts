@@ -1,8 +1,9 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { responsesSpendTarget } from "./request-spend-target";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError, carryProxyError } from "../../lib/client-error-body";
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
-import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
+import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
@@ -37,6 +38,7 @@ import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafe
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import { isAnthropicBillingKeyPool, rotateAnthropicBillingKeyOnResponse } from "../../providers/anthropic-billing-recovery";
@@ -171,7 +173,7 @@ export async function prepareAdapterExchange(
     | "genericFailovers"
     | "genericFailoverLimit"
     | "applyFailoverSnapshot"
-    | "noteRoutedAttemptSend"
+    | "noteRoutedAttemptSend" | "attemptSendDeferred" | "deferPhysicalAttribution"
   >,
   responseEffects: Pick<ResponsesEffects, "cancelResponseCompletion" | "notifyResponseComplete" | "refreshRequestToolAliases">,
   sendBudgetState: Pick<
@@ -246,12 +248,11 @@ export async function prepareAdapterExchange(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
   ).allowed;
-
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
-  const resolveRotatedCopilotSelection = async (): Promise<Response | undefined> => {
-    try { await resolveCopilotSelection(parsed); }
+  const resolveRotatedCopilotSelection = async (provider = route.provider): Promise<Response | undefined> => {
+    try { await resolveCopilotSelection(parsed, false, provider); }
     catch (error) {
       cleanupUpstreamAbort();
       upstream.abort();
@@ -270,7 +271,6 @@ export async function prepareAdapterExchange(
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
   const antigravityDenial = createAntigravityModelDenialRecovery();
-
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
   // builder runs again only after a key/account/adapter rotation, an oauth refresh, or an
@@ -479,14 +479,12 @@ export async function prepareAdapterExchange(
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
       const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
-      const deferredInitial = billingPoolRequest && !receiptMode ? deferPhysicalSendReporter(initialReporter) : undefined;
+      const deferredInitial = (billingPoolRequest || route.providerName === "github-copilot" && route.provider.authMode !== "forward") && !receiptMode ? deferPhysicalSendReporter(initialReporter) : undefined;
       try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           // Unconfigured generic sends may omit the counting reporter. Capture policy
           // independently so a later recovery still belongs to this request's start.
-          sendBudgetState.adapterSendBudget?.startRequest?.({
-            poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
-          });
+          sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
           // Receipt mode books the physical send at executor admission instead of here.
           if (!deferredInitial && !receiptMode && compactPrepaid && !compactPrepaidUsed) {
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
@@ -699,8 +697,10 @@ export async function prepareAdapterExchange(
         ? retryRequest.usageLog.inputTokens
         : undefined;
       if (retryEstimate !== undefined) logCtx.usageLogInputTokens = retryEstimate;
-      logCtx.providerAdapter = transportState.activeAdapter.name;
-      sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
+      if (!transportState.deferPhysicalAttribution) {
+        logCtx.providerAdapter = transportState.activeAdapter.name;
+        sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
+      }
       recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
       try {
         try {
@@ -767,15 +767,13 @@ export async function prepareAdapterExchange(
             : undefined;
           let refetchPermitUsed = false;
           const refetchReporter = refetchAllowance ? transientSendReporter(refetchAllowance.permit) : undefined;
-          const deferredRefetch = (billingPoolRequest || options.comboAttempt) && refetchReporter
+          const deferredRefetch = (billingPoolRequest || options.comboAttempt || route.providerName === "github-copilot" && route.provider.authMode !== "forward") && refetchReporter
             ? deferPhysicalSendReporter(refetchReporter) : undefined;
-          const pendingKeyMetadata = deferredRefetch && usesApiKeyAccount(route.provider);
+          const pendingKeyMetadata = deferredRefetch && transportState.attemptSendDeferred();
           try {
             return await refetchWithPolicy(
               recoveryKind => {
-                sendBudgetState.adapterSendBudget?.startRequest?.({
-                  poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
-                });
+                sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
                 // Prepare key metadata before the guarded transport commits its attempt;
                 // counters and permits still wait for the physical executor after pacing.
                 if (pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
@@ -932,6 +930,7 @@ export async function prepareAdapterExchange(
       if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
+          mapRefreshError: createAutoPauseRefreshErrorMapper(upstreamResponse, upstream, cleanupUpstreamAbort, copilotRefusalResponse, () => (options.abortSignal ?? req.signal).aborted, clientCancelledResponse),
           refresh: () => transportState.recoverAutoPausedSelection(parsed), refetch: () => rebuildAndRefetch("oauth-account-429"), setPermit: permit => { sendBudgetState.pendingHopPermit = permit; } });
         if (!recovered) break;
         if ("failed" in recovered) return recovered.failed;
@@ -1035,11 +1034,6 @@ export async function prepareAdapterExchange(
           cleanupUpstreamAbort();
           return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required"))));
         }
-        transportState.sentOAuthSnapshot = refreshed;
-        transportState.replayOAuthCredentialSnapshot = {
-          accountId: refreshed.accountId,
-          generation: refreshed.generation,
-        };
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
         }
@@ -1055,10 +1049,13 @@ export async function prepareAdapterExchange(
             ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
             : undefined,
         );
-        route.provider = refreshedProvider;
-        const copilotRefusal = await resolveRotatedCopilotSelection();
+        const copilotRefusal = await resolveRotatedCopilotSelection(refreshedProvider);
         if (copilotRefusal) return copilotRefusal;
         refreshedProvider = route.provider;
+        if (route.providerName !== "github-copilot") {
+          transportState.sentOAuthSnapshot = refreshed;
+          transportState.replayOAuthCredentialSnapshot = { accountId: refreshed.accountId, generation: refreshed.generation };
+        }
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
@@ -1508,7 +1505,7 @@ export async function prepareAdapterExchange(
             adapterName: transportState.activeAdapter.name,
             oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
           });
-          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
+          if (!transportState.deferPhysicalAttribution) sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
           // The replay IS this hop's send, so hand the reservation down and let the layer that
           // dispatches settle it: `adapterDispatchBudget` spends it on the adapter's first
@@ -1613,7 +1610,7 @@ export async function prepareAdapterExchange(
             adapterName: transportState.activeAdapter.name,
             oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
           });
-          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
+          if (!transportState.deferPhysicalAttribution) sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
           // The replay IS this hop's send, so hand the reservation down and let the layer that
           // dispatches settle it: `adapterDispatchBudget` spends it on the adapter's first
@@ -1962,7 +1959,7 @@ export async function prepareAdapterExchange(
           upstreamRetryAfter,
           includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
-      return formatUpstreamFailureResponse(upstreamResponse, normalized.code,
+      return carryPolicyCandidateRefusal(upstreamResponse, formatUpstreamFailureResponse(upstreamResponse, normalized.code,
         upstreamResponse.status,
         normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
         message,
@@ -1970,7 +1967,7 @@ export async function prepareAdapterExchange(
           ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
-      );
+      ));
     }
   }
 
