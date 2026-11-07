@@ -7,6 +7,7 @@ import { Button } from "@/components/ui-v2/button";
 import { frame, sectionTitle } from "@/components/v2-connect/classes";
 import { cn } from "@/lib/utils";
 import { startupChecklistDone } from "../startup-health-ui";
+import { useStartupChecklist } from "../hooks/useStartupChecklist";
 
 /*
  * The "Set up" tier: everything people do once, in the order they do it. Each row opens
@@ -25,7 +26,6 @@ interface SetupHubProps {
 
 interface ConfigBody { providers?: Record<string, unknown> }
 interface UsageBody { summary?: { requests?: number } }
-type StartupBody = Parameters<typeof startupChecklistDone>[0];
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
   const res = await fetch(url, { signal });
@@ -47,8 +47,7 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
     signal => getJson<ConfigBody>(`${apiBase}/api/config`, signal));
   const usage = useKeyedClientResource(`setup-usage:${apiBase}`, [apiBase],
     signal => getJson<UsageBody>(`${apiBase}/api/usage?range=all`, signal));
-  const startup = useKeyedClientResource(`home-startup:${apiBase}`, [apiBase],
-    signal => getJson<StartupBody>(`${apiBase}/api/startup-health`, signal));
+  const startup = useStartupChecklist(apiBase);
 
   const optional = { label: t("shellV2.badgeOptional"), tone: "optional" } satisfies HubBadge;
 

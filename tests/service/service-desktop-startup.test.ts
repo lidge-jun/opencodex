@@ -98,6 +98,26 @@ test("a disabled registration cannot survive an owner or supervisor change", () 
   }
 });
 
+test("enabled login evidence is not attributed across an ownership or process race", () => {
+  for (const change of ["owner", "pid"] as const) {
+    const f = fixture();
+    if (change === "owner") f.state.changedOwner = true;
+    else f.state.changedPid = true;
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, loginState: "unknown", running: false, viable: false });
+  }
+});
+
+test("an enabled registration loses credit if the final process probe fails", () => {
+  const f = fixture();
+  const run = f.deps.run;
+  let processReads = 0;
+  f.deps.run = (command, args) => {
+    if (command === "/bin/ps" && ++processReads === 3) throw new Error("process unavailable");
+    return run(command, args);
+  };
+  expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginEnabled: false, loginState: "unknown", running: false, viable: false });
+});
+
 test("a consistently absent login item is disabled only for a verified live Desktop", () => {
   for (const owned of [true, false]) {
     const f = fixture();

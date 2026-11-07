@@ -43,13 +43,18 @@ describe("startup health UI decisions", () => {
     expect(render("unknown")).not.toContain("Action required");
     expect(render("disabled")).toContain("Action required");
     expect(render("enabled")).not.toContain("Action required");
+    const cold = renderToStaticMarkup(createElement(I18nContext.Provider,
+      { value: { locale: "en", setLocale: () => {}, t } },
+      createElement(StartupHeroSection, { failed: true, data: { ...base, diagnosticStale: true } as StartupHealthData })));
+    expect(cold).not.toContain("Action required");
+    expect(cold).not.toContain("OpenCodex menu");
   });
 
   test("desktop uncertainty does not hide independently protected or unrelated routing", () => {
     const desktop = { owned: true, loginState: "unknown" };
     expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop })).toBe("unverified");
     expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { ...desktop, loginState: "disabled" } })).toBe("at-risk");
-    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { ...desktop, loginState: "enabled" } })).toBe("unverified");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { ...desktop, loginState: "enabled" } })).toBe("at-risk");
     expect(startupPresentation({ status: "protected", routingKind: "opencodex-local", desktop })).toBe("protected");
     expect(startupPresentation({ status: "at-risk", routingKind: "custom-local", desktop })).toBe("at-risk");
     expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { owned: false, supervisor: null } })).toBe("at-risk");
@@ -58,10 +63,14 @@ describe("startup health UI decisions", () => {
     expect(startupChecklistDone({ status: "at-risk", routingKind: "opencodex-local", desktop, protection: "none" })).toBeUndefined();
     expect(startupChecklistDone({ status: "protected", routingKind: "opencodex-local", desktop, protection: "desktop" })).toBe(true);
     expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", diagnosticStale: true, desktop: { ...desktop, loginState: "disabled" } })).toBe("unverified");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", diagnosticStale: true })).toBe("unverified");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", diagnosticStale: true }, true)).toBe("unverified");
+    expect(mergeStartupProbe({ status: "unverified", stale: true }, true)).toEqual({ status: "unverified", desktopManaged: true });
     expect(mergeStartupProbe({ status: "error", stale: false }, true)).toEqual({ status: "unverified", desktopManaged: true });
     expect(mergeStartupProbe({ status: "error", stale: false }, false)).toEqual({ status: "error", desktopManaged: false });
     expect(mergeStartupProbe({ status: "protected", stale: false, desktopManaged: true }, false)).toEqual({ status: "protected", desktopManaged: true });
     expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local", desktop })).toBe("unverified");
+    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local" })).toBe("unverified");
   });
   test("selects the shared risk-detail message", () => {
     expect(startupRiskDetailKey({ routingKind: "custom-local", shimCoverage: "none" }))

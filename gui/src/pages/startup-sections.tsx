@@ -68,11 +68,11 @@ export function StartupHeroSection({
           {t(unverified ? "startup.unverified" : failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
         </StateBadge>
         <div className="flex items-start gap-1.5">
-          <h3 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.02em] text-fg">{t(unverified ? "startup.loginUnverifiedTitle" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
+          <h3 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.02em] text-fg">{t(unverified ? desktopManagesStartup(data) ? "startup.loginUnverifiedTitle" : "startup.unverified" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
           <span className="mt-0.5"><HelpButton open={help.open} controls={help.id} name={t("startup.title")} onToggle={help.toggle} /></span>
         </div>
         <p className="m-0 max-w-[72ch] text-[14px] leading-[21px] text-fg-muted">
-          {unverified || (data.status === "at-risk" && desktopManagesStartup(data)) ? t("startup.loginUnverifiedAction") : failed ? t("startup.staleData") : data.status === "at-risk" ? t(startupRiskDetailKey(data)) : t("startup.safeDetail")}
+          {unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : data.status === "at-risk" && desktopManagesStartup(data) ? t("startup.loginUnverifiedAction") : failed ? t("startup.staleData") : data.status === "at-risk" ? t(startupRiskDetailKey(data)) : t("startup.safeDetail")}
         </p>
         <p className="startup-status-line m-0 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5">
           {facts.map(([label, value], index) => (

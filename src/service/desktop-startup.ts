@@ -249,12 +249,16 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
         && JSON.stringify(child) === JSON.stringify(finalChild) && JSON.stringify(parent) === JSON.stringify(finalParent);
     }
     const currentOwner = ownership();
-    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) facts.running = false;
+    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner) || (pid !== null && !facts.running)) {
+      facts.running = false;
+      facts.loginEnabled = false;
+      facts.loginState = "unknown";
+    }
     if (!facts.running && !facts.loginEnabled) facts.loginState = "unknown";
     return deriveDesktopStartup(facts);
   } catch {
     // Unreadable launchd/process evidence never grants protection or releases the claim.
-    return deriveDesktopStartup({ ...facts, loginState: "unknown", running: false });
+    return deriveDesktopStartup({ ...facts, loginEnabled: false, loginState: "unknown", running: false });
   }
 }
 

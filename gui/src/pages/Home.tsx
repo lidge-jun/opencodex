@@ -6,6 +6,7 @@ import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { recentFailures, type HomeLogRow } from "./home-failures";
 import { startupChecklistDone } from "../startup-health-ui";
+import { useStartupChecklist } from "../hooks/useStartupChecklist";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
@@ -25,7 +26,6 @@ interface Health { version?: string; uptime?: number }
 interface UsageDay { requests?: number; totalTokens?: number }
 interface UsageBody { summary?: { requests?: number; totalTokens?: number }; days?: UsageDay[] }
 interface ConfigBody { providers?: Record<string, unknown> }
-type StartupBody = Parameters<typeof startupChecklistDone>[0];
 interface LogRow extends HomeLogRow { model?: string; provider?: string; errorCode?: string; upstreamError?: string }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -48,8 +48,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
     signal => getJson<UsageBody>(`${apiBase}/api/usage?range=7d`, signal), { pollMs: 60_000 });
   const config = useKeyedClientResource(`home-config:${apiBase}`, [apiBase],
     signal => getJson<ConfigBody>(`${apiBase}/api/config`, signal));
-  const startup = useKeyedClientResource(`home-startup:${apiBase}`, [apiBase],
-    signal => getJson<StartupBody>(`${apiBase}/api/startup-health`, signal));
+  const startup = useStartupChecklist(apiBase);
   // The 24-hour window is cut when the rows arrive, so render never reads the clock.
   const failureRead = useKeyedClientResource(`home-failures:${apiBase}`, [apiBase],
     async signal => {

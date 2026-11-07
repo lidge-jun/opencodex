@@ -49,8 +49,8 @@ export function StartupHeroSection({
           <span className={`badge ${unverified ? "badge-muted" : failed || data.status === "at-risk" ? "badge-amber" : "badge-green"}`}>
             {t(unverified ? "startup.unverified" : failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
           </span>
-          <h3>{t(unverified ? "startup.loginUnverifiedTitle" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
-          <p>{unverified || (data.status === "at-risk" && desktopManagesStartup(data))
+          <h3>{t(unverified ? desktopManagesStartup(data) ? "startup.loginUnverifiedTitle" : "startup.unverified" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
+          <p>{unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : (data.status === "at-risk" && desktopManagesStartup(data))
             ? t("startup.loginUnverifiedAction") : failed
             ? t("startup.staleData")
             : data.status === "at-risk"

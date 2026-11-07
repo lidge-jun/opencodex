@@ -209,3 +209,26 @@ registration tests passed. A reappearing item, dangling link or changed ownershi
 does not receive a disabled verdict. Typecheck, the file-size ratchet, privacy scan
 and structure check passed after this addition. The draft PR remains subject to the
 same pending review and exact-head CI gates.
+
+A further presentation regression showed that a verified enabled login item with
+an independent viability problem was incorrectly treated as unverified. The focused
+UI test failed first (expected `at-risk`, received `unverified`); after restricting
+the neutral classification to unknown or stale evidence it passed, 20 tests total.
+This does not change the conservative backend protection calculation.
+
+An interim independent implementation review requested follow-up for the native
+tray's account projection, stale readings without Desktop context, process/owner
+races, and checklist retries. The new stale and enabled-evidence race regressions
+failed before their fixes and pass afterward. A later recheck found that an exception
+during the final process read could still retain enabled credit; its regression also
+failed first and passed after the fix. Native tray tests passed in an isolated Rust
+harness (11 tests); the rendered Home/Setup checklist tests passed (5 tests), including
+stale-to-protected and stale-to-disabled transitions. The native panel follows its
+existing English UI convention for ordinal fallback. The required fresh GOAT review
+on the final head remains pending.
+
+After those fixes, `cd gui && bun test tests` exited 0 with 3,956 tests and
+`cd gui && bun run build` exited 0 for both editions. The focused startup and
+checklist suites, root typecheck, GUI lint and i18n lint, privacy scan, structure
+check, and file-size ratchet also passed. The root full suite remains unrun by
+owner request, and the timed-out `test:changed` run is not passing evidence.

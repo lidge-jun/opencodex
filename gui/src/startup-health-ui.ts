@@ -20,8 +20,10 @@ export function startupPresentation(data: {
   desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
 }, failed = false): "native" | "protected" | "at-risk" | "unverified" | "error" {
   if (!failed && data.diagnosticStale !== true && (data.status === "native" || data.status === "protected")) return data.status;
+  if (data.diagnosticStale === true && data.routingKind === "opencodex-local") return "unverified";
   if (startupDesktopContext(data)
-    && (failed || data.diagnosticStale === true || data.desktop?.loginState !== "disabled")) return "unverified";
+    && (failed || data.diagnosticStale === true
+      || (data.desktop?.loginState !== "disabled" && data.desktop?.loginState !== "enabled"))) return "unverified";
   return failed ? "error" : data.status;
 }
 
@@ -142,7 +144,7 @@ export function startupDesktopContext(data: { routingKind?: unknown; desktop?: {
 
 export function mergeStartupProbe(probe: StartupHealthProbe, previousDesktop: boolean): { status: StartupHealthStatus; desktopManaged: boolean } {
   if (probe.status === "error") return { status: previousDesktop ? "unverified" : "error", desktopManaged: previousDesktop };
-  return { status: probe.status, desktopManaged: probe.desktopManaged === true };
+  return { status: probe.status, desktopManaged: probe.desktopManaged === true || (probe.stale && probe.status === "unverified" && previousDesktop) };
 }
 
 /** How soon to re-ask after a stale answer; matches the Startup page's follow-up delay. */
@@ -188,7 +190,7 @@ export function seedStartupHealthFromSettings(
   seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean; routingKind?: unknown; desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown } } | null | undefined,
 ): StartupHealthStatus | null {
   if (!seeded) return previous;
-  if (seeded.diagnosticStale) return startupDesktopContext(seeded) ? "unverified" : previous;
+  if (seeded.diagnosticStale) return seeded.routingKind === "opencodex-local" ? "unverified" : previous;
   // A prior hard "error" (or unknown) may be replaced by a settings seed; a real
   // status from the dedicated probe must not be overwritten.
   if (previous !== null && previous !== "error") return previous;
