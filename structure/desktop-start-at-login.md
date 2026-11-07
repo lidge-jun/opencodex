@@ -17,8 +17,8 @@ On macOS 13+ Background Task Management can resubmit the LaunchAgent through smd
 credited only when its `program` is this copy and the whole registration re-reads unchanged,
 the same rule as the service-not-found answer (#7019).
 The management diagnostic also reports login evidence as enabled, disabled, or unknown.
-A disabled override is reported only after stable matching registration and process evidence;
-ambiguous or unreadable evidence stays unknown and never earns protection credit. The
+A disabled override or consistently absent plist is reported only after stable, independently
+matching process and ownership evidence; ambiguous or unreadable evidence stays unknown and never earns protection credit. The
 dashboard presents unknown Desktop evidence informationally and a verified disabled state as
 action required when no other verified protection applies.
 The cases in `tests/fixtures/desktop-login-registration-cases.json` run against both

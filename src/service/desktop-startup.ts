@@ -182,11 +182,48 @@ function diagnoseSupervisedStartup(deps: DesktopStartupDeps, ownerRevision: numb
   return deriveDesktopStartup({ owned: false, ...login, running: true, supervisor: { supervisorPid, runtimePid, app } });
 }
 
+/** An absent plist is a verified off state only for a stable, independently observed Desktop. */
+function macRegistrationAbsent(deps: DesktopStartupDeps): boolean {
+  try {
+    lstatSync(join(deps.home ?? homedir(), "Library", "LaunchAgents", "OpenCodex.plist"));
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+}
+
+function diagnoseAbsentMacRegistration(deps: DesktopStartupDeps, owner: ServiceOwnershipResolution): DesktopStartupDiagnostic | undefined {
+  if (owner.kind === "unknown") return undefined;
+  const owned = owner.kind === "owned" && owner.ownership.owner === "desktop";
+  const fallback = owned ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : undefined;
+  const ownership = deps.ownership ?? resolveServiceOwnership;
+  try {
+    const installIdPath = join(deps.home ?? homedir(), "Library", "Application Support", "com.opencodex.desktop", "install-id");
+    const installId = owned ? readFileSync(installIdPath, "utf8").trim() : null;
+    if (owned && (owner.kind !== "owned" || installId !== owner.ownership.installId)) return fallback;
+    const first = inspectDesktopSupervision(deps);
+    if (first.kind !== "desktop" || !macRegistrationAbsent(deps)) return fallback;
+    const final = inspectDesktopSupervision({ ...deps, targetPid: first.runtimePid });
+    const currentOwner = ownership();
+    if (final.kind !== "desktop" || final.runtimePid !== first.runtimePid || final.supervisorPid !== first.supervisorPid
+      || final.app !== first.app || final.proxy !== first.proxy || currentOwner.kind === "unknown"
+      || !sameServiceOwnershipSubject(owner, currentOwner) || !macRegistrationAbsent(deps)
+      || (owned && readFileSync(installIdPath, "utf8").trim() !== installId)) return fallback;
+    return deriveDesktopStartup({ owned, loginEnabled: false, loginState: "disabled", running: true,
+      ...(!owned ? { supervisor: { supervisorPid: first.supervisorPid, runtimePid: first.runtimePid, app: first.app } } : {}) });
+  } catch { return fallback; }
+}
+
 /** Read-only macOS desktop ownership, login registration and live parent/child checks. */
 export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
   if ((deps.platform ?? process.platform) !== "darwin") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   const owner = ownership();
+  if (owner.kind === "none" || (owner.kind === "owned" && owner.ownership.owner === "desktop")) {
+    try { if (macRegistrationAbsent(deps)) return diagnoseAbsentMacRegistration(deps, owner); }
+    catch { /* Unreadable registration is handled by the existing conservative path. */ }
+  }
   if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => macLoginFactsFor(app, deps));
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
   const facts: Omit<DesktopStartupDiagnostic, "viable"> = { owned: true, loginEnabled: false, running: false };

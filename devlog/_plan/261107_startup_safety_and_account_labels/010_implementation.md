@@ -201,3 +201,11 @@ GOAT's credential expired after its server restarted, so enabled/disabled browse
 scenarios and the required fresh independent implementation/security review remain
 unverified. The fixture-based tests cover those state mappings, but do not replace
 the requested review or the remaining browser observation.
+
+The implementation also verifies a consistently absent macOS login item for the
+independently observed running Desktop, including owned and supervised cases. Its
+failing-first regression initially returned unknown; after the fix, 159 desktop/login
+registration tests passed. A reappearing item, dangling link or changed ownership
+does not receive a disabled verdict. Typecheck, the file-size ratchet, privacy scan
+and structure check passed after this addition. The draft PR remains subject to the
+same pending review and exact-head CI gates.

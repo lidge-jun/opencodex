@@ -98,6 +98,41 @@ test("a disabled registration cannot survive an owner or supervisor change", () 
   }
 });
 
+test("a consistently absent login item is disabled only for a verified live Desktop", () => {
+  for (const owned of [true, false]) {
+    const f = fixture();
+    if (!owned) f.state.owner = { kind: "none", revision: 0 };
+    rmSync(f.plistPath);
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ owned, running: true, loginEnabled: false, loginState: "disabled", viable: false });
+  }
+});
+
+test("a registration that reappears during an absence check is not reported disabled", () => {
+  const f = fixture();
+  rmSync(f.plistPath);
+  const run = f.deps.run;
+  let reads = 0;
+  f.deps.run = (command, args) => {
+    if (command === "/bin/ps" && ++reads === 2) writeFileSync(f.plistPath, "new registration");
+    return run(command, args);
+  };
+  expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginState: "unknown", viable: false });
+});
+
+test("a dangling login-item link or changing owner cannot prove absence", () => {
+  const dangling = fixture();
+  rmSync(dangling.plistPath);
+  if (process.platform !== "win32") {
+    symlinkSync(join(dangling.deps.home, "missing-target"), dangling.plistPath);
+    expect(diagnoseMacDesktopStartup(dangling.deps)).toMatchObject({ loginState: "unknown", viable: false });
+  }
+
+  const changed = fixture();
+  rmSync(changed.plistPath);
+  changed.state.changedOwner = true;
+  expect(diagnoseMacDesktopStartup(changed.deps)).toMatchObject({ loginState: "unknown", viable: false });
+});
+
 function unloadedLogin(f: ReturnType<typeof fixture>, stderr = 'Could not find service "OpenCodex" in domain for user gui: 501', status = 113, beforeMissing?: () => void) {
   const original = f.deps.run;
   f.deps.run = (command, args) => {
