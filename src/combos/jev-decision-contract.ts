@@ -33,8 +33,8 @@ export function isSystemOneEndpoint(baseUrl: string): boolean {
 }
 
 /**
- * The URL a decision row is sent to. A `/systemone` path keeps its historical trailing-slash
- * normalization; any other HTTPS path is the operator's exact endpoint.
+ * The URL a decision row is sent to. `/systemone` and the native OpenAI Decisions endpoint
+ * normalize trailing slashes; other HTTPS paths retain the operator's exact endpoint.
  */
 export function jevDecisionEndpointUrl(baseUrl: string): string {
   const raw = baseUrl.trim();
@@ -47,18 +47,21 @@ export function jevDecisionEndpointUrl(baseUrl: string): string {
       }
       return stripped;
     }
+    if (parsed.origin === "https://api.openai.com" && isDecisionsEndpoint(raw)) return stripped;
   } catch {
     return stripped.endsWith("/systemone") ? stripped : raw;
   }
   return stripped.endsWith("/systemone") ? stripped : raw;
 }
 
-/** Check if endpoint path targets /decisions or Vercel AI Gateway */
+/** Known Decisions services; a custom `/decisions` path may still expect System One. */
 export function isDecisionsEndpoint(url: string): boolean {
   try {
     const parsed = new URL(url.trim());
     return parsed.hostname === "ai-gateway.vercel.sh"
-      || parsed.origin === "https://api.openai.com" && parsed.pathname === "/v1/decisions";
+      || parsed.origin === "https://api.openai.com"
+        && parsed.pathname.replace(/\/+$/, "") === "/v1/decisions"
+        && isSystemOneEndpoint(url);
   } catch {
     return false;
   }

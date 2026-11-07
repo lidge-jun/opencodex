@@ -77,6 +77,7 @@ test.each([
   { name: "tev-local", baseUrl: "http://127.0.0.1:11434/v1/systemone", openai: false },
   { name: "openai-decisions", baseUrl: "https://api.openai.com/v1/decisions", openai: true },
   { name: "my-router", baseUrl: "https://api.openai.com/v1/decisions", openai: true },
+  { name: "my-router", baseUrl: "https://api.openai.com/v1/decisions/", openai: true },
   { name: "openai-decisions", baseUrl: "http://127.0.0.1:11434/v1/systemone", openai: false },
 ])("decision provider $name at $baseUrl keeps its identity through router creation", async ({ name, baseUrl, openai }) => {
   const decisionRow = { name, baseUrl, adapter: "jev-decision", defaultModel: openai ? "gpt-6-luna" : "tev1:4b", disabled: false };

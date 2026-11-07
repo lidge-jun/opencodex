@@ -27,7 +27,7 @@ Destinations targeting Vercel AI Gateway (`ai-gateway.vercel.sh`) normalize auto
 via `jevDecisionEndpointUrl` in `src/combos/jev-decision-contract.ts` and `systemOneEndpoint` in
 `src/server/management/decision-discovery.ts` (stripping trailing `/systemone` or slashes).
 The `openai-decisions` preset selects the same Decisions wire format for the exact endpoint
-`https://api.openai.com/v1/decisions`, using the configured model and only that row's own key.
+`https://api.openai.com/v1/decisions` (normalizing trailing slashes), using the configured model and only that row's own key.
 Other origins, ports and paths retain the existing System One behavior. Connection tests use
 this decision endpoint without model discovery or inference calls; the native Settings allow an
 editable decision model instead of an inference-model picker. The native OpenAI setup is

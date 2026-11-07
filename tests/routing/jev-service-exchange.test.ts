@@ -540,6 +540,8 @@ describe("bounded JEV service exchange", () => {
     test.each([
       "https://api.openai.com/v1/decisions",
       "  https://API.OPENAI.COM:443/v1/decisions  ",
+      "https://api.openai.com/v1/decisions/",
+      "https://api.openai.com/v1/decisions///",
     ])("direct OpenAI endpoint %j sends a Decisions request and applies its typed answer", async (baseUrl) => {
       const sent: Array<{ url: string; body: string; authorization: string | null }> = [];
       const decision = await resolveJevDecision({
@@ -563,7 +565,8 @@ describe("bounded JEV service exchange", () => {
         body: { input: "Choose a target." }, candidates, fallback,
       });
       expect(sent).toHaveLength(1);
-      expect(sent[0]!.url).toBe(baseUrl.trim());
+      expect(isDecisionsEndpoint(baseUrl)).toBeTrue();
+      expect(sent[0]!.url).toBe(baseUrl.trim().replace(/\/+$/, ""));
       expect(sent[0]!.authorization).toBe("Bearer fixture-own-key");
       const body = JSON.parse(sent[0]!.body);
       expect(body).toMatchObject({
@@ -594,6 +597,9 @@ describe("bounded JEV service exchange", () => {
     });
 
     test.each([
+      "https://api.openai.com/v1/decisions?mode=x", "https://api.openai.com/v1/decisions?",
+      "https://api.openai.com/v1/decisions#part", "https://api.openai.com/v1/decisions#",
+      "https://@api.openai.com/v1/decisions",
       "https://decider.example/v1/systemone?mode=x", "https://decider.example/v1/decisions?",
       "https://decider.example/v1/systemone#part", "https://decider.example/v1/decisions#",
       "https://user:pass@example.test/v1/systemone", "https://@decider.example/v1/decisions",
@@ -602,6 +608,7 @@ describe("bounded JEV service exchange", () => {
       "ftp://decider.example/v1/systemone", "not a url",
     ])("baseUrl %j is refused before any send", async (baseUrl) => {
       const { sent, direct, route } = await sendTo(baseUrl);
+      expect(isDecisionsEndpoint(baseUrl)).toBeFalse();
       expect(sent).toEqual([]);
       expect(direct).toEqual({ gate: "missing_key" });
       expect(route.gate).toBe("missing_key");
