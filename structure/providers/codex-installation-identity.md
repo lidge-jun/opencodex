@@ -49,6 +49,9 @@ apply the same identity to HTTP headers and a cloned client-metadata map. The se
 `src/server/responses/codex-ws-request.ts`; WebSocket preparation preserves these existence gates.
 `src/server/responses/codex-ws-pool.ts` includes immutable outgoing headers and account in its reuse
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
+Its inbound handshake snapshot also retains caller-supplied `user-agent` and
+`x-codex-app-version`, so reconstructed turns do not lose the original client identity.
+Provider egress still applies its own metadata policy; absent fields are not generated.
 Native compact in `src/server/responses/compact.ts` projects the body per physical send, so a quota
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account, while recording the first
