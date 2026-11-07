@@ -10,6 +10,13 @@
 
 /* ---- page head + tab track ------------------------------------------------- */
 .page-head:has(~ .models-page-tabs) { align-items: flex-start; margin-bottom: 18px; }
+.codex-stale-banner { flex-wrap: wrap; margin-bottom: 16px; }
+.codex-stale-banner-text { flex: 1 1 18rem; }
+.main-inner.main-inner--combos > .codex-stale-banner { margin-inline: 36px; padding-inline: 10px; }
+@media (max-width: 760px) {
+  .main-inner.main-inner--combos > .codex-stale-banner { margin-inline: 18px; }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .codex-stale-banner { margin-inline: 0; }
+}
 .models-page-tabs {
   display: inline-flex;
   width: fit-content;
@@ -258,6 +265,7 @@
   font-size: 11.5px;
   line-height: 20px;
 }
+.models-workspace-shell .models-chip:not(.models-chip--identifier) { font-family: var(--font-ui); font-variant-numeric: tabular-nums; }
 .models-workspace-shell .badge { border-radius: 6px; font-size: 11.5px; }
 
 /* primary actions: preset track + one "all on | all off" button pair */
