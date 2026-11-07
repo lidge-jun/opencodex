@@ -83,6 +83,12 @@ try {
   assert.equal(supply.inspectTransition(successor).successorRevision, 2);
   assert.throws(() => supply.verifyRootTransition(basis, after, envelope(signed.slice(1)), now));
   assert.throws(() => supply.verifyRootTransition({}, after, envelope(signed), now));
+  const rootExpiry = Date.parse("2030-01-01T00:00:00Z");
+  assert.equal(parseUpdateDocument(before, "ocx.update.root/1").expiresAt, "2030-01-01T00:00:00Z");
+  assert.ok(Object.isFrozen(supply.verifyRootTransition(basis, after, envelope(signed), rootExpiry - 1)));
+  for (const time of [rootExpiry, rootExpiry + 1, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => supply.verifyRootTransition(basis, after, envelope(signed), time));
+  }
   const digest = (bytes) => ({ sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length });
   const metadataEnvelope = (bytes) => Buffer.from(JSON.stringify({ schema: "ocx.update.signatures/1", signatures: [signEntry(bytes, keys[2])] }));
   const artifact = Buffer.from("fixture artifact");
