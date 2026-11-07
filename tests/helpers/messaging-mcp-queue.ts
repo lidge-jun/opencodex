@@ -72,6 +72,7 @@ rl.on("line", line => {
     if(!searching && mode === "reply-long") data.push({...final,item:{...final.item,id:"answer-2",text:"second"}});
     if(!searching && mode === "reply-earlier-final") data.unshift({...final,item:{...final.item,id:"earlier-answer",text:"earlier fixture answer"}});
     if(!searching && mode === "reply-refresh") {
+      if(f.params.cursor != null) return emit({id:2,result:{data:[],nextCursor:null}});
       const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
       const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
       if(reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}

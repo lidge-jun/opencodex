@@ -33,6 +33,8 @@ describe.skipIf(process.platform === "win32")("bounded stored reply waiting", ()
       const r=payload(await queueMcpWaitReply({...f.options,allowReplyRead:true},input));
       expect(r).toMatchObject({available:true,waitOutcome:"reply_observed",attempts:2,replies:[{itemId:"answer-1",text:"fixture answer"}]});
       expect(f.calls().filter(c=>c.frame.method === "thread/items/read")).toHaveLength(1);
+      const reads=f.calls().filter(c=>c.frame.method === "thread/items/list"&&c.frame.params?.turnId);
+      expect(reads).toHaveLength(2);expect(reads[1]!.frame.params?.cursor).toBeNull();
       expect(methods(f).every(c=>["thread/items/list","thread/items/read","thread/turns/list"].includes(c.frame.method))).toBe(true);
     } finally {await f.close();}
   },15_000);
