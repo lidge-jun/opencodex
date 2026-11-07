@@ -155,6 +155,7 @@ describe("adapter reasoning and usage details", () => {
       ...provider,
       adapter: "anthropic",
       authMode: "oauth",
+      anthropicOAuthUserInstructions: true,
       baseUrl: "https://api.anthropic.com",
     });
     const request = await adapter.buildRequest({

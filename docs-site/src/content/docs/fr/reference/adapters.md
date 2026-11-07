@@ -90,6 +90,8 @@ Avec l’authentification `key`, [`retryOn429`](/fr/reference/configuration/) s�
 
 ## `anthropic`
 
+Compatibilité OAuth facultative et perte de priorité des instructions système : consultez la [référence canonique en anglais](/reference/adapters/#anthropic).
+
 **Cibles :** l’API **Messages** d’Anthropic (`/v1/messages`).
 **Authentification :** `key` (`x-api-key` par défaut, ou `Authorization: Bearer` avec `apiKeyTransport: "bearer"`) ou `oauth` (Bearer + `anthropic-beta`, pour Claude Pro/Max).
 

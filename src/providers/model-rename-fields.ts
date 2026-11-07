@@ -158,6 +158,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   nativeLocalExec: "none",
   messagePhaseInference: "none",
   tlsProfile: "none",
+  anthropicOAuthUserInstructions: "none",
 } as const satisfies Record<keyof OcxProviderConfig, ModelRenameRole>;
 
 function fieldsWithRole(role: ModelRenameRole): string[] {

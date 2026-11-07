@@ -345,6 +345,7 @@ export const providerConfigSchema = z.object({
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
   mcpMaxResultBytes: z.number().int().positive().optional(),
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
+  anthropicOAuthUserInstructions: z.boolean().optional(),
   responsesPath: z.string().min(1).optional(),
   chatCompletionsPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
