@@ -5,6 +5,7 @@
 <h3 align="center">AI コーディングツールとモデルをつなぐ、一つのローカルゲートウェイ。</h3>
 <p align="center"><b>Codex、Claude Code、Claude Desktop、Grok Build で好きなモデルを使い、<br>管理対象の設定で OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code などを接続できます。</b><br>
 <a href="https://opencodex.me/ja/reference/client-support/">対応ツールをすべて見る →</a></p>
+<p align="center">GOAT の一部：任意のモデル、任意のマシンでコーディングエージェントを動かす → <a href="https://trygoat.ai">trygoat.ai</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X で @claudeebum をフォロー"></a>
@@ -80,7 +81,9 @@ Sol がセッションを進め、Kimi K3 のサブエージェントを呼び�
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <b>日本語</b> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ja/"><b>完全なドキュメント →</b></a>
 </p>
 
-opencodex は、コーディングツールとモデルプロバイダーをつなぐ軽量なローカルゲートウェイです。Responses、Chat Completions、Anthropic Messages API のリクエストを受け取り、プロバイダーのプロトコルに変換します。クライアント、モデル、プロバイダーが対応する場合は、ストリーミング、ツール呼び出し、推論、画像を中継します。Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama などのプロバイダーを、Codex、Claude Code、Claude Desktop、Grok Build や[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載のツールで使えます。Codex 認証用の **ChatGPT アカウントプール**も管理できます。アカウントを追加し、ダッシュボードでクォータを更新すると、新規セッションは使用量が最も少ない正常なアカウントに自動振り分けされ、既存のスレッドは開始時のアカウントに固定されます。
+opencodex は、コーディングツールとモデルプロバイダーをつなぐ軽量なローカルゲートウェイです。Responses、Chat Completions、Anthropic Messages API のリクエストを受け取り、プロバイダーのプロトコルに変換します。クライアント、モデル、プロバイダーが対応する場合は、ストリーミング、ツール呼び出し、推論、画像を中継します。Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama などのプロバイダーを、Codex、Claude Code、Claude Desktop、Grok Build や[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載のツールで使えます。
+
+> **商用利用：** GOAT の有料サービスは、プロバイダーの公式 API と正式な契約のみを使用します。
 
 ## クイックスタート
 
@@ -136,17 +139,6 @@ ocx start                         # プロキシとダッシュボードが loca
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にはディスクに書き込まれるすべてのものをまとめています。
 
 </details>
-
-### ChatGPT アカウントプール
-
-opencodex では、Codex 認証用の **ChatGPT アカウントプール**も管理できます。ChatGPT / Codex のアカウントを
-複数追加し、5 時間 / 週間 / 30 日のクォータをダッシュボードで更新します。クォータルーティングでは、新しい
-セッションが使用量の最も少ない健全なアカウントを使えます。ラウンドロビンと fill-first はそれぞれの方針に
-従います。既存の Codex スレッドは通常、開始したアカウントとの affinity を保つので、長い SSH・tmux・
-モバイル接続のセッションが会話の途中でアカウントを乗り換えることはありません。ただしクォータの再評価、
-failover、アカウントの除外、affinity の失効、401/403 や 429 からの復帰では再バインドされることがあります。
-ふだんは使わず他が尽きたときだけ回したいアカウント（多くは Codex Desktop のログイン）があるなら、
-アカウントに選択順を指定してください。
 
 ### スポンサー
 
@@ -290,15 +282,6 @@ CLI インストールには [Node](https://nodejs.org) 18 以上が必要です
 
 - **Codex、Claude Code、Claude Desktop、Grok Build でどの LLM でも** — 40 以上のプロバイダーが最初から
   使え、それぞれがネイティブの UI を保ちます。
-- **ChatGPT アカウントのプール** — スレッド affinity、クォータを見た自動切り替え、クールダウン、
-  fail-closed な認証処理。
-
-  > **プロバイダーポリシーに関する注意:** アカウントプールはルーティングと運用の耐障害性のためのもので
-  > あり、プロバイダーのレート制限、措置、停止その他のアカウント処分から守るものではありません。
-  > OpenCodex は、プロバイダーの制限を回避するために追加のアカウントを使うことや、アカウントの認証情報
-  > を人と共有することを推奨しません。各プロバイダーの現行の規約を守る責任は利用者にあります。
-  > [Codex Auth とアカウントプールの案内](https://opencodex.me/ja/guides/web-dashboard/)
-  > と [OpenAI の現行利用規約](https://openai.com/policies/terms-of-use/)をご覧ください。
 - **コンボ** — 1 つの仮想モデル ID で、複数プロバイダーにまたがる failover や重み付きラウンドロビンを
   組みます。[コンボガイド](https://opencodex.me/ja/guides/combos/)を参照してください。
 - **どのモデルでもサブエージェントに** — ルーティングしたモデルを Codex のサブエージェントピッカーに
@@ -448,6 +431,31 @@ opencodex は既定で `127.0.0.1` にバインドし、追加の認証を必要
 `OPENCODEX_API_AUTH_TOKEN` がなければプロキシは起動を拒否し、すべてのクライアントリクエストは
 `x-opencodex-api-key` としてトークンを乗せる必要があります。詳細は
 [設定リファレンス](https://opencodex.me/ja/reference/configuration/)にあります。
+
+## 高度な使い方
+
+上級ユーザー向けのセルフホスト型オプションです。有効にする前に各プロバイダーの規約を確認してください。
+
+### ChatGPT アカウントプール
+
+opencodex では、Codex 認証用の **ChatGPT アカウントプール**も管理できます。ChatGPT / Codex のアカウントを
+複数追加し、5 時間 / 週間 / 30 日のクォータをダッシュボードで更新します。クォータルーティングでは、新しい
+セッションが使用量の最も少ない健全なアカウントを使えます。ラウンドロビンと fill-first はそれぞれの方針に
+従います。既存の Codex スレッドは通常、開始したアカウントとの affinity を保つので、長い SSH・tmux・
+モバイル接続のセッションが会話の途中でアカウントを乗り換えることはありません。ただしクォータの再評価、
+failover、アカウントの除外、affinity の失効、401/403 や 429 からの復帰では再バインドされることがあります。
+ふだんは使わず他が尽きたときだけ回したいアカウント（多くは Codex Desktop のログイン）があるなら、
+アカウントに選択順を指定してください。
+
+- **ChatGPT アカウントのプール** — スレッド affinity、クォータを見た自動切り替え、クールダウン、
+  fail-closed な認証処理。
+
+  > **プロバイダーポリシーに関する注意:** アカウントプールはルーティングと運用の耐障害性のためのもので
+  > あり、プロバイダーのレート制限、措置、停止その他のアカウント処分から守るものではありません。
+  > OpenCodex は、プロバイダーの制限を回避するために追加のアカウントを使うことや、アカウントの認証情報
+  > を人と共有することを推奨しません。各プロバイダーの現行の規約を守る責任は利用者にあります。
+  > [Codex Auth とアカウントプールの案内](https://opencodex.me/ja/guides/web-dashboard/)
+  > と [OpenAI の現行利用規約](https://openai.com/policies/terms-of-use/)をご覧ください。
 
 ## ドキュメント
 
