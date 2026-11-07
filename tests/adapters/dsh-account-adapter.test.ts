@@ -3,6 +3,10 @@ import { createDshAccountAdapter, resolveDshAccountMessagesUrl, DSH_ACCOUNT_DEFA
 import { parseRequest } from "../../src/responses/parser";
 import type { OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { registerMessagesOverflowRows } from "../helpers/messages-overflow-assertions";
+
+// Scratch diagnostic: run the translated control before later Windows batches can abort.
+if (process.platform === "win32") registerMessagesOverflowRows(["translated-http"], true);
 
 const dshProviderConfig: OcxProviderConfig = {
   adapter: "dsh-account",

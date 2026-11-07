@@ -125,7 +125,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
 }
 
 /** Each test owns one bounded child run; no shared hook computes the full matrix. */
-export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
+export function registerMessagesOverflowRows(lanes: readonly Row["lane"][], diagnosticOnly = false) {
   expect(golden.schemaVersion).toBe(8);
   expect(golden.columns).toEqual(["lane", "status", "clientRecognizes", "decisions", "class", "type", "code", "mediaType", "clientError", "bodySha256?", "bodyLength?"]);
   expect(golden.lanes).toEqual(messagesOverflowLanes);
@@ -137,7 +137,7 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
     const sliceSize = process.platform === "win32" && WINDOWS_SLOW_LANES.has(lane) ? 16 : 64;
     const slices = Array.from({ length: Math.ceil(rows.length / sliceSize) }, (_, index) => rows.slice(index * sliceSize, (index + 1) * sliceSize));
     expect(slices.flat().map(key)).toEqual(rows.map(key));
-    const plans = slices.map((selected, index) => ({ selected, offset: index * sliceSize, mode: "matrix" }));
+    const plans = diagnosticOnly ? [] : slices.map((selected, index) => ({ selected, offset: index * sliceSize, mode: "matrix" }));
     if (process.platform === "win32" && (lane === "translated-http" || lane === "native-fold")) {
       const offset = lane === "translated-http" ? 320 : 0;
       for (const mode of ["quiet", "trace", "cold", "sqlite-off"]) plans.push({ selected: rows.slice(offset, offset + 16), offset, mode });
