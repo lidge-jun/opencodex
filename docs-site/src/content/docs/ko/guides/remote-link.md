@@ -86,7 +86,7 @@ ocx route to sync --device my-child
 
 `--device` 없는 Home 쓰기는 기본값을 바꾸고 Home에도 같은 적용 경로로 반영합니다. Child는 다음 동기화 tick에 반영합니다. Home이 추가한 Child는 명시적 sync로 즉시 적용합니다. Child가 먼저 연결한 링크는 인증된 읽기 watch를 유지하며, Home sync가 이를 즉시 깨웁니다. 적용 보고가 도착하기 전에는 `pending`으로 표시하고, 활성 watch가 없으면 다음 tick을 기다린다고 안내합니다. 이 링크의 충돌 덮어쓰기는 Child에서 사람이 `ocx route to sync --overwrite-conflict`로 허용해야 합니다. Child의 로컬 sync는 즉시 적용합니다.
 
-Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `all`은 해당 기기의 모든 계정 프로필, `none`은 선택 없음입니다. Child의 일반 쓰기는 실행할 정확한 Home 명령을 안내하며 거부합니다. Child 사용자는 `ocx route to aside off --local`로 자신의 기기만 제외하고 `inherit --local`로 복귀할 수 있습니다. 로컬 `on`은 허용하지 않습니다.
+Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `all`은 해당 기기의 모든 계정 프로필, `none`은 선택 없음입니다. Child의 일반 쓰기는 실행할 정확한 Home 명령을 안내하며 거부합니다. Child 사용자는 `ocx route to aside off --local`로 자신의 기기만 제외하고 `inherit --local`로 복귀할 수 있습니다. 로컬 `on`은 허용하지 않습니다. 적용 중단이나 로컬 제외가 발생하면 Home의 이전 적용 확인을 철회합니다. 의도나 카탈로그 조회가 지연된 명시적 로컬 sync는 캐시된 off 상태가 정리되어 있어도 0이 아닌 종료 코드를 반환합니다. 토글에서 생략한 계정·모델 이름 정책은 유지됩니다. 소유 기록이 있는데 Aside 계정 명세에서 사라진 프로필은 소유권을 해결하기 전까지 완료로 표시하지 않습니다.
 
 상태 JSON은 `ocx.route-to/1`이며 의도·출처·적용 결과를 구분합니다. `not_installed`, `conflict`, `failed`는 성공으로 처리하지 않습니다. 충돌 덮어쓰기는 해당 실행의 명시적 `--overwrite-conflict`가 필요합니다. 자세한 동작은 [영문 가이드](/guides/remote-link/#route-clients-per-device)를 참고하세요.
 
@@ -111,6 +111,8 @@ ocx link reconnect --link-id <id> [--json]
 ```
 
 비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
+
+기존 대시보드의 native 토글은 Home 기기 override를 저장하여 Child 기본값을 유지합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존하며, 기존 모드 전환을 마치기 전에는 상속된 gateway 적용을 conflict로 표시합니다.
 
 ## 관련 가이드
 
