@@ -176,7 +176,7 @@ test.each(["success", "unavailable"] as const)("a colliding replacement key neve
   else expect(next.reports).toEqual([]);
 });
 
-test.each(["unchanged", "key", "removed", "destination"] as const)("a joined quota request validates its own configuration after %s", async change => {
+test.each(["unchanged", "key", "removed", "destination", "local"] as const)("a joined quota request validates its own configuration after %s", async change => {
   const first = { defaultProvider: "mistral", providers: { mistral: { ...provider } } } as OcxConfig;
   const second = { defaultProvider: "mistral", providers: { mistral: { ...provider } } } as OcxConfig;
   const gate = Promise.withResolvers<void>();
@@ -192,6 +192,7 @@ test.each(["unchanged", "key", "removed", "destination"] as const)("a joined quo
   if (change === "key") second.providers.mistral!.apiKey = "replacement-key";
   if (change === "removed") delete second.providers.mistral;
   if (change === "destination") second.providers.mistral!.baseUrl = "https://example.com/v1";
+  if (change === "local") second.providers.mistral!.authMode = "local";
   gate.resolve();
   expect((await original).reports).toHaveLength(1);
   expect((await joined).reports).toHaveLength(change === "unchanged" ? 1 : 0);

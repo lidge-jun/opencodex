@@ -27,7 +27,7 @@ const keyReportDestinations = new WeakMap<ProviderQuotaReport, { adapter: string
 export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined): boolean {
   const captured = keyReportCredentialIds.get(value);
   if (!captured) return true;
-  if (!provider || provider.disabled || provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  if (!provider || provider.disabled || (provider.authMode ?? "key") !== "key") return false;
   const destination = keyReportDestinations.get(value);
   if (!destination || destination.adapter !== provider.adapter || destination.baseUrl !== provider.baseUrl) return false;
   const current = resolveProviderApiKey(provider.apiKey)?.trim();
