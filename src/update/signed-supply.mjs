@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { parseSignatureEnvelope, parseUpdateDocument } from "./update-contracts.mjs";
+import { parseRootTransitionEnvelope, parseSignatureEnvelope, parseUpdateDocument } from "./update-contracts.mjs";
 import { EMBEDDED_ROOT_SHA256 } from "./update-trust-anchor.mjs";
 import { snapshotUpdateBytes } from "./update-bytes.mjs";
 import { verifySignatureThreshold } from "./update-signature-threshold.mjs";
@@ -42,7 +42,7 @@ export function verifyRootTransition(predecessorBasis, bytes, envelopeBytes, now
   const previous = currentRoot(predecessorBasis, nowMs);
   const nextBytes = snapshotUpdateBytes(bytes, 65536);
   const signatureBytes = snapshotUpdateBytes(envelopeBytes, 262144);
-  const envelope = parseUpdateDocument(signatureBytes, "ocx.update.root-transition-signatures/1");
+  const envelope = parseRootTransitionEnvelope(signatureBytes);
   const root = parseUpdateDocument(nextBytes, "ocx.update.root/1");
   if (root.revision <= previous.root.revision || Date.parse(root.expiresAt) <= nowMs) {
     throw new Error("Invalid successor root");

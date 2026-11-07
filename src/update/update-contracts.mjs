@@ -203,3 +203,4 @@ export function parseUpdateDocument(bytes, expectedSchema) {
   return value;
 }
 export function parseSignatureEnvelope(bytes) { return parseUpdateDocument(bytes, "ocx.update.signatures/1"); }
+export function parseRootTransitionEnvelope(bytes) { return parseUpdateDocument(bytes, "ocx.update.root-transition-signatures/1"); }

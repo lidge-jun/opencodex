@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { parseSignatureEnvelope, parseUpdateDocument } from "../../src/update/update-contracts.mjs";
+import { parseRootTransitionEnvelope, parseSignatureEnvelope, parseUpdateDocument } from "../../src/update/update-contracts.mjs";
 import type { UpdateDocumentSchemas } from "../../src/update/update-contracts.mjs";
 import { repoPath } from "../helpers/repo-root";
 
@@ -106,10 +106,12 @@ describe("closed unverified update contracts", () => {
     const entries = Array.from({ length: 33 }, (_, i) => ({ keyFingerprint: i.toString(16).padStart(64, "0"), signatureBox: box }));
     const transition = { schema: "ocx.update.root-transition-signatures/1", signatures: entries.slice(0, 32) };
     expect(parse(transition).signatures).toHaveLength(32);
+    expect(parseRootTransitionEnvelope(bytes(transition)).signatures).toHaveLength(32);
     reject({ ...transition, signatures: entries });
     reject({ ...e, signatures: entries.slice(0, 17) });
     expect(() => parseSignatureEnvelope(bytes(transition))).toThrow();
     expect(() => parseUpdateDocument(bytes(e), "ocx.update.root-transition-signatures/1")).toThrow();
+    expect(() => parseRootTransitionEnvelope(bytes(e))).toThrow();
     reject({...e, signatures: [e.signatures[0], e.signatures[0]]});
     reject({...e, signatures: [{...e.signatures[0], signatureBox: `${box}\n`}]});
     reject({...e, signatures: [{...e.signatures[0], signatureBox: Buffer.from("bad").toString("base64")}]});

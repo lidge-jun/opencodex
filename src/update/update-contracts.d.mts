@@ -21,3 +21,4 @@ export type UpdateActivation = {schema: "ocx.update.activation/1"; operationId: 
 export interface UpdateDocumentSchemas {"ocx.update.root/1": UpdateRoot; "ocx.update.signatures/1": SignatureEnvelope; "ocx.update.root-transition-signatures/1": RootTransitionEnvelope; "ocx.update.release/1": UpdateRelease; "ocx.update.verification/1": UpdateReceipt; "ocx.update.tree/1": UpdateTree; "ocx.link-capabilities/1": UpdateCapabilities; "ocx.update.policy/1": UpdatePolicy; "ocx.update.prepared/1": UpdatePrepared; "ocx.update.activation/1": UpdateActivation}
 export function parseUpdateDocument<S extends keyof UpdateDocumentSchemas>(bytes: Uint8Array, expectedSchema: S): UpdateDocumentSchemas[S];
 export function parseSignatureEnvelope(bytes: Uint8Array): SignatureEnvelope;
+export function parseRootTransitionEnvelope(bytes: Uint8Array): RootTransitionEnvelope;
