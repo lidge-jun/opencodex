@@ -136,7 +136,9 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob, supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning, } from \"./supervised-recovery.mjs\";"
   ],
   "src/update/install-detection.mjs": [
-    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";"
+    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
+    // Dependency-free pnpm store-layout spelling shared with the tree verifier (#8183).
+    "import { PNPM_GLOBAL_STORE_LINKS_PATTERN } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/job-pinned-start.ts": [
     "import { guardedSpawn } from \"./mutation-guard.mjs\";",
@@ -354,7 +356,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
     "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
-    "import { basename, dirname, join } from \"node:path\";"
+    "import { basename, dirname, join } from \"node:path\";",
+    "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],
   "src/update/update-failure-guidance.mjs": [

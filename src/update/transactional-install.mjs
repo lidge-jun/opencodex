@@ -26,6 +26,7 @@ import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
 
 /**
  * Dependency lookup confined to the candidate's OWN tree. This is the npm contract and it
@@ -69,11 +70,24 @@ function isPnpmManagedRoot(nodeModulesDir) {
 }
 
 /**
+ * A package group inside pnpm's global virtual store (`<store>/v<N>/links/.../node_modules`).
+ * pnpm links each dependency beside the package there and writes neither `.pnpm` nor
+ * `.modules.yaml`, so the bookkeeping test above cannot see it (#8183). The store is pnpm's
+ * own directory, so its layout is the ownership evidence. Only the package's REALPATH group
+ * may use it: a lexical path is merely how the package is exposed, and must keep proving
+ * ownership with pnpm's metadata.
+ */
+function isPnpmGlobalStoreGroup(nodeModulesDir) {
+  return !!nodeModulesDir && isInPnpmGlobalStoreLinks(nodeModulesDir);
+}
+
+/**
  * Dependency roots this package INSTANCE owns. pnpm exposes dependencies in several shapes —
  * symlinks inside the package's own node_modules, a package root that is itself a symlink into
  * the virtual store, or a hoisted group root — so the npm rule alone rejects healthy trees.
  * Ownership is still bounded: an enclosing node_modules counts only when pnpm's own metadata
- * says pnpm manages it, which keeps an unrelated ancestor installation out.
+ * says pnpm manages it, or when the package's realpath group sits in pnpm's global virtual
+ * store, which keeps an unrelated ancestor installation out.
  */
 function ownedDependencyRoots(packageDir) {
   const roots = [];
@@ -85,7 +99,7 @@ function ownedDependencyRoots(packageDir) {
   if (real && real !== packageDir) add(join(real, "node_modules"));
   if (isPnpmManagedRoot(lexicalGroup)) add(lexicalGroup);
   const realGroup = real ? enclosingNodeModules(real) : undefined;
-  if (isPnpmManagedRoot(realGroup)) add(realGroup);
+  if (isPnpmManagedRoot(realGroup) || isPnpmGlobalStoreGroup(realGroup)) add(realGroup);
   return roots;
 }
 

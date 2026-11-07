@@ -230,4 +230,54 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("sentinel dependency missing: bun");
   });
+
+  /**
+   * #8183: pnpm 11's global virtual store. The exposed package is a symlink into
+   * <store>/v11/links/<pkg>/<version>/<hash>/node_modules/<pkg>, whose dependencies are
+   * linked beside it in that group. The group carries no `.pnpm` or `.modules.yaml`.
+   */
+  function globalStoreLinksFixture(opts: { depsInOwnGroup: boolean }): string {
+    const links = join(root, "pnpm", "store", "v11", "links");
+    const group = join(links, ...PKG.split("/"), "2.0.0", "h1", "node_modules");
+    const target = join(group, ...PKG.split("/"));
+    writePackage(target, "2.0.0");
+    for (const name of ["bun", "zod"]) {
+      const physical = join(links, name, "1.0.0", "h2", "node_modules", name);
+      writeDependency(physical, name);
+      if (opts.depsInOwnGroup) symlinkSync(physical, join(group, name), "dir");
+    }
+    const exposedGroup = join(root, "pnpm", "global", "v11", "g1", "node_modules");
+    mkdirSync(join(exposedGroup, "@bitkyc08"), { recursive: true });
+    const exposed = join(exposedGroup, ...PKG.split("/"));
+    symlinkSync(target, exposed, "dir");
+    return exposed;
+  }
+
+  test("the pnpm verifier accepts a global virtual-store links group reached through the realpath", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    expect(verifyPnpmInstallTree(exposed, "2.0.0")).toEqual({ ok: true, failures: [] });
+  });
+
+  test("another links group in the same global store cannot vouch for the package", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: false });
+    const result = verifyPnpmInstallTree(exposed, "2.0.0");
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("sentinel dependency missing: bun");
+    expect(result.failures).toContain("sentinel dependency missing: zod");
+  });
+
+  test("a store-links spelling on the exposed path alone does not vouch for the package", () => {
+    // Only the realpath group is trusted by layout; the lexical group still needs pnpm metadata.
+    const target = join(root, "plain", "node_modules", ...PKG.split("/"));
+    writePackage(target, "2.0.0");
+    const lexicalGroup = join(root, "pnpm", "store", "v11", "links", "x", "1.0.0", "h1", "node_modules");
+    writeDependency(join(lexicalGroup, "bun"), "bun");
+    writeDependency(join(lexicalGroup, "zod"), "zod");
+    mkdirSync(join(lexicalGroup, "@bitkyc08"), { recursive: true });
+    const exposed = join(lexicalGroup, ...PKG.split("/"));
+    symlinkSync(target, exposed, "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0");
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("sentinel dependency missing: bun");
+  });
 });
