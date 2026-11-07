@@ -113,10 +113,10 @@ different pointer, so every branch move and promotion dragged a diff.
   Reference *clones* are gitignored: they are third-party source carrying their
   own licenses and have no business in this repository's history.
 
-Nothing in the build, typecheck, or test path reads from `devlog/`, so a
-contributor who ignores it entirely still passes every gate. `privacy:scan` does
-read it — that is deliberate, and it is what makes a public devlog safe rather
-than merely visible.
+Build and typecheck do not read `devlog/`. The test-layout membership oracle reads
+`devlog/_fin/260905_test_modularization_and_windows/001_test_inventory.md`; sparse
+checkouts running that test must materialize this tracked input. `privacy:scan`
+also reads `devlog/` to keep public development notes safe to publish.
 
 Two mechanical guards in `tests/ci-workflows/repo-hygiene.test.ts` back this up: no `160000`
 gitlink may be tracked anywhere, and neither the vendored reference clones nor
