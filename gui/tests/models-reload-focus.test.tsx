@@ -161,6 +161,7 @@ test("reload action is unique after each controlled classifier outcome", async (
     await act(async () => { reads[index]!(state === "error" ? new Response(null, { status: 500 }) : Response.json({ state, runningCount: state === "not_running" ? 0 : 1 })); await Promise.resolve(); });
     const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")].filter(button => button.textContent?.includes("Reload Codex models"));
     expect(buttons).toHaveLength(1);
+    expect(!!host.querySelector(".codex-stale-banner")).toBe(state === "stale");
     expect(!!buttons[0]!.closest(".codex-stale-banner")).toBe(state === "stale");
   }
 });

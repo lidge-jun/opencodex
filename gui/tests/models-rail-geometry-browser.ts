@@ -63,7 +63,9 @@ try {
       await rows.last().scrollIntoViewIfNeeded();
       const lastVisible = await rows.last().evaluate(element => {
         const row = element.getBoundingClientRect(), list = element.parentElement!.getBoundingClientRect();
-        return row.top >= list.top - 0.5 && row.bottom <= list.bottom + 0.5;
+        // WebKit can round scroll positions by up to one device pixel at fractional page zoom.
+        const tolerance = 1 / window.devicePixelRatio;
+        return row.top >= list.top - tolerance && row.bottom <= list.bottom + tolerance;
       });
       if (!lastVisible) { failures++; console.error(`FAIL ${width}/${zoom}: last row inaccessible`); }
     }
