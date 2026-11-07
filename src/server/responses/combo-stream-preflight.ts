@@ -1,4 +1,11 @@
-import { codexAccountModelRefusal, codexAccountModelRefusalPayload, hasConflictingCodexModelRefusalEnvelopes, type CodexAccountModelRefusal } from "../../combos/failover";
+import {
+  codexAccountModelRefusal,
+  codexAccountModelRefusalPayload,
+  hasConflictingCodexModelRefusalEnvelopes,
+  isMalformedResponseFormatRecord,
+  isOpenRouterOpaque400Record,
+  type CodexAccountModelRefusal,
+} from "../../combos/failover";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
@@ -112,11 +119,18 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const code = typeof error.code === "string"
     ? error.code
     : typeof event.code === "string" ? event.code : null;
+  const upstreamType = typeof error.type === "string"
+    ? error.type
+    : typeof event.type === "string" ? event.type : null;
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
+  const rawRecord = (nested && typeof nested === "object" && !Array.isArray(nested) ? nested : event) as Record<string, unknown>;
+  const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
+  const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400Record(rawRecord) : undefined;
   return comboFailureDecision(status, message, {
-    code, codexModelRefusal: terminalModelRefusal(status, event),
+    code, upstreamType, codexModelRefusal: terminalModelRefusal(status, event),
+    malformedResponseFormat, openRouterOpaque400,
   }) === "hop";
 }
 

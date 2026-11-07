@@ -382,6 +382,81 @@ function normalizedFailureCode(code?: string | null): string {
   return code?.trim().toLowerCase().replaceAll("-", "_") ?? "";
 }
 
+/** Parse one bounded error record from an HTTP 400 body or a single SSE data frame. */
+export function http400ErrorRecord(message: string): Record<string, unknown> | undefined {
+  if (message.length > 16_384) return undefined;
+  let text = message.trim();
+  if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
+  if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
+  try {
+    const payload: unknown = JSON.parse(text);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+    const root = payload as Record<string, unknown>;
+    const nested = root.response && typeof root.response === "object" && !Array.isArray(root.response)
+      ? (root.response as Record<string, unknown>).error
+      : undefined;
+    const error = root.error ?? nested;
+    return error !== null && typeof error === "object" && !Array.isArray(error)
+      ? error as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Check whether a parsed error record or raw diagnostic text represents a malformed response_format. */
+export function isMalformedResponseFormatRecord(record?: Record<string, unknown>, rawText?: string): boolean {
+  const fields = record
+    ? [record.message, record.detail].filter((value): value is string => typeof value === "string")
+    : [];
+  if (fields.length === 0 && rawText) fields.push(rawText);
+  return fields.some(detail =>
+    /\binvalid schema(?: for)? response_format\b/i.test(detail)
+    || /\bresponse_format(?:\.[a-z_]+)*\s+must be (?:one of|valid|a valid)\b/i.test(detail));
+}
+
+/** Identify known malformed structured-output diagnostics that must remain terminal. */
+export function isMalformedResponseFormatRequest(status: number, message: string): boolean {
+  if (status !== 400) return false;
+  return isMalformedResponseFormatRecord(http400ErrorRecord(message), message);
+}
+
+/** Check whether a parsed error record matches OpenRouter's uncoded numeric-400 opaque wrapper. */
+export function isOpenRouterOpaque400Record(record?: Record<string, unknown>): boolean {
+  if (!record) return false;
+  const metadata = record.metadata;
+  return record.message === "Provider returned error"
+    && (record.code === 400 || record.code === "400")
+    && record.type === undefined
+    && metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)
+    && (metadata as Record<string, unknown>).raw === "ERROR";
+}
+
+/** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */
+export function isOpenRouterOpaque400Envelope(message: string): boolean {
+  return isOpenRouterOpaque400Record(http400ErrorRecord(message));
+}
+
+/** Check whether an uncoded numeric 400 is an opaque OpenRouter failure that may safely advance without cooling. */
+function isUncodedUpstream400(
+  status: number,
+  message: string,
+  code?: string | null,
+  options?: {
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
+  },
+): boolean {
+  if (status !== 400 || (code && code !== "400" && normalizedFailureCode(code))) return false;
+  const malformed = options?.malformedResponseFormat !== undefined
+    ? options.malformedResponseFormat
+    : isMalformedResponseFormatRequest(status, message);
+  if (malformed) return false;
+  return options?.openRouterOpaque400 !== undefined
+    ? options.openRouterOpaque400
+    : isOpenRouterOpaque400Envelope(message);
+}
+
 /**
  * A spent account window, by structured code or upstream prose. Status is deliberately not
  * consulted: the ChatGPT Codex backend reports a depleted plan window as HTTP 502
@@ -644,10 +719,16 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
+/** Return the narrowest cooldown scope supported by this target's failure evidence. */
 export function comboFailureCooldownScope(
   status: number,
   message: string,
-  options?: { code?: string | null },
+  options?: {
+    code?: string | null;
+    upstreamType?: string | null;
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
+  },
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
   if (isAnthropicBillingFailure(status, message, options?.code)) return "provider";
@@ -671,6 +752,10 @@ export function comboFailureCooldownScope(
   // through the same provider row carries the same key and will fail identically.
   if (status === 401 || status === 402 || status === 403) return "provider";
   if (PROVIDER_SCOPED_FAILURE_CODES.has(code)) return "provider";
+  // OpenRouter's opaque numeric-code wrapper may be target-specific (for example a gateway
+  // rejecting a model's translated payload). It may advance the combo, but says nothing about
+  // target health and must not quarantine the target.
+  if (isUncodedUpstream400(status, message, options?.code, options)) return "none";
   return "target";
 }
 
@@ -783,15 +868,19 @@ export function codexAccountModelRefusal(
   return codexAccountModelRefusalPayload(status, payload);
 }
 
+/** Decide whether a zero-output combo failure can move to another eligible target. */
 export function comboFailureDecision(
   status: number,
   message: string,
   options?: {
     code?: string | null;
+    upstreamType?: string | null;
     codexModelRefusal?: CodexAccountModelRefusal;
     failedAdapter?: string;
     /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
     verifiedPlanRefusal?: boolean;
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -890,6 +979,10 @@ export function comboFailureDecision(
   // 400 / invalid_request_error envelope, so it must precede that stop. Exhaustion prose alone
   // never reaches this arm: a validation error can quote quota wording back (#7625).
   if (hasAccountExhaustionCode(options?.code)) return "hop";
+  // OpenRouter can wrap an opaque provider failure as a numeric 400 with `metadata.raw: "ERROR"`
+  // and no type. Let a heterogeneous combo try another target in this case, while keeping
+  // malformed response_format diagnostics terminal and preserving any structured code.
+  if (isUncodedUpstream400(status, message, options?.code, options)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

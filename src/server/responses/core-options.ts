@@ -33,6 +33,10 @@ export interface ConsumedComboFailure {
   classificationText: string;
   /** Complete bounded-envelope evidence captured before display truncation; never serialized. */
   codexModelRefusal?: CodexAccountModelRefusal;
+  /** Complete bounded-envelope malformed response_format diagnostic verdict captured before display truncation. */
+  malformedResponseFormat?: boolean;
+  /** Complete bounded-envelope OpenRouter opaque-400 verdict captured before display truncation. */
+  openRouterOpaque400?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
   /** Sanitized structured `error.message`; compared only against proxy-owned constants, never emitted. */

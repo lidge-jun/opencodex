@@ -379,6 +379,33 @@ describe("combo stream preflight", () => {
     }
   });
 
+  test("retries a zero-output opaque OpenRouter numeric 400 without a structured code", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
+  test("treats a wrapped invalid_request_error with upstream_error as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        type: "upstream_error",
+        message: 'Provider error 400: {"type":"error","error":{"type":"invalid_request_error","message":"tools.0.custom.name: String should match pattern ..."}}',
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
   test("passes a zero-output credential error to the ordinary combo classifier", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",
