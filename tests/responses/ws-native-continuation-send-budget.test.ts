@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
 import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
 import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, listWorkflowBudgetEvents, WORKFLOW_LOCAL_REFUSAL_HEADER } from "../../src/lib/workflow-budget";
 import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
@@ -12,7 +14,7 @@ import { workflowRefusalResponse } from "../../src/server/workflow-refusal";
 import type { ServerWebSocket } from "bun";
 import {
   installInjectionFixture, prepareInjectionSpendHome, beginInjection, injectionConfig,
-  advertiseInjection, completeInjection, savedResult, continuationFrame,
+  advertiseInjection, completeInjection, savedResult, continuationFrame, injectionClient,
   acknowledgeInjection, waitForInjection, fallbackCalls, InjectionSocket, type Frame,
 } from "../helpers/native-injection-fixture";
 
@@ -213,4 +215,112 @@ test("an unpaced injection continuation preserves a known local refusal", async 
   expect(error.status).toBe(429);
   expect(error.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_sends_exhausted");
   expect(socket.frames).toHaveLength(1); expect(fallbackCalls).toBe(0);
+});
+
+// The continuation hook is only as strong as the legs that forward it. Every native-capable
+// executor in the passthrough path must pass onContinuationDispatch: a recovery leg that
+// rebuilds the native socket without it would let a successor bypass send-count and spend
+// admission. The HTTP-only ambiguous-replacement executor is intentionally absent -- a
+// replacement that cannot open a WebSocket exchange can never dispatch a native frame.
+test("every native-capable passthrough executor routes continuations through admission", () => {
+  const source = readFileSync(repoPath("src/server/responses/passthrough-dispatch.ts"), "utf8");
+  const legs = source.split("providerFetch(").slice(1).map(leg => {
+    const end = leg.indexOf("route.provider.authMode");
+    return leg.slice(0, end === -1 ? 2000 : end);
+  });
+  const nativeCapable = legs.filter(leg => leg.includes("nativeControl:"));
+  expect(nativeCapable).toHaveLength(5);
+  for (const leg of nativeCapable) expect(leg).toContain("onContinuationDispatch");
+});
+
+// A saved-result continuation is a new inference priced on the frame actually leaving:
+// the reconstructed input and the successor's own output ceiling. The opening request's
+// estimate must not stand in -- a small opening followed by a large stored tool result
+// is exactly the case the stale reservation used to admit past the root ceiling.
+test("a continuation is priced on the reconstructed frame, not the opening estimate", async () => {
+  const root = "native-successor-estimate";
+  prepareInjectionSpendHome(); bindWorkflowBudgetConfig(null);
+  configureSharedSpendLedger(spendPolicyFromConfig({ root: { maxTokens: 2000 } }));
+  const x = await beginInjection({}, injectionConfig(), "test",
+    { "x-codex-parent-thread-id": root, "thread-id": root });
+  // A small saved result still fits: exact pricing is not an across-the-board refusal.
+  const small = advertiseInjection(x.socket, "small");
+  completeInjection(x.socket, { output: [small] });
+  await waitForInjection(() => x.sent.some(frame => frame.type === "response.completed"));
+  const before1 = x.socket.frames.length;
+  x.send(continuationFrame({ type: "response.create", previous_response_id: x.id, input: [savedResult("small")] }));
+  await waitForInjection(() => x.socket.frames.length === before1 + 1
+    || x.sent.some(frame => frame.type === "error"));
+  expect(x.socket.frames).toHaveLength(before1 + 1);
+  const successor = "estimate-successor";
+  x.socket.emit({ type: "response.created", response: { id: successor, previous_response_id: x.id, output: [] } });
+  const big = advertiseInjection(x.socket, "big");
+  completeInjection(x.socket, { output: [big] }, successor);
+  await waitForInjection(() => x.sent.some(frame => frame.type === "response.completed" && frame.response.id === successor));
+  // A ~20 KB stored tool result prices the successor near 5k tokens: past the 2000 root
+  // ceiling, where the opening request's ~100-token reservation would have admitted it.
+  const before2 = x.socket.frames.length;
+  x.send(continuationFrame({ type: "response.create", previous_response_id: successor,
+    input: [savedResult("big", "x".repeat(20000))] }));
+  await waitForInjection(() => x.sent.some(frame => frame.type === "error")
+    || x.socket.frames.length > before2);
+  expect(x.socket.frames).toHaveLength(before2);
+  const refusal = x.sent.find(frame => frame.type === "error")!;
+  expect(refusal.status).toBe(429);
+  expect(refusal.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_spend_exhausted");
+  await waitForInjection(() => !x.ws.data.nativeControl);
+  expect(workflowBudgetSnapshot(root)).toMatchObject({ sends: 2, active: 0 });
+  expect(fallbackCalls).toBe(0);
+});
+
+// A pre-output upstream refusal settles as a real 4xx; when the outbound body still
+// carries opaque state, the single-shot rebuild leg opens a second WebSocket exchange and
+// the steering channel rebinds to it. That recovered socket runs the same continuation
+// admission as the first: under a spent root ceiling the successor is refused before it
+// can leave, never sent as an uncounted third inference.
+test("a recovered native socket still routes continuations through admission", async () => {
+  const root = "native-recovered-continuation";
+  prepareInjectionSpendHome();
+  bindWorkflowBudgetConfig({ workflowBudget: { maxPhysicalSends: 2 } });
+  configureSharedSpendLedger(spendPolicyFromConfig(undefined));
+  InjectionSocket.suppressAutoCreated = true;
+  const x = injectionClient(
+    { multi_agent: undefined, input: [{ type: "reasoning", encrypted_content: "opaque-blob" }] },
+    { ...injectionConfig(), codexNativeSteering: true }, "test",
+    { "x-codex-parent-thread-id": root, "thread-id": root });
+  const first = await (async () => {
+    await waitForInjection(() => InjectionSocket.all.length === 1 && InjectionSocket.all[0]!.frames.length === 1);
+    return InjectionSocket.all[0]!;
+  })();
+  // The error must arrive before any lifecycle frame: a held or committed preamble keeps
+  // in-body delivery instead of the replayable 4xx projection this recovery needs.
+  first.emit({ type: "error", status_code: 400,
+    error: { type: "invalid_request_error", code: "invalid_encrypted_content", message: "undecryptable" } });
+  InjectionSocket.suppressAutoCreated = false;
+  await waitForInjection(() => InjectionSocket.all.length === 2);
+  const recovered = InjectionSocket.all[1]!;
+  await waitForInjection(() => x.sent.some(frame => frame.type === "response.created"));
+  // Send 1 was refused upstream; the opaque-blob rebuild is send 2 of the root's 2.
+  expect(workflowBudgetSnapshot(root)?.sends).toBe(2);
+  expect(x.ws.data.nativeControl).toBeDefined();
+  advertiseInjection(recovered, "recovered-call");
+  x.send({ type: "response.steer", previous_response_id: recovered.root, input: "continue with the saved result" });
+  await waitForInjection(() => recovered.frames.length === 2);
+  recovered.emit({ type: "response.steer.accepted", steer: { id: "steer-1", previous_response_id: recovered.root } });
+  completeInjection(recovered, {}, recovered.root);
+  recovered.emit({ type: "response.steer.pending", steer: { id: "steer-1", previous_response_id: recovered.root },
+    reason: "waiting_for_required_input", required_input: [{ type: "function_call_output", call_id: "recovered-call" }] });
+  await waitForInjection(() => x.sent.some(frame => frame.type === "response.completed" && frame.response.id === recovered.root));
+  const before = recovered.frames.length;
+  x.send(continuationFrame({ type: "response.create", previous_response_id: recovered.root,
+    input: [savedResult("recovered-call")], multi_agent: undefined }));
+  await waitForInjection(() => x.sent.some(frame => frame.type === "error")
+    || recovered.frames.length > before);
+  expect(recovered.frames).toHaveLength(before);
+  const refusal = x.sent.find(frame => frame.type === "error")!;
+  expect(refusal.status).toBe(429);
+  expect(refusal.headers?.[WORKFLOW_LOCAL_REFUSAL_HEADER]).toBe("workflow_sends_exhausted");
+  await waitForInjection(() => !x.ws.data.nativeControl);
+  expect(workflowBudgetSnapshot(root)).toMatchObject({ sends: 2, active: 0 });
+  expect(fallbackCalls).toBe(0);
 });

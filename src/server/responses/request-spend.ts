@@ -22,6 +22,13 @@ export interface SpendTargetIdentity extends SpendScopes {
   /** Helpers preserve other bookings and do not own the routed model's terminal usage. */
   readonly auxiliary?: boolean;
   readonly estimate?: { inputTokens: number; outputCeilingTokens: number };
+  /**
+   * The target carries its own measured estimate (explicit native continuations). Unlike an
+   * auxiliary target it still owns the routed model's terminal usage; unlike an anchor
+   * rebind it never retires an unrelated pending booking and is never adopted by an
+   * unkeyed same-scope lookup.
+   */
+  readonly explicitEstimate?: boolean;
 }
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
@@ -88,7 +95,7 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; explicitEstimate: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
   const auxiliarySendIds = new Set<string>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
@@ -269,20 +276,23 @@ export function createRequestSpendTracker(
         }
       }
       if (target.targetKey === undefined) {
-        const same = [...seeds.entries()].find(([candidate]) => {
+        const same = [...seeds.entries()].find(([candidate, candidateState]) => {
           const identity = JSON.parse(candidate) as Array<string | undefined>;
-          return identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
+          return candidateState.explicitEstimate !== true
+            && identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
         });
         if (same) return same[1].seed;
       }
-      // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay live.
-      for (const [oldKey, state] of seeds) if (!state.started && !target.auxiliary) {
+      // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay
+      // live, and an explicit-estimate successor neither retires nor is retired by another leg:
+      // both directions would destroy a booking its own reporter still owns.
+      for (const [oldKey, state] of seeds) if (!state.started && !state.explicitEstimate && !target.auxiliary && target.explicitEstimate !== true) {
         if (!retireSeed(oldKey, state.seed)) return undefined;
       }
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const estimate = target.auxiliary ? target.estimate : undefined;
+      const estimate = target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
       const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...(estimate ?? estimates()), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
@@ -290,7 +300,8 @@ export function createRequestSpendTracker(
         return undefined;
       }
       seededAccounting = true;
-      seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true, estimate });
+      seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true,
+        explicitEstimate: target.explicitEstimate === true, estimate });
       return decision.seed;
     },
     releaseSeed(seed) {

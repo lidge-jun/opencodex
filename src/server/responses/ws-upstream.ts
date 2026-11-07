@@ -166,7 +166,7 @@ export async function codexWsUpstreamFetch(
   onPhysicalDispatch?: () => void,
   /** Opt-in pre-output refusal hold (#6969); see codexWsExchange. */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold,
-  onContinuationDispatch?: () => void,
+  onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));

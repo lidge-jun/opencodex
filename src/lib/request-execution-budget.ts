@@ -170,7 +170,7 @@ export interface RequestSendObserver {
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   /** Capture request policy at its first admission or actual physical start. */
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
-  ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }, proof?: SpendReservationProof): SpendSeed | undefined;
+  ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number }; explicitEstimate?: boolean }, proof?: SpendReservationProof): SpendSeed | undefined;
   /** Release only this tracker's unstarted seed when physical admission refuses it. */
   releaseSeed?(seed: SpendSeed): void;
   beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
@@ -364,7 +364,7 @@ export function rebindPhysicalSend(budget: TransientSendBudget | undefined, targ
  */
 export function createPhysicalSendReporter(
   budget: TransientSendBudget,
-  target: () => SpendScopes & { targetKey?: string },
+  target: () => SpendScopes & { targetKey?: string; estimate?: { inputTokens: number; outputCeilingTokens: number }; explicitEstimate?: boolean },
   permit?: SingleUseDispatchPermit,
   telemetry?: (sends: number) => void,
   options: { explicitContinuation?: boolean } = {},

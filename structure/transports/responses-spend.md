@@ -33,16 +33,24 @@ Each explicit successor `response.create` claims and reports a fresh physical st
 and credential revalidation, immediately before its frame is sent. `response.steer` and
 `response.inject` are control frames, not new sends. `src/server/responses/native-continuation-send.ts` uses a fresh
 reporter without an initial or recovery permit; unconfigured chains do not acquire the retry
-ladder's default send cap. Each successor reserves a fresh token seed before claiming its root
-slot. Explicit starts have separate physical allowance; ordinary retry and bounded recovery grants
-are not replenished, including when recovery is created after earlier successors. A refused successor sends no upstream frame and ends the chain with
+ladder's default send cap. Every native-capable executor — the initial passthrough send and each
+recovery leg (rebuild, OAuth replay, wire refresh and rate-limit replay) — installs that admission
+hook, so a continuation on a recovered socket is admitted the same way as on the first. Each
+successor reserves a fresh token seed before claiming its root slot, priced on the exact
+reconstructed successor frame, never reusing the opening input estimate. An explicit successor
+`max_output_tokens` replaces its output reservation (null removes it); when the wire omits that
+field, the caller's existing local output reservation remains, including canonical-backend stripping.
+Explicit starts have separate physical
+allowance; ordinary retry and bounded recovery grants are not replenished, including when recovery
+is created after earlier successors. A refused successor sends no upstream frame and ends the chain with
 the original locally constructed 429 response, including its workflow-refusal provenance and header.
 The request log retains that refusal's HTTP status rather than mapping the failed terminal to 502.
 It never falls back to HTTP or replays the initial request.
 The same known local refusal reaches the response stream when no continuation pacing hook is installed.
 The tracker carries each new denial's reason and spend detail into that response without recording the refusal event twice.
 `tests/responses/ws-native-continuation-send-budget.test.ts` covers both native modes and spend
-policies, repeated sends, cancellation before dispatch, control frames and unconfigured long chains.
+policies, repeated sends, cancellation before dispatch, control frames, unconfigured long chains,
+per-leg hook coverage and successor-estimate refusals.
 
 Workflow refusals constructed inside native Messages keep the Anthropic `{ type: "error", error: { type, message, code } }`
 envelope, HTTP status, local-refusal header and its CORS exposure. Projection preserves process-local proxy
@@ -341,6 +349,10 @@ obtains a normal-capacity pre-send seed through `reserveSeed`. A failed initial 
 wire call, including rootless passthrough and generic adapter ingress. Stable retries reuse that
 seed; a real identity change must acquire its own normal seed. A prepaid combo child adopts only
 its exact permit on the same shared send ledger, excluding that reservation once from preflight.
+An `explicitEstimate` target — an explicit native continuation — reserves against its own measured
+input and output ceiling instead of the opening estimate; its seed books beside unrelated pending
+reservations rather than retiring them, is never adopted by an unkeyed same-scope lookup, and still
+owns routed terminal usage like any non-auxiliary send.
 Reported additional sends reuse the seed's exact scope references through `reserveReportedFromSeed`
 and allocate no new scope keys. Already-started sends remain booked even during persistence failure.
 

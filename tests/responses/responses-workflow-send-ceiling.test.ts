@@ -36,7 +36,7 @@ for (const path of ["reporter", "continuation", "permit"] as const) {
   test(`a refused ${path} releases its unstarted token seed before settlement`, () => {
     const sends = root(1);
     const f = request(true);
-    const continuation = path === "continuation" ? auxiliaryOwner(f.budget, f.logCtx).continuationSendReporter() : undefined;
+    const continuation = path === "continuation" ? auxiliaryOwner(f.budget, f.logCtx).continuationSendReporter({ body: {}, text: "x" }) : undefined;
     const other = request(false);
     const sent = createPhysicalSendReporter(other.budget, () => ({ poolId: "fixture" }));
     expect(sent.beforeSend!()).toBe(true);
@@ -206,10 +206,10 @@ test("native successors reserve fresh token capacity before each physical start"
     const state = createResponsesSendBudget({ options: { sendBudget: budget }, logCtx,
       req: new Request("http://fixture/v1/responses", { headers: { "x-codex-parent-thread-id": "physical-root" } }) });
     if (state instanceof Response) throw new Error("fixture admission refused");
-    for (const reporter of [state.transientSendReporter(), state.continuationSendReporter()]) {
+    for (const reporter of [state.transientSendReporter(), state.continuationSendReporter({ body: {}, text: "x" })]) {
       try { expect(reporter.beforeSend!()).toBe(true); reporter(1); } finally { reporter.close?.(); }
     }
-    const denied = state.continuationSendReporter();
+    const denied = state.continuationSendReporter({ body: {}, text: "x" });
     try { expect(denied.beforeSend!()).toBe(false); } finally { denied.close?.(); }
     expect(sends()).toBe(2); expect(budget.used).toBe(2); expect(budget.physicalStarted).toBe(2);
     expect(tracker.refusals).toBe(1);
@@ -225,7 +225,7 @@ test("explicit native starts do not replenish ordinary or bounded recovery grant
       req: new Request("http://fixture/v1/responses", { headers: { "x-codex-parent-thread-id": "physical-root" } }) });
     if (state instanceof Response) throw new Error("fixture admission refused");
     for (let i = 0; i < 6; i++) {
-      const reporter = state.continuationSendReporter();
+      const reporter = state.continuationSendReporter({ body: {}, text: "x" });
       try { expect(reporter.beforeSend!()).toBe(true); reporter(1); } finally { reporter.close?.(); }
     }
     expect(budget.used).toBe(6); expect(budget.physicalStarted).toBe(6);

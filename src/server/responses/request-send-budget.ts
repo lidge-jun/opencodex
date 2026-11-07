@@ -12,6 +12,7 @@ import { poolContinuityRefusalReason, workflowRefusalResponse } from "../workflo
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
 import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
 import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { estimateTokens } from "../../lib/token-estimate";
 import type {
   DispatchDecision,
   DispatchIntent,
@@ -85,11 +86,13 @@ export function createResponsesSendBudget(
     if (!physicalWorkflowAccounting && !workflowAlreadyCounted) chargeWorkflowSends(workflowRootId, charged);
   };
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
-  const physicalSendReporter = (permit?: SingleUseDispatchPermit, explicitContinuation = false) => {
+  const physicalSendReporter = (permit?: SingleUseDispatchPermit, explicitContinuation = false,
+    continuationEstimate?: { inputTokens: number; outputCeilingTokens: number }) => {
     let unreportedWorkflowStarts = 0;
     const targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined;
     const reporter = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
-      identityId: logCtx.accountLogLabel, ...(targetKey ? { targetKey } : {}) }), permit, charged => {
+      identityId: logCtx.accountLogLabel, ...(targetKey ? { targetKey } : {}),
+      ...(continuationEstimate ? { estimate: continuationEstimate, explicitEstimate: true } : {}) }), permit, charged => {
       noteTargetSends(Math.max(0, charged));
       options.onCompactionRecoverySendsReported?.(charged);
       const prepaid = Math.min(unreportedWorkflowStarts, Math.max(0, charged));
@@ -366,8 +369,22 @@ export function createResponsesSendBudget(
     workflowRootId,
     noteTransientSends,
     transientSendReporter,
-    /** A new native continuation cannot consume an initial or recovery booking. */
-    continuationSendReporter: () => physicalSendReporter(undefined, true),
+    /**
+     * A new native continuation cannot consume an initial or recovery booking. Its
+     * reservation is priced on the exact successor frame about to leave — the
+     * production dispatch path always supplies it. The merged outgoing body's
+     * max_output_tokens replaces the output reservation when present, including null.
+     * When the wire omits it, retain the caller's local output reservation: the
+     * canonical backend strips unsupported output caps. Input is always remeasured.
+     */
+    continuationSendReporter: (frame: { body: Record<string, unknown>; text: string }) =>
+      physicalSendReporter(undefined, true, {
+        inputTokens: Math.max(1, estimateTokens(frame.text, logCtx.model)),
+        outputCeilingTokens: typeof frame.body.max_output_tokens === "number"
+          && Number.isFinite(frame.body.max_output_tokens) && frame.body.max_output_tokens > 0
+          ? Math.trunc(frame.body.max_output_tokens)
+          : Object.hasOwn(frame.body, "max_output_tokens") ? 0 : logCtx.spendOutputCeilingTokens ?? 0,
+      }),
     remainingTransientSendBudget,
     /** Only this child's prepaid send, not every pending external booking, is spendable here. */
     initialSendAllowance: (cap: number): number => Math.min(cap,

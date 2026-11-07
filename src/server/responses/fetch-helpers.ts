@@ -286,7 +286,7 @@ export interface ProviderFetchOptions {
   /** One-shot receipt after final local HTTP admission, immediately before executor entry. */
   onPhysicalDispatch?: () => void;
   /** Repeatable admission for native successor creates, after pacing and auth checks. */
-  onContinuationDispatch?: () => void;
+  onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /**
    * Opt-in (#6969): let a Codex WebSocket send hold empty lifecycle frames so an authoritative
    * upstream refusal before any output settles as a replayable gateway status. Only a caller that

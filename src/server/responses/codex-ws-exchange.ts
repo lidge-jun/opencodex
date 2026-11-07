@@ -28,7 +28,7 @@ interface ExchangeOptions {
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
   onPhysicalDispatch?: () => void;
-  onContinuationDispatch?: () => void;
+  onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
   /**
@@ -530,7 +530,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               }
               beforeDispatch?.(new Headers(headers));
               if (frame.type === "response.create") {
-                options.onContinuationDispatch?.();
+                // The exact serialized successor and its body, so admission can price the
+                // reconstructed input and the successor's own output ceiling — never the
+                // opening request's stale estimate.
+                options.onContinuationDispatch?.({ body: prepared.outgoing, text: prepared.text });
                 continuationBase = prepared.outgoing;
               }
               try { ws.send(prepared.text); } catch {

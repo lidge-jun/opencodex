@@ -11,6 +11,7 @@ import {
 import { createRequestExecutionBudget, reportDispatchSends, createPhysicalSendReporter } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { estimateTokens } from "../../src/lib/token-estimate";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { SpendLedgerOwnerError, type SpendLedgerOwnerErrorCode } from "../../src/lib/spend-ledger-owner";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -518,5 +519,84 @@ describe("the request path books every physical send on the durable ledger", () 
       expect(complete?.settled).toBe(150);
       expect(complete?.unresolved).toBe(500);
     }
+  });
+});
+
+/**
+ * An explicit native continuation books its own measured successor frame -- the exact
+ * reconstructed input and that frame's output ceiling -- rather than reusing the opening
+ * request's estimate, and it still owns the routed model's terminal usage like any routed
+ * send. Because the reservation is its own keyed booking, it also must not disturb the
+ * request's other pending seeds in either direction.
+ */
+describe("explicit native-continuation spend identity", () => {
+  const rootId = `root-native-${crypto.randomUUID()}`;
+  function nativeFixture() {
+    const journal = memoryJournal();
+    const ledger = createSpendReservationLedger({ journal, policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 1_000_000 },
+    } });
+    // A full RequestLogContext: createResponsesSendBudget prices the successor frame on model.
+    const log = { model: "gpt-5.6-sol", provider: "test-pool",
+      accountLogLabel: "k0123456789abcdef0123456789abcdef",
+      usageLogInputTokens: 100, spendOutputCeilingTokens: 400 };
+    const tracker = createRequestSpendTracker(log, rootId, ledger);
+    const budget = createRequestExecutionBudget(undefined, "native-continuation-test", tracker);
+    const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"),
+      logCtx: log, options: { sendBudget: budget } });
+    if (owner instanceof Response) throw new Error("owner refused");
+    return { journal, ledger, tracker, owner };
+  }
+
+  test("an explicit continuation books the measured successor frame and owns terminal usage", () => {
+    const f = nativeFixture();
+    const frame = { body: { max_output_tokens: 3900 }, text: "x".repeat(2000) };
+    const reporter = f.owner.continuationSendReporter(frame);
+    expect(reporter.beforeSend!()).toBe(true);
+    // ceil(2000 / ~4) + the frame's own 3900 ceiling; the stale opening estimate (100+400)
+    // would have booked 500 for the same send.
+    const expected = Math.max(1, estimateTokens(frame.text, "gpt-5.6-sol")) + 3900;
+    const reserve = f.journal.lines.map(line => JSON.parse(line)).find(row => row.kind === "reserve");
+    expect(reserve.tokens).toBe(expected);
+    expect(f.ledger.snapshot("root", rootId)?.reserved).toBe(expected);
+    reporter(1); reporter.close!();
+    f.tracker.settle({ inputTokens: 7, outputTokens: 3 });
+    const settled = f.journal.lines.map(line => JSON.parse(line)).filter(row => row.kind === "settle");
+    // The continuation is no auxiliary helper: the routed model's terminal usage is its own.
+    expect(settled.map(row => row.send)).toContain(reserve.send);
+  });
+
+  for (const [label, body, output] of [
+    ["omitted", {}, 400], ["removed", { max_output_tokens: null }, 0],
+    ["replaced", { max_output_tokens: 900 }, 900],
+  ] as const) test(`successor output reservation is ${label} independently of fresh input`, () => {
+    const f = nativeFixture();
+    const frame = { body, text: "x".repeat(1200) };
+    const reporter = f.owner.continuationSendReporter(frame);
+    expect(reporter.beforeSend!()).toBe(true);
+    const reserve = f.journal.lines.map(line => JSON.parse(line)).find(row => row.kind === "reserve");
+    expect(reserve.tokens).toBe(estimateTokens(frame.text, "gpt-5.6-sol") + output);
+    reporter(1); reporter.close!(); f.tracker.settle(undefined);
+  });
+
+  test("an explicit-estimate successor neither retires nor is retired by another leg", () => {
+    const f = nativeFixture();
+    const sendAlias = (id: string) => hashSpendAlias("", "send", id);
+    const abandons = () => f.journal.lines.map(line => JSON.parse(line))
+      .filter(row => row.kind === "abandon").map(row => row.send);
+    const explicitTarget = () => ({ targetKey: "native-continuation:c1",
+      explicitEstimate: true as const, estimate: { inputTokens: 10, outputCeilingTokens: 10 } });
+    const pending = f.tracker.ensureSeed!({ targetKey: "pending-leg" })!;
+    const explicit = f.tracker.ensureSeed!(explicitTarget())!;
+    // The successor books beside an unstarted deferred booking instead of retiring it.
+    expect(abandons()).toHaveLength(0);
+    expect(f.tracker.ensureSeed!({ targetKey: "pending-leg" })).toBe(pending);
+    // A later routed admission still retires an unused ordinary anchor, but the unstarted
+    // explicit seed its reporter owns is not a provisional anchor it may rebind.
+    f.tracker.ensureSeed!({ targetKey: "routed-leg" });
+    expect(abandons()).toContain(sendAlias(pending.sendId));
+    expect(abandons()).not.toContain(sendAlias(explicit.sendId));
+    expect(f.tracker.ensureSeed!(explicitTarget())).toBe(explicit);
+    f.tracker.settle(undefined);
   });
 });
