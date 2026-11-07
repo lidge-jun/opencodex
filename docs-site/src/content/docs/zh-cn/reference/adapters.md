@@ -125,8 +125,8 @@ interface ProviderAdapter {
 `GOOGLE_CLOUD_LOCATION` 提供。添加 provider 不代表凭据或权限已验证。API key 未指定
 项目时使用 Vertex express 模式。
 仪表盘预设使用以配置的默认模型为起点的静态目录；连接测试不会验证 Vertex 凭据或权限。
-已有 Vertex 配置省略 `liveModels` 时也默认使用静态目录。显式设置 `liveModels: true`
-会保留用户的实时发现选择并使用通用发现端点。
+已有 Vertex 配置省略 `liveModels` 时会保留通过通用发现端点进行实时发现的原有行为。
+设置 `liveModels: false` 使用静态目录，也可在设置页面切换这两种模式。
 
 - 系统提示词 → `systemInstruction`；消息 → `contents[]`（assistant → `model`）；工具 →
   `functionDeclarations`；data URL 图像 → `inline_data`。

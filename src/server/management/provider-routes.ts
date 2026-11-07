@@ -1647,7 +1647,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
       return jsonResponse(await probeJevDecisionProvider(config, name, { signal: req.signal }));
     }
-    if (prov.liveModels === false || (prov.adapter === "google" && effectiveGoogleMode(name, prov) === "vertex" && prov.liveModels !== true)) {
+    if (prov.liveModels === false) {
       // A static catalog has no live discovery endpoint to test. This is neither
       // positive connectivity evidence nor an outage, and it must stay before
       // credential resolution/network access for providers such as Antigravity.

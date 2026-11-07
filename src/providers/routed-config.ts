@@ -133,6 +133,11 @@ function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConf
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
+  if (provider.authMode === "forward" && provider.adapter === "google"
+    && (provider.googleMode === "vertex" || (provider.googleMode === undefined
+      && registryEntry?.googleMode === "vertex" && providerMatchesRegistryTransportWithStaticGuards(providerName, provider)))) {
+    throw new Error("Vertex does not support forward authentication");
+  }
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     // A row whose adapter no longer matches its registry entry still reaches the Responses

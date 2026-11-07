@@ -136,7 +136,6 @@ const STATIC_MODEL_CATALOG_TRANSPORTS: Readonly<Record<string, { adapter: string
 
 /** Keep the Providers toggle aligned with the backend's canonical static-catalog boundary. */
 export function providerSupportsLiveModelDiscovery(name: string, provider: WorkspaceProvider): boolean {
-  if (provider.liveModels !== true && isVertexProvider({ name, ...provider })) return false;
   const canonical = STATIC_MODEL_CATALOG_TRANSPORTS[name];
   if (!canonical || provider.adapter !== canonical.adapter) return true;
   return normalizedBaseUrl(provider.baseUrl) !== normalizedBaseUrl(canonical.baseUrl);

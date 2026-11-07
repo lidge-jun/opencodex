@@ -96,6 +96,44 @@ function setEnv(k: string, v: string): void {
 }
 
 describe("gcp-adc resolver", () => {
+  test("ADC rotation during schema repair preserves the repaired replay", async () => {
+    const replacementPath = join(tmp, "repair-replacement.json");
+    writeFileSync(replacementPath, JSON.stringify({ type: "authorized_user", client_id: "fixture", client_secret: "fixture", refresh_token: "fixture" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    const bodies: string[] = [];
+    const authorizations: Array<string | null> = [];
+    let tokens = 0;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === OAUTH_TOKEN_URL) return Response.json({ access_token: `fixture-${++tokens}`, expires_in: 3600 });
+      bodies.push(String(init?.body));
+      authorizations.push(new Headers(init?.headers).get("authorization"));
+      if (bodies.length === 1) setEnv("GOOGLE_APPLICATION_CREDENTIALS", replacementPath);
+      return Response.json({ error: { code: 400, status: "INVALID_ARGUMENT", message: "tools.0.custom.input_schema: JSON schema is invalid" } }, { status: 400 });
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }],
+        tools: [{ type: "function", function: { name: "fixture", parameters: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } } } } }], stream: false,
+      }) });
+      await handleChatCompletions(request, config, { model: "", provider: "" });
+      expect(tokens).toBe(2);
+      expect(bodies).toHaveLength(2);
+      expect(authorizations).toEqual(["Bearer fixture-1", "Bearer fixture-2"]);
+      expect(bodies[1]).not.toBe(bodies[0]);
+    } finally {
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
+
   test("unresolved explicit Vertex key references do not fall back to host credentials", () => {
     setEnv("GOOGLE_CLOUD_API_KEY", "fixture-host-key");
     setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => null, setPassword: () => {}, deletePassword: () => true }));
@@ -409,10 +447,6 @@ describe("gcp-adc resolver", () => {
       const probe = new ManagementRequest("http://127.0.0.1/api/providers/test?name=my-vertex", { method: "POST" });
       const probeResponse = await handleManagementAPI(probe, new URL(probe.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
       expect(await probeResponse!.json()).toMatchObject({ applicable: false, reason: "static_catalog" });
-      delete config.providers["my-vertex"]!.liveModels;
-      const legacyProbe = new ManagementRequest("http://127.0.0.1/api/providers/test?name=my-vertex", { method: "POST" });
-      const legacyResponse = await handleManagementAPI(legacyProbe, new URL(legacyProbe.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
-      expect(await legacyResponse!.json()).toMatchObject({ applicable: false, reason: "static_catalog" });
       const patch = new ManagementRequest("http://127.0.0.1/api/providers?name=my-vertex", { method: "PATCH", headers: { "content-type": "application/json" },
         body: JSON.stringify({ project: "new-project", location: "" }) });
       const patchResponse = await handleManagementAPI(patch, new URL(patch.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });

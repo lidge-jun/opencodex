@@ -146,8 +146,8 @@ provider를 추가했다고 자격증명이나 권한의 유효성이 검증되�
 프로젝트를 지정하지 않으면 Vertex express 모드를 사용합니다.
 대시보드 프리셋은 설정한 기본 모델로 시작하는 정적 목록을 사용하며, 연결 테스트는 Vertex
 자격증명이나 권한을 검증하지 않습니다.
-기존 Vertex 항목에서 `liveModels`를 생략해도 정적 목록을 사용합니다. 명시적인
-`liveModels: true`는 사용자의 실시간 검색 선택을 유지하고 일반 검색 엔드포인트를 사용합니다.
+기존 Vertex 항목에서 `liveModels`를 생략하면 일반 검색 엔드포인트를 통한 기존 실시간 검색이 유지됩니다.
+`liveModels: false`는 정적 목록을 사용하며 설정 화면에서 두 모드를 전환할 수 있습니다.
 
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.

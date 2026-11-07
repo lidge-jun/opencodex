@@ -1021,6 +1021,15 @@ export async function prepareResponsesTransport(
           rebuilt.releaseBodyObservation?.();
           return markProxyError(formatErrorResponse(413, "outbound_body_too_large", describeOutboundBodyRefusal(bodySize)), "outbound");
         }
+        // A Google schema-repair replay owns its modified body. Retain it only when the
+        // credential rebuild produced the same original payload; otherwise refuse to combine
+        // a repair for the old request with a newly constructed request.
+        let refreshedBody: BodyInit | null | undefined = rebuilt.body;
+        if (route.provider.adapter === "google" && route.provider.googleMode === "vertex"
+          && typeof dispatchInit.body === "string" && dispatchInit.body !== wireRequest.body) {
+          if (rebuilt.body !== wireRequest.body) throw new Error("Vertex request changed during schema repair");
+          refreshedBody = dispatchInit.body;
+        }
         const headers = new Headers(dispatchInit.headers);
         for (const name of Object.keys(wireRequest.headers)) headers.delete(name);
         for (const [name, value] of Object.entries(rebuilt.headers)) headers.set(name, value);
@@ -1034,7 +1043,7 @@ export async function prepareResponsesTransport(
         sameTargetParsed = requestParsed;
         sameTargetToken = transportToken;
         destination = rebuilt.url;
-        dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
+        dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: refreshedBody };
         pacingChanged = route.provider.requestPacing?.enabled === true
           && (!!route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin");
         // A refreshed key must reacquire admission before the next synchronous send guard.

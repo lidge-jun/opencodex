@@ -67,9 +67,10 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
 }
 
 describe("applyActiveAccountReauth", () => {
-  test("legacy Vertex defaults to static discovery without hiding an explicit opt-in", () => {
+  test("Vertex discovery remains configurable independently of its saved setting", () => {
     const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex" } as const;
-    expect(providerSupportsLiveModelDiscovery("renamed-vertex", provider)).toBe(false);
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", provider)).toBe(true);
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", { ...provider, liveModels: false })).toBe(true);
     expect(providerSupportsLiveModelDiscovery("renamed-vertex", { ...provider, liveModels: true })).toBe(true);
   });
   test("Vertex host and marker credentials have an unverified group", () => {

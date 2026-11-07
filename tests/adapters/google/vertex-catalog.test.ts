@@ -46,15 +46,15 @@ describe("Vertex catalog configuration", () => {
     expect(sends).toBe(0);
   });
 
-  test("a legacy Vertex provider without liveModels uses its configured catalog without probing", async () => {
+  test("a legacy Vertex provider without liveModels retains live discovery", async () => {
     let sends = 0;
-    globalThis.fetch = (() => { sends++; throw new Error("unexpected network request"); }) as typeof fetch;
+    globalThis.fetch = (() => { sends++; return Promise.resolve(Response.json({ data: [{ id: "gemini-discovered" }] })); }) as typeof fetch;
     const config: OcxConfig = { providers: { "renamed-vertex": {
-      adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", defaultModel: "gemini-3-pro",
+      adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", apiKey: "test-key",
     } } };
     const rows = await gatherRoutedModels(config);
-    expect(rows).toContainEqual(expect.objectContaining({ provider: "renamed-vertex", id: "gemini-3-pro" }));
-    expect(sends).toBe(0);
+    expect(rows).toContainEqual(expect.objectContaining({ provider: "renamed-vertex", id: "gemini-discovered" }));
+    expect(sends).toBeGreaterThan(0);
   });
   test("defaultModel without models survives failed Vertex discovery", async () => {
     globalThis.fetch = (() => { throw new TypeError("offline"); }) as typeof fetch;
