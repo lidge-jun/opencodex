@@ -38,6 +38,7 @@ function fixtures(): Record<Schema, any> {
   return {
     "ocx.update.root/1": {schema: "ocx.update.root/1", revision: 1, expiresAt: "2000-02-29T12:00:00Z", rootKeys: [key], rootThreshold: 1, releaseKeys: [{...key, channels: ["latest"], roles: ["release", "tree", "desktop-artifact", "standalone-artifact", "guardian-artifact"]}], releaseThreshold: 1, channels: ["latest"]},
     "ocx.update.signatures/1": {schema: "ocx.update.signatures/1", signatures: [{keyFingerprint: fingerprint, signatureBox: box}]},
+    "ocx.update.root-transition-signatures/1": {schema: "ocx.update.root-transition-signatures/1", signatures: [{keyFingerprint: fingerprint, signatureBox: box}]},
     "ocx.update.release/1": {schema: "ocx.update.release/1", version: "1.2.3", channel: "latest", sequence: 1, sourceCommit: "b".repeat(40), rolloutNotBefore: "2028-02-29T00:00:00Z", receipt: {...digest}, releaseNotes: [{title: "title", body: "body"}], targets: targets()},
     "ocx.update.verification/1": {schema: "ocx.update.verification/1", sourceCommit: "b".repeat(40), version: "1.2.3", channel: "latest", workflowRunId: 1, workflowAttempt: 1, versionSources: ["package.json", "desktop/src-tauri/tauri.conf.json", "desktop/src-tauri/Cargo.toml", "desktop/src-tauri/Cargo.lock"].map(path => ({path, sha256: h})), assets: [{name: "a", ...digest}, {name: "b", ...digest}], universalProofs: [{assetName: "a", artifactSha256: h, architectures: ["arm64", "x64"], inspectionSha256: h}], architectureProofs: [{targetId: "linux-x64-npm", assetName: "b", artifactSha256: h, arch: "x64", inspectionSha256: h}]},
     "ocx.update.tree/1": {schema: "ocx.update.tree/1", version: "1.2.3", target: "linux-x64-npm", entries: [{path: "bin", type: "directory", mode: 493}, {path: "bin/a", type: "file", mode: 420, size: 0, sha256: h}, {path: "bin/link", type: "symlink", target: "../bin/a"}]},
@@ -64,7 +65,7 @@ describe("closed unverified update contracts", () => {
     expect(parseSignatureEnvelope(bytes(all["ocx.update.signatures/1"])).signatures).toHaveLength(1);
   });
   test("expected schema determines the immutable raw byte cap", () => {
-    const caps: Record<Schema, number> = {"ocx.update.root/1":65536, "ocx.update.signatures/1":65536, "ocx.update.release/1":1048576, "ocx.update.verification/1":1048576, "ocx.update.tree/1":16777216, "ocx.link-capabilities/1":1048576, "ocx.update.policy/1":4096, "ocx.update.prepared/1":8192, "ocx.update.activation/1":8192};
+    const caps: Record<Schema, number> = {"ocx.update.root/1":65536, "ocx.update.signatures/1":65536, "ocx.update.root-transition-signatures/1":262144, "ocx.update.release/1":1048576, "ocx.update.verification/1":1048576, "ocx.update.tree/1":16777216, "ocx.link-capabilities/1":1048576, "ocx.update.policy/1":4096, "ocx.update.prepared/1":8192, "ocx.update.activation/1":8192};
     for (const [schema, value] of Object.entries(fixtures()) as [Schema, any][]) {
       const raw = bytes(value); const exact = Buffer.concat([raw, Buffer.alloc(caps[schema] - raw.length, 32)]);
       expect(parseUpdateDocument(exact, schema).schema).toBe(schema);
@@ -102,6 +103,13 @@ describe("closed unverified update contracts", () => {
   });
   test("signature envelope rejects noncanonical encodings and duplicate fingerprints", () => {
     const e = fixtures()["ocx.update.signatures/1"];
+    const entries = Array.from({ length: 33 }, (_, i) => ({ keyFingerprint: i.toString(16).padStart(64, "0"), signatureBox: box }));
+    const transition = { schema: "ocx.update.root-transition-signatures/1", signatures: entries.slice(0, 32) };
+    expect(parse(transition).signatures).toHaveLength(32);
+    reject({ ...transition, signatures: entries });
+    reject({ ...e, signatures: entries.slice(0, 17) });
+    expect(() => parseSignatureEnvelope(bytes(transition))).toThrow();
+    expect(() => parseUpdateDocument(bytes(e), "ocx.update.root-transition-signatures/1")).toThrow();
     reject({...e, signatures: [e.signatures[0], e.signatures[0]]});
     reject({...e, signatures: [{...e.signatures[0], signatureBox: `${box}\n`}]});
     reject({...e, signatures: [{...e.signatures[0], signatureBox: Buffer.from("bad").toString("base64")}]});

@@ -41,14 +41,27 @@ export function bootstrapEmbeddedRoot(bytes, nowMs) {
 export function verifyRootTransition(predecessorBasis, bytes, envelopeBytes, nowMs) {
   const previous = currentRoot(predecessorBasis, nowMs);
   const nextBytes = snapshotUpdateBytes(bytes, 65536);
-  const signatureBytes = snapshotUpdateBytes(envelopeBytes, 65536);
-  const envelope = parseSignatureEnvelope(signatureBytes);
-  verifySignatureThreshold(nextBytes, envelope, previous.root.rootKeys, previous.root.rootThreshold);
+  const signatureBytes = snapshotUpdateBytes(envelopeBytes, 262144);
+  const envelope = parseUpdateDocument(signatureBytes, "ocx.update.root-transition-signatures/1");
   const root = parseUpdateDocument(nextBytes, "ocx.update.root/1");
   if (root.revision <= previous.root.revision || Date.parse(root.expiresAt) <= nowMs) {
     throw new Error("Invalid successor root");
   }
-  verifySignatureThreshold(nextBytes, envelope, root.rootKeys, root.rootThreshold);
+  const oldKeys = new Map(previous.root.rootKeys.map((key) => [key.keyId, key]));
+  const newKeys = new Map(root.rootKeys.map((key) => [key.keyId, key]));
+  for (const [fingerprint, oldKey] of oldKeys) {
+    const newKey = newKeys.get(fingerprint);
+    if (newKey) {
+      const decode = (key) => decodePublicKey(Buffer.from(key.publicKey, "base64").toString("utf8"));
+      if (decode(oldKey).keyId !== decode(newKey).keyId) throw new Error("Incompatible root key packet identifiers");
+    }
+  }
+  if (envelope.signatures.some((signature) => !oldKeys.has(signature.keyFingerprint) && !newKeys.has(signature.keyFingerprint))) {
+    throw new Error("Unknown root transition signer");
+  }
+  const subset = (keys) => ({ signatures: envelope.signatures.filter((signature) => keys.has(signature.keyFingerprint)) });
+  verifySignatureThreshold(nextBytes, subset(oldKeys), previous.root.rootKeys, previous.root.rootThreshold);
+  verifySignatureThreshold(nextBytes, subset(newKeys), root.rootKeys, root.rootThreshold);
   const digest = createHash("sha256").update(nextBytes).digest("hex");
   const handle = Object.freeze(Object.create(null));
   TRANSITIONS.set(handle, { root, bytes: nextBytes, digest, predecessorDigest: previous.digest,

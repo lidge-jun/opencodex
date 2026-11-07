@@ -5,6 +5,7 @@ import { sameSignedVersion } from "./update-signed-version.mjs";
 
 const CAPS = Object.freeze({
   "ocx.update.root/1": 65536, "ocx.update.signatures/1": 65536,
+  "ocx.update.root-transition-signatures/1": 262144,
   "ocx.update.release/1": 1048576, "ocx.update.verification/1": 1048576,
   "ocx.update.tree/1": 16777216, "ocx.link-capabilities/1": 1048576,
   "ocx.update.policy/1": 4096, "ocx.update.prepared/1": 8192,
@@ -75,8 +76,8 @@ function root(v) {
     }
   }
 }
-function envelope(v) {
-  exact(obj(v, ["schema", "signatures"]) && array(v.signatures, 1, 16));
+function envelope(v, limit = 16) {
+  exact(obj(v, ["schema", "signatures"]) && array(v.signatures, 1, limit));
   for (const entry of v.signatures) {
     exact(obj(entry, ["keyFingerprint", "signatureBox"]) && hash(entry.keyFingerprint)); signature(entry.signatureBox);
   }
@@ -187,6 +188,7 @@ function activation(v) {
 }
 const VALIDATORS = Object.freeze({
   "ocx.update.root/1": root, "ocx.update.signatures/1": envelope,
+  "ocx.update.root-transition-signatures/1": (value) => envelope(value, 32),
   "ocx.update.release/1": release, "ocx.update.verification/1": receipt,
   "ocx.update.tree/1": tree, "ocx.link-capabilities/1": capability,
   "ocx.update.policy/1": policy, "ocx.update.prepared/1": prepared,
