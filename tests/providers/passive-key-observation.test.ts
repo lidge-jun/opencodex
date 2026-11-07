@@ -9,6 +9,7 @@ import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib
 import { saveConfig } from "../../src/config";
 import { setProviderApiKeyPaused } from "../../src/providers/api-key-pause";
 import { resolveProviderApiKey, resolveProviderApiKeyPassively, resolveProviderApiKeyQuietly, setProviderKeychainEntryFactoryForTests, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
+import { addProviderApiKey, apiKeyPoolEntryId, removeProviderApiKey } from "../../src/providers/api-keys";
 import * as decision from "../../src/providers/quota-decision-snapshot";
 
 function fixture(name: string): OcxConfig {
@@ -154,6 +155,48 @@ test("pause and unpause retire the prior key incarnation, including its in-fligh
   release();
   await pending;
   expect(listPassiveKeyLimits(config)).toEqual([]);
+});
+
+test.each(["pause", "add", "add-new", "remove-readd"] as const)("%s retires only the affected key's cached and pending observations", async operation => {
+  observations.clearPassiveKeyLimits();
+  const name = `key-scope-${operation}`;
+  const config = fixture(name);
+  const first = "synthetic-key", sibling = "synthetic-sibling";
+  const firstId = apiKeyPoolEntryId(first), siblingId = apiKeyPoolEntryId(sibling);
+  config.providers[name]!.apiKeyPool = [{ id: firstId, key: first }, { id: siblingId, key: sibling }];
+  config.providers.other = { ...config.providers[name]!, apiKey: first, apiKeyPool: [{ id: firstId, key: first }] };
+  saveConfig(config);
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const makeSend = (providerName: string, key: string, pending: boolean) => {
+    const provider = { ...config.providers[providerName]!, apiKey: key };
+    return passiveKeyPhysicalFetch(trusted(async () => { if (pending) await wait; return response(); }), config, providerName, routedProviderConfig(providerName, provider));
+  };
+  const send = (providerName: string, key: string, model: string, pending = false) => makeSend(providerName, key, pending)(
+    "https://api.groq.com/openai/v1/chat/completions",
+    { ...init, headers: { authorization: `Bearer ${key}` }, body: JSON.stringify({ model }) },
+  );
+  await Promise.all([send(name, first, "cached"), send(name, sibling, "cached"), send("other", first, "cached")]);
+  expect(listPassiveKeyLimits(config)).toHaveLength(3);
+  const pending = [send(name, first, "pending", true), send(name, sibling, "pending", true), send("other", first, "pending", true)];
+  if (operation === "pause") {
+    expect(setProviderApiKeyPaused(config, name, firstId, true)).toBe(true);
+    expect(setProviderApiKeyPaused(config, name, firstId, false)).toBe(true);
+  } else if (operation === "add") {
+    expect(addProviderApiKey(config, name, first)).toEqual({ id: firstId });
+  } else if (operation === "add-new") {
+    expect(addProviderApiKey(config, name, "synthetic-new")).toEqual({ id: apiKeyPoolEntryId("synthetic-new") });
+  } else {
+    expect(removeProviderApiKey(config, name, firstId)).toBe(true);
+    expect(addProviderApiKey(config, name, first)).toEqual({ id: firstId });
+  }
+  release();
+  await Promise.all(pending);
+  const rows = listPassiveKeyLimits(config).map(({ provider, keyId, model }) => `${provider}/${keyId}/${model}`).sort();
+  const expected = [`${name}/${siblingId}/cached`, `${name}/${siblingId}/pending`, `other/${firstId}/cached`, `other/${firstId}/pending`];
+  if (operation === "add-new") expected.push(`${name}/${firstId}/cached`, `${name}/${firstId}/pending`);
+  expect(rows).toEqual(expected.sort());
+  observations.clearPassiveKeyLimits();
 });
 
 test.each(["get", "list", "send"] as const)("passive %s does not observe or invalidate decision credentials after an env replacement", async operation => {

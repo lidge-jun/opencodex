@@ -15,24 +15,20 @@ const paths: Record<PassiveKeyProvider, readonly string[]> = {
   groq: ["/openai/v1/chat/completions"], mistral: ["/v1/chat/completions"],
 };
 let sequence = 0;
-let epoch = 0;
-const generations = new Map<string, object>();
 const seenResponses = new WeakSet<Response>();
 
 /** Invalidate both stored and in-flight observations after key-store mutation. */
 export function clearPassiveKeyLimits(name?: string): void {
-  if (name === undefined) { epoch++; generations.clear(); }
-  else generations.delete(name);
   passiveKeyLimits.clear(name);
 }
 
-function generationFor(name: string): object {
-  let generation = generations.get(name);
-  if (!generation) {
-    if (generations.size >= 512) generations.delete(generations.keys().next().value!);
-    generations.set(name, generation = {});
-  }
-  return generation;
+function accountScope(name: string, id: string): string {
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify([name, id])).digest("hex");
+}
+
+/** Retire all models and outstanding reservations for one account incarnation. */
+export function clearPassiveKeyAccount(name: string, id: string): void {
+  passiveKeyLimits.clear(name, accountScope(name, id));
 }
 
 function keyId(reference: string): string {
@@ -87,13 +83,12 @@ export function passiveKeyPhysicalFetch(
     }
     const model = owned ? extractPassiveWireModel(init?.body) : undefined;
     const attempt = ++sequence;
-    const generation = epoch;
-    const providerGeneration = generationFor(name);
     let reservation: ReturnType<typeof passiveKeyLimits.reserve>;
     try {
       if (owned && vendor && model) {
         const reference = snapshot._apiKeyAttempt!.reference!;
-        reservation = passiveKeyLimits.reserve({ owner: identity(name, snapshot, snapshot._apiKeyAttempt!.entryId ?? keyId(reference), reference, key), provider: vendor, model, namespace: name }, attempt);
+        const id = snapshot._apiKeyAttempt!.entryId ?? keyId(reference);
+        reservation = passiveKeyLimits.reserve({ owner: identity(name, snapshot, id, reference, key), provider: vendor, model, namespace: name, account: accountScope(name, id) }, attempt);
       }
     } catch { /* Reservation failure cannot prevent a proxied send. */ }
     try {
@@ -101,7 +96,7 @@ export function passiveKeyPhysicalFetch(
       const reused = seenResponses.has(response);
       seenResponses.add(response);
       try {
-        if (reservation && !reused && generation === epoch && generations.get(name) === providerGeneration && stillConfigured(config, name, snapshot)) {
+        if (reservation && !reused && stillConfigured(config, name, snapshot)) {
           reservation.record(response.headers, Date.now());
         }
       } catch { /* Passive display evidence must not fail the proxied response. */ }

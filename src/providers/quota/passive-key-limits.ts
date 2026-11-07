@@ -10,7 +10,7 @@ export type PassiveKeyLimit = {
   resetAt?: number;
 };
 export type PassiveKeyLimitReading = PassiveKeyLimit & { stale: boolean };
-export type PassiveKeyIdentity = { owner: string; provider: PassiveKeyProvider; model: string; namespace?: string };
+export type PassiveKeyIdentity = { owner: string; provider: PassiveKeyProvider; model: string; namespace?: string; account?: string };
 
 const PROVIDERS: readonly string[] = ["openai", "xai", "groq", "anthropic", "mistral"];
 const MAX_COUNT = 1_000_000_000_000;
@@ -90,7 +90,7 @@ export function parsePassiveKeyLimits(provider: PassiveKeyProvider, headers: Hea
   return result;
 }
 
-type Entry = { sequence: number; rows: PassiveKeyLimit[]; pending: number; namespace?: string; timer?: ReturnType<typeof setTimeout> };
+type Entry = { sequence: number; rows: PassiveKeyLimit[]; pending: number; namespace?: string; account?: string; timer?: ReturnType<typeof setTimeout> };
 export type PassiveKeyLimitReservation = {
   record(headers: Headers, observedAt: number): boolean;
   cancel(): void;
@@ -111,9 +111,10 @@ export class PassiveKeyLimitCache {
     }
   }
 
-  clear(namespace?: string): void {
+  clear(namespace?: string, account?: string): void {
     for (const [key, entry] of this.entries) {
       if (namespace !== undefined && entry.namespace !== namespace) continue;
+      if (account !== undefined && entry.account !== account) continue;
       if (entry.timer) clearTimeout(entry.timer);
       this.entries.delete(key);
     }
@@ -138,7 +139,7 @@ export class PassiveKeyLimitCache {
     if (!key || !Number.isSafeInteger(sequence) || sequence < 0) return undefined;
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { sequence: -1, rows: [], pending: 0, namespace: identity.namespace };
+      entry = { sequence: -1, rows: [], pending: 0, namespace: identity.namespace, account: identity.account };
       this.entries.set(key, entry);
       this.evictOverflow();
     }
@@ -177,12 +178,12 @@ export class PassiveKeyLimitCache {
     if (!rows.length) {
       this.entries.delete(key);
       if (current) current.sequence = sequence;
-      this.entries.set(key, current ?? { sequence, rows: [], pending: 0, namespace: identity.namespace });
+      this.entries.set(key, current ?? { sequence, rows: [], pending: 0, namespace: identity.namespace, account: identity.account });
       this.evictOverflow();
       return false;
     }
     if (current?.timer) clearTimeout(current.timer);
-    const entry: Entry = current ?? { sequence, rows, pending: 0, namespace: identity.namespace };
+    const entry: Entry = current ?? { sequence, rows, pending: 0, namespace: identity.namespace, account: identity.account };
     entry.sequence = sequence;
     entry.rows = rows;
     entry.timer = setTimeout(() => { entry.rows = []; entry.timer = undefined; }, this.retentionMs);

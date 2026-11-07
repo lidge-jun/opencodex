@@ -53,7 +53,7 @@ serializes response-arrival decisions, resets on accepted HTTP responses, and ex
 transient/quota/model/request failures. No provider body or account identifier enters its log.
 The opt-in counter defaults to two refusals; each process owns its counters. Durable pause
 uses `setAccountPaused`, `setCodexAccountPaused`, or
-`src/providers/api-key-pause.ts`; resume changes an incarnation fence and clears the reason. Each successful key pause or resume also invalidates that provider’s cached and in-flight passive key-limit observations.
+`src/providers/api-key-pause.ts`; resume changes an incarnation fence and clears the reason. Each successful key pause or resume also invalidates that account’s cached and in-flight passive key-limit observations, preserving sibling accounts.
 API-key selectors and reactive/proactive failover exclude disabled pool entries, including request-local round-robin allocation. A distributed refusal pauses its exact sending entry even when a different key is active, under the existing selection-revision fence. Recovery allocates a healthy sibling and reacquires its pacing lease before dispatch.
 Regression coverage: `tests/oauth/oauth-account-auto-pause.test.ts` and
 `tests/responses/responses-account-auto-pause.test.ts` and `tests/providers/api-key-auto-pause-distribution.test.ts`.
