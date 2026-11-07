@@ -16,3 +16,10 @@ export function sameSignedVersion(releaseVersion, signedVersion) {
   const normalized = signedVersion.startsWith("v") ? signedVersion.slice(1) : signedVersion;
   return validVersion(normalized) && releaseVersion === normalized;
 }
+
+/** Compare a version field only after the caller authenticates the comment. */
+export function trustedCommentMatchesVersion(comment, releaseVersion) {
+  if (typeof comment !== "string" || Buffer.byteLength(comment, "utf8") > 4096) return false;
+  const versions = comment.split("\t").filter((field) => field.startsWith("version:"));
+  return versions.length === 1 && sameSignedVersion(releaseVersion, versions[0].slice("version:".length));
+}

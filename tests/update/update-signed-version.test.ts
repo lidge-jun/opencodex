@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sameSignedVersion } from "../../src/update/update-signed-version.mjs";
+import { sameSignedVersion, trustedCommentMatchesVersion } from "../../src/update/update-signed-version.mjs";
 
 describe("signed update version equality", () => {
   test("preserves full version identity and permits one signed v prefix", () => {
@@ -17,5 +17,13 @@ describe("signed update version equality", () => {
       expect(sameSignedVersion(bad, bad)).toBe(false);
       expect(sameSignedVersion("1.2.3", bad)).toBe(false);
     }
+  });
+
+  test("requires exactly one matching version field in the authenticated comment", () => {
+    expect(trustedCommentMatchesVersion("timestamp:1\tfile:app.tar.gz\tversion:v1.2.3+build", "1.2.3+build")).toBe(true);
+    for (const comment of ["timestamp:1\tfile:app", "version:", "version:1.2.3\tversion:1.2.3", "version:1.2.3+other", "xversion:1.2.3", "version:vv1.2.3"]) {
+      expect(trustedCommentMatchesVersion(comment, "1.2.3+build")).toBe(false);
+    }
+    expect(trustedCommentMatchesVersion("version:1.2.3\tversion:1.2.3", "1.2.3")).toBe(false);
   });
 });
