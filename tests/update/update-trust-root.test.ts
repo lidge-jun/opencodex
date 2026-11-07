@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { repoPath } from "../helpers/repo-root";
 import { generateUpdateTrustRoot } from "../../scripts/generate-update-trust-root";
 import { decodePublicKey } from "../../src/update/minisign.mjs";
+import { EMBEDDED_ROOT_SHA256 } from "../../src/update/update-trust-anchor.mjs";
 
 describe("generated update trust root", () => {
   test("uses the pinned updater public key and generates identical resource bytes", () => {
@@ -19,6 +21,7 @@ describe("generated update trust root", () => {
     expect(root.channels).toEqual(["latest", "preview", "nightly"]);
     expect(readFileSync(repoPath("src/update/trust-root.json"), "utf8")).toBe(generated);
     expect(readFileSync(repoPath("desktop/src-tauri/update-trust-root.json"), "utf8")).toBe(generated);
+    expect(EMBEDDED_ROOT_SHA256).toBe(createHash("sha256").update(generated).digest("hex"));
   });
 
   test("rejects absent, malformed and noncanonical public keys", () => {

@@ -428,7 +428,8 @@ and grants no update or installation authority by itself. It decodes Tauri’s o
 trusted-comment signature. Missing or malformed fields fail before publication.
 `scripts/generate-update-trust-root.ts` derives identical offline root files at
 `src/update/trust-root.json` and `desktop/src-tauri/update-trust-root.json` from
-the pinned public key; `--check` detects drift. These files do not yet authorize
+the pinned public key and emits their digest in `src/update/update-trust-anchor.mjs`;
+`--check` detects drift. These files do not yet authorize
 updates or change the Tauri updater's existing trust configuration.
 On macOS, in-app updates download `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for
 the first installation.
