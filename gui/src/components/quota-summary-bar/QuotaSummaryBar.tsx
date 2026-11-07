@@ -212,7 +212,7 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         {headline.labelKey === "quotaSummary.creditsUnavailable" && (
           <span className="quota-summary-name">{t("quotaSummary.creditsUnavailable")}</span>
         )}
-        <span className="quota-summary-pct">{formatQuotaPercent(headline.percent, headline.rounding)}</span>
+        <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>
         {row.provider === "meta-muse" && headline.resetAt !== undefined && (
           <span className="quota-summary-name" title={formatResetFuture(headline.resetAt, t, locale)}>
             {formatMuseResetCountdown(headline.resetAt, clock)}
@@ -233,7 +233,7 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
               {row.windows.map(window => (
                 <tr key={window.id} className={`quota-summary-row--${window.severity}`}>
                   <th scope="row">{windowLabel(window, t)}</th>
-                  <td className="quota-summary-row-pct">{formatQuotaPercent(window.percent, window.rounding)}</td>
+                  <td className="quota-summary-row-pct">{formatQuotaPercent(window.percent)}</td>
                   <td className="quota-summary-row-reset">
                     {window.resetAt !== undefined ? formatResetFuture(window.resetAt, t, locale) : "-"}
                   </td>
@@ -293,7 +293,7 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
   // Chips can widen without the list box changing size (a new provider, a longer percent, a late
   // web font), so the observer watches every chip as well as the list, and the row signature
   // re-measures on the next frame for chips that arrive with the new rows.
-  const rowsKey = rows.map(row => `${row.provider}:${row.label}:${formatQuotaPercent(row.headline.percent, row.headline.rounding)}:${row.severity}`).join("|");
+  const rowsKey = rows.map(row => `${row.provider}:${row.label}:${formatQuotaPercent(row.headline.percent)}:${row.severity}`).join("|");
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;

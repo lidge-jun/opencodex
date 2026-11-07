@@ -23,8 +23,6 @@ export interface QuotaSummaryWindow {
   /** Provider-named window label, shown verbatim. */
   label?: string;
   percent?: number;
-  /** Informational balances have no severity threshold and may round to the nearest percent. */
-  rounding?: "nearest";
   resetAt?: number;
   severity: QuotaSummarySeverity;
 }
@@ -48,9 +46,26 @@ export function quotaSeverity(percent: number | undefined): QuotaSummarySeverity
   return "normal";
 }
 
-// Threshold-bearing windows floor to keep the displayed number on the same side as the color.
-export function formatQuotaPercent(percent: number | undefined, rounding?: "nearest"): string {
-  return finite(percent) ? `${rounding === "nearest" ? Math.round(percent) : Math.floor(percent)}%` : "-";
+// Flooring keeps the displayed number on the same side of the 70/90 thresholds as the color.
+export function formatQuotaPercent(percent: number | undefined): string {
+  return finite(percent) ? `${Math.floor(percent)}%` : "-";
+}
+
+/** Interpret the reported decimal numbers exactly when rounding an informational balance. */
+function decimalRatio(value: number): [bigint, bigint] {
+  const [coefficient, exponent = "0"] = value.toString().split("e");
+  const [whole, fraction = ""] = coefficient!.split(".");
+  const digits = BigInt(`${whole}${fraction}`);
+  const scale = fraction.length - Number(exponent);
+  return scale >= 0 ? [digits, 10n ** BigInt(scale)] : [digits * 10n ** BigInt(-scale), 1n];
+}
+
+function roundedUnavailablePercent(total: number, remaining: number): number {
+  const [totalNumerator, totalDenominator] = decimalRatio(total);
+  const [remainingNumerator, remainingDenominator] = decimalRatio(Math.min(remaining, total));
+  const denominator = totalNumerator * remainingDenominator;
+  const numerator = (denominator - remainingNumerator * totalDenominator) * 100n;
+  return Number((2n * numerator + denominator) / (2n * denominator));
 }
 
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
@@ -87,12 +102,11 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   // The provider can sum up to 512 packages; tolerate only their accumulated roundoff.
   if (workbuddy && workbuddy.total > 0 && workbuddy.remaining / workbuddy.total <= 1 + Number.EPSILON * 1024) {
     // Remaining is authoritative and includes frozen credits; the meter is informational.
-    const percent = (1 - Math.min(workbuddy.remaining / workbuddy.total, 1)) * 100;
+    const percent = roundedUnavailablePercent(workbuddy.total, workbuddy.remaining);
     windows.push({
       id: "quotaSummary.creditsUnavailable",
       labelKey: "quotaSummary.creditsUnavailable",
       percent,
-      rounding: "nearest",
       severity: "normal",
     });
   }
