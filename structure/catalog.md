@@ -513,11 +513,10 @@ Operator-owned `pinnedReasoningEffort`, `modelPinnedReasoningEfforts`, and root
 Provider model pins precede provider-wide pins, then global selector/destination pins.
 A pin can raise the effective caller effort; the later cap can still lower or omit it.
 On legacy effort paths, `none` means explicit-effort omission (provider default), not guaranteed reasoning disablement. For a declared thinking toggle, the client compatibility decoder resolves `none` to thinking off before strength policy; an independent `thinkingEnabled` boolean takes precedence. Effort caps do not clear that switch, and a destination change restores the original thinking choice alongside effort before normalization.
-Compaction maintenance is exempt. Pins are user overlays and do not alter registry seeds,
-model discovery or advertised ladders. Native Chat applies qualifying caps even without a
-pin, and normalizes pinned values and values rewritten by a cap through provider wire
-mapping. Without a pin or a cap rewrite, native caller values retain their original wire
-spelling; the V1 and compaction cap exemptions are preserved.
+Compaction maintenance is exempt. Pins are user overlays and do not alter registry seeds, model discovery or advertised ladders.
+Native Chat applies qualifying caps even without a pin, and normalizes pinned values and values rewritten by a cap through provider wire
+mapping. Without a pin or a cap rewrite, native caller values retain their original wire spelling, except a caller `ultra`,
+which the passthrough folds to `max` (clamped to the declared ladder) unless that ladder lists `ultra`; the V1 and compaction cap exemptions are preserved.
 
 > Decision record: [ADR-0023](decisions/ADR-0023-ultra-reasoning-level.md)
 
