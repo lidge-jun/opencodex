@@ -197,11 +197,12 @@ export async function fetchProviderModelsWithAuth(
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   if (azureMetadata) await refreshAzureModelMetadata(prov.baseUrl, metadataConfigDir);
+  const vertexStatic = prov.adapter === "google" && effectiveGoogleMode(name, prov) === "vertex" && prov.liveModels !== true;
   const seedVertexDefault = prov.adapter === "google"
-    && prov.googleMode === "vertex"
+    && effectiveGoogleMode(name, prov) === "vertex"
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
-  const seedStaticDefault = prov.liveModels === false
+  const seedStaticDefault = (prov.liveModels === false || vertexStatic)
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
   // Ordered dedupe union: implicit default seed, then `models`, then `retainModels`. `configured` is the
@@ -245,7 +246,7 @@ export async function fetchProviderModelsWithAuth(
   };
   // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
   // discovery failure left by an older live configuration even when the account is logged out.
-  if (prov.liveModels === false) {
+  if (prov.liveModels === false || vertexStatic) {
     clearProviderDiscoveryStatus(name);
     if (name === "kiro") {
       const ids = [...configuredIds];

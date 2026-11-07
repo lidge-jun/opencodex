@@ -794,6 +794,10 @@ export async function prepareResponsesTransport(
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
       if (!current) throw new Error("API key selection is unavailable before dispatch");
+      if (route.provider.googleMode === "vertex" || current.googleMode === "vertex") {
+        const freshPolicy = captureRouteStaticPolicy(route.providerName, route.modelId, current, route.staticPolicy.effectiveAlias, inboundWire);
+        if (freshPolicy.model.adapter !== route.staticPolicy.model.adapter) throw new Error("Vertex model wire changed before dispatch");
+      }
       await resolveCopilotSelection(requestParsed, true, current);
     }
     adapter = activeAdapter = runTurnAdapter = resolveSelectionAdapter(
@@ -1008,6 +1012,7 @@ export async function prepareResponsesTransport(
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           completedToolBlocks: requestState.completedToolBlocks,
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
+          abortSignal: dispatchInit.signal ?? options.abortSignal ?? req.signal,
           dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });

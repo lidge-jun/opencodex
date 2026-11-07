@@ -6,6 +6,7 @@ import {
   hideRedundantChatGptForwardProviders,
   isAccountProvider,
   isFreeProvider,
+  providerSupportsLiveModelDiscovery,
   providerTier,
   sortWorkspaceItems,
   type WorkspaceItem,
@@ -66,6 +67,11 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
 }
 
 describe("applyActiveAccountReauth", () => {
+  test("legacy Vertex defaults to static discovery without hiding an explicit opt-in", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex" } as const;
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", provider)).toBe(false);
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", { ...provider, liveModels: true })).toBe(true);
+  });
   test("Vertex host and marker credentials have an unverified group", () => {
     const vertex = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex" } as const;
     const sections = buildProviderWorkspace({

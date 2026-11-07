@@ -439,6 +439,8 @@ host. Adding the provider does not verify that credentials or permissions are us
 without an explicit project uses Vertex express mode.
 The dashboard preset uses a static catalog seeded by the configured default model; its connection
 test does not verify Vertex credentials or permissions.
+Existing Vertex rows without `liveModels` use the same static default. Explicit `liveModels: true`
+retains the operator's live-discovery choice and uses the generic discovery endpoint.
 
 - **Location denials are permission errors, not invalid requests.** Google rejects unsupported
   geographic or datacenter locations with HTTP 400 `FAILED_PRECONDITION: User location is not

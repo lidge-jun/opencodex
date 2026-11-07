@@ -114,6 +114,11 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 /** Bind the environment values used by Vertex to the routed request for send-time checks. */
 function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConfig {
   if (provider.adapter !== "google" || provider.googleMode !== "vertex") return provider;
+  const reference = provider._apiKeyAttempt?.reference;
+  if (reference && (reference.startsWith("keychain:") || reference.startsWith("$"))
+    && (!provider.apiKey?.trim() || provider.apiKey === "N/A" || provider.apiKey.startsWith("<") || reference === "keychain:")) {
+    throw new Error("Vertex API key reference could not be resolved");
+  }
   const marker = provider.apiKey?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) === true;
   const configuredKey = provider.apiKey && !provider.apiKey.startsWith("<") && provider.apiKey !== "N/A" ? provider.apiKey : undefined;
   captureVertexEnvironmentKey(provider._apiKeyAttempt, provider);

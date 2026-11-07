@@ -1223,6 +1223,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       if (provider.googleMode === "vertex") {
+        if (provider.authMode === "forward") throw new Error("Vertex does not support forward authentication");
         const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;

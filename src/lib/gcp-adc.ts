@@ -118,7 +118,8 @@ interface TokenResponse {
 
 const tokenCache = new Map<string, CachedToken>();
 type VertexTokenAuthority = { token: string; source: string; generation: number; markerAccount?: string };
-type InflightToken = { controller: AbortController; promise: Promise<VertexTokenAuthority>; waiters: number; settled: boolean };
+type TokenWaiter = { beforeSend?: () => void };
+type InflightToken = { controller: AbortController; promise: Promise<VertexTokenAuthority>; waiters: Set<TokenWaiter>; settled: boolean };
 const inflight = new Map<string, InflightToken>();
 const sourceObservations = new Map<string, { source: string; generation: number }>();
 let sourceEpoch = 0;
@@ -429,14 +430,19 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
   let entry = inflight.get(cacheKey);
   if (!entry) {
     const controller = new AbortController();
-    entry = { controller, waiters: 0, settled: false, promise: undefined as unknown as Promise<VertexTokenAuthority> };
+    entry = { controller, waiters: new Set(), settled: false, promise: undefined as unknown as Promise<VertexTokenAuthority> };
     const owned = entry;
     const beforeSend = () => {
       const current = observeAdcSource(markerAccount);
       if (current.source !== expected.source || current.generation !== expected.generation) throw new Error("Vertex ADC source changed before token exchange");
-      options?.beforeSend?.();
+      let failure: unknown;
+      for (const waiter of owned.waiters) {
+        try { waiter.beforeSend?.(); return; }
+        catch (error) { failure = error; }
+      }
+      throw failure ?? new Error("Vertex token exchange has no authorized waiter");
     };
-    owned.promise = (async () => {
+    owned.promise = Promise.resolve().then(async () => {
     try {
       const { source, token } = await resolveAccessTokenUncached(markerAccount, controller.signal, fetchImpl, beforeSend);
       const current = observeAdcSource(markerAccount);
@@ -453,19 +459,20 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
       owned.settled = true;
       if (inflight.get(cacheKey) === owned) inflight.delete(cacheKey);
     }
-    })();
+    });
     inflight.set(cacheKey, owned);
   }
   const owned = entry;
-  owned.waiters++;
+  const waiter: TokenWaiter = { beforeSend: options?.beforeSend };
+  owned.waiters.add(waiter);
   return new Promise<VertexTokenAuthority>((resolve, reject) => {
     let finished = false;
     const finish = () => {
       if (finished) return false;
       finished = true;
       options?.signal?.removeEventListener("abort", onAbort);
-      owned.waiters--;
-      if (owned.waiters === 0 && !owned.settled) {
+      owned.waiters.delete(waiter);
+      if (owned.waiters.size === 0 && !owned.settled) {
         if (inflight.get(cacheKey) === owned) inflight.delete(cacheKey);
         owned.controller.abort();
       }
@@ -473,7 +480,10 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
     };
     const onAbort = () => { if (finish()) reject(options?.signal?.reason ?? new Error("Google OAuth token exchange aborted")); };
     options?.signal?.addEventListener("abort", onAbort, { once: true });
-    owned.promise.then(value => { if (finish()) resolve(value); }, error => { if (finish()) reject(error); });
+    owned.promise.then(value => {
+      if (!finish()) return;
+      try { waiter.beforeSend?.(); resolve(value); } catch (error) { reject(error); }
+    }, error => { if (finish()) reject(error); });
   });
 }
 

@@ -26,6 +26,7 @@ function vertexProvider(name: string): OcxConfig {
         googleMode: "vertex",
         baseUrl: "https://aiplatform.googleapis.com",
         apiKey: "test-key",
+        liveModels: true,
         models: ["publisher-model-a"],
       },
     },
@@ -39,6 +40,17 @@ describe("Vertex catalog configuration", () => {
     const config: OcxConfig = { providers: { "renamed-vertex": {
       adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com",
       defaultModel: "gemini-3-pro", liveModels: false,
+    } } };
+    const rows = await gatherRoutedModels(config);
+    expect(rows).toContainEqual(expect.objectContaining({ provider: "renamed-vertex", id: "gemini-3-pro" }));
+    expect(sends).toBe(0);
+  });
+
+  test("a legacy Vertex provider without liveModels uses its configured catalog without probing", async () => {
+    let sends = 0;
+    globalThis.fetch = (() => { sends++; throw new Error("unexpected network request"); }) as typeof fetch;
+    const config: OcxConfig = { providers: { "renamed-vertex": {
+      adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com", defaultModel: "gemini-3-pro",
     } } };
     const rows = await gatherRoutedModels(config);
     expect(rows).toContainEqual(expect.objectContaining({ provider: "renamed-vertex", id: "gemini-3-pro" }));
