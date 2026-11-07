@@ -213,11 +213,7 @@ function useAccountSelectionEvents(
   return useCallback(() => recoverRef.current(), []);
 }
 
-export default function Providers(props: { apiBase: string }) {
-  return <ProvidersPage key={props.apiBase} {...props} />;
-}
-
-function ProvidersPage({ apiBase }: { apiBase: string }) {
+export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
   const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
   const [config, setConfig] = useState<ProvidersConfig | null>(
@@ -342,7 +338,7 @@ function ProvidersPage({ apiBase }: { apiBase: string }) {
    * is silent while every real mutation path still forces a re-read.
    */
   const { quotaRefresh, invalidateProviderQuotas, settleQuotaRefresh, beginQuotaRefresh } = useQuotaRefreshCoordinator(apiBase);
-  const { fetchConfig: refreshConfigResult, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
+  const { fetchConfig: refreshConfigResult, fetchOauth, fetchProviderQuotas, invalidateOauthStatusReads } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
@@ -483,7 +479,7 @@ function ProvidersPage({ apiBase }: { apiBase: string }) {
 
   const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
-    setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
+    setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
     onLoginSettled: onProviderLoginSettled,
   });

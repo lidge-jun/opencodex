@@ -20,6 +20,7 @@ export function useProvidersOAuth({
   setStatus,
   setLoginInfo,
   setOauthStatus,
+  invalidateOauthStatusReads,
   notify,
   fetchConfig,
   fetchOauth,
@@ -37,6 +38,7 @@ export function useProvidersOAuth({
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
+  invalidateOauthStatusReads?: (provider: string) => boolean;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
@@ -168,6 +170,7 @@ export function useProvidersOAuth({
         if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         if (!s) continue;
         if (s.error) {
+          if (invalidateOauthStatusReads?.(provider) === false) return;
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           const cancelled = /cancel/i.test(s.error);
           notify(
@@ -185,6 +188,7 @@ export function useProvidersOAuth({
           ? (statusCount > baselineCount || s.done === true)
           : (s.loggedIn || s.done === true);
         if (completed) {
+          if (invalidateOauthStatusReads?.(provider) === false) return;
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           const target = reauthTargetId
             ? s.accounts?.find(a => a.id === reauthTargetId)

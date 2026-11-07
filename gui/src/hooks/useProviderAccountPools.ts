@@ -127,6 +127,8 @@ export function useProviderAccountPools(deps: {
     apiBase, t, config, aliveRef, notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   } = deps;
+  const accountTarget = useMemo(() => ({ apiBase }), [apiBase]);
+  const [accountStateTarget, setAccountStateTarget] = useState(accountTarget);
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
   const [accountLoadStates, setAccountLoadStates] = useState<Record<string, AccountLoadState>>({});
   const [switchingAccounts, setSwitchingAccounts] = useState<Record<string, { provider: string; accountId: string }>>({});
@@ -167,6 +169,7 @@ export function useProviderAccountPools(deps: {
       setSwitchingAccounts({});
       setKeyPools({});
       setAccountLoadStates({});
+      setAccountStateTarget(accountTarget);
     });
     return () => {
       mountedRef.current = false;
@@ -179,7 +182,7 @@ export function useProviderAccountPools(deps: {
       for (const controller of requests) controller.abort();
       requests.clear();
     };
-  }, [apiBase]);
+  }, [apiBase, accountTarget]);
   // Provider lists this instance has already fetched for. The deferred loads below are deliberately
   // uncancellable, and StrictMode double-invokes their effects, so dedupe by list identity here.
   const accountSetsKeyRef = useRef<string | null>(null);
@@ -879,7 +882,7 @@ export function useProviderAccountPools(deps: {
   );
 
   return {
-    accountSets, accountLoadStates, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
+    accountSets, accountLoadStates: accountStateTarget === accountTarget ? accountLoadStates : {}, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
     fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,

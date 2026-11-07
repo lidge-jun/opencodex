@@ -330,6 +330,36 @@ describe("first-response progression states on ProviderOverview", () => {
 });
 
 describe("ProviderDetails raw ID disambiguation and Providers page integration", () => {
+  test("changing API targets does not unmount an unsaved Settings draft", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path.startsWith("/new/")) return new Promise<Response>(() => {});
+      if (path === "/old/api/config") return Response.json({ port: 0, defaultProvider: "my-provider", providers: {
+        "my-provider": { adapter: "openai-chat", baseUrl: "https://example.test/v1", hasApiKey: true },
+      } });
+      if (path === "/old/api/providers") return Response.json([{ name: "my-provider", adapter: "openai-chat", baseUrl: "https://example.test/v1", hasApiKey: true }]);
+      if (path === "/old/api/oauth/providers" || path === "/old/api/provider-presets") return Response.json({ providers: [] });
+      if (path === "/old/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/old/api/models") return Response.json([]);
+      if (path === "/old/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/old/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/old/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    await render(<Providers apiBase="/old" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
+    const input = [...host.querySelectorAll<HTMLInputElement>("input")].find(element => element.value === "https://example.test/v1")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, "https://draft.example.test/v1");
+      input.dispatchEvent(new win.Event("input", { bubbles: true }));
+    });
+    expect(host.textContent).toContain("unsaved changes");
+    await render(<Providers apiBase="/new" />);
+    expect([...host.querySelectorAll<HTMLInputElement>("input")].some(element => element.value === "https://draft.example.test/v1")).toBe(true);
+    expect(host.textContent).toContain("unsaved changes");
+  });
   test("switching API targets never paints the previous server's account", async () => {
     let firstNewPaint = "";
     function Inspect({ apiBase }: { apiBase: string }) {
