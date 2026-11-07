@@ -290,7 +290,7 @@ intended account and workload.
 
 See the [Configuration reference](/reference/configuration/server/#sidecars) for every field.
 
-Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message.
+Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message. A repeated full-text completion for the same output part replaces its previous snapshot instead of duplicating the answer; distinct output parts remain separate.
 
 The OpenAI search and vision sidecars accept CR, LF and CRLF line endings, including mixed endings and CRLF split across network chunks. They read a final completion or failure event even when the server closes the body without a trailing newline. An unfinished response or one stopped by a size limit still reports an error.
 

@@ -1,7 +1,57 @@
 import { describe, expect, test } from "bun:test";
-import { parseSidecarSSE } from "../../src/web-search/parse";
+import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search/parse";
 
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
+
+describe("sidecar text-done snapshots", () => {
+  for (const indexed of [false, true]) {
+    test(`repeated ${indexed ? "indexed" : "unindexed"} done text is not appended twice`, async () => {
+      const indexes = indexed ? { output_index: 0, content_index: 0 } : {};
+      const done = { type: "response.output_text.done", ...indexes, text: "Final answer 😀" };
+      expect(await parseSidecarSSE(response([done, done, { type: "response.completed" }])))
+        .toEqual({ text: "Final answer 😀", sources: [] });
+    });
+  }
+
+  test("the last full snapshot replaces earlier text for the same part", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "First version" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "Final version" },
+      { type: "response.output_text.done", output_index: 0, content_index: 1, text: " Other part." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "Final version Other part.", sources: [] });
+  });
+
+  test("distinct parts with identical done text remain distinct", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "Same." },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "Same." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "Same.Same.", sources: [] });
+  });
+
+  test("partial completed output falls back to the last snapshot of its missing part", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "Old" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "Final" },
+      { type: "response.completed", response: { output: [
+        null, { type: "message", content: [{ type: "output_text", text: " second" }] },
+      ] } },
+    ]));
+    expect(result).toEqual({ text: "Final second", sources: [] });
+  });
+
+  test("repeated full snapshots still consume the decoded payload budget", async () => {
+    const done = { type: "response.output_text.done", output_index: 0, content_index: 0,
+      text: "x".repeat(Math.floor(MAX_SIDECAR_DECODED_CHARS / 2) + 1) };
+    const result = await parseSidecarSSE(response([done, done, { type: "response.completed" }]));
+    expect(result.error).toBe("sidecar response decoded text limit reached");
+  });
+});
+
 describe("search SSE field shapes", () => {
   test.each([7, {}, [], true])("ignores a non-string event type: %j", async type => {
     const result = await parseSidecarSSE(response([{ type }, { type: "response.output_text.delta", delta: "kept" }, { type: "response.completed" }]));
