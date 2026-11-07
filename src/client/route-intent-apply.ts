@@ -65,7 +65,11 @@ async function applyNative(
     guard();
     if (!existsSync(getCodexHome())) return { client, target, outcome: intent.enabled ? "not_installed" : "current" };
     if (intent.enabled && options.codexApplied) return { client, target, outcome: "current" };
-    if (currentExternalCodexModelProvider()) return { client, target, outcome: intent.enabled ? "conflict" : "current", message: "Codex has an external provider" };
+    const externalProvider = currentExternalCodexModelProvider();
+    if (externalProvider) {
+      const { approvedCodexProviders } = await import("../codex/provider-routing");
+      if (!approvedCodexProviders().includes(externalProvider)) return { client, target, outcome: intent.enabled ? "conflict" : "current", message: "Codex has an external provider" };
+    }
     if (!intent.enabled && !isCodexRoutingInjected()) return { client, target, outcome: "current" };
     const config = committedConfig;
     if (!intent.enabled) {
@@ -116,42 +120,60 @@ async function applyNative(
   const inspected = desktop.inspectDesktop3pConfigLibrary({ appliedFingerprint: input.config.claudeCode?.desktopProfile?.appliedFingerprint });
   const target = inspected.selectedProfilePath ?? inspected.libraryPath;
   if (inspected.kind === "not_installed") return { client, target, outcome: intent.enabled ? "not_installed" : "current" };
-  if (!intent.enabled && inspected.kind === "no_owned_state") return { client, target, outcome: "current" };
-  if (["unsafe", "broken", "gateway_drifted"].includes(inspected.kind)
-    && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };
   const state = readClientConnectionState();
+  // Connected profiles carry their own owner/projection evidence, not the standalone marker.
+  if (!intent.enabled && state.kind === "connected") {
+    guard();
+    const result = desktop.removeDesktop3pStandardPivot({ lifecycleLockDeps: options.lifecycleLockDeps });
+    return { client, target, outcome: result.ok ? "current" : result.reason === "conflict" ? "conflict" : "failed" };
+  }
+  const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../claude/desktop-first-party");
+  const firstParty = (config: OcxConfig) => resolveClaudeDesktopMode(config, observeClaudeDesktopMode(config)) === "first-party";
+  const modeConflict: RouteClientOutcome = { client, target, outcome: "conflict", message: "Claude Desktop first-party mode needs its existing mode-switch transaction" };
   if (intent.enabled && state.kind === "connected") {
     const { applyRemoteDesktopStore } = await import("../claude/desktop-remote-store");
     const { readServiceApiTokenState } = await import("../lib/service-secrets");
     const models = desktop.generateDesktop3pModels(input.models.filter(model => model.native).map(model => model.id),
       input.models.filter(model => !model.native).map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })));
-    return withClientLifecycleSync(held => {
+    return withClientLifecycleSync(held => withConfigMutationLockSync(() => {
       guard();
+      if (firstParty(loadConfig())) return modeConflict;
       const token = readServiceApiTokenState();
       if (token.kind !== "present") return { client, target, outcome: "failed", message: "Child service credential is unavailable" };
       const result = applyRemoteDesktopStore(held, {
         owner: { serverUrl: state.value.serverUrl, apiKeyId: state.value.apiKeyId, connectedAt: state.value.connectedAt },
         expectedTokenFingerprint: token.fingerprint, baseUrl: `http://127.0.0.1:${input.config.port}`,
-        apiKey: "opencodex-loopback", mode: "static", models, localListener: true,
+        apiKey: "opencodex-loopback", mode: "static", models, localListener: true, overwriteConflict: options.overwriteConflict,
       });
       return { client, target: result.ok ? result.path ?? target : target, outcome: result.ok ? "current" : result.reason === "conflict" ? "conflict" : "failed" };
-    }, options.lifecycleLockDeps);
+    }), options.lifecycleLockDeps);
   }
-  if (input.config.claudeCode?.desktopMode === "first-party") return { client, target, outcome: "conflict", message: "Claude Desktop first-party mode needs its existing mode-switch transaction" };
-  const config = committedConfig;
-  guard();
-    if (!intent.enabled) {
-      const result = desktop.removeDesktop3pStandardPivot({ appliedFingerprint: config.claudeCode?.desktopProfile?.appliedFingerprint });
-      return { client, target, outcome: result.ok ? "current" : "failed" };
-    }
+  if (!intent.enabled && inspected.kind === "no_owned_state") return { client, target, outcome: "current" };
+  if (["unsafe", "broken", "gateway_drifted"].includes(inspected.kind)
+    && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };
+  if (!intent.enabled) {
+    guard();
+    const result = desktop.removeDesktop3pStandardPivot({ appliedFingerprint: committedConfig.claudeCode?.desktopProfile?.appliedFingerprint, lifecycleLockDeps: options.lifecycleLockDeps });
+    return { client, target, outcome: result.ok ? "current" : "failed" };
+  }
+  const { getClaudePickerController } = await import("../claude/intercept/runtime");
+  const { runDesktopTransition } = await import("../claude/desktop-picker");
+  // Mode switches share picker exclusion in-process and L→C across CLI/server writers.
+  // Keep the file write and marker together, reusing the existing writer with this lease.
+  return runDesktopTransition<RouteClientOutcome>(getClaudePickerController(), async () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+    guard();
+    const config = loadConfig();
+    if (firstParty(config)) return modeConflict;
     const result = desktop.writeDesktop3pConfig(input.config.port,
       input.models.filter(model => model.native).map(model => model.id),
       input.models.filter(model => !model.native).map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })),
-      undefined, "static", config.claudeCode?.desktopProfile);
+      undefined, "static", config.claudeCode?.desktopProfile, undefined, options.lifecycleLockDeps, undefined, held);
     if (!result.written) return { client, target, outcome: "failed", message: result.reason ?? "Claude Desktop writer refused" };
     guard();
-    const recorded = persistCommittedDesktopGateway(config, config.claudeCode?.desktopProfile, result.fingerprint);
+    if (firstParty(loadConfig())) return modeConflict;
+    const recorded = persistCommittedDesktopGateway(config, config.claudeCode?.desktopProfile, result.fingerprint, current => !firstParty(current));
     return { client, target, outcome: recorded.ok ? "current" : "failed" };
+  }), options.lifecycleLockDeps), { config: committedConfig });
 }
 
 export function materializeLocalRouteIntent(

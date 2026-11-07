@@ -83,6 +83,8 @@ export function applyRemoteDesktopStore(held: ClientLifecycleHeld, options: {
   baseUrl: string; apiKey: string; mode: Desktop3pConfigMode; models: Desktop3pModelEntry[];
   /** Link-only local materialization: exact Child listener and a non-secret placeholder. */
   localListener?: boolean;
+  /** One operation's consent to replace edited fields of this already-owned profile. */
+  overwriteConflict?: boolean;
 }): DesktopStoreResult {
   return mutation(held, io => {
     const { config, client } = currentConnection(options.owner);
@@ -104,7 +106,7 @@ export function applyRemoteDesktopStore(held: ClientLifecycleHeld, options: {
       inferenceGatewayApiKey: options.apiKey, modelDiscoveryEnabled: options.mode !== "static",
       ...(options.mode === "discovery" ? {} : { inferenceModels: options.models }),
     };
-    artifact(io, bundle, value, "apply", token.fingerprint, bundle.state!.targetId);
+    artifact(io, bundle, value, "apply", token.fingerprint, bundle.state!.targetId, options.overwriteConflict);
     cleanBackup(io, bundle, [token.fingerprint, ...serviceGenerations()]);
     return success(io, bundle, "applied");
   });
