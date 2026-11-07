@@ -10,7 +10,7 @@ export type PassiveKeyLimit = {
   resetAt?: number;
 };
 export type PassiveKeyLimitReading = PassiveKeyLimit & { stale: boolean };
-export type PassiveKeyIdentity = { owner: string; provider: PassiveKeyProvider; model: string };
+export type PassiveKeyIdentity = { owner: string; provider: PassiveKeyProvider; model: string; namespace?: string };
 
 const PROVIDERS: readonly string[] = ["openai", "xai", "groq", "anthropic", "mistral"];
 const MAX_COUNT = 1_000_000_000_000;
@@ -90,7 +90,7 @@ export function parsePassiveKeyLimits(provider: PassiveKeyProvider, headers: Hea
   return result;
 }
 
-type Entry = { sequence: number; rows: PassiveKeyLimit[]; timer?: ReturnType<typeof setTimeout> };
+type Entry = { sequence: number; rows: PassiveKeyLimit[]; namespace?: string; timer?: ReturnType<typeof setTimeout> };
 
 /** In-memory only. Callers supply opaque owner IDs and globally increasing send sequences. */
 export class PassiveKeyLimitCache {
@@ -107,14 +107,17 @@ export class PassiveKeyLimitCache {
     }
   }
 
-  clear(): void {
-    for (const entry of this.entries.values()) if (entry.timer) clearTimeout(entry.timer);
-    this.entries.clear();
+  clear(namespace?: string): void {
+    for (const [key, entry] of this.entries) {
+      if (namespace !== undefined && entry.namespace !== namespace) continue;
+      if (entry.timer) clearTimeout(entry.timer);
+      this.entries.delete(key);
+    }
   }
 
   private key(identity: PassiveKeyIdentity): string | undefined {
     if (!identity || typeof identity.owner !== "string" || identity.owner.length < 1 || identity.owner.length > 256
-      || !PROVIDERS.includes(identity.provider) || typeof identity.model !== "string"
+      || !PROVIDERS.includes(identity.provider) || (identity.namespace !== undefined && (typeof identity.namespace !== "string" || identity.namespace.length > 128)) || typeof identity.model !== "string"
       || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(identity.model)) return undefined;
     const ownerHash = new Bun.CryptoHasher("sha256").update(identity.owner).digest("hex");
     return JSON.stringify([ownerHash, identity.provider, identity.model]);
@@ -130,12 +133,12 @@ export class PassiveKeyLimitCache {
     if (!rows.length) {
       this.entries.delete(key);
       if (current) current.sequence = sequence;
-      this.entries.set(key, current ?? { sequence, rows: [] });
+      this.entries.set(key, current ?? { sequence, rows: [], namespace: identity.namespace });
       this.evictOverflow();
       return false;
     }
     if (current?.timer) clearTimeout(current.timer);
-    const entry: Entry = { sequence, rows };
+    const entry: Entry = { sequence, rows, namespace: identity.namespace };
     entry.timer = setTimeout(() => { entry.rows = []; entry.timer = undefined; }, this.retentionMs);
     entry.timer.unref();
     this.entries.delete(key);

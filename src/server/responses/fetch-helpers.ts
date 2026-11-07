@@ -19,6 +19,7 @@ import {
 } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import { providerTlsFetch } from "../../lib/provider-tls-profile";
+import { isPassiveKeyTransparent, markPassiveKeyTransparent } from "../../lib/passive-key-fetch-proof";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
@@ -327,6 +328,7 @@ export function providerFetch(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => configuredOutboundFetch(input, init),
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
+  markPassiveKeyTransparent(configuredFetch);
   const base = customExecutor ?? configuredFetch;
   const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
@@ -347,6 +349,7 @@ export function providerFetch(
       sendWithConnectionPolicy(transport, input, init, egressBinding),
     { preconnect },
   ) as typeof globalThis.fetch);
+  if (isPassiveKeyTransparent(transport)) markPassiveKeyTransparent(dispatch);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
       reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,

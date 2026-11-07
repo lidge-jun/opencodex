@@ -145,6 +145,18 @@ test("a passive-only response keeps each model for the same account visible", as
   expect(view.host.textContent).not.toContain("opaque");
 });
 
+test("Groq daily request and minute token windows retain their distinct periods", async () => {
+  const view = await mount("", 0, [], [{ provider: "groq", keyId: "opaque", model: "a", windows: [
+    { dimension: "requests", window: "day", observedAt: now, remaining: 5, limit: 10, stale: false },
+    { dimension: "tokens", window: "minute", observedAt: now, remaining: 6, limit: 20, stale: false },
+  ] }], true);
+  const chip = view.host.querySelector('a[href="#providers?provider=groq&tab=accounts"]');
+  expect(chip?.textContent).toContain("day");
+  expect(chip?.textContent).toContain("5 / 10");
+  expect(chip?.textContent).toContain("minute");
+  expect(chip?.textContent).toContain("6 / 20");
+});
+
 test("malformed passive readings do not render or invent counts", async () => {
   const view = await mount("meta-muse:usage-frame", 42, [], [
     null, { provider: "mistral", keyId: "x", model: "m", windows: "bad" },

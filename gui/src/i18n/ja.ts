@@ -4258,6 +4258,7 @@ export const ja: Record<TKey, string> = {
   "quotaSummary.scrollNext": "プロバイダーを右へスクロール",
   "quotaSummary.account": "観測されたキー {n}",
   "quotaSummary.perMinute": "毎分",
+  "quotaSummary.perDay": "毎日",
   "quotaSummary.perMonth": "毎月",
   "quotaSummary.remainingLimit": "残り / 上限",
   "quotaSummary.openAccounts": "アカウント管理を開く",

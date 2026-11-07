@@ -106,6 +106,28 @@ test("compact sends record the physical OpenAI key's limits", async () => {
   } finally { release(); }
 });
 
+for (const fixture of [
+  { name: "xai", baseUrl: "https://api.x.ai/v1", model: "grok-test", header: "x-ratelimit-remaining-tokens" },
+  { name: "mistral", baseUrl: "https://api.mistral.ai/v1", model: "mistral-test", header: "x-ratelimit-remaining-tokens-minute" },
+] as const) {
+  test(`${fixture.name} records limit headers through its built-in transport`, async () => {
+    const config = getDefaultConfig();
+    config.defaultProvider = fixture.name;
+    config.defaultModel = fixture.model;
+    config.providers = { [fixture.name]: { adapter: "openai-chat", baseUrl: fixture.baseUrl,
+      authMode: "key", apiKey: "synthetic-transport-key", models: [fixture.model], liveModels: false } };
+    globalThis.fetch = (async () => Response.json({ id: "synthetic", object: "chat.completion", model: fixture.model,
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] },
+    { headers: { [fixture.header]: "23" } })) as typeof fetch;
+    const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: `${fixture.name}/${fixture.model}`, input: "hi", stream: false, store: false }) });
+    const response = await handleResponses(request, config, { provider: "", model: "" }, {});
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(observations.getPassiveKeyLimits(config, fixture.name, fixture.model)).toMatchObject([{ dimension: "tokens", remaining: 23 }]);
+  });
+}
+
 test("an in-flight response stays attributed to its key after another key becomes active", async () => {
   const config = getDefaultConfig();
   config.defaultProvider = "rotating-fixture";

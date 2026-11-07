@@ -56,7 +56,7 @@ function severityText(severity: QuotaSummarySeverity, t: TFn): string {
 
 function passiveLabel(window: PassiveQuotaWindow, t: TFn): string {
   const dimension = t(passiveDimensionKeys[window.dimension]);
-  return window.window ? `${dimension} · ${t(window.window === "minute" ? "quotaSummary.perMinute" : "quotaSummary.perMonth")}` : dimension;
+  return window.window ? `${dimension} · ${t(window.window === "minute" ? "quotaSummary.perMinute" : window.window === "day" ? "quotaSummary.perDay" : "quotaSummary.perMonth")}` : dimension;
 }
 
 function passiveCounts(window: PassiveQuotaWindow, t: TFn, locale: Locale): string {
@@ -229,8 +229,8 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         onClick={onClick}
       >
         <span className="quota-summary-name">{row.label}</span>
-        {row.passive ? row.passive.windows.map((window, index) => (
-          <span key={index} className="quota-summary-pct" title={t("quotaSummary.remainingLimit")}>{passiveLabel(window, t)}: {passiveCounts(window, t, locale)}{isPassiveStale(window, currentTime) ? ` · ${t("startup.stale")}` : ""}<span className="sr-only">{t("quotaSummary.remainingLimit")}</span></span>
+        {row.passive ? row.passive.windows.map(window => (
+          <span key={`${window.dimension}:${window.window ?? ""}`} className="quota-summary-pct" title={t("quotaSummary.remainingLimit")}>{passiveLabel(window, t)}: {passiveCounts(window, t, locale)}{isPassiveStale(window, currentTime) ? ` · ${t("startup.stale")}` : ""}<span className="sr-only">{t("quotaSummary.remainingLimit")}</span></span>
         )) : row.showAllWindows ? row.windows.map(window => (
           <span key={window.id} className={`quota-summary-pct quota-summary-pct--${window.severity}`} title={windowLabel(window, t)}>
             {windowLabel(window, t).split(" (")[0]}: {formatQuotaPercent(window.percent)}
@@ -253,8 +253,8 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
           </div>
           <table id={`${popoverId}-table`} className={`quota-summary-table${row.passive ? " quota-summary-table--passive" : ""}`}>
             <tbody>
-              {row.passive ? row.passive.windows.map((window, index) => (
-                <tr key={index}>
+              {row.passive ? row.passive.windows.map(window => (
+                <tr key={`${window.dimension}:${window.window ?? ""}`}>
                   <th scope="row">{passiveLabel(window, t)}</th>
                   <td className="quota-summary-row-pct">{passiveCounts(window, t, locale)}</td>
                   <td className="quota-summary-row-reset">
@@ -401,7 +401,7 @@ export default function QuotaSummaryBar({ apiBase }: { apiBase: string }) {
     `ocx.quota-summary.provider-quotas.v1:${apiBase}`,
     [apiBase],
     load,
-    { isEmpty: data => Object.keys(data.reports).length === 0 && data.passive.length === 0, pollMs: POLL_MS, pauseWhenHidden: true },
+    { isEmpty: data => Object.keys(data.reports).length === 0 && (data.passive?.length ?? 0) === 0, pollMs: POLL_MS, pauseWhenHidden: true },
   );
 
   const data = resource.data;

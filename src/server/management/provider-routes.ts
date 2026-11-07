@@ -74,7 +74,7 @@ import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studi
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
-import { listPassiveKeyLimits } from "../../providers/passive-key-observation";
+import { clearPassiveKeyLimits, listPassiveKeyLimits } from "../../providers/passive-key-observation";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { probeJevDecisionProvider } from "../../combos/jev";
@@ -1009,6 +1009,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (sourceChanged || currentDiskConfig === null) {
       return jsonResponse({ error: "provider reload source changed" }, 409);
     }
+    clearPassiveKeyLimits(name);
     reconcileLiveStateStores();
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
@@ -1116,6 +1117,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     cleanupRemovedGcpCredentials(removedCredentials);
     adoptProviderEditorCandidate(config, outcome.value.config);
+    clearPassiveKeyLimits();
     reconcileLiveStateStores();
     refreshConfigDerivedRegistries(outcome.value.config);
     clearGatherRoutedModelsInflight();
@@ -1395,6 +1397,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
     });
     if (validationError !== undefined) return jsonResponse({ error: validationError }, 400);
+    clearPassiveKeyLimits(name);
     cleanupRemovedGcpCredentials(removedCredentials);
     reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
@@ -1591,6 +1594,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
+    clearPassiveKeyLimits(name);
     reconcileLiveStateStores();
     if (applied.editorTouched && !pacingOnly) {
       const { clearModelCache } = await import("../../codex/model-cache");

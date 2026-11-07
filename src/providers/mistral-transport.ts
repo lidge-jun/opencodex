@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { isPassiveKeyTransparent, markPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { waitOutsideProviderHeaderDeadline } from "../lib/provider-admission-wait";
 import { markSameTargetRetryHold, sleepWithAbort } from "../lib/upstream-retry";
@@ -198,6 +199,7 @@ export function resolveMistralTransport(
   if (!isCanonicalMistralChat(provider) || (provider.fetch && wrapped.has(provider.fetch))) return provider;
   const baseFetch = provider.fetch
     ?? markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof globalThis.fetch);
+  if (!provider.fetch) markPassiveKeyTransparent(baseFetch);
   const attemptFetch = (async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin !== "https://api.mistral.ai" || url.pathname !== "/v1/chat/completions"
@@ -235,6 +237,7 @@ export function resolveMistralTransport(
     return response;
   }) as typeof globalThis.fetch;
   if (isEgressTransparentExecutor(baseFetch)) markEgressTransparentExecutor(attemptFetch);
+  if (isPassiveKeyTransparent(baseFetch)) markPassiveKeyTransparent(attemptFetch);
   wrapped.add(attemptFetch);
   return { ...provider, fetch: attemptFetch };
 }

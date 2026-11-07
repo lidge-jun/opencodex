@@ -1,5 +1,6 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
 import { resolveProviderApiKey } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 
@@ -14,12 +15,23 @@ const paths: Record<PassiveKeyProvider, readonly string[]> = {
 };
 let sequence = 0;
 let epoch = 0;
+const generations = new Map<string, object>();
 const seenResponses = new WeakSet<Response>();
 
 /** Invalidate both stored and in-flight observations after key-store mutation. */
-export function clearPassiveKeyLimits(): void {
-  epoch++;
-  passiveKeyLimits.clear();
+export function clearPassiveKeyLimits(name?: string): void {
+  if (name === undefined) { epoch++; generations.clear(); }
+  else generations.delete(name);
+  passiveKeyLimits.clear(name);
+}
+
+function generationFor(name: string): object {
+  let generation = generations.get(name);
+  if (!generation) {
+    if (generations.size >= 512) generations.delete(generations.keys().next().value!);
+    generations.set(name, generation = {});
+  }
+  return generation;
 }
 
 function keyId(reference: string): string {
@@ -59,7 +71,7 @@ function wireModel(body: BodyInit | null | undefined): string | undefined {
 export function passiveKeyPhysicalFetch(
   physicalFetch: typeof globalThis.fetch, config: OcxConfig, name: string, provider: OcxProviderConfig,
 ): typeof globalThis.fetch {
-  if ((provider.authMode !== undefined && provider.authMode !== "key") || !provider.apiKey || !provider._apiKeyAttempt?.reference) return physicalFetch;
+  if (!isPassiveKeyTransparent(physicalFetch) || (provider.authMode !== undefined && provider.authMode !== "key") || !provider.apiKey || !provider._apiKeyAttempt?.reference) return physicalFetch;
   const snapshot = { ...provider, _apiKeyAttempt: { ...provider._apiKeyAttempt } };
   const wrapped = (async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -82,13 +94,14 @@ export function passiveKeyPhysicalFetch(
     } catch { /* An unprovable owner cannot receive a passive observation. */ }
     const attempt = ++sequence;
     const generation = epoch;
+    const providerGeneration = generationFor(name);
     const response = await physicalFetch(input, init);
     const reused = seenResponses.has(response);
     seenResponses.add(response);
     try {
-      if (owned && vendor && model && !reused && generation === epoch && stillConfigured(config, name, snapshot)) {
+      if (owned && vendor && model && !reused && generation === epoch && generations.get(name) === providerGeneration && stillConfigured(config, name, snapshot)) {
         const reference = snapshot._apiKeyAttempt!.reference!;
-        passiveKeyLimits.record({ owner: identity(name, snapshot, snapshot._apiKeyAttempt!.entryId ?? keyId(reference), reference, key), provider: vendor, model }, response.headers, Date.now(), attempt);
+        passiveKeyLimits.record({ owner: identity(name, snapshot, snapshot._apiKeyAttempt!.entryId ?? keyId(reference), reference, key), provider: vendor, model, namespace: name }, response.headers, Date.now(), attempt);
       }
     } catch { /* Passive display evidence must not fail the proxied response. */ }
     return response;

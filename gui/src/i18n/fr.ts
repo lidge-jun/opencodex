@@ -4225,6 +4225,7 @@ export const fr: Record<TKey, string> = {
   "quotaSummary.scrollNext": "Faire défiler les fournisseurs vers la droite",
   "quotaSummary.account": "Clé observée {n}",
   "quotaSummary.perMinute": "par minute",
+  "quotaSummary.perDay": "par jour",
   "quotaSummary.perMonth": "par mois",
   "quotaSummary.remainingLimit": "Restant / limite",
   "quotaSummary.openAccounts": "Ouvrir la gestion des comptes",

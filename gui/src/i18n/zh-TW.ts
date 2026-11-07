@@ -4222,6 +4222,7 @@ export const zhTW: Record<TKey, string> = {
   "quotaSummary.scrollNext": "向右捲動供應商",
   "quotaSummary.account": "已觀察的金鑰 {n}",
   "quotaSummary.perMinute": "每分鐘",
+  "quotaSummary.perDay": "每日",
   "quotaSummary.perMonth": "每月",
   "quotaSummary.remainingLimit": "剩餘 / 限額",
   "quotaSummary.openAccounts": "開啟帳號管理",

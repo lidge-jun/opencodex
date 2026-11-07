@@ -4258,6 +4258,7 @@ export const ko: Record<TKey, string> = {
   "quotaSummary.scrollNext": "프로바이더 목록 오른쪽으로",
   "quotaSummary.account": "관찰된 키 {n}",
   "quotaSummary.perMinute": "분당",
+  "quotaSummary.perDay": "일당",
   "quotaSummary.perMonth": "월별",
   "quotaSummary.remainingLimit": "남은 수 / 한도",
   "quotaSummary.openAccounts": "계정 관리 열기",

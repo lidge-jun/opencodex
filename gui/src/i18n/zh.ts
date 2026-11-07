@@ -4257,6 +4257,7 @@ export const zh: Record<TKey, string> = {
   "quotaSummary.scrollNext": "向右滚动提供商",
   "quotaSummary.account": "已观察的密钥 {n}",
   "quotaSummary.perMinute": "每分钟",
+  "quotaSummary.perDay": "每天",
   "quotaSummary.perMonth": "每月",
   "quotaSummary.remainingLimit": "剩余 / 限额",
   "quotaSummary.openAccounts": "打开账号管理",

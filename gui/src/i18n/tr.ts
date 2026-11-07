@@ -4259,6 +4259,7 @@ export const tr: Record<TKey, string> = {
   "quotaSummary.scrollNext": "Sağlayıcıları sağa kaydır",
   "quotaSummary.account": "Gözlenen anahtar {n}",
   "quotaSummary.perMinute": "dakika başına",
+  "quotaSummary.perDay": "gün başına",
   "quotaSummary.perMonth": "ay başına",
   "quotaSummary.remainingLimit": "Kalan / limit",
   "quotaSummary.openAccounts": "Hesap yönetimini aç",

@@ -4228,6 +4228,7 @@ export const vi: Record<TKey, string> = {
   "quotaSummary.scrollNext": "Cuộn nhà cung cấp sang phải",
   "quotaSummary.account": "Khóa đã ghi nhận {n}",
   "quotaSummary.perMinute": "mỗi phút",
+  "quotaSummary.perDay": "mỗi ngày",
   "quotaSummary.perMonth": "mỗi tháng",
   "quotaSummary.remainingLimit": "Còn lại / giới hạn",
   "quotaSummary.openAccounts": "Mở quản lý tài khoản",

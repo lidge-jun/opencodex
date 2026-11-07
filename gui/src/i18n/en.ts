@@ -4270,6 +4270,7 @@ export const en = {
   "quotaSummary.scrollNext": "Scroll providers right",
   "quotaSummary.account": "Observed key {n}",
   "quotaSummary.perMinute": "per minute",
+  "quotaSummary.perDay": "per day",
   "quotaSummary.perMonth": "per month",
   "quotaSummary.remainingLimit": "Remaining / limit",
   "quotaSummary.openAccounts": "Open account management",

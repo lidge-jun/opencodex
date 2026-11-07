@@ -4259,6 +4259,7 @@ export const ru: Record<TKey, string> = {
   "quotaSummary.scrollNext": "Прокрутить провайдеров вправо",
   "quotaSummary.account": "Наблюдаемый ключ {n}",
   "quotaSummary.perMinute": "в минуту",
+  "quotaSummary.perDay": "в день",
   "quotaSummary.perMonth": "в месяц",
   "quotaSummary.remainingLimit": "Осталось / лимит",
   "quotaSummary.openAccounts": "Открыть управление аккаунтами",

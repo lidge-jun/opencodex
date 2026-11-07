@@ -2,7 +2,7 @@ import type { TKey } from "./i18n/en";
 
 export interface PassiveQuotaWindow {
   dimension: "requests" | "tokens" | "input-tokens" | "output-tokens";
-  window?: "minute" | "month";
+  window?: "minute" | "day" | "month";
   observedAt: number;
   remaining?: number;
   limit?: number;
@@ -38,10 +38,14 @@ export function parsePassiveQuotaRows(value: unknown): PassiveQuotaRow[] {
       || typeof item.keyId !== "string" || !item.keyId || item.keyId.length > 256
       || typeof item.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(item.model) || !Array.isArray(item.windows)) continue;
     const windows: PassiveQuotaWindow[] = [];
+    const kinds = new Set<string>();
     for (const raw of item.windows) {
       if (!record(raw) || typeof raw.dimension !== "string" || !Object.hasOwn(passiveDimensionKeys, raw.dimension)
-        || (raw.window !== undefined && raw.window !== "minute" && raw.window !== "month")
+        || (raw.window !== undefined && raw.window !== "minute" && raw.window !== "day" && raw.window !== "month")
         || !timestamp(raw.observedAt) || typeof raw.stale !== "boolean") continue;
+      const kind = `${raw.dimension}:${raw.window ?? ""}`;
+      if (kinds.has(kind)) continue;
+      kinds.add(kind);
       windows.push({ dimension: raw.dimension as PassiveQuotaWindow["dimension"],
         ...(raw.window ? { window: raw.window } : {}), observedAt: raw.observedAt, stale: raw.stale,
         ...(count(raw.remaining) ? { remaining: raw.remaining } : {}),
