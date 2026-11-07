@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "../lib/upstream-retry";
 import { redactSecretString } from "../lib/redact";
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 
 export const REQUEST_PACING_MAX_QUEUE_DEPTH = 256;
 export const REQUEST_PACING_MAX_QUEUE_AGE_MS = 60_000;
@@ -49,8 +50,8 @@ export class RequestPacingQueueOverloadError extends Error {
     public readonly retryAfterSeconds: number,
   ) {
     super(reason === "keys_exhausted" ? "No eligible API key remains; wait for the provider cooldown before retrying" : reason === "queue_full"
-      ? `request pacing queue for provider '${providerName}' is full`
-      : `request pacing queue for provider '${providerName}' exceeded the maximum queued age`);
+      ? `request pacing queue for provider '${errorDestinationText(providerErrorDestinationLabel(providerName))}' is full`
+      : `request pacing queue for provider '${errorDestinationText(providerErrorDestinationLabel(providerName))}' exceeded the maximum queued age`);
     this.name = "RequestPacingQueueOverloadError";
   }
 }

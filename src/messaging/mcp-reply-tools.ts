@@ -18,12 +18,12 @@ function entries(data: unknown, limit: number, turnId?: string): Entry[] {
     seen.add(row.item.id);
     if (row.item.type === "userMessage" && row.item.clientId != null && !validId(row.item.clientId)) throw new Error("invalid correlation");
     if (row.item.type === "agentMessage" && (typeof row.item.text !== "string"
-      || (row.item.phase !== null && !["commentary", "partial_answer", "final_answer"].includes(row.item.phase as string)))) throw new Error("invalid message");
+      || (row.item.phase != null && !["commentary", "partial_answer", "final_answer"].includes(row.item.phase as string)))) throw new Error("invalid message");
   }
   return data as Entry[];
 }
 
-/** A repeated or oversized continuation fails closed instead of restarting history or looping. */
+/** An immediately repeated or oversized continuation fails closed; longer cycles remain caller-owned. */
 function nextCursor(result: Record<string, unknown>, previous: string | null): string | null {
   const next = result.nextCursor;
   if (next !== null && (typeof next !== "string" || !next || next.length > 8192 || /[\x00-\x1f]/.test(next) || next === previous)) throw new Error("invalid cursor");

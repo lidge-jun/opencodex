@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Не удалось сохранить лимиты рабочих процессов.",
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
+  ...shellV2Copy("ru"),
+  ...modelsV2Copy("ru"),
+  ...accountsV2Copy("ru"),
+  ...subagentsV2Copy("ru"),
+  ...usageV2Copy("ru"),
+  ...logsV2Copy("ru"),
+  ...connectV2Copy("ru"),
+  ...startupV2Copy("ru"),
+  ...proxyV2Copy("ru"),
   "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
   "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
   "claude.tierDefaults.title": "Модели CLI по умолчанию",
@@ -1347,6 +1365,35 @@ export const ru: Record<TKey, string> = {
   "logs.detail.estimate.priority_lower_bound": "Подтверждённая цена Priority недоступна; показанная оценка является известной нижней границей.",
   "logs.col.error": "Ошибка",
   "logs.col.upstreamReason": "Причина от провайдера",
+  "logs.col.failureDetail": "Подробности сбоя",
+  "logs.detail.condition.authFailed": "Учётные данные отклонены",
+  "logs.detail.condition.accessDenied": "Доступ запрещён",
+  "logs.detail.condition.contextOverflow": "Превышено окно контекста",
+  "logs.detail.condition.locationUnsupported": "Регион не поддерживается",
+  "logs.detail.condition.accountVerificationRequired": "Требуется подтверждение аккаунта",
+  "logs.detail.condition.billingExhausted": "Квота или кредиты исчерпаны",
+  "logs.detail.condition.modelUnavailable": "Модель недоступна",
+  "logs.detail.condition.rateLimited": "Достигнут лимит запросов",
+  "logs.detail.condition.upstreamUnavailable": "Провайдер недоступен",
+  "logs.detail.condition.upstreamFailed": "Сбой провайдера",
+  "logs.detail.condition.requestRejected": "Запрос отклонён",
+  "logs.failureDetail.providerError": "Провайдер вернул ошибку",
+  "logs.failureDetail.providerErrorTyped": "Провайдер вернул ошибку ({type})",
+  "logs.failureDetail.headerTimeout": "Истекло время ожидания заголовков ответа",
+  "logs.failureDetail.headerTimeoutAfter": "Истекло время ожидания заголовков ответа через {value} мс",
+  "logs.failureDetail.connectTimeout": "Подключение к провайдеру истекло через {value} мс",
+  "logs.failureDetail.connectFailed": "Не удалось подключиться к провайдеру",
+  "logs.failureDetail.clientClosed": "Клиент закрыл запрос",
+  "logs.failureDetail.bodyStall": "Тело ответа простаивало {value} мс",
+  "logs.failureDetail.bodyOverflow": "Тело ответа превысило {value} байт",
+  "logs.failureDetail.streamErrorStop": "Провайдер завершил ход с ошибкой",
+  "logs.failureDetail.streamEndedEarly": "Поток ответа завершился до последнего события",
+  "logs.failureDetail.streamFailed": "Поток ответа завершился сбоем",
+  "logs.failureDetail.outputLimit": "Вывод достиг запрошенного лимита токенов",
+  "logs.failureDetail.stallTimeout": "Провайдер не передал данные в пределах тайм-аута простоя",
+  "logs.failureDetail.adapterEof": "Поток провайдера завершился без последнего события",
+  "logs.failureDetail.generationTimeout": "Маршрутизированная модель не ответила за {value} мс",
+  "logs.failureDetail.turnInactivity": "Ход был неактивен {value} мс",
   "logs.col.duration": "Длительность",
   "logs.modelTooltip.model": "модель",
   "logs.modelTooltip.resolvedModel": "разрешённая модель",
@@ -2084,7 +2131,7 @@ export const ru: Record<TKey, string> = {
   "modal.useOauthLogin": "← Войти через OAuth",
 "nav.codexAuth": "Аутентификация Codex",
   "nav.codexSet": "Codex",
-  "nav.connect": "Подключение",
+  "nav.connect": "Маршрут",
   "nav.usageLogs": "Использование и журналы",
   "nav.sectionNavigation": "Страницы раздела",
   "codexSet.tab.multiauth": "Мультиаутентификация",
@@ -3816,6 +3863,7 @@ export const ru: Record<TKey, string> = {
   "models.aliasStale": "устарел",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "Сохранённое подключение Remote Link этого Child отсутствует или теперь указывает на другого владельца или ссылку и больше не совпадает с запущенным Child. Остановите или перезапустите этот Child и проверьте подключение перед повторной привязкой.",
   "connection.linkManaged": "Управляется Home {home} через Remote Link ({linkId}). Эта панель показывает настройки и квоту Home только для чтения; вносите изменения на Home.",
   "connection.linkManagedUnnamed": "Управляется вашим Home через Remote Link ({linkId}). Эта панель показывает настройки и квоту Home только для чтения; вносите изменения на Home.",
   "connection.disconnect": "Disconnect from hub",

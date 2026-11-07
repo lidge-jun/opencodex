@@ -24,6 +24,9 @@ import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { OcxClientConnectionConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import * as applyRestart from "../../src/cli/link-apply-restart";
+import { classifySyncResult } from "../../src/cli/sync-fanout";
+import { readClientConnectionState } from "../../src/client/state";
 
 const KEY = `ocx_data_${"e".repeat(40)}`;
 const LINK_ID = "lnk_0123456789abcdef";
@@ -187,6 +190,43 @@ describe("syncConnectedClient checks the expected identity under its own lock", 
 });
 
 describe("ocx sync --expect-link / --expect-hub-key", () => {
+  test.each(["desktop", "service"] as const)("a %s supervised Child sync succeeds and its Home accepts the JSON", async supervisor => {
+    writeClient({ transport: "link" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const appliedAt = "2026-10-21T01:00:00.000Z";
+    const record = { linkId: LINK_ID, fetchedAt: appliedAt, appliedAt, document: {
+      version: 1 as const, home: { name: "fixture", version: "2.97.0" },
+      settings: { fastMode: true, multiAgentMode: "v1" as const, webSearchSidecarEnabled: false, subagentDefaults: null },
+    } };
+    const realRestart = applyRestart.restartRuntimeAfterApply;
+    const restart = spyOn(applyRestart, "restartRuntimeAfterApply").mockImplementation((entry, deps) => realRestart(entry, {
+      ...deps, findLive: async () => ({ pid: 5151, port: 23499, hostname: "127.0.0.1", source: "runtime", role: "client" }), readStartedAt: async () => 0,
+    }));
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, appliedRecord: record });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const output: string[] = [], errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...parts) => { output.push(parts.map(String).join(" ")); });
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync", "--expect-link", LINK_ID, "--json"];
+      const deps = { args, handleProxyRestart: async (_start: unknown, onSupervised: (value: typeof supervisor) => void) => { onSupervised(supervisor); return false; },
+        handleRestartStartWhenStopped: async () => { throw new Error("must not start a runtime"); } } as unknown as CliDispatchDeps;
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, deps);
+      expect(code).toBe(0);
+      expect(errors).toContain(supervisor === "desktop"
+        ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+        : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.");
+      expect(JSON.parse(output.at(-1)!)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "synced", exit: 0 }, fanout: { state: "not-applicable", reason: null }, children: [] });
+      expect(classifySyncResult({ code, stdout: `ocx-fanout:stdout-begin\n${output.at(-1)}`, stderr: "ocx-fanout:selected:2.97.0\n" })).toEqual({ state: "synced", reason: null });
+      process.exitCode = 1;
+      expect(await dispatchCommand({ kind: "command", command: "sync", args }, deps)).toBe(1);
+    } finally {
+      process.exitCode = 0;
+      restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
   async function runSync(args: string[]) {
     let discoveries = 0;
     const errors: string[] = [];
@@ -416,13 +456,13 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
   });
 });
 
-describe("the CLI root leaves a pinned sync to its own check", () => {
-  test("the shim preflight skips a pinned sync and keeps repairing a plain one", () => {
+describe("the CLI root leaves sync to its own guard", () => {
+  test("the shim preflight skips sync until the mutex is acquired", () => {
     const skips = shimAutoRestore.skipsCodexShimAutoRestore;
     expect(skips("sync", ["sync", "--expect-link", LINK_ID])).toBe(true);
     expect(skips("sync", ["sync", `--expect-hub-key=${HUB_KEY_ID}`])).toBe(true);
-    expect(skips("sync", ["sync"])).toBe(false);
-    expect(skips("sync", ["sync", "--expect-linked"])).toBe(false);
+    expect(skips("sync", ["sync"])).toBe(true);
+    expect(skips("sync", ["sync", "--expect-linked"])).toBe(true);
   });
 
   test("a malformed pinned sync exits 2 at the root, before any preflight", async () => {

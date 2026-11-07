@@ -9,10 +9,16 @@ export type ParsedKiroEvent =
   | { type: "metering"; unit: string; usage: number; unitPlural?: string }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
-  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string }
+  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string; refusal?: KiroRefusalDetails }
   | { type: "message_metadata"; conversationId?: string }
   | { type: "invalid_state"; message?: string }
   | { type: "error"; reason?: string; message?: string };
+
+/** The model-side refusal Kiro attaches to a CONTENT_FILTERED stop (`stopDetails.refusal`). */
+export interface KiroRefusalDetails {
+  category?: string;
+  explanation?: string;
+}
 
 const KNOWN_EVENT_TYPES = new Set([
   "assistantResponseEvent",
@@ -59,6 +65,28 @@ function optionalBoolean(eventType: string, obj: Record<string, unknown>, key: s
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "boolean") return malformed(eventType, `${key} must be a boolean`);
   return value;
+}
+
+/**
+ * `stopDetails.refusal` is advisory copy for the user. Read it leniently: an unexpected shape drops
+ * the details rather than turning the refusal itself into a protocol error. Upstream-controlled
+ * text, so each field is bounded.
+ */
+function refusalDetails(obj: Record<string, unknown>): KiroRefusalDetails | undefined {
+  const stopDetails = obj.stopDetails;
+  if (!stopDetails || typeof stopDetails !== "object" || Array.isArray(stopDetails)) return undefined;
+  const refusal = (stopDetails as Record<string, unknown>).refusal;
+  if (!refusal || typeof refusal !== "object" || Array.isArray(refusal)) return undefined;
+  /** A non-empty trimmed string field of the refusal, cut to `max` characters, or undefined. */
+  const field = (key: string, max: number): string | undefined => {
+    const value = (refusal as Record<string, unknown>)[key];
+    return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined;
+  };
+  const category = field("category", 64);
+  const explanation = field("explanation", 400);
+  return category || explanation
+    ? { ...(category ? { category } : {}), ...(explanation ? { explanation } : {}) }
+    : undefined;
 }
 
 function tokenCount(eventType: string, obj: Record<string, unknown>, key: string, required: boolean): number {
@@ -217,6 +245,7 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
         return malformed(eventType, "contextUsagePercentage must be a finite number");
       }
       const stopReason = optionalString(eventType, parsed, "stopReason");
+      const refusal = refusalDetails(parsed);
       return {
         type: "metadata",
         ...(parseTokenUsage(eventType, parsed.tokenUsage) !== undefined
@@ -224,6 +253,7 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
           : {}),
         ...(typeof contextUsagePercentage === "number" ? { contextUsagePercentage } : {}),
         ...(stopReason !== undefined ? { stopReason } : {}),
+        ...(refusal ? { refusal } : {}),
       };
     }
     case "contextUsageEvent": {

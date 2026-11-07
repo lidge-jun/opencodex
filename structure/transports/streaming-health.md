@@ -125,11 +125,11 @@ A body timeout publishes a typed read failure and cancels only that body's reade
 it does not abort the request-wide signal before the enclosing bridge can emit
 its failure terminal. A caught body failure is classified before signal state, so a
 source cancellation that synchronously aborts the shared signal still reports the
-stall. Buffered initial timeouts return HTTP 504; continuation
-timeouts become an in-stream error with status 504, while caller cancellation
-retains status 499. Normal completion does not abort a shared request.
+stall. Buffered initial and locally marked continuation timeouts return HTTP 504; streamed initial,
+recovery and continuation timeouts emit `upstream_stall_timeout` and retain 504 terminal classification.
+Provider-supplied codes cannot mint the local marker; caller cancellation retains 499. Normal completion does not abort a shared request.
 
-Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts`.
+Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts` and `tests/server/terminal-guard-server.test.ts`.
 
 ### Pre-stream provider input overflow
 
@@ -550,9 +550,9 @@ charged against the unchanged 32 MiB serialized history budget. The existing
 body-persistence eligibility and accepted-only steering commit rules still apply.
 `tests/responses/ws-steering-stability.test.ts` binds these deadline and replay
 contracts to deterministic clocks and a synthetic real-handler continuation test.
-`src/server/responses/native-response-json.ts` owns content comparison without
-importing either control owner, keeping the replay dependency graph acyclic.
-Injection retains its existing helper export names and comparison semantics.
+`src/server/responses/native-response-json.ts` owns content comparison and
+[bounded output identity](inventory.md#native-output-identity) without importing either control owner.
+Injection retains its existing helper export names and SHA-256 comparison semantics.
 
 ## Steering settings, public API and diagnostic probe
 

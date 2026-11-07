@@ -8,6 +8,7 @@ import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { advisorModelValues } from "../src/advisor-models";
 import { AdvisorActivityTable } from "../src/pages/advisor/AdvisorActivity";
 import { renderToStaticMarkup } from "react-dom/server";
+import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const globals = [
   "document",
@@ -111,10 +112,12 @@ test("adaptive policy exposes and saves the server-enforced task allowance", asy
   const { root, container } = await mountEditor({ ...initialSettings, policy: "adaptive", maxConsultationsPerTask: 3 });
   const label = [...container.querySelectorAll("label")]
     .find(item => item.textContent === "Consultations per task");
-  const limit = label?.control as HTMLSelectElement;
+  // The visible label still names the control: `htmlFor` points at the Select trigger.
+  const limit = label?.control as HTMLButtonElement;
   expect(limit).toBeTruthy();
-  expect(limit.tagName).toBe("SELECT");
-  await act(async () => { limit.value = "2"; limit.dispatchEvent(new testWindow.Event("change", { bubbles: true })); });
+  expect(limit.getAttribute("role")).toBe("combobox");
+  expect(selectValue(limit)).toBe("3");
+  await chooseOption(limit, "2");
   await clickSave(container);
   expect(submitted).toMatchObject({ policy: "adaptive", maxConsultationsPerTask: 2, contextSharingConsent: "v1" });
   await act(async () => root.unmount());
@@ -293,11 +296,7 @@ test("unlisted saved identifier survives catalog load and unrelated setting save
   expect(container.querySelector("#advisor-model")?.textContent).toContain(initial.model);
   expect(container.textContent).toContain("saved identifier is preserved");
   expect(submitted).toBeUndefined();
-  await act(async () => {
-    const policy = container.querySelector<HTMLSelectElement>("#advisor-policy")!;
-    policy.value = "preflight";
-    policy.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(container, "#advisor-policy"), "preflight");
   await clickSave(container);
   expect(submitted).toEqual({ ...initial, policy: "preflight" });
   await act(async () => root.unmount());
@@ -346,15 +345,11 @@ test("cold catalog loading disables selection without replacing the saved identi
   const { root, container } = await mountEditor(initialSettings, () => pending);
   expect(container.querySelector<HTMLButtonElement>("#advisor-model")?.disabled).toBe(true);
   expect(container.querySelector("#advisor-model")?.textContent).toContain(initialSettings.model);
-  await act(async () => {
-    const policy = container.querySelector<HTMLSelectElement>("#advisor-policy")!;
-    policy.value = "preflight";
-    policy.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(container, "#advisor-policy"), "preflight");
   await act(async () => { resolve(Response.json([{ namespaced: "gpt-6-astra" }])); });
   expect(container.querySelector<HTMLButtonElement>("#advisor-model")?.disabled).toBe(false);
   expect(container.querySelector("#advisor-model")?.textContent).toContain(initialSettings.model);
-  expect(container.querySelector<HTMLSelectElement>("#advisor-policy")?.value).toBe("preflight");
+  expect(selectValue(selectTrigger(container, "#advisor-policy"))).toBe("preflight");
   await act(async () => root.unmount());
 });
 

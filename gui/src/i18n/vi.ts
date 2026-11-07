@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -123,6 +132,15 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Không thể lưu giới hạn quy trình.",
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
+  ...shellV2Copy("vi"),
+  ...modelsV2Copy("vi"),
+  ...accountsV2Copy("vi"),
+  ...subagentsV2Copy("vi"),
+  ...usageV2Copy("vi"),
+  ...logsV2Copy("vi"),
+  ...connectV2Copy("vi"),
+  ...startupV2Copy("vi"),
+  ...proxyV2Copy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",
@@ -1368,6 +1386,35 @@ export const vi: Record<TKey, string> = {
   "logs.detail.estimate.priority_lower_bound": "Giá Ưu tiên (Priority price) đã xác nhận không khả dụng; ước tính hiển thị là giới hạn dưới đã biết.",
   "logs.col.error": "Lỗi",
   "logs.col.upstreamReason": "Lý do upstream",
+  "logs.col.failureDetail": "Chi tiết lỗi",
+  "logs.detail.condition.authFailed": "Thông tin xác thực bị từ chối",
+  "logs.detail.condition.accessDenied": "Truy cập bị từ chối",
+  "logs.detail.condition.contextOverflow": "Vượt quá cửa sổ ngữ cảnh",
+  "logs.detail.condition.locationUnsupported": "Vị trí không được hỗ trợ",
+  "logs.detail.condition.accountVerificationRequired": "Cần xác minh tài khoản",
+  "logs.detail.condition.billingExhausted": "Hết hạn mức hoặc tín dụng",
+  "logs.detail.condition.modelUnavailable": "Mô hình không khả dụng",
+  "logs.detail.condition.rateLimited": "Đã đạt giới hạn tốc độ",
+  "logs.detail.condition.upstreamUnavailable": "Nhà cung cấp không khả dụng",
+  "logs.detail.condition.upstreamFailed": "Nhà cung cấp gặp lỗi",
+  "logs.detail.condition.requestRejected": "Yêu cầu bị từ chối",
+  "logs.failureDetail.providerError": "Nhà cung cấp đã trả về lỗi",
+  "logs.failureDetail.providerErrorTyped": "Nhà cung cấp đã trả về lỗi ({type})",
+  "logs.failureDetail.headerTimeout": "Hết thời gian chờ tiêu đề phản hồi",
+  "logs.failureDetail.headerTimeoutAfter": "Hết thời gian chờ tiêu đề phản hồi sau {value} ms",
+  "logs.failureDetail.connectTimeout": "Kết nối tới nhà cung cấp đã hết thời gian sau {value} ms",
+  "logs.failureDetail.connectFailed": "Không thể kết nối tới nhà cung cấp",
+  "logs.failureDetail.clientClosed": "Máy khách đã đóng yêu cầu",
+  "logs.failureDetail.bodyStall": "Nội dung phản hồi bị dừng trong {value} ms",
+  "logs.failureDetail.bodyOverflow": "Nội dung phản hồi vượt quá {value} byte",
+  "logs.failureDetail.streamErrorStop": "Nhà cung cấp đã kết thúc lượt với một lỗi",
+  "logs.failureDetail.streamEndedEarly": "Luồng phản hồi kết thúc trước sự kiện cuối",
+  "logs.failureDetail.streamFailed": "Luồng phản hồi thất bại",
+  "logs.failureDetail.outputLimit": "Đầu ra đã đạt giới hạn token được yêu cầu",
+  "logs.failureDetail.stallTimeout": "Nhà cung cấp không gửi dữ liệu trong thời gian chờ đình trệ",
+  "logs.failureDetail.adapterEof": "Luồng của nhà cung cấp kết thúc mà không có sự kiện cuối",
+  "logs.failureDetail.generationTimeout": "Mô hình được định tuyến không phản hồi trong {value} ms",
+  "logs.failureDetail.turnInactivity": "Lượt không hoạt động trong {value} ms",
   "logs.col.duration": "Thời lượng",
   "logs.modelTooltip.model": "mô hình",
   "logs.modelTooltip.resolvedModel": "mô hình sau khi định tuyến",
@@ -2093,7 +2140,7 @@ export const vi: Record<TKey, string> = {
   "modal.adding": "Đang thêm…",
   "modal.useOauthLogin": "← Sử dụng đăng nhập OAuth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Kết nối",
+  "nav.connect": "Định tuyến",
   "nav.usageLogs": "Mức dùng & nhật ký",
   "nav.sectionNavigation": "Trang trong mục",
   "codexSet.tab.multiauth": "Đa xác thực",
@@ -3790,6 +3837,7 @@ export const vi: Record<TKey, string> = {
   "models.aliasStale": "cũ (stale)",
   "connection.discovering": "Đang khám phá các mục tiêu cục bộ (local) và được chia sẻ…",
   "connection.machineUnavailable": "Mặt phẳng máy cục bộ (local machine plane) không khả dụng. Các yêu cầu chia sẻ đã không được chuyển hướng cục bộ.",
+  "connection.clientStateChanged": "Kết nối Remote Link đã lưu của Child này bị thiếu hoặc nay trỏ đến chủ sở hữu hoặc liên kết khác, nên không còn khớp với Child đang chạy. Hãy dừng hoặc khởi động lại Child này và kiểm tra kết nối trước khi liên kết lại.",
   "connection.linkManaged": "Được quản lý bởi Home {home} qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.linkManagedUnnamed": "Được quản lý bởi Home của nó qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.disconnect": "Ngắt kết nối khỏi hub",

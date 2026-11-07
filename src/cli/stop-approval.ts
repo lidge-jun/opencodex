@@ -27,7 +27,7 @@ export interface GuardedStopSnapshot {
  * inspection probe -- it carries no path, command line, stderr, or token.
  */
 export type TrackedRuntimeCheck =
-  | { pid: number; port: number; hostname: string }
+  | { pid: number; port: number; hostname: string | undefined }
   | { untracked: string }
   | null;
 
@@ -145,7 +145,7 @@ export async function runApprovedStop(
       return approvalChanged(`the tracked runtime record could not be verified (${target.untracked})`);
     }
     if (target.pid !== expected.pid || target.port !== expected.port
-      || target.hostname !== expected.hostname) {
+      || (target.hostname === undefined ? expected.hostname !== "127.0.0.1" : target.hostname !== expected.hostname)) {
       return approvalChanged("the tracked runtime record changed");
     }
     if (manager.kind === "unknown") {

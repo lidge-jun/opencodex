@@ -1,13 +1,14 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireAccountLease } from "../../../src/oauth/kiro-account-load";
 import { clearGenericFailoverHealth, preferredInitialAccount, rotateGenericOAuthAccountOnRefusal } from "../../../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
+import { getAccountSet, replaceProviderAccountSet } from "../../../src/oauth/store";
 import { genericPoolSettingsDto, parseGenericPoolStrategy, parseKiroAccountCap, unifiedPoolSettingsDto } from "../../../src/oauth/pool-settings-capability";
 import type { OcxConfig } from "../../../src/types";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 import { saveConfig, loadConfig } from "../../../src/config";
 import { startServer } from "../../../src/server";
 import { managementFetch } from "../../helpers/management-auth";
@@ -16,29 +17,35 @@ import { installIsolatedCodexHome } from "../../helpers/isolated-codex-home";
 const oldHome = process.env.OPENCODEX_HOME;
 let home = "";
 const held: Array<{ release(): void }> = [];
-afterEach(() => {
+afterEach(async () => {
   held.splice(0).forEach(lease => lease.release());
   clearGenericFailoverHealth();
   if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = oldHome;
-  if (home) removeTreeWithRetry(home);
+  if (home) await removeTreeAfterBackgroundWork(home);
   home = "";
-});
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 async function seed(provider = "kiro") {
   home = mkdtempSync(join(tmpdir(), "ocx-load-settings-"));
   process.env.OPENCODEX_HOME = home;
-  for (let i = 0; i < 3; i++) await saveCredential(provider, {
-    access: `load-${i}`, refresh: `refresh-${i}`, expires: Date.now() + 3_600_000,
-    accountId: `account-${i}`,
-  }, { addAccount: true });
-  const ids = getAccountSet(provider)!.accounts.map(row => row.id);
-  await setActiveAccount(provider, ids[0]!);
+  const now = Date.now();
+  const accounts = Array.from({ length: 3 }, (_, i) => ({
+    id: createHash("sha256").update(`account-${i}`).digest("hex").slice(0, 32),
+    credential: { access: `load-${i}`, refresh: `refresh-${i}`, expires: now + 3_600_000, accountId: `account-${i}` },
+    addedAt: now, loginId: randomUUID(),
+  }));
+  // Pool behavior is under test; keep one real fenced/ACL-checked store write for fixture setup.
+  await replaceProviderAccountSet(provider, { activeAccountId: accounts[0]!.id, accounts });
+  const stored = getAccountSet(provider)!;
+  const ids = stored.accounts.map(row => row.id);
+  expect(ids).toEqual(accounts.map(row => row.id));
+  expect(stored.activeAccountId).toBe(ids[0]!);
   return ids;
 }
 
 function config(strategy: "least-loaded" | "quota" = "least-loaded", enabled = true): OcxConfig {
-  return { pool: { kernel: true }, providers: { kiro: { adapter: "kiro", authMode: "oauth",
+  return { pool: { kernel: true }, clientIntegrations: { codex: false }, providers: { kiro: { adapter: "kiro", authMode: "oauth",
     baseUrl: "https://runtime.us-east-1.kiro.dev", models: ["claude-sonnet-4.5"],
     oauthAccountFailover: { strategy, enabled, maxConcurrentPerAccount: 1 } } } } as OcxConfig;
 }
@@ -53,15 +60,24 @@ test("Kiro reads least-loaded and maxConcurrentPerAccount in both DTOs", () => {
   expect(unifiedPoolSettingsDto(cfg, "anthropic", "anthropic").maxConcurrentPerAccount).toBeNull();
 });
 
-test("Kiro persists and reads least-loaded and maxConcurrentPerAccount", async () => {
-  await seed();
-  const isolated = installIsolatedCodexHome("ocx-load-settings-codex-");
-  const saved = config("quota");
-  saved.providers.xai = { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1",
-    models: ["test"] };
-  saveConfig({ ...saved, defaultProvider: "kiro", hostname: "127.0.0.1", port: 0 } as OcxConfig);
-  const server = startServer(0);
-  try {
+describe("Kiro pool settings management", () => {
+  let server: ReturnType<typeof startServer> | undefined;
+  let isolated: ReturnType<typeof installIsolatedCodexHome> | undefined;
+  beforeEach(async () => {
+    await seed();
+    isolated = installIsolatedCodexHome("ocx-load-settings-codex-");
+    const saved = config("quota");
+    saved.providers.xai = { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1",
+      models: ["test"] };
+    saveConfig({ ...saved, defaultProvider: "kiro", hostname: "127.0.0.1", port: 0 } as OcxConfig);
+    server = startServer(0);
+  }, 10_000); // Real Windows ACL/startup work has its own bound; the API assertions keep 5 seconds.
+  afterEach(async () => {
+    try { await server?.stop(true); }
+    finally { server = undefined; isolated?.restore(); isolated = undefined; }
+  });
+  test("Kiro persists and reads least-loaded and maxConcurrentPerAccount", async () => {
+    if (!server) throw new Error("pool-settings fixture did not start");
     const write = await managementFetch(new URL("/api/pool/settings", server.url), { method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ provider: "kiro", strategy: "least-loaded", maxConcurrentPerAccount: 2 }) });
@@ -85,7 +101,7 @@ test("Kiro persists and reads least-loaded and maxConcurrentPerAccount", async (
       expect(invalid.status).toBe(400);
     }
     expect(statSync(configFile).mtimeMs).toBe(before);
-  } finally { await server.stop(true); isolated.restore(); }
+  });
 });
 
 test("non-Kiro strategy and cap values are rejected by the provider parser", () => {

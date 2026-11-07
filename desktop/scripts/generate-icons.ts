@@ -6,8 +6,8 @@
  * was a separate artifact that could drift from the others and nothing could detect it. This makes
  * the sizes derived: one curve, rendered at each dimension the platforms ask for.
  *
- * The SVG reproduces the raster it replaced to within antialiasing (430 of 262144 pixels at 512),
- * measured rather than assumed — the geometry in that file was read off the original bitmap.
+ * The mark in that file is scripts/brand/opencodex-mark.svg verbatim, white on a dark plate; the
+ * menu bar source (tray/icon.svg) reuses its curves and its prompt mask.
  *
  * `--check` regenerates into a temporary directory and compares, so CI can fail on a hand-edited
  * PNG instead of letting the source and the shipped icons disagree quietly.
@@ -71,7 +71,22 @@ const TRAY_OUTPUT = "tray/icon.png";
 const TRAY_SIZE = 44;
 const traySource = join(iconsDir, "tray", "icon.svg");
 const DOTTED_TRAY_OUTPUT = "tray/icon-update.png";
-const DOTTED_TRAY_SVG = '<g id="update-dot"><circle cx="409" cy="395" r="48" fill="#ffffff"/><circle cx="409" cy="395" r="34" fill="#2f81f7"/></g>';
+/** Bottom-right badge, in the coordinates of tray/icon.svg's viewBox. */
+const DOTTED_TRAY_SVG = '<g id="update-dot"><circle cx="861" cy="806" r="118" fill="#ffffff"/><circle cx="861" cy="806" r="83" fill="#2f81f7"/></g>';
+
+/**
+ * The .icns is rendered from the same plate without its corner radius. Windows, Linux and the
+ * Store tiles draw the icon as it is, so they get the rounded plate; macOS applies its own
+ * rounded-rectangle mask and material, and a pre-rounded corner fights it.
+ */
+function fullBleedSource(target: string): string {
+  const base = readFileSync(source, "utf8");
+  const square = base.replace(/(<rect id="backdrop"[^>]*?) rx="\d+"/, "$1");
+  if (square === base) throw new Error("icon.svg has no rounded backdrop to square off");
+  const out = join(target, ".icon-full-bleed.svg");
+  writeFileSync(out, square);
+  return out;
+}
 
 function renderDottedTray(target: string): void {
   const dottedSvg = join(target, ".tray-update.svg");
@@ -104,7 +119,9 @@ function generateInto(target: string): { produced: string[]; icnsSkipped: boolea
 
   const iconset = join(target, "icon.iconset");
   mkdirSync(iconset, { recursive: true });
-  for (const entry of ICNS_ENTRIES) render(entry.size, join(iconset, entry.name));
+  const square = fullBleedSource(target);
+  try { for (const entry of ICNS_ENTRIES) render(entry.size, join(iconset, entry.name), square); }
+  finally { rmSync(square, { force: true }); }
   const icns = spawnSync("iconutil", ["-c", "icns", iconset, "-o", join(target, "icon.icns")]);
   const icnsSkipped = icns.status !== 0;
   if (!icnsSkipped) produced.push("icon.icns");

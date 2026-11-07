@@ -136,3 +136,7 @@ privacy), `tests/responses/responses-combo-fallback-off.test.ts`, `tests/routing
 and `gui/tests/fallback-panel.test.tsx`.
 
 The opt-in [all-cooled Combo recovery](runtime.md#scoped-provider-quota-for-combo-selection) can reserve saved combo cooldowns in `src/combos/resolve.ts`; only that request bypasses its reserved writes until a successful dispatch conditionally clears its unchanged target, with throwing predicates treated as ineligible during recovery preparation and available siblings preferred without probing cooled targets. Route-level picks and in-flight retry-after-cooldown selections disable reprobes. Recovery does not authorize a fallback hop or bypass the configured fallback policy.
+
+Local combo refusals name target indices and validated provider labels with closed exclusion reasons.
+Configured model strings and combo aliases do not enter the client message; the current contract is
+[Chat client error bodies](data-planes/error-detail.md#client-error-bodies-chat).

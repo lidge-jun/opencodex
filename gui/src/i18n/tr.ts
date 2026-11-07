@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -122,6 +131,15 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "İş akışı sınırları kaydedilemedi.",
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
+  ...shellV2Copy("tr"),
+  ...modelsV2Copy("tr"),
+  ...accountsV2Copy("tr"),
+  ...subagentsV2Copy("tr"),
+  ...usageV2Copy("tr"),
+  ...logsV2Copy("tr"),
+  ...connectV2Copy("tr"),
+  ...startupV2Copy("tr"),
+  ...proxyV2Copy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",
@@ -1374,6 +1392,35 @@ export const tr: Record<TKey, string> = {
   "logs.detail.estimate.priority_lower_bound": "Doğrulanan Priority fiyatı kullanılamıyor; gösterilen tahmin bilinen bir alt sınırdır.",
   "logs.col.error": "Hata",
   "logs.col.upstreamReason": "Yukarı akış nedeni",
+  "logs.col.failureDetail": "Hata ayrıntısı",
+  "logs.detail.condition.authFailed": "Kimlik bilgileri reddedildi",
+  "logs.detail.condition.accessDenied": "Erişim reddedildi",
+  "logs.detail.condition.contextOverflow": "Bağlam penceresi aşıldı",
+  "logs.detail.condition.locationUnsupported": "Konum desteklenmiyor",
+  "logs.detail.condition.accountVerificationRequired": "Hesap doğrulaması gerekli",
+  "logs.detail.condition.billingExhausted": "Kota veya kredi tükendi",
+  "logs.detail.condition.modelUnavailable": "Model kullanılamıyor",
+  "logs.detail.condition.rateLimited": "Hız sınırına ulaşıldı",
+  "logs.detail.condition.upstreamUnavailable": "Sağlayıcı kullanılamıyor",
+  "logs.detail.condition.upstreamFailed": "Sağlayıcı başarısız oldu",
+  "logs.detail.condition.requestRejected": "İstek reddedildi",
+  "logs.failureDetail.providerError": "Sağlayıcı bir hata döndürdü",
+  "logs.failureDetail.providerErrorTyped": "Sağlayıcı bir hata döndürdü ({type})",
+  "logs.failureDetail.headerTimeout": "Yanıt başlıkları beklenirken zaman aşımı oluştu",
+  "logs.failureDetail.headerTimeoutAfter": "{value} ms sonra yanıt başlıkları beklenirken zaman aşımı oluştu",
+  "logs.failureDetail.connectTimeout": "Sağlayıcıya bağlantı {value} ms sonra zaman aşımına uğradı",
+  "logs.failureDetail.connectFailed": "Sağlayıcıya bağlanılamadı",
+  "logs.failureDetail.clientClosed": "İstemci isteği kapattı",
+  "logs.failureDetail.bodyStall": "Yanıt gövdesi {value} ms boyunca durdu",
+  "logs.failureDetail.bodyOverflow": "Yanıt gövdesi {value} baytı aştı",
+  "logs.failureDetail.streamErrorStop": "Sağlayıcı turu bir hatayla sonlandırdı",
+  "logs.failureDetail.streamEndedEarly": "Yanıt akışı son olayından önce bitti",
+  "logs.failureDetail.streamFailed": "Yanıt akışı başarısız oldu",
+  "logs.failureDetail.outputLimit": "Çıktı istenen belirteç sınırına ulaştı",
+  "logs.failureDetail.stallTimeout": "Sağlayıcı takılma zaman aşımı içinde veri göndermedi",
+  "logs.failureDetail.adapterEof": "Sağlayıcı akışı son olay olmadan bitti",
+  "logs.failureDetail.generationTimeout": "Yönlendirilen model {value} ms içinde yanıt vermedi",
+  "logs.failureDetail.turnInactivity": "Tur {value} ms boyunca etkin değildi",
   "logs.col.duration": "Süre",
   "logs.modelTooltip.model": "model",
   "logs.modelTooltip.resolvedModel": "çözümlenen model",
@@ -2111,7 +2158,7 @@ export const tr: Record<TKey, string> = {
   "modal.useOauthLogin": "← OAuth girişini kullan",
 "nav.codexAuth": "Codex Kimlik Doğrulama",
   "nav.codexSet": "Codex",
-  "nav.connect": "Bağlantı",
+  "nav.connect": "Rota",
   "nav.usageLogs": "Kullanım ve Günlükler",
   "nav.sectionNavigation": "Bölüm sayfaları",
   "codexSet.tab.multiauth": "Çoklu kimlik doğrulama",
@@ -3816,6 +3863,7 @@ export const tr: Record<TKey, string> = {
   "models.aliasStale": "eski",
   "connection.discovering": "Yerel ve paylaşılan hedefler aranıyor…",
   "connection.machineUnavailable": "Yerel makine bağlantısı kullanılamıyor. Paylaşılan istekler yerele yönlendirilmedi.",
+  "connection.clientStateChanged": "Bu Child'ın kayıtlı Remote Link bağlantısı eksik veya artık başka bir sahibi ya da bağlantıyı gösteriyor, bu yüzden çalışan Child ile eşleşmiyor. Yeniden bağlamadan önce bu Child'ı durdurun veya yeniden başlatın ve bağlantısını kontrol edin.",
   "connection.linkManaged": "Remote Link ({linkId}) üzerinden Home {home} tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.linkManagedUnnamed": "Remote Link ({linkId}) üzerinden Home tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.disconnect": "Merkez bağlantısını kes",

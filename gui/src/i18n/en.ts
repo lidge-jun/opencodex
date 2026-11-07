@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -123,6 +132,15 @@ export const en = {
   "workflowBudget.saveFailed": "Could not save workflow limits.",
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
+  ...shellV2Copy("en"),
+  ...modelsV2Copy("en"),
+  ...accountsV2Copy("en"),
+  ...subagentsV2Copy("en"),
+  ...usageV2Copy("en"),
+  ...logsV2Copy("en"),
+  ...connectV2Copy("en"),
+  ...startupV2Copy("en"),
+  ...proxyV2Copy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -1388,6 +1406,35 @@ export const en = {
   "logs.detail.estimate.priority_lower_bound": "The confirmed Priority price is unavailable; the displayed estimate is a known lower bound.",
   "logs.col.error": "Error",
   "logs.col.upstreamReason": "Upstream reason",
+  "logs.col.failureDetail": "Failure detail",
+  "logs.detail.condition.authFailed": "Credentials rejected",
+  "logs.detail.condition.accessDenied": "Access denied",
+  "logs.detail.condition.contextOverflow": "Context window exceeded",
+  "logs.detail.condition.locationUnsupported": "Location not supported",
+  "logs.detail.condition.accountVerificationRequired": "Account verification required",
+  "logs.detail.condition.billingExhausted": "Quota or credits exhausted",
+  "logs.detail.condition.modelUnavailable": "Model unavailable",
+  "logs.detail.condition.rateLimited": "Rate limited",
+  "logs.detail.condition.upstreamUnavailable": "Provider unavailable",
+  "logs.detail.condition.upstreamFailed": "Provider failed",
+  "logs.detail.condition.requestRejected": "Request rejected",
+  "logs.failureDetail.providerError": "The provider returned an error",
+  "logs.failureDetail.providerErrorTyped": "The provider returned an error ({type})",
+  "logs.failureDetail.headerTimeout": "Timed out waiting for response headers",
+  "logs.failureDetail.headerTimeoutAfter": "Timed out waiting for response headers after {value} ms",
+  "logs.failureDetail.connectTimeout": "Connecting to the provider timed out after {value} ms",
+  "logs.failureDetail.connectFailed": "Could not connect to the provider",
+  "logs.failureDetail.clientClosed": "The client closed the request",
+  "logs.failureDetail.bodyStall": "The response body stalled for {value} ms",
+  "logs.failureDetail.bodyOverflow": "The response body exceeded {value} bytes",
+  "logs.failureDetail.streamErrorStop": "The provider ended the turn with an error",
+  "logs.failureDetail.streamEndedEarly": "The response stream ended before its final event",
+  "logs.failureDetail.streamFailed": "The response stream failed",
+  "logs.failureDetail.outputLimit": "Output reached the requested token limit",
+  "logs.failureDetail.stallTimeout": "The provider sent no data within the stall timeout",
+  "logs.failureDetail.adapterEof": "The provider stream ended without a final event",
+  "logs.failureDetail.generationTimeout": "The routed model sent no response within {value} ms",
+  "logs.failureDetail.turnInactivity": "The turn was inactive for {value} ms",
   "logs.col.duration": "Duration",
   "logs.modelTooltip.model": "model",
   "logs.modelTooltip.resolvedModel": "resolved model",
@@ -2125,7 +2172,7 @@ export const en = {
   "modal.useOauthLogin": "← Use OAuth login",
 "nav.codexAuth": "Codex Auth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Connect",
+  "nav.connect": "Route",
   "nav.usageLogs": "Usage & Logs",
   "nav.sectionNavigation": "Section pages",
   "codexSet.tab.multiauth": "Multi-auth",
@@ -3873,6 +3920,7 @@ export const en = {
   "models.aliasStale": "stale",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "This Child's saved Remote Link connection is missing or now names another owner or link, so it no longer matches the running Child. Stop or restart this Child and check its connection before linking it again.",
   "connection.linkManaged": "Managed by Home {home} over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.linkManagedUnnamed": "Managed by its Home over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.disconnect": "Disconnect from hub",

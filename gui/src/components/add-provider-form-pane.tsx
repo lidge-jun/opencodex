@@ -1,6 +1,7 @@
 import { IconExternal, IconKey } from "../icons";
 import { useT } from "../i18n/shared";
 import { Trans } from "../i18n/provider";
+import { Select } from "../ui";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { ProviderPayloadForm } from "../provider-payload";
 import { AddProviderField } from "./add-provider-modal-field";
@@ -78,34 +79,32 @@ export function AddProviderFormPane({
       {dup && <div className="text-label" style={{ color: "var(--amber)" }}>{t("modal.duplicateWarn", { name: form.name.trim() })}</div>}
       {!isReservedForward && <>
         <AddProviderField label={t("modal.adapter")}>
-          <select className="input" value={form.adapter} onChange={e => onFormChange({ ...form, adapter: e.target.value })}>
-            {adapterOptions(form.adapter).map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
+          <Select fullWidth label={t("modal.adapter")} value={form.adapter}
+            onChange={adapter => onFormChange({ ...form, adapter })}
+            options={adapterOptions(form.adapter).map(a => ({ value: a, label: a }))} />
         </AddProviderField>
         {preset.baseUrlChoices && preset.baseUrlChoices.length > 0 ? (
           <>
             <AddProviderField label={t("modal.endpoint")}>
-              <select
-                className="input"
+              <Select
+                fullWidth
+                label={t("modal.endpoint")}
                 value={endpointChoice}
-                onChange={e => {
-                  const id = e.target.value;
+                onChange={id => {
                   onEndpointChoiceChange(id);
                   onFormChange({
                     ...form,
                     baseUrl: baseUrlForChoice(preset.baseUrlChoices, id, form.baseUrl),
                   });
                 }}
-              >
-                {preset.baseUrlChoices.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.id === "token-plan" ? t("modal.endpoint.tokenPlan")
-                      : c.id === "payg" ? t("modal.endpoint.payAsYouGo")
-                      : c.id === "custom" ? t("modal.endpoint.custom")
-                      : c.label}
-                  </option>
-                ))}
-              </select>
+                options={preset.baseUrlChoices.map(c => ({
+                  value: c.id,
+                  label: c.id === "token-plan" ? t("modal.endpoint.tokenPlan")
+                    : c.id === "payg" ? t("modal.endpoint.payAsYouGo")
+                    : c.id === "custom" ? t("modal.endpoint.custom")
+                    : c.label,
+                }))}
+              />
             </AddProviderField>
             {endpointChoice === "custom" && (
               <AddProviderField label={t("modal.baseUrl")}>
@@ -170,14 +169,16 @@ export function AddProviderFormPane({
           </AddProviderField>
           {form.adapter === "anthropic" && form.authMode === "key" && (
             <AddProviderField label={t("modal.apiKeyTransport")}>
-              <select
-                className="input"
+              <Select
+                fullWidth
+                label={t("modal.apiKeyTransport")}
                 value={form.apiKeyTransport ?? "x-api-key"}
-                onChange={e => onFormChange({ ...form, apiKeyTransport: e.target.value === "bearer" ? "bearer" : undefined })}
-              >
-                <option value="x-api-key">{t("modal.apiKeyTransportNative")}</option>
-                <option value="bearer">{t("modal.apiKeyTransportBearer")}</option>
-              </select>
+                onChange={value => onFormChange({ ...form, apiKeyTransport: value === "bearer" ? "bearer" : undefined })}
+                options={[
+                  { value: "x-api-key", label: t("modal.apiKeyTransportNative") },
+                  { value: "bearer", label: t("modal.apiKeyTransportBearer") },
+                ]}
+              />
             </AddProviderField>
           )}
         </>

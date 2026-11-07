@@ -96,7 +96,7 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
     finally {await f.close();}
   });
 
-  for (const mode of ["reply-reject","reply-wrong-turn","reply-invalid-client","reply-too-many","reply-bad-turns"]) test(`${mode}: unavailable without private diagnostics`,async()=>{
+  for (const mode of ["reply-reject","reply-wrong-turn","reply-invalid-client","reply-invalid-phase","reply-invalid-text","reply-too-many","reply-bad-turns"]) test(`${mode}: unavailable without private diagnostics`,async()=>{
     const f=queueMcpFixture(mode);
     try { const r=await queueMcpReadReply({...f.options,allowReplyRead:true},input);expect(r.available).toBe(false);expect(JSON.stringify(r)).not.toContain("PRIVATE_"); }
     finally {await f.close();}
@@ -108,7 +108,7 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
     finally {await f.close();}
   });
 
-  test("a repeated native cursor cannot create a history paging loop",async()=>{
+  test("an immediately repeated native cursor is rejected",async()=>{
     const f=queueMcpFixture("reply-cycle");
     try {const opts={...f.options,allowReplyRead:true};const first=payload(await queueMcpReadReply(opts,input));expect((await queueMcpReadReply(opts,{...input,cursor:first.nextCursor})).available).toBe(false);}
     finally {await f.close();}
@@ -132,9 +132,15 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
     finally {await f.close();}
   });
 
-  test("unknown phase is not silently promoted to a final answer",async()=>{
-    const f=queueMcpFixture("reply-unknown-phase");
+  for (const mode of ["reply-unknown-phase","reply-missing-phase"]) test(`${mode}: absent phase is not promoted to a final answer`,async()=>{
+    const f=queueMcpFixture(mode);
     try {expect(await queueMcpReadReply({...f.options,allowReplyRead:true},input)).toMatchObject({status:"observed",replies:[]});}
+    finally {await f.close();}
+  });
+
+  test("unrelated history without phase does not hide a matching receipt or final text",async()=>{
+    const f=queueMcpFixture("reply-unrelated-missing-phase");
+    try {const r=await queueMcpReadReply({...f.options,allowReplyRead:true},input);expect(r).toMatchObject({available:true,status:"observed",replies:[{itemId:"answer-1",text:"fixture answer"}]});expect(JSON.stringify(r)).not.toContain("PRIVATE_");}
     finally {await f.close();}
   });
 
@@ -144,13 +150,21 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
     finally {await f.close();}
   });
 
-  test("one outer deadline cancels sequential helpers instead of granting each a new full budget",async()=>{
-    const f=queueMcpFixture("reply-delay");const native=setTimeout;let shortened=false;
+  test("one outer deadline cancels the second helper after its request barrier",async()=>{
+    const f=queueMcpFixture("reply-deadline-barrier");const native=setTimeout;let expire:(()=>void)|undefined;
     const timer=spyOn(globalThis,"setTimeout").mockImplementation(((fn,ms,...args)=>{
-      if(ms===20000&&!shortened){shortened=true;return native(fn,650,...args);}return native(fn,ms,...args);
+      if(ms===20000&&!expire) expire=()=> (fn as ()=>void)();
+      return native(fn,ms,...args);
     }) as typeof setTimeout);
-    try {expect((await queueMcpReadReply({...f.options,allowReplyRead:true},input)).available).toBe(false);expect(f.calls().filter(c=>c.frame.method === "thread/turns/list")).toHaveLength(0);}
-    finally {timer.mockRestore();await f.close();}
+    const pending=queueMcpReadReply({...f.options,allowReplyRead:true},input);
+    try {
+      const until=performance.now()+3000;while(!f.calls().some(c=>c.frame.method === "thread/items/list"&&c.frame.params?.turnId)&&performance.now()<until)await Bun.sleep(10);
+      expect(f.calls().filter(c=>c.frame.method === "thread/items/list")).toHaveLength(2);
+      const pid=f.calls().at(-1)!.pid;expect(expire).toBeFunction();expire!();
+      expect(await pending).toEqual({available:false,error:{code:"reply_read_unavailable"}});
+      expect(()=>process.kill(pid,0)).toThrow();
+      expect(f.calls().filter(c=>c.frame.method === "thread/turns/list")).toHaveLength(0);
+    } finally {expire?.();await pending;timer.mockRestore();await f.close();}
   });
 
   test("cancelled reads reap their helper and do not retry or mutate the queue",async()=>{

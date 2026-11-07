@@ -213,27 +213,65 @@ describe("multi-account auth store", () => {
     }
   });
 
-  test.each(["false", "throw"] as const)("recovery survives registration %s and warns without exposing credentials", async (failure) => {
+  // The backup is registered before it is created. An unowned home still gets the recovery copy; a
+  // full owned manifest gets none, because an unlisted credential copy would survive uninstall; a
+  // thrown refusal defers the migration so a retry backs up again.
+  test.each(["unowned", "full", "throw"] as const)("recovery handles registration %s and warns without exposing credentials", async (failure) => {
     const path = join(TEST_DIR, "auth.json");
     const backup = `${path}.pre-multiauth`;
     const original = JSON.stringify({ xai: cred({ email: "old@example.test" }) });
     writeFileSync(path, original);
-    const register = configOwnership.recordOwnedConfigPath;
-    const registration = spyOn(configOwnership, "recordOwnedConfigPath").mockImplementation((dir, candidate) => {
+    const register = configOwnership.registerOwnedConfigPath;
+    const registration = spyOn(configOwnership, "registerOwnedConfigPath").mockImplementation((dir, candidate) => {
       if (candidate !== backup) return register(dir, candidate);
       if (failure === "throw") throw new Error("private ownership failure fixture");
-      return false;
+      return failure;
     });
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      const saved = saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      if (failure === "unowned") {
+        await saved;
+        expect(readFileSync(backup, "utf8")).toBe(original);
+        expect(getCredential("xai")?.access).toBe("new-access");
+        expect(warning.mock.calls).toEqual([["[oauth] Recovery backup created, but uninstall ownership registration failed."]]);
+      } else if (failure === "full") {
+        await saved;
+        expect(existsSync(backup)).toBe(false);
+        expect(getCredential("xai")?.access).toBe("new-access");
+        expect(warning.mock.calls).toEqual([["[oauth] Recovery backup skipped: the uninstall ownership manifest is full."]]);
+      } else {
+        // The migration is deferred: no unlisted copy, and the legacy store is left for a retry.
+        await expect(saved).rejects.toThrow("OAuth store migration deferred");
+        expect(existsSync(backup)).toBe(false);
+        expect(readFileSync(path, "utf8")).toBe(original);
+        expect(warning.mock.calls).toEqual([]);
+      }
       expect(registration).toHaveBeenCalledWith(TEST_DIR, backup);
-      expect(readFileSync(backup, "utf8")).toBe(original);
-      expect(getCredential("xai")?.access).toBe("new-access");
-      expect(warning.mock.calls).toEqual([["[oauth] Recovery backup created, but uninstall ownership registration failed."]]);
     } finally {
       warning.mockRestore();
       registration.mockRestore();
+    }
+  });
+
+  test("a full manifest in an owned home leaves no credential backup behind uninstall", async () => {
+    const dir = join(TEST_DIR, "full");
+    const path = join(dir, "auth.json");
+    process.env.OPENCODEX_HOME = dir;
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      writeFileSync(path, JSON.stringify({ xai: cred({ email: "old@example.test" }) }));
+      // Fill the manifest with short names until even the backup's name no longer fits.
+      for (let i = 0; i < 2_000; i += 1) if (!recordOwnedConfigPath(dir, join(dir, "f" + i))) break;
+      await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      expect(existsSync(`${path}.pre-multiauth`)).toBe(false);
+      expect(getCredential("xai")?.access).toBe("new-access");
+      await flushConfigDirHardeningForTests();
+      expect(removeOwnedConfigState(dir).status).toBe("removed");
+    } finally {
+      warning.mockRestore();
+      process.env.OPENCODEX_HOME = TEST_DIR;
     }
   });
 

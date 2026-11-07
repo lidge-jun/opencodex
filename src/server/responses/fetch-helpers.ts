@@ -33,6 +33,7 @@ import {
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
+import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
 
 export { withUpstreamHttpVersion };
 
@@ -57,9 +58,13 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
-export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string): Record<symbol, unknown> {
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void): Record<symbol, unknown> {
   const physical = observer?.physical;
-  return physical ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => physical(destination === target, headers) } : {};
+  let noted = false;
+  return physical || onPhysicalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
+    if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
+    physical?.(destination === target, headers);
+  } } : {};
 }
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
@@ -382,6 +387,10 @@ export function providerFetch(
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unobserved = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
+    // Turn-state handles are redeemed here, at the send, where the admitted caller, the provider and
+    // the outbound account are all settled; a handle bound to anything else is not forwarded.
+    const sendHeaders = (sent?: RequestInit) => new Headers(sent?.headers ?? (input instanceof Request ? input.headers : undefined));
+    init = redeemOutboundTurnState(init, turnStateBinding(providerName, sendHeaders(init)));
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
@@ -412,7 +421,8 @@ export function providerFetch(
       };
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
         httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing, null)) as typeof globalThis.fetch;
-      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url), wsInit ?? init,
+      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url),
+        { ...(wsInit ?? init), [TURN_STATE_BINDING_INIT]: turnStateBinding(providerName, sendHeaders(wsInit ?? init)) } as RequestInit,
         fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
         async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold),
         { provider, http: markEgressTransparentExecutor(fallback) });

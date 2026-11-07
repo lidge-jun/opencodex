@@ -55,6 +55,8 @@ force jamais d'actualisation en amont.
 
 - Chaque étiquette affiche la fenêtre signalée prioritaire : d'abord hebdomadaire, puis mensuelle,
   puis 5 heures, puis une fenêtre nommée par le fournisseur ou des crédits prépayés.
+- Les crédits prépayés utilisés à 90 % ou plus deviennent prioritaires si la fenêtre habituelle
+  préférée n'est pas critique. Si elle est aussi critique, elle reste affichée en priorité.
 - Une étiquette passe en ambre à 70 % d'utilisation et en rouge à 90 %.
 - Survolez une étiquette ou donnez-lui le focus au clavier pour voir toutes les fenêtres signalées
   avec leur heure de réinitialisation et l'heure de la lecture. Sur un écran tactile, le premier
@@ -93,7 +95,7 @@ Les vues Utilisation, Tableau de bord, Fournisseurs, Catalogue des fournisseurs 
 
 ### Filtrer les requêtes
 
-Le détail d’une requête privilégie la cause d’échec amont enregistrée plutôt qu’un message générique d’erreur du proxy. Le nombre d’envois physiques est toujours affiché lorsqu’il est valide ; une comptabilité absente ou invalide affiche **Unavailable**, et non zéro. **Retries** compte les envois après le premier uniquement lorsqu’une seule tentative entièrement réglée et cohérente est enregistrée. Les tentatives multiples, les comptabilités non résolues ou incohérentes et les normalisations avec perte omettent les retries au lieu d’en inventer. Une cause persistante inconnue revient au titre fondé sur le statut, sans attribution brute.
+Le détail d’une requête privilégie la cause d’échec amont enregistrée plutôt qu’un message générique d’erreur du proxy. Le nombre d’envois physiques est toujours affiché lorsqu’il est valide ; une comptabilité absente ou invalide affiche **Unavailable**, et non zéro. **Retries** compte les envois après le premier uniquement lorsqu’une seule tentative entièrement réglée et cohérente est enregistrée. Les tentatives multiples, les comptabilités non résolues ou incohérentes et les normalisations avec perte omettent les retries au lieu d’en inventer. Une cause persistante inconnue revient au titre fondé sur le statut, sans attribution brute. **Upstream reason** affiche une condition fournisseur classée (par exemple limite de débit atteinte, quota ou crédits épuisés, fenêtre de contexte dépassée, emplacement non pris en charge, vérification du compte requise ou modèle indisponible), et **Failure detail** affiche un texte rédigé par le proxy, comme un délai d’inactivité ou une limite d’octets ; les nouvelles lignes ne conservent pas le texte d’erreur propre au fournisseur. D’anciens fichiers `usage.jsonl` peuvent encore le contenir, mais le tableau de bord l’écarte à la lecture.
 
 Les filtres combinent interface, requêtes interceptées, fournisseur, modèle exact, statut, période, vitesse et identifiant de conversation dans le journal chargé. Les choix incluent les tentatives de repli ; les modèles ignorent la casse et les espaces externes, sans correspondance partielle. Un choix disparu revient à Tous.
 

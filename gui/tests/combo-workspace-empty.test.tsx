@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ComboWorkspace from "../src/components/ComboWorkspace";
 import { LanguageProvider } from "../src/i18n/provider";
 import { providerQuotaStatesFromReports } from "../src/combo-workspace-data";
+import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -97,20 +98,16 @@ test("an empty combo list creates the first combo and shows confirmation", async
   });
 
   const idInput = container.querySelector<HTMLInputElement>("#cwi-edit-id")!;
-  const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!;
+  const providerSelect = selectTrigger(container, '[role="combobox"][aria-label="Provider"]');
   await act(async () => {
     Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
       .set!.call(idInput, "first");
     idInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
   });
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
-      .set!.call(providerSelect, "openai");
-    providerSelect.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(providerSelect, "openai");
   expect(idInput.value).toBe("first");
-  expect(providerSelect.value).toBe("openai");
-  expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')?.value).toBe("gpt-5");
+  expect(selectValue(providerSelect)).toBe("openai");
+  expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("gpt-5");
 
   const createButton = [...container.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent?.trim() === "Create combo");
@@ -160,12 +157,7 @@ test("first-combo Create disables only while every usable target is known exhaus
   await act(async () => { root.render(render({ state: "exhausted", updatedAt: now, validUntil: now + 60_000 })); });
   await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
 
-  const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
-      .set!.call(providerSelect, "openai");
-    providerSelect.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(container, '[role="combobox"][aria-label="Provider"]'), "openai");
 
   const createButton = container.querySelector<HTMLButtonElement>("#cwi-edit-create")!;
   expect(createButton.disabled).toBe(true);

@@ -3,6 +3,19 @@ import type { Capability } from "./capability-types";
 /** Verified existing handlers only; local operations never claim management routes. */
 export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["disconnect"], summary: "Disconnect a client or preserve orphaned token files for recovery.",
+    usage: "ocx disconnect [--keep-catalog] [--json] | ocx disconnect --orphaned-token --yes [--json]",
+    routes: [],
+    flags: [
+      { name: "--keep-catalog", value: "boolean", summary: "Keep the connected client's catalog during ordinary disconnect." },
+      { name: "--orphaned-token", value: "boolean", summary: "Preserve unowned service-token files in a private backup when disconnected." },
+      { name: "--yes", value: "boolean", summary: "Explicitly confirm orphan-token recovery; requires --orphaned-token." },
+      { name: "--json", value: "boolean", summary: "Emit the local result and backup location as JSON." },
+    ],
+    mutates: true, json: "payload",
+    details: ["Orphan recovery requires a disconnected durable state, no pending connect or disconnect, no Hub or admission-secret use, no installed or unverified service, and verified absence of a client runtime. It preserves rather than deletes token files and does not establish their ownership.", "If refused, inspect the bind, API keys, token environment and service status; manage a Hub secret through its service. Stop OpenCodex and move saved files back only when their original names are absent. Never print their contents."],
+  },
+  {
     command: ["hub", "disable"], summary: "Return a hub to standalone in one validated config write.",
     usage: "ocx hub disable [--revoke-clients --client-key <id> ...] [--json]",
     routes: [],

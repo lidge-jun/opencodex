@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
-import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
+import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { readClientConnectionState } from "../client/state";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { readCliConfigForMutation } from "./config-mutation";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
@@ -331,7 +332,15 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
         readCliConfigForMutation();
-        saveConfig(validate(loadInput(path)));
+        const imported = validate(loadInput(path));
+        withConfigMutationLockSync(() => {
+          const client = readClientConnectionState();
+          if (client.kind === "connected" && (imported.runtimeRole !== "client"
+            || JSON.stringify(imported.client) !== JSON.stringify(client.value))) {
+            throw new Error("config import refused: disconnect the active client before replacing its connection");
+          }
+          saveConfig(imported);
+        });
       });
       printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ocx sync if needed.`]);
       return;
