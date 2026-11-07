@@ -39,6 +39,32 @@ afterEach(() => {
 });
 
 describe("model display name management rows", () => {
+  test("GET /api/models returns configured native labels with operator provenance", async () => {
+    const home = createTempHome("native-display-endpoint-");
+    try {
+      const nativeConfig: OcxConfig = {
+        port: 10100, defaultProvider: "openai",
+        providers: { openai: { adapter: "openai-responses", authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex", liveModels: false,
+          modelDisplayNames: { "gpt-6.1-sol": "  sol  " } } },
+      };
+      const url = new URL("http://127.0.0.1:10100/api/models");
+      const response = await handleModelRoutes({
+        req: new Request(url), url, config: nativeConfig, deps: {},
+        convergeCodexCatalog: async () => { throw new Error("GET must not converge the catalog"); },
+        syncClaudeAgentDefsBestEffort: async () => {},
+      });
+      expect(response?.status).toBe(200);
+      const rows = await response!.json() as Array<Record<string, unknown>>;
+      expect(rows.find(row => row.native === true && row.id === "gpt-6.1-sol")).toMatchObject({
+        provider: "openai", id: "gpt-6.1-sol", namespaced: "gpt-6.1-sol",
+        displayName: "sol", displayNameOverride: "sol", displayNameSource: "operator",
+      });
+    } finally {
+      home.remove();
+    }
+  });
+
   test("native labels leave account-qualified rows unchanged", async () => {
     const home = createTempHome("native-display-name-");
     try {
