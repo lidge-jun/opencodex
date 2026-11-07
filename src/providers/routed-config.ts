@@ -12,7 +12,7 @@ import { GCP_CREDENTIAL_MARKER_PREFIX } from "../lib/gcp-adc";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
-import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
+import { PROVIDER_REGISTRY, registryEntryForProviderDestination, withoutRegistryStaticHeaderCopies } from "./registry";
 import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts, registryInputModalitiesForDestination } from "./derive";
 import { cloneFastWire } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
@@ -124,8 +124,12 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     const destination = registryEntryForProviderDestination(provider);
     const inputModalities = provider.inputModalities === undefined
       ? registryInputModalitiesForDestination(providerName, provider) : undefined;
+    // A same-named row retargeted to another host keeps its own headers, not the preset's ones.
+    const headers = withoutRegistryStaticHeaderCopies(registryEntry, provider);
+    const { headers: _savedHeaders, ...rest } = provider;
     return {
-      ...provider,
+      ...rest,
+      ...(headers ? { headers } : {}),
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
       ...(destination?.modelDefaultReasoningEfforts ? {
