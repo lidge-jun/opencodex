@@ -9,6 +9,7 @@ export type PassiveKeyLimit = {
   remaining?: number;
   resetAt?: number;
 };
+export type PassiveKeyLimitReading = PassiveKeyLimit & { stale: boolean };
 export type PassiveKeyIdentity = { owner: string; provider: PassiveKeyProvider; model: string };
 
 const PROVIDERS: readonly string[] = ["openai", "xai", "groq", "anthropic", "mistral"];
@@ -145,18 +146,16 @@ export class PassiveKeyLimitCache {
     this.entries.delete(oldest);
   }
 
-  get(identity: PassiveKeyIdentity, now: number): PassiveKeyLimit[] {
+  get(identity: PassiveKeyIdentity, now: number): PassiveKeyLimitReading[] {
     const key = this.key(identity);
     if (!key || !timestamp(now)) return [];
     const entry = this.entries.get(key);
     if (!entry) return [];
-    entry.rows = entry.rows.filter(row => now < row.observedAt || (now - row.observedAt < this.retentionMs
-      && (row.resetAt === undefined || now < row.resetAt)));
-    const rows = entry.rows.filter(row => now >= row.observedAt
-      && (row.resetAt === undefined || now < row.resetAt));
+    entry.rows = entry.rows.filter(row => now < row.observedAt || now - row.observedAt < this.retentionMs);
+    const rows = entry.rows.filter(row => now >= row.observedAt);
     // Keep the sequence fence until eviction; freshness applies to the returned rows.
     this.entries.delete(key);
     this.entries.set(key, entry);
-    return rows.map(row => ({ ...row }));
+    return rows.map(row => ({ ...row, stale: row.resetAt !== undefined && now >= row.resetAt }));
   }
 }

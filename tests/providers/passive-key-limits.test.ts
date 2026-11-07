@@ -65,7 +65,7 @@ describe("passive key observation cache", () => {
     expect(cache.record(identity, response(7), at, 2)).toBe(true);
     expect(cache.record(identity, response(2), at + 50, 1)).toBe(false);
     expect(cache.record(identity, response(1), at + 50, 2)).toBe(false);
-    expect(cache.get(identity, at + 100)).toEqual([{ dimension: "requests", observedAt: at, remaining: 7, resetAt: at + 10000 }]);
+    expect(cache.get(identity, at + 100)).toEqual([{ dimension: "requests", observedAt: at, remaining: 7, resetAt: at + 10000, stale: false }]);
   });
   test("empty newer responses fence earlier sends, including the first response", () => {
     const cache = new PassiveKeyLimitCache();
@@ -80,7 +80,17 @@ describe("passive key observation cache", () => {
   test("expired rows are stale and missing resets live only for retention", () => {
     const cache = new PassiveKeyLimitCache({ retentionMs: 20000 });
     cache.record(identity, headers({ "x-ratelimit-remaining-requests": "5", "x-ratelimit-reset-requests": "1s", "x-ratelimit-remaining-tokens": "10" }), at, 1);
-    expect(cache.get(identity, at + 1000)).toEqual([{ dimension: "tokens", observedAt: at, remaining: 10 }]);
+    expect(cache.get(identity, at + 1000)).toEqual([
+      { dimension: "requests", observedAt: at, remaining: 5, resetAt: at + 1000, stale: true },
+      { dimension: "tokens", observedAt: at, remaining: 10, stale: false },
+    ]);
+    const fresh = new PassiveKeyLimitCache({ retentionMs: 20000 });
+    fresh.record(identity, headers({ "x-ratelimit-remaining-requests": "5", "x-ratelimit-reset-requests": "1s", "x-ratelimit-remaining-tokens": "10" }), at, 1);
+    expect(fresh.get(identity, at + 999)).toEqual([
+      { dimension: "requests", observedAt: at, remaining: 5, resetAt: at + 1000, stale: false },
+      { dimension: "tokens", observedAt: at, remaining: 10, stale: false },
+    ]);
+    expect(cache.get(identity, at + 19999)[0]?.stale).toBe(true);
     expect(cache.get(identity, at + 20000)).toEqual([]);
   });
   test("idle observations are removed after retention without another cache access", async () => {
