@@ -245,11 +245,13 @@ test("display-only API and Vibe budgets do not rank keys in the quota strategy",
 
 test.each([[100, 0], [0, 100], [undefined, 100]] as const)("passive quota pool excludes Mistral display budgets (API %s, Vibe %s)", async (api, vibe) => {
   const deepseek = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "test-deepseek-key" } as const;
-  const cfg = { ...config, providers: { mistral: provider, deepseek } } as OcxConfig;
+  const openrouter = { adapter: "openai-chat", authMode: "key", baseUrl: "https://openrouter.ai/api/v1", apiKey: "test-openrouter-key" } as const;
+  const cfg = { ...config, providers: { mistral: provider, deepseek, openrouter } } as OcxConfig;
   const resetAt = "2099-12-01T00:00:00Z";
   globalThis.fetch = (async input => {
     const url = String(input);
     if (url.includes("deepseek.com")) return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
+    if (url.includes("openrouter.ai")) return Response.json({ data: { limit: 20, limit_remaining: 15 } });
     if (url.endsWith("/subscription")) return Response.json(subscription);
     return Response.json({
       api_budget: { ...budget.api_budget, usage_percentage: api, initial_budget: api === undefined ? 0 : 20, reset_at: resetAt },
@@ -270,5 +272,6 @@ test.each([[100, 0], [0, 100], [undefined, 100]] as const)("passive quota pool e
   if (!result.ok) throw new Error(result.error);
   expect(QuotaPoolSchema.parse(result.pool)).toEqual(result.pool);
   expect(result.pool.providers.find(row => row.provider === "mistral")?.pooled).toEqual({ windows: [] });
-  expect(result.pool.providers.find(row => row.provider === "deepseek")?.pooled.windows.length).toBeGreaterThan(0);
+  expect(result.pool.providers.find(row => row.provider === "deepseek")?.pooled.windows).toEqual([]);
+  expect(result.pool.providers.find(row => row.provider === "openrouter")?.pooled.windows.length).toBeGreaterThan(0);
 });
