@@ -300,6 +300,23 @@ describe("toggle-only Chat reasoning capability", () => {
   });
 
   test.each([
+    ["max", undefined], ["ultra", undefined], ["max", "gateway-object"], ["ultra", "gateway-object"],
+  ] as const)("native dual-axis wire omits the aliased %s effort on %s", (effort, reasoningWireFormat) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const explicit of [undefined, false, true]) {
+      const raw = { ...request(effort), ...(explicit === undefined ? {} : { reasoning: { enabled: explicit } }) };
+      const body = JSON.parse(buildOpenAIChatPassthroughRequest(target, raw, toggleModel, false).body);
+      expect(body.thinking).toEqual({ type: explicit === false ? "disabled" : "enabled" });
+      expect(body.reasoning_effort).toBeUndefined();
+      expect(body.reasoning).toBeUndefined();
+    }
+  });
+
+  test.each([
     [undefined, false], [undefined, true],
     ["gateway-object", false], ["gateway-object", true],
   ] as const)("dual controls retain %s effort policy with tools=%s", (reasoningWireFormat, hasTools) => {

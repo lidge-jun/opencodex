@@ -1,7 +1,7 @@
 import { resolveThinkingEnabled } from "../../clients/reasoning-controls";
 import { declaredModelCapabilities, resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { registryEntryForProviderDestination } from "../../providers/registry";
-import { configuredReasoningEfforts, mapReasoningEffort, resolveEffortAtOrBelow } from "../../reasoning-effort";
+import { configuredReasoningEfforts, isDeclaredReasoningEffort, isReasoningEffortOmitted, mapReasoningEffort, reasoningEffortMapFor, resolveEffortAtOrBelow } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
 import type { AdapterRequest } from "../base";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
@@ -100,8 +100,16 @@ export function applyExplicitChatReasoningWirePolicy(options: {
     if (capabilities.supportsThinkingToggle === false) delete body.thinking;
     return { handled: true };
   }
+  const omitIndependentEffort = toggleWire && declaresIndependentChatReasoningEffort(provider, modelId)
+    && requestedStrength !== undefined
+    && isReasoningEffortOmitted(reasoningEffortMapFor(provider, modelId)?.[requestedStrength]);
+  if (omitIndependentEffort) delete body.reasoning_effort;
   const resolvedThinkingEnabled = toggleWire && !toggleDisabled
-    ? resolveThinkingEnabled(provider, modelId, { thinkingEnabled, reasoning: requestedEffort })
+    ? resolveThinkingEnabled(provider, modelId, {
+      thinkingEnabled: thinkingEnabled ?? (omitIndependentEffort && requestedStrength !== undefined && isDeclaredReasoningEffort(requestedStrength)
+        ? requestedStrength !== "none" : undefined),
+      reasoning: requestedEffort,
+    })
     : undefined;
   if (toggleDisabled) {
     delete body.thinking;
