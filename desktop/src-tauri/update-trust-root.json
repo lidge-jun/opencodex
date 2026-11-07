@@ -1,0 +1,38 @@
+{
+  "schema": "ocx.update.root/1",
+  "revision": 1,
+  "expiresAt": "2028-11-07T00:00:00Z",
+  "rootKeys": [
+    {
+      "keyId": "eae4c0180e8ca39a844b3c0e1ec28842261e85628d6dee77ceff5dd081853799",
+      "algorithm": "minisign-ed25519-blake2b512/1",
+      "publicKey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDNzZCMDg0NkVCRUJGODEKUldTQnY3NXVoTEIyckhRUXJMOXJRUDR0aHQ2L3pLVHVweXFSc1lzS24vWDNiSUJ5MXJIZmpyb2sK"
+    }
+  ],
+  "rootThreshold": 1,
+  "releaseKeys": [
+    {
+      "keyId": "eae4c0180e8ca39a844b3c0e1ec28842261e85628d6dee77ceff5dd081853799",
+      "algorithm": "minisign-ed25519-blake2b512/1",
+      "publicKey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDNzZCMDg0NkVCRUJGODEKUldTQnY3NXVoTEIyckhRUXJMOXJRUDR0aHQ2L3pLVHVweXFSc1lzS24vWDNiSUJ5MXJIZmpyb2sK",
+      "channels": [
+        "latest",
+        "preview",
+        "nightly"
+      ],
+      "roles": [
+        "release",
+        "tree",
+        "desktop-artifact",
+        "standalone-artifact",
+        "guardian-artifact"
+      ]
+    }
+  ],
+  "releaseThreshold": 1,
+  "channels": [
+    "latest",
+    "preview",
+    "nightly"
+  ]
+}
