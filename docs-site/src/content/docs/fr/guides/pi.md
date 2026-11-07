@@ -54,6 +54,10 @@ Les identifiants de modèle sont les sélecteurs canoniques du proxy : les modè
 suffixe — `(anthropic)`, `(native)`, `(routed)` — permet de distinguer, dans le sélecteur de Pi, deux modèles de même nom
 provenant de services en amont différents.
 
+L'export Pi conserve les barres obliques des identifiants imbriqués : par exemple,
+`openrouter/openrouter/free` sélectionne le modèle `openrouter/free` d'OpenRouter.
+Les alias personnalisés et les sélecteurs Fast synthétiques gardent leurs noms actuels.
+
 ## Où ça va
 
 La configuration globale du modèle Pi est :

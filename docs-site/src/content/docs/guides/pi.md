@@ -54,6 +54,10 @@ Model ids are the proxy's canonical selectors, so routed models appear as `provi
 suffix — `(anthropic)`, `(native)`, `(routed)` — is what makes two same-named models from
 different upstreams distinguishable in Pi's picker.
 
+For nested upstream model IDs, Pi's export preserves the slashes: for example,
+`openrouter/openrouter/free` selects the `openrouter/free` model from OpenRouter.
+Custom aliases and synthetic Fast selectors keep their existing names.
+
 ## Where it goes
 
 Pi's global model config is:

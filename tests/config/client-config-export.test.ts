@@ -24,6 +24,7 @@ import {
 } from "../../src/clients/config-export";
 import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, opencodeGlobalConfigPath } from "../../src/cli/opencode";
 import { exportModelsFromProxyRows } from "../../src/cli/export-command";
+import { routeModel } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -296,6 +297,33 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
 });
 
 describe("Pi serializer (accept criterion 2)", () => {
+  test("Pi emits raw nested provider selectors while preserving aliases and Fast rows", () => {
+    const input = ctx({ models: [
+      { namespaced: "openrouter/openrouter-free", provider: "openrouter", id: "openrouter/free", fastRowAvailable: true },
+      { namespaced: "provider/chosen-alias", provider: "provider", id: "org/model" },
+      { namespaced: "gpt-5.6-luna", native: true, provider: "openai", id: "gpt-5.6-luna" },
+    ] });
+    const provider = piConfig(input).providers.opencodex!;
+    expect(provider.models.map(model => model.id)).toEqual([
+      "gpt-5.6-luna", "openrouter/openrouter/free", "openrouter/openrouter-free--fast", "provider/chosen-alias",
+    ]);
+    expect(buildClientContribution("pi", input).fragments[0]!.value).toEqual(provider);
+    const omo = buildClientConfig("omo", input) as PiGeneratedConfig;
+    expect(omo.providers.opencodex!.models.map(model => model.id)).toContain("openrouter/openrouter-free");
+  });
+
+  test("a flattened management row exports a Pi selector that routes to the native slug", () => {
+    const config = cfg({ defaultProvider: "openrouter", providers: {
+      openrouter: { adapter: "openai-chat", baseUrl: "https://openrouter.example.test/v1", models: ["openrouter/free"] },
+    } });
+    const models = exportModelsFromProxyRows([
+      { namespaced: "openrouter/openrouter-free", provider: "openrouter", id: "openrouter/free" },
+    ], config);
+    const selector = piConfig(ctx({ models, config })).providers.opencodex!.models[0]!.id;
+    expect(selector).toBe("openrouter/openrouter/free");
+    expect(routeModel(config, selector)).toMatchObject({ providerName: "openrouter", modelId: "openrouter/free" });
+  });
+
   test("models is an array keyed by id, not a keyed object", () => {
     const provider = piConfig().providers.opencodex!;
     expect(Array.isArray(provider.models)).toBe(true);
