@@ -3,6 +3,7 @@ import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../l
 import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
 import { resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
+import { extractPassiveWireModel } from "./quota/passive-wire-model";
 
 const destinations = new Map<string, PassiveKeyProvider>([
   ["https://api.openai.com", "openai"], ["https://api.anthropic.com", "anthropic"],
@@ -57,16 +58,6 @@ function stillConfigured(config: OcxConfig, name: string, snapshot: OcxProviderC
   return resolveProviderApiKeyPassively(reference) === snapshot.apiKey;
 }
 
-/** Parse bounded serialized bodies only; large sends are accepted when model is first. */
-function wireModel(body: BodyInit | null | undefined): string | undefined {
-  if (typeof body !== "string") return undefined;
-  const prefix = /^\s*\{\s*"model"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]/.exec(body.slice(0, 4096))?.[1];
-  try {
-    const value = prefix ? JSON.parse(prefix) : body.length <= 65536 ? JSON.parse(body)?.model : undefined;
-    return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value) ? value : undefined;
-  } catch { return undefined; }
-}
-
 /** Record only a configured key at the final destination and credential boundary. */
 export function passiveKeyPhysicalFetch(
   physicalFetch: typeof globalThis.fetch, config: OcxConfig, name: string, provider: OcxProviderConfig,
@@ -78,7 +69,7 @@ export function passiveKeyPhysicalFetch(
     let destination: URL;
     try { destination = new URL(url); } catch { return physicalFetch(input, init); }
     const vendor = destinations.get(destination.origin);
-    const model = wireModel(init?.body);
+    const model = extractPassiveWireModel(init?.body);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     const key = snapshot.apiKey!;
     const expectedAuth = vendor === "anthropic" && snapshot.apiKeyTransport !== "bearer"

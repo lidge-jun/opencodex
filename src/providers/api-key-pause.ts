@@ -6,6 +6,7 @@ import type { AccountPauseDetails } from "../types/account-auto-pause";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { resolveProviderApiKey } from "./api-key-resolve";
 import { commitProviderApiKeySelection } from "./api-key-selection";
+import { clearPassiveKeyLimits } from "./passive-key-observation";
 
 export function setProviderApiKeyPaused(config: OcxConfig, name: string, id: string, paused: boolean,
   automatic?: { fence: AccountAutoPauseFence; selection: ProviderApiKeySelection; pauseRevision?: string; resolvedKey?: string; details: AccountPauseDetails }): boolean {
@@ -28,5 +29,7 @@ export function setProviderApiKeyPaused(config: OcxConfig, name: string, id: str
     } else if (!paused && !provider.apiKey) provider.apiKey = entry.key;
     return { changed: true, selectionChanged: true, value: true };
   }, automatic?.selection);
-  return result.status === "committed" && result.value;
+  const committed = result.status === "committed" && result.value;
+  if (committed) clearPassiveKeyLimits(name);
+  return committed;
 }

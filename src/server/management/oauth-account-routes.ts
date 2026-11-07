@@ -1195,7 +1195,6 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
     const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
     if (!setProviderApiKeyPaused(config, body.name, body.id, body.paused)) return jsonResponse({ error: "key not found" }, 404);
-    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits(body.name);
     return jsonResponse({ ok: true });
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {

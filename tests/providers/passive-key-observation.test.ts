@@ -5,6 +5,8 @@ import * as observations from "../../src/providers/passive-key-observation";
 const { getPassiveKeyLimits, listPassiveKeyLimits, passiveKeyPhysicalFetch } = observations;
 import type { OcxConfig } from "../../src/types";
 import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
+import { saveConfig } from "../../src/config";
+import { setProviderApiKeyPaused } from "../../src/providers/api-key-pause";
 import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
 import * as decision from "../../src/providers/quota-decision-snapshot";
 
@@ -28,6 +30,13 @@ test("an opaque custom executor cannot assign its response to the configured key
   const send = passiveKeyPhysicalFetch(async (_input, _init) => response(), config, "opaque-executor", routedProviderConfig("opaque-executor", config.providers["opaque-executor"]!));
   await send("https://api.groq.com/openai/v1/chat/completions", init);
   expect(getPassiveKeyLimits(config, "opaque-executor", "model")).toEqual([]);
+});
+
+test("a large request with model after its input still retains the wire identity", async () => {
+  const config = fixture("large-model-last");
+  const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "large-model-last", routedProviderConfig("large-model-last", config.providers["large-model-last"]!));
+  await send("https://api.groq.com/openai/v1/chat/completions", { ...init, body: JSON.stringify({ messages: [{ content: "x".repeat(128000) }], model: "model" }) });
+  expect(getPassiveKeyLimits(config, "large-model-last", "model")).toMatchObject([{ remaining: 5 }]);
 });
 
 test("changed wire auth and rewritten destinations cannot claim an account's reading", async () => {
@@ -91,6 +100,23 @@ test("retiring one provider does not clear another provider's observation", asyn
   observations.clearPassiveKeyLimits("provider-a");
   expect(getPassiveKeyLimits(a, "provider-a", "model")).toEqual([]);
   expect(getPassiveKeyLimits(b, "provider-b", "model")).toMatchObject([{ remaining: 5 }]);
+});
+
+test("pause and unpause retire the prior key incarnation, including its in-flight send", async () => {
+  const config = fixture("pause-incarnation");
+  config.providers["pause-incarnation"]!.apiKeyPool = [{ id: "one", key: "synthetic-key" }];
+  saveConfig(config);
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  let count = 0;
+  const send = passiveKeyPhysicalFetch(trusted(async () => { if (++count === 2) await wait; return response(); }), config, "pause-incarnation", routedProviderConfig("pause-incarnation", config.providers["pause-incarnation"]!));
+  await send("https://api.groq.com/openai/v1/chat/completions", init);
+  const pending = send("https://api.groq.com/openai/v1/chat/completions", init);
+  expect(setProviderApiKeyPaused(config, "pause-incarnation", "one", true)).toBe(true);
+  expect(setProviderApiKeyPaused(config, "pause-incarnation", "one", false)).toBe(true);
+  release();
+  await pending;
+  expect(listPassiveKeyLimits(config)).toEqual([]);
 });
 
 test.each(["get", "list", "send"] as const)("passive %s does not observe or invalidate decision credentials after an env replacement", async operation => {
