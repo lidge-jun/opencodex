@@ -97,7 +97,8 @@ test("create exposes and saves nativeAlias plus displayName", async () => {
   const nativeAlias = [...container.querySelectorAll<HTMLButtonElement>("button.switch-labeled")].find(button => button.textContent?.includes("Native OpenAI alias"))!;
   const displayName = container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!;
   expect(nativeAlias).toBeTruthy();
-  expect(nativeAlias.getAttribute("aria-pressed")).toBe("false");
+  expect(nativeAlias.getAttribute("role")).toBe("switch");
+  expect(nativeAlias.getAttribute("aria-checked")).toBe("false");
   expect(displayName).toBeTruthy();
   await act(async () => {
     setInputValue(alias, "gpt-5.6-sol");
@@ -129,7 +130,8 @@ test("edit renders existing nativeAlias state and persists display-name changes"
   const { container, root } = await renderPanel(baseline, false, item => { saved = item; });
   const nativeAlias = [...container.querySelectorAll<HTMLButtonElement>("button.switch-labeled")].find(button => button.textContent?.includes("Native OpenAI alias"))!;
   const displayName = container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!;
-  expect(nativeAlias.getAttribute("aria-pressed")).toBe("true");
+  expect(nativeAlias.getAttribute("role")).toBe("switch");
+  expect(nativeAlias.getAttribute("aria-checked")).toBe("true");
   expect(displayName.value).toBe("Nova Sol");
   await act(async () => { setInputValue(displayName, "Nova Sol 2"); });
   const save = container.querySelector<HTMLButtonElement>("#cwi-edit-save");

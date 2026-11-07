@@ -116,7 +116,7 @@ function imageSwitch(scope: ParentNode = container) {
 }
 function expectImages(supported: boolean, scope: ParentNode = container) {
   expect(imageSwitch(scope).disabled).toBe(!supported);
-  expect(imageSwitch(scope).getAttribute("aria-pressed")).toBe(String(supported));
+  expect(imageSwitch(scope).getAttribute("aria-checked")).toBe(String(supported));
 }
 /** The effort picker's option values (the app's Select, opened and closed to read them). */
 async function effortValues(selector = "#cwi-effort") {
