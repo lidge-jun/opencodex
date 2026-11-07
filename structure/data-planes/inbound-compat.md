@@ -63,8 +63,8 @@ unchanged, on both join credentials described under streaming audio. Coverage li
 `src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
 Browser sockets offer opencodex-audio and opencodex-key.<base64url-key>; only the public
 marker is selected downstream. Invalid presented keys cannot become credential-free native calls.
-`src/server/audio-dictation.ts` maps the validated desktop session.start/audio.append/session.close
-protocol to ChatGPT dictation with server-owned credentials and a five-minute lifetime.
+`src/server/audio-dictation.ts` validates session.start/audio.append/audio.flush/session.close for ChatGPT dictation with server-owned credentials, a ten-minute recording budget, and a separate bounded 60-second finalization window after close.
+The forwarded TTL does not set the recording budget. ScribeTray's bounded optional metadata and minimal server VAD preserve PCM checks and refusal of audio after close.
 The `src/server/index.ts` byte relay retains bounded queues, handshake/session deadlines and
 the account/turn lifecycle until its upstream closes. `src/server/ws-bridge.ts` carries the
 in-memory callbacks and signal; handshake credentials are cleared after socket construction.
