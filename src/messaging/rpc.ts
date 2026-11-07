@@ -1,8 +1,10 @@
+import { isAbsolute } from "node:path";
+import { realpathSync, statSync } from "node:fs";
 import { MessageBudget } from "./budget";
 import { localSocket, type LocalSocket } from "./socket";
 import { isRecord, isThreadId, LocalMessagingError, type LocalMetadataClient, type LocalThread } from "./types";
 
-type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add";
+type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add" | "thread/resume";
 interface QueueResult {
   status: "not_sent" | "queued" | "unknown";
   error?: { code: string; message: string };
@@ -16,9 +18,11 @@ interface Pending {
   method: Method;
 }
 
-/** Metadata discovery plus one text-only queue method; no lifecycle/turn/permission mutation. */
+/** Default metadata/queue connection; lifecycle access requires a separate explicit factory. */
 export class LocalMessageRpc implements LocalMetadataClient {
   private nextId = 0;
+  private allowResume = false;
+  private serverHome: unknown;
   private readonly pending = new Map<number, Pending>();
   private closed = false;
   private readonly abort: () => void;
@@ -76,10 +80,42 @@ export class LocalMessageRpc implements LocalMetadataClient {
         capabilities: { experimentalApi: true },
       });
       if (!isRecord(result)) throw rpc.invalidMetadata();
+      rpc.serverHome = result.codexHome;
       budget.throwIfEnded();
       socket.send(JSON.stringify({ method: "initialized", params: {} }));
       return rpc;
     } catch (error) { rpc.close(); throw error; }
+  }
+
+  /** Grant only existing-thread resume on an explicitly selected trusted local server. */
+  static async connectForResume(url: string, budget: MessageBudget, codexHome: string): Promise<LocalMessageRpc> {
+    const rpc = await LocalMessageRpc.connect(url, budget);
+    try {
+      if (typeof rpc.serverHome !== "string" || !isAbsolute(rpc.serverHome) || !statSync(codexHome).isDirectory() || realpathSync(rpc.serverHome) !== realpathSync(codexHome)) {
+        throw new LocalMessagingError("resume_home_mismatch", "The selected server must report the configured Codex home.");
+      }
+      rpc.allowResume = true;
+      return rpc;
+    } catch (error) {
+      rpc.close();
+      throw error instanceof LocalMessagingError ? error : new LocalMessagingError("resume_home_unverified", "The selected server home could not be verified.");
+    }
+  }
+
+  /** Acknowledgement is not execution/completion; uncertain writes are never retried. */
+  async resumeThread(threadId: string) {
+    let written = false;
+    try {
+      if (!this.allowResume || !isThreadId(threadId)) throw new LocalMessagingError("resume_disabled", "Explicit resume access and an exact thread UUID are required.");
+      const raw = await this.request("thread/resume", { threadId, excludeTurns: true }, () => { written = true; });
+      const thread = isRecord(raw) ? raw.thread : null;
+      if (!isRecord(thread) || thread.id !== threadId || !isRecord(thread.status)
+        || !["idle", "active"].includes(String(thread.status.type))) throw this.invalidMetadata();
+      return { status: "resumed" as const, observedStatus: thread.status.type as "idle" | "active" };
+    } catch (error) {
+      return { status: written ? "unknown" as const : "not_resumed" as const,
+        error: error instanceof LocalMessagingError ? { code: error.code } : { code: "resume_unavailable" } };
+    }
   }
 
   /** Read up to 50 loaded UUIDs, rejecting malformed IDs and unbounded pagination cursors. */
@@ -183,7 +219,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
       const pending = this.pending.get(raw.id);
       if (!pending) {
         // During a one-shot submission an uncorrelated response cannot acknowledge our write.
-        if ([...this.pending.values()].some(request => request.method === "thread/queue/add")) throw new Error();
+        if ([...this.pending.values()].some(request => ["thread/queue/add", "thread/resume"].includes(request.method))) throw new Error();
         return;
       }
       let rejection: LocalMessagingError | undefined;
@@ -197,7 +233,8 @@ export class LocalMessageRpc implements LocalMetadataClient {
           rejection = unsupported
             ? new QueueRejection("unsupported_queue", "Your Codex daemon does not support local queueing (experimental thread/queue/add).")
             : new QueueRejection("queue_rejected", "Codex rejected the local queue submission.");
-        } else rejection = new LocalMessagingError("rpc_rejected", "Codex rejected the local metadata request.");
+        } else if (pending.method === "thread/resume") rejection = new LocalMessagingError("resume_rejected", "Codex rejected the explicit resume request.");
+        else rejection = new LocalMessagingError("rpc_rejected", "Codex rejected the local metadata request.");
       }
       this.pending.delete(raw.id);
       clearTimeout(pending.timer);

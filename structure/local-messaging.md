@@ -29,8 +29,9 @@ Only the validated real address is connected; no helper or reconnect is used.
 `src/messaging/rpc.ts` initializes one connection with experimental API capability
 and sends initialized before metadata requests. Its explicit request whitelist
 contains initialize, loaded-session pagination, metadata-only thread reads and
-one text-only `thread/queue/add`. It cannot create/resume a session, start/steer a
-turn or grant permission. A thread read returns only ID, name and status,
+one text-only `thread/queue/add`. Default local/send and remote-peer connections
+cannot resume a session, start/steer a turn or grant permission. A separate explicit
+MCP factory grants only thread/resume as described below. A thread read returns only ID, name and status,
 excluding history, preview and working directory.
 
 Responses must match the requested ID and bounded shape. RPC errors are sanitized.
@@ -248,3 +249,45 @@ rejects immediate repeats, not arbitrary multi-page cycles. The actual CLI
 opt-in handshake is exercised by `tests/cli/cli-message-mcp.test.ts`; existing inert
 activation and default-tool tests remain in force. Offline helpers prove protocol
 contracts, not native app processing, goal behavior or cross-client registration.
+
+
+## Explicit existing-server resume
+
+`src/messaging/mcp-resume-tools.ts` exposes codex_resume_thread only when the MCP
+host receives both --allow-resume and --resume-socket. Default queue and read
+options grant no execution access. Initialization/import allocates no connection.
+The selected existing Unix socket uses the local transport's ownership, ancestor,
+address and frame bounds. No listener, daemon, CLI helper or session is created.
+
+`src/messaging/rpc.ts` grants resume only through connectForResume, after initialize
+reports a home whose real path equals the configured Codex home. Older servers
+without a verifiable home refuse. Default connect/attach instances cannot resume;
+remote peers gain no lifecycle capability. The preflight exact-UUID thread/read
+uses includeTurns false. Idle/active targets return already_loaded without a
+resume RPC; systemError refuses. A notLoaded target is resumed once with only
+threadId and excludeTurns true: no model, cwd, sandbox, permission or approval
+policy override is supplied. No message is queued and no turn/start or steer is
+issued. Existing queued work may execute under the saved native configuration.
+
+resumed means a validated same-thread acknowledgement, never delivery, execution
+or completion; executionVerified is always false. Live state is scoped to this
+selected server, not other processes. A concurrent external resume can rejoin the
+same native thread; there is no global execution lease. The MCP host refuses
+same-thread overlapping resume calls and shares its four-operation bound. A
+20-second inherited budget includes connection, home verification, preflight and
+resume, with existing ten-second RPC limits. After a resume write, rejection,
+timeout, malformed/uncorrelated acknowledgement, approval request or disconnect
+is unknown, with no replay. Before that write, failures are not_resumed. Private
+server errors, history and paths are not returned.
+
+The bridge does not answer approval requests. Unexpected server requests close
+this connection; native approval handling belongs to the server's existing owner.
+Cancellation/disconnect closes only the MCP-owned connection, not the shared
+server or target turn. A resumed target can continue or await native approval
+without this connection. Callers inspect stored replies separately.
+
+`tests/codex-integration/messaging-mcp-resume.test.ts` covers default refusal,
+same-home verification, state preflight, exact bounded parameters, unknown writes,
+unsupported approval handling and cancellation. `tests/cli/cli-message-mcp-resume.test.ts`
+covers paired flags, actual MCP registration/invocation, inert activation,
+same-thread admission, four-operation limits and disconnect cleanup.

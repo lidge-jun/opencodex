@@ -47,7 +47,7 @@ Windows is explicitly refused.
   to 16 KiB; NUL and empty text are refused. There is no name guessing, model
   override, permission grant or automatic response.
 
-Each tool call starts a short-lived, explicitly selected Codex CLI app-server
+Each queue/metadata or stored-read tool call starts a short-lived, explicitly selected Codex CLI app-server
 over stdio. It uses `thread/list` or the same experimental `thread/queue/add`
 method as `codex queue`, without putting text in subprocess arguments. It issues
 no daemon-start, login, thread-resume, turn-start or steer request. Ordinary
@@ -392,3 +392,40 @@ is not controlled by it.
 
 Mesh, dashboard/cache controls, isolation, Claude messaging, managed skills and
 idle notifications remain outside this contribution.
+
+
+## Explicit existing-server resume
+
+To let an MCP client explicitly resume an existing unloaded Codex conversation,
+add both flags to the MCP host's arguments:
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read --allow-resume --resume-socket /absolute/path/to/existing.sock
+```
+
+This adds `codex_resume_thread`, with one exact `threadId` UUID. Grant it only when
+you intend to execute already queued work and accept possible model usage. Queueing,
+reading and resuming remain separate calls; queueing never implicitly resumes.
+No server is installed or started. The socket must be an existing trusted local
+Unix App Server, and its initialization must report the same canonical Codex home.
+Missing/unverifiable/mismatched homes refuse. Network/SSH endpoints and Windows
+are not supported by this tool.
+
+The tool checks the selected server's live state. Loaded idle/active conversations
+return `already_loaded`; unhealthy conversations refuse. Only `notLoaded` targets
+receive one `thread/resume` with `excludeTurns: true`. It creates no conversation,
+sends no message and supplies no model, permission or approval overrides. State
+on other servers/processes is not verified; do not use this as a global execution
+lock. Overlapping resume calls for one UUID on this MCP host are refused.
+
+`resumed` is an acknowledgement, not proof that a message was processed or a task
+completed. `executionVerified` is always false. Failure before writing resume is
+`not_resumed`; uncertain results after writing, including errors or disconnects,
+are `unknown`. Never automatically repeat unknown operations or resend messages.
+Use the existing receipt and stored-reply tools to inspect results separately.
+
+The bridge never answers native approval requests. They require the server's
+existing owner/native client. Unsupported requests close this connection and can
+make the result unknown. Disconnect/cancellation closes the bridge connection,
+not the shared server or recipient turn; work may continue or await approval.
+Each call shares a 20-second budget and the MCP host's four-operation limit.
