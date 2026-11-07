@@ -1,3 +1,4 @@
+import { isRouteClientId, type RouteClientId } from "./route-intent";
 /**
  * Argument vectors for the system OpenSSH client used by machine links.
  *
@@ -288,6 +289,8 @@ try_ocx() {
 ${REMOTE_OCX_CANDIDATES}
 exit ${REMOTE_COMMAND_NOT_FOUND}`;
 
-export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix"): string[] {
-  return platform === "windows" ? windowsPinnedSyncArgv(linkId) : ["sh", "-c", REMOTE_PINNED_SYNC_SCRIPT, "ocx", linkId];
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
+  if (overwriteClient !== undefined && (!overwriteConflict || !isRouteClientId(overwriteClient))) throw new LinkSshArgumentError("invalid overwrite client");
+  const script = overwriteConflict ? REMOTE_PINNED_SYNC_SCRIPT.replace('sync --expect-link "$1" --json', 'sync --expect-link "$1" --json --overwrite-conflict' + (overwriteClient ? ` --overwrite-client ${overwriteClient}` : '')) : REMOTE_PINNED_SYNC_SCRIPT;
+  return platform === "windows" ? windowsPinnedSyncArgv(linkId, overwriteConflict, overwriteClient) : ["sh", "-c", script, "ocx", linkId];
 }

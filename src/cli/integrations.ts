@@ -240,10 +240,28 @@ export async function handleClientIntegrationCommand(
     const { handleIntegrationAsideSync } = await import("./integration-aside-sync");
     return handleIntegrationAsideSync(argv.slice(1), deps);
   }
+  // Explicit profiles and bound/planned or Droid-policy writes retain their legacy scope.
+  // A plain global toggle owns Home intent, so later device syncs preserve the choice.
+  if (["enable", "disable"].includes(argv[0] ?? "") && !argv.some(arg =>
+    ["--profile", "--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults"]
+      .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
+    return runCliAction(async () => {
+      const { integrationOption } = await import("./integration-input");
+      const { routeToAction } = await import("./route-to");
+      const args = argv.slice(1);
+      const client = integrationOption(args, "--client");
+      if (!client) throw new CliUsageError("--client <id> is required", CLIENT_USAGE);
+      await routeToAction([client, argv[0] === "enable" ? "on" : "off", ...args], deps);
+    });
+  }
   if (argv[0] === "preview" || argv.some(arg => ["--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults", "--model-names"]
     .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
     const { handleIntegrationPreviewCommand } = await import("./integration-preview");
-    return handleIntegrationPreviewCommand(argv, deps, expectedClientId);
+    const code = await handleIntegrationPreviewCommand(argv, deps, expectedClientId);
+    if (code === 0 && ["enable", "disable"].includes(argv[0] ?? "")) {
+      console.error("This scoped integration change leaves route intent unchanged; a later route-to sync may reapply the Home intent.");
+    }
+    return code;
   }
   return runCliAction(async () => {
     const args = [...argv];
@@ -357,6 +375,7 @@ export async function handleClientIntegrationCommand(
       ? batch.results.map(row => `aside:${String(row.profileId)}  ${String(row.message ?? (row.ok ? "updated" : "refused"))}${row.residual === true ? " Recovery did not finish." : ""}${typeof row.snapshotPath === "string" ? ` Backup: ${row.snapshotPath}` : ""}`)
       : [String(batch.message ?? `${client} ${action}d.`)]);
     if (batch.ok === false) throw new RuntimeApiError(batch.message ?? "Some Aside profiles could not be updated", 207, result);
+    if (profile !== undefined) console.error("This profile change leaves route intent unchanged; a later route-to sync may reapply the Home intent.");
   });
 }
 

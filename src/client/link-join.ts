@@ -319,7 +319,7 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
     result = await deps.runner.run(
       buildExecArgv({
         alias: input.alias,
-        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"]),
+        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), ...(deps.selectedClients ? ["--clients", deps.selectedClients.join(",")] : []), "--json"]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
@@ -383,6 +383,7 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
       transport: "link",
       link: { tunnelPort, linkId: issued.linkId },
       selectedClients: deps.selectedClients ?? ["codex", "claude"],
+      selectedClientsExplicit: deps.selectedClients !== undefined,
       managementTransport: "direct",
     }, {
       fetchImpl: deps.fetchImpl,

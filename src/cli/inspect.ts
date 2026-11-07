@@ -109,14 +109,8 @@ async function nativeIntegration(argv: string[], deps: RuntimeApiDeps): Promise<
     throw new CliUsageError(`expected on or off after ${action}`, USAGE);
   }
 
-  // Toggling rewrites the client's own config file, which is why each client has its own route
-  // rather than one route with a client parameter.
-  const result = await runtimeRequest(`/api/native-integrations/${action}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ enabled: state === "on" }),
-  }, deps);
-  printData(result, wantsJson, summaryLines(result));
+  const { routeToAction } = await import("./route-to");
+  await routeToAction([action, state, ...(wantsJson ? ["--json"] : [])], deps);
 }
 
 /**

@@ -752,8 +752,12 @@ const commandRunners: Record<string, CommandRunner> = {
     return await handleCompanionCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   route: async deps => {
+    if (deps.args[1] === "to") {
+      const { handleRouteToCommand } = await import("./route-to");
+      return await handleRouteToCommand(deps.args.slice(2), { findLiveProxy: deps.findLiveProxy });
+    }
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
-      console.error("Usage: ocx route <combo|policy> <subcommand>");
+      console.error("Usage: ocx route <to|combo|policy> <subcommand>");
       return 2;
     }
     if (deps.args[1] === "combo") {

@@ -1308,13 +1308,13 @@ describe("headless GUI parity CLI", () => {
     }
   }
 
-  test("client integration toggles hit the exact management routes", async () => {
-    const runtime = fakeRuntime();
+  test("client integration toggles update Home route intent", async () => {
+    const runtime = fakeRuntime(() => ({ schema: "ocx.route-to/1", devices: [{ id: "home", clients: [{ client: "hermes", intent: "on", source: "default", applied: "current" }] }] }));
     expect(await handleClientIntegrationCommand(["enable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
     expect(await handleClientIntegrationCommand(["disable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
     expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
-      ["/api/client-integrations/hermes", "PUT", { enabled: true }],
-      ["/api/client-integrations/hermes", "PUT", { enabled: false }],
+      ["/api/route-to", "PUT", { client: "hermes", action: "on" }],
+      ["/api/route-to", "PUT", { client: "hermes", action: "off" }],
     ]);
   });
 
@@ -1343,16 +1343,16 @@ describe("headless GUI parity CLI", () => {
      * an agent driving the proxy. That dead end is the reason the overwrite path
      * exists, so leaving it GUI-only reproduces it for half the users.
      */
-    const runtime = fakeRuntime();
+    const runtime = fakeRuntime(() => ({ schema: "ocx.route-to/1", devices: [{ id: "home", clients: [{ client: "hermes", intent: "on", source: "default", applied: "current" }] }] }));
     expect(await handleClientIntegrationCommand(["enable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
     expect(await handleClientIntegrationCommand(
       ["enable", "--client", "hermes", "--overwrite-conflict", "--json"],
       runtime.deps,
     )).toBe(0);
     expect(runtime.requests.map(row => row.body)).toEqual([
-      // Absent rather than false: an older proxy sees the request it always saw.
-      { enabled: true },
-      { enabled: true, overwriteConflict: true },
+      // Permission belongs only to the explicit operation; it is never persisted.
+      { client: "hermes", action: "on" },
+      { client: "hermes", action: "on", overwriteConflict: true },
     ]);
   });
 
@@ -1650,13 +1650,13 @@ describe("Aside profile integration CLI", () => {
     expect(runtime.requests).toHaveLength(0);
   });
 
-  test("unqualified Aside enable remains bulk and reports partial failure as nonzero", async () => {
+  test("unqualified Aside enable updates Home intent and refuses an unverified result", async () => {
     const runtime = fakeRuntime(() => ({
       ok: false, clientId: "aside", message: "one profile refused",
       results: [{ profileId: 0, ok: true, message: "updated" }, { profileId: 1, ok: false, message: "conflict" }],
     }));
     expect(await handleClientIntegrationCommand(["enable", "--client", "aside", "--json"], runtime.deps)).toBe(1);
-    expect(runtime.requests[0]).toEqual({ path: "/api/client-integrations/aside/profiles", method: "PUT", body: { enabled: true } });
+    expect(runtime.requests[0]).toEqual({ path: "/api/route-to", method: "PUT", body: { client: "aside", action: "on" } });
   });
 });
 
@@ -1746,7 +1746,7 @@ describe("Aside CLI recovery metadata", () => {
     }
   });
 
-  test.each([false, true])("bulk 207 retains each profile's recovery metadata and fails nonzero (json=%s)", async wantsJson => {
+  test.each([false, true])("profile-addressed 207 retains recovery metadata and fails nonzero (json=%s)", async wantsJson => {
     const snapshotPath = "/tmp/aside-recovery/profile 2/models.json.before-write";
     const otherSnapshot = String.raw`C:\Aside Recovery\profile 7\models.json.bak`;
     const longMessage = `Profile 2 write failed: ${"could not replace models.json; ".repeat(80)}`;
@@ -1764,7 +1764,7 @@ describe("Aside CLI recovery metadata", () => {
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(await handleClientIntegrationCommand([
-        "enable", "--client", "aside", ...(wantsJson ? ["--json"] : []),
+        "enable", "--client", "aside", "--profile", "2", ...(wantsJson ? ["--json"] : []),
       ], runtime.deps)).toBe(1);
       const stdout = log.mock.calls.map(call => String(call[0])).join("\n");
       if (wantsJson) {
@@ -1780,7 +1780,7 @@ describe("Aside CLI recovery metadata", () => {
       }
       expect(error.mock.calls.map(call => String(call[0])).join("\n")).toContain(result.message);
       expect(runtime.requests).toEqual([{
-        path: "/api/client-integrations/aside/profiles", method: "PUT", body: { enabled: true },
+        path: "/api/client-integrations/aside/profiles/2", method: "PUT", body: { enabled: true },
       }]);
     } finally {
       log.mockRestore();

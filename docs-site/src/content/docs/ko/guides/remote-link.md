@@ -71,6 +71,29 @@ ocx disconnect
 
 자식 연결을 끊으려면 자식에서 `ocx disconnect`를 실행합니다. 이 명령은 클라이언트 터널을 끊고 SSH를 통해 홈에서 링크를 폐기합니다. 홈에서 폐기하지 못하면 다음 문구를 출력합니다: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
+## 기기별 Route to
+
+Home의 Route to 의도는 Child에 기본으로 동기화됩니다. 각 기기는 자신의 설치된 클라이언트, 경로, 수신 포트, 제공 모델 카탈로그로 설정을 생성합니다. 우선순위는 기기 override > Home 기본값 > 내장 기본값(Codex·Claude Code만 켜짐)입니다.
+
+```sh
+ocx route to status --device all --json
+ocx route to aside on --accounts all
+ocx route to aside on --device my-child --accounts stable-aside-user-id
+ocx route to pi off --device my-child
+ocx route to pi inherit --device my-child
+ocx route to sync --device my-child
+```
+
+`--device` 없는 Home 쓰기는 기본값을 바꾸고 Home에도 같은 적용 경로로 반영합니다. Child는 다음 동기화 tick에 반영합니다. Home이 추가한 Child는 명시적 sync로 즉시 적용합니다. Child가 먼저 연결한 링크는 인증된 읽기 watch를 유지하며, Home sync가 이를 즉시 깨웁니다. 적용 보고가 도착하기 전에는 `pending`으로 표시하고, 활성 watch가 없으면 다음 tick을 기다린다고 안내합니다. 이 링크의 충돌 덮어쓰기는 Child에서 사람이 `ocx route to sync --overwrite-conflict`로 허용해야 합니다. Child의 로컬 sync는 즉시 적용합니다.
+
+Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `all`은 해당 기기의 모든 계정 프로필, `none`은 선택 없음입니다. Child의 일반 쓰기는 실행할 정확한 Home 명령을 안내하며 거부합니다. Child 사용자는 `ocx route to aside off --local`로 자신의 기기만 제외하고 `inherit --local`로 복귀할 수 있습니다. 로컬 `on`은 허용하지 않습니다.
+
+상태 JSON은 `ocx.route-to/1`이며 의도·출처·적용 결과를 구분합니다. `not_installed`, `conflict`, `failed`는 성공으로 처리하지 않습니다. 충돌 덮어쓰기는 해당 실행의 명시적 `--overwrite-conflict`가 필요합니다. 자세한 동작은 [영문 가이드](/guides/remote-link/#route-clients-per-device)를 참고하세요.
+
+기존에 소유권 기록이 있는 연동은 Home 기본값으로 이전합니다. 명시적인 `connect --clients` 선택은 초기 기기 override로 유지하며, Home의 해당 기기 `on|off|inherit`가 그 선택을 대체합니다. Child 보고는 Home 정책을 변경하지 않습니다.
+
+disconnect는 소유한 키만 복구하므로 이후 편집한 모델·훅·신뢰 프로젝트·Computer Use 설정이 남습니다. 중단된 작업은 `ocx disconnect`로 재개하며 최초 사용한 `--keep-catalog`를 유지하세요. 소유 키 충돌이나 소유권 근거가 남은 이전 저널은 `ocx disconnect --recover-config --yes`로 현재 상태를 비공개 백업한 뒤 키 단위로 복구합니다. 소유권을 확인할 수 없거나 프로필이 편집되어 검증할 수 없으면 계속 거부합니다. 백업 경로를 보존하고, disconnect 후 `ocx service restart`로 독립형 런타임을 시작한 다음 다시 연결하세요.
+
 ## 보안
 
 Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 인증 정보를 사용합니다. Home은 Child마다 별도의 링크 키를 만들며, 링크를 제거하면 그 키를 폐기합니다. 확인 전에 호스트 지문을 비교하여 잘못된 컴퓨터나 변경된 호스트 키를 실수로 허용하지 않도록 하세요. Tailscale identity로 발급된 대시보드 세션은 머신 링크를 관리할 수 없습니다. Child에서 키는 OpenCodex 안에만 머뭅니다. Codex나 Claude Code가 Child에서 보내는 인증 정보는 Home으로 전달되지 않으며, Child에서 `127.0.0.1:<port>`에 접근하는 프로그램은 키 없이 Home을 사용합니다. 이는 독립형 설치가 로컬 프로그램에 주는 것과 같은 신뢰 수준입니다. 다른 사이트의 웹 페이지는 거부됩니다.
