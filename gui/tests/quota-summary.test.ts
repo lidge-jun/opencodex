@@ -99,6 +99,18 @@ describe("quota summary", () => {
     expect(formatQuotaPercent(row!.headline.percent, row!.headline.rounding)).toBe("90%");
   });
 
+  test("contradictory WorkBuddy balances are omitted without hiding valid quota windows", () => {
+    const balance = (remaining: number) => ({ total: 100, used: 2, remaining, frozen: 0, groups: [] });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "invalid", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(110) } },
+      { provider: "mixed", updatedAt: now, quota: { updatedAt: now, weeklyPercent: 25, workbuddyCredits: balance(110) } },
+      { provider: "roundoff", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100 + 1e-12) } },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => [row.provider, row.headline.percent])).toEqual([["mixed", 25], ["roundoff", 0]]);
+    expect(rows[0]!.windows.map(window => window.labelKey)).toEqual(["quota.weeklyLimit"]);
+  });
+
   test("critical credits override a noncritical headline, but not a critical one", () => {
     const credits = (percent: number) => ({ used: percent, limit: 100, remaining: 100 - percent, percent });
     const reports = freshQuotaReportsFromResponse([

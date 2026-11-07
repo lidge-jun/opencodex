@@ -84,7 +84,8 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
     });
   }
   const workbuddy = quota.workbuddyCredits;
-  if (workbuddy && workbuddy.total > 0) {
+  // The provider can sum up to 512 packages; tolerate only their accumulated roundoff.
+  if (workbuddy && workbuddy.total > 0 && workbuddy.remaining / workbuddy.total <= 1 + Number.EPSILON * 1024) {
     // Remaining is authoritative and includes frozen credits; the meter is informational.
     const percent = (1 - Math.min(workbuddy.remaining / workbuddy.total, 1)) * 100;
     windows.push({
