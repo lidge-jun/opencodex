@@ -44,6 +44,22 @@ const USAGE_OK = {
 describe("muse key quota probe", () => {
   beforeEach(() => { resetMuseKeyQuotaBackoff(); });
 
+  test("a replacement credential does not join the old credential's in-flight mint", async () => {
+    let release!: (response: Response) => void;
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      if (calls === 1) return await new Promise<Response>(resolve => { release = resolve; });
+      return Response.json({ subs_usage: { window: { used_percent: 7, window_duration_mins: 300 } } });
+    }) as typeof fetch;
+    const first = fetchMuseKeyQuotaSnapshot("same-account", TOKEN, { fetchImpl }, undefined, "old-owner");
+    const second = await fetchMuseKeyQuotaSnapshot("same-account", "new-token", { fetchImpl }, undefined, "new-owner");
+    release(Response.json({ subs_usage: { window: { used_percent: 90, window_duration_mins: 300 } } }));
+    expect((await first)?.fiveHourPercent).toBe(90);
+    expect(second?.fiveHourPercent).toBe(7);
+    expect(calls).toBe(2);
+  });
+
   test("maps the five-hour window and the weekly window", async () => {
     const h = harness([{ body: USAGE_OK }]);
     const quota = await fetchMuseKeyQuotaSnapshot("acct-a", TOKEN, h.deps);

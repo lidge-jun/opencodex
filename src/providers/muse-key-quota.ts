@@ -50,11 +50,13 @@ export interface MuseKeyQuotaDeps {
 const backoffUntil = new Map<string, number>();
 const lastSuccessAt = new Map<string, number>();
 /**
- * One in-flight probe per account.
+ * One in-flight probe per account and captured owner.
  *
  * The TTL check alone is not atomic: `?refresh=1` and the reset poller can both pass it
  * before either writes `lastSuccessAt`, which would spend two mints inside one window.
- * Concurrent callers share the first request instead of racing it.
+ * Concurrent callers for the same owner share the first request instead of racing it;
+ * a replaced credential cannot join an older owner's result. Backoff and successful-mint
+ * spacing remain account-scoped.
  */
 const inFlight = new Map<string, Promise<ProviderQuota | null>>();
 
@@ -74,21 +76,23 @@ export async function fetchMuseKeyQuotaSnapshot(
   oauthAccessToken: string,
   deps: MuseKeyQuotaDeps = {},
   signal?: AbortSignal,
+  identity?: string,
 ): Promise<ProviderQuota | null> {
+  const probeKey = identity ? `${accountId}\0${identity}` : accountId;
   const now = deps.now ?? Date.now;
   const at = now();
   if (museKeyQuotaBackoffRemainingMs(accountId, at) > 0) return null;
   // Success spacing, enforced even for a forced refresh. See SUCCESS_TTL_MS.
   const last = lastSuccessAt.get(accountId);
   if (last !== undefined && at - last < SUCCESS_TTL_MS) return null;
-  const running = inFlight.get(accountId);
+  const running = inFlight.get(probeKey);
   if (running) return await running;
   const attempt = probe(accountId, oauthAccessToken, deps, signal);
-  inFlight.set(accountId, attempt);
+  inFlight.set(probeKey, attempt);
   try {
     return await attempt;
   } finally {
-    inFlight.delete(accountId);
+    if (inFlight.get(probeKey) === attempt) inFlight.delete(probeKey);
   }
 }
 

@@ -20,6 +20,7 @@ import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./ven
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 import { isDisplayOnlyQuota, markDisplayOnlyQuota } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import { captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -132,6 +133,14 @@ export function hydrateAccountQuotaCache(): void {
   const liveKiro = new Map<string, ProviderAccount>(getAccountSet("kiro")?.accounts.map(account =>
     [accountCacheKey("kiro", account.id), account]) ?? []);
   for (const [key, quota] of readPersistedAccountQuotas(now)) {
+    if (key.startsWith("meta-muse\0")) {
+      const owner = captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length));
+      const saved = quota as ProviderQuota & { museIdentity?: string };
+      if (!owner || saved.museIdentity !== owner.identity) continue;
+      const { museIdentity: _identity, ...publicQuota } = saved;
+      if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, isCurrent: owner.isCurrent });
+      continue;
+    }
     if (key.startsWith("kiro\0")) {
       const account = liveKiro.get(key);
       if (!account || (quota as KiroPersistedQuota).identity !== kiroEvidenceIdentity(account)
@@ -168,6 +177,13 @@ export function persistAccountQuotaCache(): void {
       const quota = isAnthropicAccountCacheKey(key) ? normalizeAnthropicQuota(entry.quota, now) : entry.quota;
       // The in-memory provenance is not serialized; never restore display-only bars as decisions.
       if (quota && isDisplayOnlyQuota(quota)) continue;
+      if (key.startsWith("meta-muse\0")) {
+        if (quota && entry.identity && entry.isCurrent?.()) {
+          const saved: ProviderQuota & { museIdentity: string } = { ...quota, museIdentity: entry.identity };
+          yield [key, saved] as [string, ProviderQuota];
+        }
+        continue;
+      }
       if (quota && key.startsWith("kiro\0")) {
         const account = liveKiro.get(key);
         if (account && entry.identity === kiroEvidenceIdentity(account))
@@ -368,8 +384,11 @@ export function recordPassiveAccountQuota(
   accountId: string,
   quota: ProviderQuota,
   writerGeneration: number,
+  owner: MuseQuotaOwner | null = captureMuseQuotaOwner(provider, accountId),
+  epoch = captureProviderAccountQuotaEpoch(provider),
 ): void {
-  if (!hasPassiveAccountQuota(provider) || !accountId) return;
+  if (!hasPassiveAccountQuota(provider) || !accountId || !owner || owner.accountId !== accountId || !owner.isCurrent()
+    || epoch !== captureProviderAccountQuotaEpoch(provider)) return;
   const key = accountCacheKey(provider, accountId);
   if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
   // Hydrate BEFORE writing, not only on the read path. `persistAccountQuotaCache`
@@ -379,7 +398,8 @@ export function recordPassiveAccountQuota(
   // them. A probe writer cannot hit this because its own read hydrates first; an
   // observation arrives unprompted, so it must hydrate itself.
   hydrateAccountQuotaCache();
-  accountQuotaCache.set(key, { ts: Date.now(), quota });
+  accountQuotaCache.set(key, { ts: Date.now(), quota, identity: owner.identity,
+    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent() });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
   persistAccountQuotaCache();
@@ -408,7 +428,11 @@ export function readPassiveProviderAccountQuotas(provider: string): ProviderAcco
   const rows: ProviderAccountQuota[] = [];
   for (const account of set.accounts) {
     const entry = accountQuotaCache.get(accountCacheKey(provider, account.id));
-    if (entry?.quota) rows.push({ accountId: account.id, quota: entry.quota });
+    if (entry?.quota && entry.isCurrent?.()) {
+      const row: ProviderAccountQuota = { accountId: account.id, quota: entry.quota };
+      Object.defineProperty(row, "isCurrent", { value: entry.isCurrent });
+      rows.push(row);
+    }
   }
   return rows;
 }

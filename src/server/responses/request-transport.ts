@@ -91,6 +91,8 @@ import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "../../providers/quota/muse-owner";
+import { captureProviderAccountQuotaEpoch } from "../../providers/quota/account-cache";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -361,6 +363,8 @@ export async function prepareResponsesTransport(
    * the case the fence exists for. Stays 0 for every provider without a passive quota.
    */
   let passiveQuotaWriterGeneration = 0;
+  let passiveQuotaOwner: MuseQuotaOwner | null = null;
+  let passiveQuotaEpoch = 0;
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
@@ -1206,6 +1210,8 @@ export async function prepareResponsesTransport(
         // Captured beside the account it fences, so the two can never disagree.
         if (hasPassiveAccountQuota(route.providerName)) {
           passiveQuotaWriterGeneration = captureConfigGeneration();
+          passiveQuotaOwner = bindMuseQuotaConfig(captureMuseQuotaOwner(route.providerName, resolved.accountId, resolved.generation), config, route.providerName);
+          passiveQuotaEpoch = captureProviderAccountQuotaEpoch(route.providerName);
         }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
@@ -1466,6 +1472,8 @@ export async function prepareResponsesTransport(
     commitResolvedOAuthSelection,
     refreshResolvedOAuthSelection,
     get passiveQuotaWriterGeneration(): number { return passiveQuotaWriterGeneration; },
+    get passiveQuotaOwner(): MuseQuotaOwner | null { return passiveQuotaOwner; },
+    get passiveQuotaEpoch(): number { return passiveQuotaEpoch; },
     applyFailoverSnapshot,
     selectionIsCurrent,
     resolveSelectionAdapter,
