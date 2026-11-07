@@ -33,6 +33,16 @@ describe("createProtocolEnvelope", () => {
     expect(envelope.inbound).toBe("chat");
   });
 
+  test("peekBody hands out the source by reference without charging the budget", () => {
+    const source = chatBody();
+    const budget = createTestTranslatorBudget();
+    const envelope = createProtocolEnvelope({ inbound: "chat", body: source, translatorBudget: budget });
+    expect(envelope.peekBody()).toBe(source);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    envelope.freshBody();
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+  });
+
   test("freshBody returns an independent copy each time", () => {
     const source = chatBody();
     const envelope = createProtocolEnvelope({ inbound: "chat", body: source, translatorBudget: createTestTranslatorBudget() });

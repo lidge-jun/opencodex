@@ -19,6 +19,11 @@ export interface ProtocolEnvelope {
   features(): ReadonlySet<ProtocolFeature>;
   /** A structured clone of the source body, charged to the translator budget. */
   freshBody(): Record<string, unknown>;
+  /**
+   * The source body by reference, uncharged and read-only: for a consumer that only inspects the
+   * request (a candidate eligibility check) and so needs no copy. Never mutate or retain it.
+   */
+  peekBody(): Readonly<Record<string, unknown>>;
 }
 
 export function createProtocolEnvelope(input: {
@@ -33,6 +38,9 @@ export function createProtocolEnvelope(input: {
     features() {
       features ??= featuresFromBody(inbound, body);
       return features;
+    },
+    peekBody() {
+      return body;
     },
     freshBody() {
       // Charged before the copy exists, so an over-budget request fails without allocating it.
