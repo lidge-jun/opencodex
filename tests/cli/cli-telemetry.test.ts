@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { handleConfigCommand } from "../../src/cli/config-command";
 import { maybeShowStarPrompt, setStarPromptDepsForTests } from "../../src/cli/star-prompt";
 import {
+  TELEMETRY_CLI_DISCLOSURE_LINES,
   TELEMETRY_DEFERRAL_FILE,
   handleTelemetryCommand,
   maybeShowTelemetryPrompt,
@@ -12,6 +13,7 @@ import {
 } from "../../src/cli/telemetry";
 import { readConfigDiagnostics } from "../../src/config/diagnostics";
 import {
+  ensureTelemetryInstallId,
   readTelemetryInstallId,
   resetTelemetryInstallIdMemoForTests,
   telemetryIdPath,
@@ -103,8 +105,42 @@ describe("ocx telemetry CLI and interactive prompt", () => {
     const log = spyOn(console, "log").mockImplementation(() => {});
     const err = spyOn(console, "error").mockImplementation(() => {});
     try {
+      // D4: Non-TTY or OCX_SERVICE refuses enable with tty_required pointing to the dashboard:
+      setTelemetryPromptDepsForTests({ isTty: () => false });
+      const nonTtyCode = await handleTelemetryCommand(["enable", "--json"]);
+      expect(nonTtyCode).toBe(1);
+      const nonTtyBody = JSON.parse(log.mock.calls.map(c => String(c[0])).join("\n")) as { code: string; error: string };
+      expect(nonTtyBody.code).toBe("tty_required");
+      expect(nonTtyBody.error.toLowerCase()).toContain("dashboard");
+      expect(readConfigDiagnostics().config.telemetry).toBeUndefined();
+
+      log.mockClear();
+      process.env.OCX_SERVICE = "1";
+      setTelemetryPromptDepsForTests({ isTty: () => true });
+      const serviceCode = await handleTelemetryCommand(["enable", "--json"]);
+      expect(serviceCode).toBe(1);
+      expect(log.mock.calls.map(c => String(c[0])).join("\n")).toContain("tty_required");
+      delete process.env.OCX_SERVICE;
+
+      // Interactive human terminal: prints disclosure block, prompts with defaultYes=true, and records accepted:
+      log.mockClear();
+      let confirmQuestion = "";
+      let confirmDefaultYes: boolean | undefined;
+      let disclosureBeforePrompt = "";
+      setTelemetryPromptDepsForTests({
+        isTty: () => true,
+        interactiveConfirm: async opts => {
+          disclosureBeforePrompt = log.mock.calls.map(c => String(c[0])).join("\n");
+          confirmQuestion = opts.question;
+          confirmDefaultYes = opts.defaultYes;
+          return true;
+        },
+      });
       const enableCode = await handleTelemetryCommand(["enable", "--json"]);
       expect(enableCode).toBe(0);
+      expect(confirmDefaultYes).toBe(true);
+      expect(confirmQuestion).toContain("Share anonymous usage statistics?");
+      expect(disclosureBeforePrompt).toBe(TELEMETRY_CLI_DISCLOSURE_LINES.join("\n"));
       expect(readConfigDiagnostics().config.telemetry?.decision).toBe("accepted");
 
       const tick = await runTelemetryTick({
@@ -136,12 +172,13 @@ describe("ocx telemetry CLI and interactive prompt", () => {
         }
       }
     } finally {
+      delete process.env.OCX_SERVICE;
       log.mockRestore();
       err.mockRestore();
     }
   });
 
-  test("ocx config set/unset refuse telemetry and import drops telemetry when agent-driven", async () => {
+  test("D6: ocx config set/unset refuse telemetry and import preserves persisted telemetry for every caller (human and agent)", async () => {
     const log = spyOn(console, "log").mockImplementation(() => {});
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     const err = spyOn(console, "error").mockImplementation(() => {});
@@ -166,17 +203,27 @@ describe("ocx telemetry CLI and interactive prompt", () => {
         }),
         "utf8",
       );
-      process.env.CODEX_THREAD_ID = "agent-import";
-      // Direction 1: undecided on disk -> agent import does not inject telemetry
+      // 1a. Human caller (not agent-driven) on undecided install -> imported telemetry is ignored, disk stays undecided:
       expect(await handleConfigCommand(["import", importAccepted, "--yes"])).toBe(0);
       expect(readConfigDiagnostics().config.telemetry).toBeUndefined();
       expect(warn.mock.calls.map(c => String(c[0])).join("\n")).toContain("ocx telemetry");
 
-      // Direction 2: declined on disk -> agent import preserves declined whether input has telemetry or omits it
+      // 1b. Agent-driven caller on undecided install -> imported telemetry is ignored, disk stays undecided:
+      warn.mockClear();
+      process.env.CODEX_THREAD_ID = "agent-import";
+      expect(await handleConfigCommand(["import", importAccepted, "--yes"])).toBe(0);
+      expect(readConfigDiagnostics().config.telemetry).toBeUndefined();
+      expect(warn.mock.calls.map(c => String(c[0])).join("\n")).toContain("ocx telemetry");
+
+      // 2. Declined on disk -> both human and agent callers preserve declined whether input has telemetry or omits it:
       expect(await handleTelemetryCommand(["disable", "--json"])).toBe(0);
       const declinedBefore = readConfigDiagnostics().config.telemetry;
       expect(declinedBefore?.decision).toBe("declined");
 
+      expect(await handleConfigCommand(["import", importAccepted, "--yes"])).toBe(0);
+      expect(readConfigDiagnostics().config.telemetry).toEqual(declinedBefore);
+
+      delete process.env.CODEX_THREAD_ID;
       expect(await handleConfigCommand(["import", importAccepted, "--yes"])).toBe(0);
       expect(readConfigDiagnostics().config.telemetry).toEqual(declinedBefore);
 
@@ -228,18 +275,30 @@ describe("ocx telemetry CLI and interactive prompt", () => {
       expect(log.mock.calls.length).toBe(0);
       expect(readConfigDiagnostics().config.telemetry).toBeUndefined();
 
-      // Interactive human run prompts with defaultYes: true and records accepted:
+      // Interactive human run prints the disclosure block before prompting with defaultYes: true and records accepted:
       delete process.env.CODEX_THREAD_ID;
       let observedDefaultYes: boolean | undefined;
+      let printedBeforeConfirm = "";
       setTelemetryPromptDepsForTests({
         isTty: () => true,
         interactiveConfirm: async opts => {
+          printedBeforeConfirm = log.mock.calls.map(c => String(c[0])).join("\n");
           observedDefaultYes = opts.defaultYes;
           return opts.defaultYes;
         },
       });
       await maybeShowTelemetryPrompt();
       expect(observedDefaultYes).toBe(true);
+      expect(printedBeforeConfirm).toBe(TELEMETRY_CLI_DISCLOSURE_LINES.join("\n"));
+      // D5: Pin required elements of the disclosure text:
+      expect(printedBeforeConfirm).toContain("telemetry.opencodex.me");
+      expect(printedBeforeConfirm).toContain("Never sent: prompts, model outputs");
+      expect(printedBeforeConfirm).toContain("opencodex.me/dashboard");
+      expect(printedBeforeConfirm).toContain("ocx telemetry status --json");
+      expect(printedBeforeConfirm).toContain("ocx telemetry disable");
+      expect(printedBeforeConfirm).toContain("OCX_TELEMETRY=0");
+      expect(printedBeforeConfirm).toContain("DO_NOT_TRACK=1");
+      expect(printedBeforeConfirm).toContain("Proxy details");
       const telemetry = readConfigDiagnostics().config.telemetry;
       expect(telemetry?.decision).toBe("accepted");
       expect(typeof telemetry?.decidedAt).toBe("string");
@@ -247,6 +306,62 @@ describe("ocx telemetry CLI and interactive prompt", () => {
       expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).telemetry.decision).toBe("accepted");
     } finally {
       log.mockRestore();
+    }
+  });
+
+  test("D9: enable and disable exit non-zero with no success line and preserve telemetry-id.json when config.json is unavailable", async () => {
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { identity } = ensureTelemetryInstallId(home);
+      expect(existsSync(telemetryIdPath(home))).toBe(true);
+
+      // Corrupt config.json so mutatePersistedConfig returns { status: "unavailable", reason: "malformed" }:
+      writeFileSync(join(home, "config.json"), "{ malformed json\n", "utf8");
+
+      const disableCode = await handleTelemetryCommand(["disable"]);
+      expect(disableCode).not.toBe(0);
+      expect(log.mock.calls).toHaveLength(0);
+      expect(err.mock.calls.map(c => String(c[0])).join("\n")).toContain("config.json is invalid");
+      // Install id must NOT be deleted when the decline failed to persist:
+      expect(existsSync(telemetryIdPath(home))).toBe(true);
+      expect(readTelemetryInstallId(home)?.installId).toBe(identity.installId);
+
+      log.mockClear();
+      err.mockClear();
+      setTelemetryPromptDepsForTests({
+        isTty: () => true,
+        interactiveConfirm: async () => true,
+      });
+      const enableCode = await handleTelemetryCommand(["enable"]);
+      expect(enableCode).not.toBe(0);
+      // Only the disclosure block was printed before confirm; no "Anonymous telemetry enabled." success line:
+      expect(log.mock.calls.map(c => String(c[0])).join("\n")).not.toContain("Anonymous telemetry enabled");
+      expect(err.mock.calls.map(c => String(c[0])).join("\n")).toContain("config.json is invalid");
+    } finally {
+      log.mockRestore();
+      err.mockRestore();
+    }
+  });
+
+  test("D12: README.md, translated READMEs, and code-signing.md state the telemetry privacy policy accurately", () => {
+    for (const rel of [
+      "README.md",
+      "readme/README.fr.md",
+      "readme/README.ja.md",
+      "readme/README.ko.md",
+      "readme/README.ru.md",
+      "readme/README.tr.md",
+      "readme/README.zh-CN.md",
+      "readme/README.zh-TW.md",
+      "docs-site/src/content/docs/reference/code-signing.md",
+    ]) {
+      const text = readFileSync(repoPath(rel), "utf8");
+      expect(text).not.toContain("will not transfer any information to other networked systems");
+      expect(text).toContain("telemetry.opencodex.me");
+      expect(text).toContain("ocx telemetry disable");
+      expect(text).toContain("OCX_TELEMETRY=0");
+      expect(text).toContain("DO_NOT_TRACK=1");
     }
   });
 

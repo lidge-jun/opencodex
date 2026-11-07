@@ -198,10 +198,18 @@ export function disjointTelemetryTokens(usage: OcxUsage | undefined): DisjointTe
   };
 }
 
-export function aggregateTelemetryEntriesForDay(
-  day: string,
-  entries: Iterable<PersistedUsageEntry>,
-): DailyTelemetryAggregate {
+export interface DailyTelemetryAccumulator {
+  onEntry: (entry: PersistedUsageEntry) => void;
+  finalize: () => DailyTelemetryAggregate;
+}
+
+/**
+ * Streaming accumulator for one completed UTC day.
+ *
+ * Accumulates counters directly inside `onEntry` for entries falling inside `day`
+ * and never retains `PersistedUsageEntry` rows in memory.
+ */
+export function createDailyTelemetryAccumulator(day: string): DailyTelemetryAccumulator {
   const dayStartMs = parseCalendarUtcDayMs(day);
   if (dayStartMs === null) {
     throw new Error(`Invalid UTC day: ${day}`);
@@ -244,9 +252,9 @@ export function aggregateTelemetryEntriesForDay(
     row.reasoningTokens += tokens.reasoningTokens;
   };
 
-  for (const entry of entries) {
+  const onEntry = (entry: PersistedUsageEntry): void => {
     if (typeof entry.timestamp !== "number" || entry.timestamp < dayStartMs || entry.timestamp >= dayEndMs) {
-      continue;
+      return;
     }
     minutes.add(Math.floor(entry.timestamp / 60_000));
     const outcome = classifyRequestOutcome(entry);
@@ -264,64 +272,77 @@ export function aggregateTelemetryEntriesForDay(
     } else {
       addModelAttribution(entry.provider, entry.model, entry.usage);
     }
-  }
-
-  let models = [...modelMap.values()].sort((a, b) => {
-    if (b.requests !== a.requests) return b.requests - a.requests;
-    const aTokens = a.inputTokens + a.cacheReadTokens + a.cacheWriteTokens + a.outputTokens + a.reasoningTokens;
-    const bTokens = b.inputTokens + b.cacheReadTokens + b.cacheWriteTokens + b.outputTokens + b.reasoningTokens;
-    if (bTokens !== aTokens) return bTokens - aTokens;
-    if (a.providerKind !== b.providerKind) return a.providerKind.localeCompare(b.providerKind);
-    return a.modelFamily.localeCompare(b.modelFamily);
-  });
-
-  if (models.length > TELEMETRY_MAX_MODELS) {
-    const kept = models.slice(0, TELEMETRY_MAX_MODELS - 1);
-    const overflow = models.slice(TELEMETRY_MAX_MODELS - 1);
-    let otherRow = kept.find(r => r.providerKind === "other" && r.modelFamily === "other");
-    if (!otherRow) {
-      otherRow = {
-        providerKind: "other",
-        modelFamily: "other",
-        requests: 0,
-        inputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-      };
-      kept.push(otherRow);
-    }
-    for (const row of overflow) {
-      otherRow.requests += row.requests;
-      otherRow.inputTokens += row.inputTokens;
-      otherRow.cacheReadTokens += row.cacheReadTokens;
-      otherRow.cacheWriteTokens += row.cacheWriteTokens;
-      otherRow.outputTokens += row.outputTokens;
-      otherRow.reasoningTokens += row.reasoningTokens;
-    }
-    models = kept;
-  }
-
-  return {
-    day,
-    activeMinutes: Math.min(1440, minutes.size),
-    requests,
-    models,
-    errors,
   };
+
+  const finalize = (): DailyTelemetryAggregate => {
+    let models = [...modelMap.values()].sort((a, b) => {
+      if (b.requests !== a.requests) return b.requests - a.requests;
+      const aTokens = a.inputTokens + a.cacheReadTokens + a.cacheWriteTokens + a.outputTokens + a.reasoningTokens;
+      const bTokens = b.inputTokens + b.cacheReadTokens + b.cacheWriteTokens + b.outputTokens + b.reasoningTokens;
+      if (bTokens !== aTokens) return bTokens - aTokens;
+      if (a.providerKind !== b.providerKind) return a.providerKind.localeCompare(b.providerKind);
+      return a.modelFamily.localeCompare(b.modelFamily);
+    });
+
+    if (models.length > TELEMETRY_MAX_MODELS) {
+      const kept = models.slice(0, TELEMETRY_MAX_MODELS - 1);
+      const overflow = models.slice(TELEMETRY_MAX_MODELS - 1);
+      let otherRow = kept.find(r => r.providerKind === "other" && r.modelFamily === "other");
+      if (!otherRow) {
+        otherRow = {
+          providerKind: "other",
+          modelFamily: "other",
+          requests: 0,
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+        };
+        kept.push(otherRow);
+      }
+      for (const row of overflow) {
+        otherRow.requests += row.requests;
+        otherRow.inputTokens += row.inputTokens;
+        otherRow.cacheReadTokens += row.cacheReadTokens;
+        otherRow.cacheWriteTokens += row.cacheWriteTokens;
+        otherRow.outputTokens += row.outputTokens;
+        otherRow.reasoningTokens += row.reasoningTokens;
+      }
+      models = kept;
+    }
+
+    return {
+      day,
+      activeMinutes: Math.min(1440, minutes.size),
+      requests: { ...requests },
+      models,
+      errors: { ...errors },
+    };
+  };
+
+  return { onEntry, finalize };
+}
+
+export function aggregateTelemetryEntriesForDay(
+  day: string,
+  entries: Iterable<PersistedUsageEntry>,
+): DailyTelemetryAggregate {
+  const accumulator = createDailyTelemetryAccumulator(day);
+  for (const entry of entries) {
+    accumulator.onEntry(entry);
+  }
+  return accumulator.finalize();
 }
 
 export async function aggregateTelemetryForDay(
   day: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<DailyTelemetryAggregate> {
-  const entries: PersistedUsageEntry[] = [];
+  const accumulator = createDailyTelemetryAccumulator(day);
   await scanUsageLedgerCooperatively({
     signal: options.signal,
-    onEntry: entry => {
-      entries.push(entry);
-    },
+    onEntry: accumulator.onEntry,
   });
-  return aggregateTelemetryEntriesForDay(day, entries);
+  return accumulator.finalize();
 }

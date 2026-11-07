@@ -9,7 +9,10 @@ Anonymous, default-on daily usage telemetry owned by `src/telemetry/`, `src/type
 the closed rosters (`PROVIDER_KINDS`, `MODEL_FAMILIES`, `INSTALL_CHANNELS`, `RELEASE_CHANNELS`,
 `OS_VALUES`, `ARCH_VALUES`, `REQUEST_OUTCOME_CLASSES`, `REQUEST_FAILURE_CAUSES`), and
 `validateTelemetryPayloadV1`. Every level of the payload rejects unknown keys, non-roster strings,
-out-of-window or non-calendar `day` values, semver build metadata, and more than 64 model rows.
+out-of-window or non-calendar `day` values, versions not matching
+`^\d+\.\d+\.\d+(-preview\.\d{8}(\.\d+)?)?$` (no build metadata), and more than 64 model rows.
+Any roster or wire-contract addition must be deployed to the collector before a client release
+emits the new values (collector-first rollout).
 
 ## Consent and agent boundary
 
@@ -25,12 +28,17 @@ via `adoptPersistedTelemetry` in `src/config/live-reconcile.ts`.
 
 Only a human can transition an undecided install to active sending:
 
-- `PUT /api/telemetry` and `POST /api/telemetry/notice` in `src/telemetry/routes.ts` (delegated
+- `PUT /api/telemetry` in `src/telemetry/routes.ts` (delegated
   from `src/server/management/telemetry-routes.ts` and lazily mounted in `src/server/management-api.ts`)
-  require `hasHumanDashboardSession` from `src/server/management/consent-session.ts`.
-- `ocx telemetry enable` in `src/cli/telemetry.ts` and `ocx config set telemetry` in
-  `src/cli/config-command.ts` refuse agent-driven callers; `ocx telemetry disable` is always
-  permitted.
+  requires `hasHumanDashboardSession` from `src/server/management/consent-session.ts`.
+  `GET /api/telemetry` previews the oldest eligible unsent day (or the latest completed day with
+  `previewEligible: false` when no day is eligible).
+- `ocx telemetry enable` in `src/cli/telemetry.ts` requires an interactive human terminal
+  (`isatty` stdin and stdout, not `OCX_SERVICE`, not agent-driven), prints the disclosure block,
+  and asks for confirmation before recording `accepted`; otherwise it exits non-zero with
+  `agent_consent_required` or `tty_required`. `ocx telemetry disable` is always permitted.
+  `ocx config set`/`unset` in `src/cli/config-command.ts` refuse `telemetry`, and `ocx config import`
+  preserves the persisted `telemetry` block unchanged for every caller.
 - Interactive prompts run from `src/cli/star-prompt.ts`, `src/service/cli.ts`, and
   `src/cli/init.ts`; agent-driven, non-TTY, or service starts print a once-per-version notice
   and record neither `noticeShownAt` nor `decision`.
@@ -38,17 +46,25 @@ Only a human can transition an undecided install to active sending:
 ## Identity, aggregation, and scheduling
 
 `src/telemetry/install-id.ts` manages `<OPENCODEX_HOME>/telemetry-id.json` (`0o600`, exclusive
-no-follow creation) on the first send and deletes it when telemetry is declined. Only
+no-follow creation) on the first send and deletes it when telemetry is declined or when an
+`OCX_TELEMETRY`/`DO_NOT_TRACK` environment opt-out is observed. Only
 `sha256(installId + ":" + day)` leaves the machine.
 
 `src/telemetry/aggregate.ts` scans `usage.jsonl` through `src/usage/ledger-scanner.ts` for one
-completed UTC day, mapping providers to `PROVIDER_KINDS`, models to `MODEL_FAMILIES`, outcomes
-via `src/usage/request-outcome.ts`, and decomposing usage into five disjoint token buckets
-(`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, `reasoningTokens`) whose
-sum matches `usageDisplayTotalTokens` in `src/usage/totals.ts`.
+completed UTC day, accumulating counters directly inside `onEntry` without retaining ledger rows in
+memory, mapping providers to `PROVIDER_KINDS`, models to `MODEL_FAMILIES`, outcomes via
+`src/usage/request-outcome.ts`, and decomposing usage into five disjoint token buckets
+(`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, `reasoningTokens`) whose sum
+matches `usageDisplayTotalTokens` in `src/usage/totals.ts`.
 
 `src/telemetry/payload.ts` resolves the install channel and validates the built payload with
 `validateTelemetryPayloadV1`. `src/telemetry/sender.ts` posts to the constant collector URL
-with a 10-second `signalWithTimeout`. `src/telemetry/scheduler.ts` runs an unref'd background
-timer started lazily from `src/server/background-lifecycle.ts`, re-reading config from disk on
-each tick and sending at most one completed post-consent day per tick.
+with a 10-second `signalWithTimeout` and parses `Retry-After` on HTTP 429/503 responses.
+`src/telemetry/scheduler.ts` runs an unref'd background timer with startup and interval jitter
+started from `src/server/background-lifecycle.ts`. Whenever an `OCX_TELEMETRY` or `DO_NOT_TRACK`
+opt-out is observed (at startup in `src/server/background-lifecycle.ts` or on a tick),
+`recordTelemetryEnvOptOut` persists `ineligibleThroughDay` (today's UTC day) in
+`telemetry-state.json` and deletes `telemetry-id.json`. Each tick sends at most one completed UTC
+day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
+`ineligibleThroughDay`, honors `retryAfterUntil` backoffs, re-reads persisted consent and env
+immediately before transmission, and carries an `AbortSignal` cancelled on stop or consent changes.

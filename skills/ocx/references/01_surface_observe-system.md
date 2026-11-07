@@ -1876,7 +1876,7 @@ State-changing: no. JSON mode: `payload`.
 
 Usage: `ocx telemetry status [--json]`
 
-Inspect anonymous telemetry consent status and the next daily payload preview.
+Inspect anonymous telemetry consent status and the daily payload preview.
 
 State-changing: no. JSON mode: `payload`.
 
@@ -1889,7 +1889,7 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the telemetry status and preview as JSON. |
 
 - Reads live status from the running proxy and falls back to local configuration and ledger preview when the proxy is stopped.
-- Never creates or transmits a telemetry install identifier.
+- Previews the oldest eligible unsent day, or the latest completed day with previewEligible = false when no day is eligible. Never creates or transmits a telemetry install identifier.
 
 ### `ocx telemetry enable`
 
@@ -1905,8 +1905,8 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit the updated telemetry status as JSON. |
 
-- Writes telemetry.decision = accepted and telemetry.noticeShownAt in local config.json.
-- Refuses with agent_consent_required when called from an agent-driven session.
+- Requires an interactive human terminal, prints the telemetry disclosure block, and asks for confirmation before recording telemetry.decision = accepted.
+- Refuses with agent_consent_required when agent-driven and with tty_required when non-interactive or running under OCX_SERVICE.
 
 ### `ocx telemetry disable`
 

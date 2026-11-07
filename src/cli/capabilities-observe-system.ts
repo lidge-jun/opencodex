@@ -732,12 +732,12 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
   {
     command: ["telemetry", "status"],
     usage: "ocx telemetry status [--json]",
-    summary: "Inspect anonymous telemetry consent status and the next daily payload preview.",
+    summary: "Inspect anonymous telemetry consent status and the daily payload preview.",
     routes: [{"method": "GET", "path": "/api/telemetry"}],
     flags: [{"name": "--json", "value": "boolean", "summary": "Emit the telemetry status and preview as JSON."}],
     mutates: false,
     json: "payload",
-    details: ["Reads live status from the running proxy and falls back to local configuration and ledger preview when the proxy is stopped.", "Never creates or transmits a telemetry install identifier."],
+    details: ["Reads live status from the running proxy and falls back to local configuration and ledger preview when the proxy is stopped.", "Previews the oldest eligible unsent day, or the latest completed day with previewEligible = false when no day is eligible. Never creates or transmits a telemetry install identifier."],
   },
   {
     command: ["telemetry", "enable"],
@@ -747,7 +747,7 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     flags: [{"name": "--json", "value": "boolean", "summary": "Emit the updated telemetry status as JSON."}],
     mutates: true,
     json: "envelope",
-    details: ["Writes telemetry.decision = accepted and telemetry.noticeShownAt in local config.json.", "Refuses with agent_consent_required when called from an agent-driven session."],
+    details: ["Requires an interactive human terminal, prints the telemetry disclosure block, and asks for confirmation before recording telemetry.decision = accepted.", "Refuses with agent_consent_required when agent-driven and with tty_required when non-interactive or running under OCX_SERVICE."],
   },
   {
     command: ["telemetry", "disable"],

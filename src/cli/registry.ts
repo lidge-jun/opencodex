@@ -840,7 +840,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Inspect or change anonymous daily usage telemetry consent and preview the payload.",
     details: [
       "status [--json]   Show effective state, reason, install channel, last sent day, and exact preview payload.",
-      "enable [--json]   Opt in to anonymous telemetry (refused with agent_consent_required when agent-driven).",
+      "enable [--json]   Confirm and opt in to anonymous telemetry in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
       "disable [--json]  Opt out of anonymous telemetry and delete telemetry-id.json.",
     ],
   },
