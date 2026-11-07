@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::codex_settings::HomeCodexSettings;
 use crate::platform::{
-    ensure_private_dir, reject_symlink, sha256_hex, write_private_atomic, write_regular_atomic,
+    DirectoryIdentity, directory_identity, ensure_private_dir, reject_symlink, sha256_hex,
+    write_private_atomic, write_regular_atomic,
 };
 use crate::state::ChildPaths;
 use crate::toml_surgeon::{
@@ -26,6 +27,10 @@ pub struct ChildJournalV1 {
     pub api_key_id: String,
     pub opencodex_home: String,
     pub codex_home: String,
+    #[serde(default)]
+    pub opencodex_home_identity: Option<DirectoryIdentity>,
+    #[serde(default)]
+    pub codex_home_identity: Option<DirectoryIdentity>,
     pub catalog_path: String,
     pub pre_attach_config_existed: bool,
     pub pre_attach_config_bytes_b64: Option<String>,
@@ -94,20 +99,22 @@ pub fn write_journal(path: &Path, journal: &ChildJournalV1) -> Result<(), String
 fn validate_journal_paths(paths: &ChildPaths, journal: &ChildJournalV1) -> Result<(), String> {
     let current_ocx = fs::canonicalize(&paths.opencodex_home)
         .map_err(|e| format!("cannot resolve current OpenCodex home: {e}"))?;
-    let recorded_ocx = fs::canonicalize(&journal.opencodex_home)
-        .map_err(|e| format!("cannot resolve recorded OpenCodex home: {e}"))?;
     let current_codex = fs::canonicalize(&paths.codex_home)
         .map_err(|e| format!("cannot resolve current Codex home: {e}"))?;
-    let recorded_codex = fs::canonicalize(&journal.codex_home)
-        .map_err(|e| format!("cannot resolve recorded Codex home: {e}"))?;
     let catalog = Path::new(&journal.catalog_path);
-    let catalog_parent = catalog.parent().ok_or("journal catalog has no parent")?;
-    let recorded_catalog_parent = fs::canonicalize(catalog_parent)
-        .map_err(|e| format!("cannot resolve journal catalog parent: {e}"))?;
-    if current_ocx != recorded_ocx
-        || current_codex != recorded_codex
-        || current_codex != recorded_catalog_parent
-        || catalog.file_name() != Some(std::ffi::OsStr::new("opencodex-catalog.json"))
+    let expected_ocx_identity = journal
+        .opencodex_home_identity
+        .as_ref()
+        .ok_or("child journal lacks OpenCodex directory identity")?;
+    let expected_codex_identity = journal
+        .codex_home_identity
+        .as_ref()
+        .ok_or("child journal lacks Codex directory identity")?;
+    if current_ocx != Path::new(&journal.opencodex_home)
+        || current_codex != Path::new(&journal.codex_home)
+        || catalog != current_codex.join("opencodex-catalog.json")
+        || &directory_identity(&current_ocx)? != expected_ocx_identity
+        || &directory_identity(&current_codex)? != expected_codex_identity
     {
         return Err("child journal belongs to a different home or catalog path".to_owned());
     }
@@ -311,7 +318,18 @@ pub fn apply_attach_or_sync_with_fault(
         detect_unowned_root_routing_conflict(&current_cfg_text)?;
     }
 
-    let catalog_path_str = catalog_path.to_string_lossy().into_owned();
+    ensure_private_dir(&paths.child_dir)?;
+    fs::create_dir_all(&paths.codex_home)
+        .map_err(|e| format!("failed to create Codex home: {e}"))?;
+    let canonical_ocx = fs::canonicalize(&paths.opencodex_home)
+        .map_err(|e| format!("cannot resolve OpenCodex home: {e}"))?;
+    let canonical_codex = fs::canonicalize(&paths.codex_home)
+        .map_err(|e| format!("cannot resolve Codex home: {e}"))?;
+    let catalog_path_str = canonical_codex
+        .join("opencodex-catalog.json")
+        .to_str()
+        .ok_or("canonical catalog path is not UTF-8")?
+        .to_owned();
     let (next_cfg_text, next_ledger) = apply_design_b_config(
         &current_cfg_text,
         listen_port,
@@ -439,8 +457,16 @@ pub fn apply_attach_or_sync_with_fault(
         schema: CHILD_JOURNAL_SCHEMA.to_owned(),
         link_id: link_id.to_owned(),
         api_key_id: api_key_id.to_owned(),
-        opencodex_home: paths.opencodex_home.to_string_lossy().into_owned(),
-        codex_home: paths.codex_home.to_string_lossy().into_owned(),
+        opencodex_home: canonical_ocx
+            .to_str()
+            .ok_or("canonical OpenCodex home is not UTF-8")?
+            .to_owned(),
+        codex_home: canonical_codex
+            .to_str()
+            .ok_or("canonical Codex home is not UTF-8")?
+            .to_owned(),
+        opencodex_home_identity: Some(directory_identity(&canonical_ocx)?),
+        codex_home_identity: Some(directory_identity(&canonical_codex)?),
         catalog_path: catalog_path_str,
         pre_attach_config_existed: pre_cfg_existed,
         pre_attach_config_bytes_b64: pre_cfg_b64,
@@ -459,10 +485,6 @@ pub fn apply_attach_or_sync_with_fault(
         previous_models_cache_sha256: prev_cache_sha,
         ledger: next_ledger,
     };
-    // Create homes before the journal so later validation can resolve their identities.
-    ensure_private_dir(&paths.child_dir)?;
-    fs::create_dir_all(&paths.codex_home)
-        .map_err(|e| format!("failed to create Codex home: {e}"))?;
     // Persist recovery journal BEFORE mutating any file in $CODEX_HOME (write-ahead durability).
     write_journal(&paths.journal_file, &journal)?;
     if fault == Some(JournalWriteFault::AfterJournalWrite) {
@@ -536,6 +558,21 @@ fn offline_detach_inner(
     reject_symlink(catalog_path).map_err(DetachError::Io)?;
     reject_symlink(&cache_path).map_err(DetachError::Io)?;
 
+    let prior_catalog =
+        if !keep_catalog && journal.pre_attach_catalog_existed {
+            let encoded = journal
+                .pre_attach_catalog_bytes_b64
+                .as_ref()
+                .ok_or_else(|| {
+                    DetachError::Conflict("missing pre-attach catalog snapshot".to_owned())
+                })?;
+            Some(BASE64.decode(encoded).map_err(|e| {
+                DetachError::Conflict(format!("bad pre-attach catalog snapshot: {e}"))
+            })?)
+        } else {
+            None
+        };
+
     if !keep_catalog && catalog_path.exists() {
         let cat_bytes = fs::read(catalog_path)
             .map_err(|e| DetachError::Io(format!("failed reading catalog: {e}")))?;
@@ -543,11 +580,9 @@ fn offline_detach_inner(
         let matches_known_injected = cur_cat_sha == journal.latest_catalog_sha256
             || Some(cur_cat_sha.as_str()) == journal.previous_catalog_sha256.as_deref();
         if !matches_known_injected {
-            let matches_prior = journal
-                .pre_attach_catalog_bytes_b64
+            let matches_prior = prior_catalog
                 .as_ref()
-                .and_then(|b64| BASE64.decode(b64).ok())
-                .is_some_and(|prior| prior == cat_bytes);
+                .is_some_and(|prior| *prior == cat_bytes);
             if !matches_prior {
                 return Err(DetachError::Conflict(
                     "client_catalog_ownership_changed: opencodex-catalog.json was modified externally".to_owned(),
@@ -663,10 +698,8 @@ fn offline_detach_inner(
 
     if !keep_catalog {
         if journal.pre_attach_catalog_existed {
-            if let Some(b64) = &journal.pre_attach_catalog_bytes_b64
-                && let Ok(prior_bytes) = BASE64.decode(b64)
-            {
-                write_regular_atomic(catalog_path, &prior_bytes).map_err(DetachError::Io)?;
+            if let Some(prior_bytes) = &prior_catalog {
+                write_regular_atomic(catalog_path, prior_bytes).map_err(DetachError::Io)?;
             }
         } else {
             remove_optional_file(catalog_path).map_err(DetachError::Io)?;

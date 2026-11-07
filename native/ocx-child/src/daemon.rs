@@ -95,12 +95,6 @@ fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
     let Ok(nonce) = random_hex(32) else {
         return false;
     };
-    let Some(expected) = compute_child_shutdown_proof(shutdown_secret, "listener", &nonce) else {
-        return false;
-    };
-    let Some(caller) = compute_child_shutdown_proof(shutdown_secret, "caller", &nonce) else {
-        return false;
-    };
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
         return false;
@@ -125,6 +119,21 @@ fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
         .iter()
         .filter(|(k, _)| k.eq_ignore_ascii_case("x-ocx-child-shutdown-proof"))
         .count();
+    let nonce_count = head
+        .headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("x-ocx-child-shutdown-nonce"))
+        .count();
+    let Some(server_nonce) = head.header("x-ocx-child-shutdown-nonce") else {
+        return false;
+    };
+    let binding = format!("{nonce}{server_nonce}");
+    let Some(expected) = compute_child_shutdown_proof(shutdown_secret, "listener", &binding) else {
+        return false;
+    };
+    let Some(caller) = compute_child_shutdown_proof(shutdown_secret, "caller", &binding) else {
+        return false;
+    };
     let lengths: Vec<&str> = head
         .headers
         .iter()
@@ -133,6 +142,8 @@ fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
         .collect();
     if head.status != 204
         || proof_count != 1
+        || nonce_count != 1
+        || !crate::relay_auth::is_valid_hex64(server_nonce)
         || lengths != ["0"]
         || head
             .headers
@@ -156,16 +167,20 @@ fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
 pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
     let port = state.listen_port;
     let live_health = probe_local_healthz(port, Duration::from_millis(500));
-    let verified_pid = match (state.daemon_pid, &live_health) {
-        (Some(expected_pid), Some(h))
+    let observed_pid = match &live_health {
+        Some(h)
             if h.service == "opencodex"
                 && h.ephemeral_child == Some(true)
-                && expected_pid == h.pid =>
+                && h.port == port
+                && h.pid != 0 =>
         {
-            Some(h.pid)
+            h.pid
         }
-        (Some(pid), None) if !is_port_bound(port) && !process_is_alive(pid) => return Ok(()),
-        (None, None) if !is_port_bound(port) => return Ok(()),
+        None if !is_port_bound(port)
+            && state.daemon_pid.is_none_or(|pid| !process_is_alive(pid)) =>
+        {
+            return Ok(());
+        }
         _ => return Err("cannot establish that the child daemon has stopped".to_owned()),
     };
 
@@ -175,7 +190,7 @@ pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         let port_down = !is_port_bound(port);
-        let pid_down = verified_pid.is_none_or(|p| !process_is_alive(p));
+        let pid_down = !process_is_alive(observed_pid);
         if port_down && pid_down {
             return Ok(());
         }

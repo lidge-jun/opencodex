@@ -18,12 +18,14 @@ use crate::journal::{
 };
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
-    FileLock, LockAcquireError, SecretBytes, constant_time_eq, ensure_private_dir,
-    format_iso8601_utc, now_epoch_ms, random_hex, reject_symlink, resolve_codex_home,
-    resolve_opencodex_home, volatile_zero_bytes, write_private_atomic, write_regular_atomic,
+    DirectoryIdentity, FileLock, LockAcquireError, SecretBytes, constant_time_eq,
+    directory_identity, ensure_private_dir, format_iso8601_utc, now_epoch_ms, random_hex,
+    reject_symlink, resolve_codex_home, resolve_opencodex_home, volatile_zero_bytes,
+    write_private_atomic, write_regular_atomic,
 };
 use crate::relay::{
-    RelayCredentials, fetch_home_authenticated, post_child_parity_report, serve_foreground,
+    RelayCredentials, UpstreamError, fetch_home_authenticated, post_child_parity_report,
+    serve_foreground,
 };
 use crate::relay_auth::{is_valid_key_id, is_valid_link_id};
 use crate::routes::RelayAuthKind;
@@ -158,10 +160,21 @@ fn read_stdin_credential() -> Result<(String, SecretBytes), String> {
     Ok((parsed.api_key_id, key_bytes))
 }
 
+struct SettingsFetchError {
+    retryable: bool,
+    message: String,
+}
+
+impl std::fmt::Display for SettingsFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 fn fetch_home_settings_doc(
     tunnel_port: u16,
     creds: &RelayCredentials,
-) -> Result<HomeCodexSettingsDocument, String> {
+) -> Result<HomeCodexSettingsDocument, SettingsFetchError> {
     let (head, body, _) = fetch_home_authenticated(
         tunnel_port,
         creds,
@@ -171,7 +184,10 @@ fn fetch_home_settings_doc(
         None,
         64 * 1024,
     )
-    .map_err(|e| format!("codex-settings fetch failed: {e:?}"))?;
+    .map_err(|e| SettingsFetchError {
+        retryable: matches!(e, UpstreamError::HomeUnreachable(_)),
+        message: format!("codex-settings fetch failed: {e:?}"),
+    })?;
     if head.status == 404 {
         return Ok(HomeCodexSettingsDocument {
             version: 1,
@@ -188,10 +204,15 @@ fn fetch_home_settings_doc(
         });
     }
     if head.status != 200 {
-        return Err(format!("Home codex-settings returned HTTP {}", head.status));
+        return Err(SettingsFetchError {
+            retryable: head.status >= 500,
+            message: format!("Home codex-settings returned HTTP {}", head.status),
+        });
     }
-    parse_home_codex_settings_document(&body)
-        .ok_or_else(|| "Home codex-settings failed strict schema validation".to_owned())
+    parse_home_codex_settings_document(&body).ok_or_else(|| SettingsFetchError {
+        retryable: false,
+        message: "Home codex-settings failed strict schema validation".to_owned(),
+    })
 }
 
 pub struct AttachRollbackSnapshot {
@@ -214,6 +235,8 @@ struct AttachRollbackRecordRef<'a> {
     schema: &'static str,
     opencodex_home: String,
     codex_home: String,
+    opencodex_home_identity: DirectoryIdentity,
+    codex_home_identity: DirectoryIdentity,
     prior_state: &'a Option<ChildStateV1>,
     prior_was_serving: bool,
     journal: Option<&'a [u8]>,
@@ -231,6 +254,8 @@ struct AttachRollbackRecord {
     schema: String,
     opencodex_home: String,
     codex_home: String,
+    opencodex_home_identity: DirectoryIdentity,
+    codex_home_identity: DirectoryIdentity,
     prior_state: Option<ChildStateV1>,
     prior_was_serving: bool,
     journal: Option<Vec<u8>>,
@@ -354,6 +379,8 @@ impl AttachRollbackSnapshot {
         let (opencodex_home, codex_home) = Self::canonical_homes(paths)?;
         let record = AttachRollbackRecordRef {
             schema: "ocx.child.attach-rollback/1",
+            opencodex_home_identity: directory_identity(std::path::Path::new(&opencodex_home))?,
+            codex_home_identity: directory_identity(std::path::Path::new(&codex_home))?,
             opencodex_home,
             codex_home,
             prior_state: &self.prior_state,
@@ -399,6 +426,8 @@ impl AttachRollbackSnapshot {
         if record.schema != "ocx.child.attach-rollback/1"
             || record.opencodex_home != ocx
             || record.codex_home != codex
+            || record.opencodex_home_identity != directory_identity(std::path::Path::new(&ocx))?
+            || record.codex_home_identity != directory_identity(std::path::Path::new(&codex))?
         {
             return Err("rollback snapshot belongs to a different home".to_owned());
         }
@@ -1132,25 +1161,41 @@ fn cmd_sync(args: &[String]) -> u8 {
         4 * 1024 * 1024,
     ) {
         Ok((h, b, _)) if h.status == 200 => b,
-        _ => match fs::read(&paths.catalog_backup_file) {
-            Ok(cached) => {
-                stale = true;
-                cached
+        result @ (Err(UpstreamError::HomeUnreachable(_)) | Ok((_, _, _)))
+            if matches!(&result, Err(UpstreamError::HomeUnreachable(_)))
+                || matches!(&result, Ok((h, _, _)) if h.status >= 500) =>
+        {
+            match fs::read(&paths.catalog_backup_file) {
+                Ok(cached) => {
+                    stale = true;
+                    cached
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Connected sync failed without local fallback: Home /v1/catalog unreachable"
+                    );
+                    return 1;
+                }
             }
-            Err(_) => {
-                eprintln!(
-                    "Connected sync failed without local fallback: Home /v1/catalog unreachable"
-                );
-                return 1;
-            }
-        },
+        }
+        Ok((head, _, _)) => {
+            eprintln!(
+                "Connected sync failed: Home /v1/catalog returned HTTP {}",
+                head.status
+            );
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("Connected sync failed: Home /v1/catalog: {e:?}");
+            return 1;
+        }
     };
 
     let now_ms = now_epoch_ms();
     let now_iso = format_iso8601_utc(now_ms);
     let settings_doc = match fetch_home_settings_doc(state.tunnel_port, &creds) {
         Ok(doc) => doc,
-        Err(_) if stale && state.applied_settings.is_some() => {
+        Err(e) if stale && e.retryable && state.applied_settings.is_some() => {
             state.applied_settings.as_ref().unwrap().document.clone()
         }
         Err(e) => {

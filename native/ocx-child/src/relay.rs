@@ -12,6 +12,7 @@ use crate::http_wire::{
     read_request_head, read_response_head, response_framing, sanitize_response_headers,
     stream_upstream_to_chunked_client, validate_and_sanitize_request_headers, write_json_response,
 };
+use crate::journal::validate_existing_journal_paths;
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
     SecretBytes, constant_time_eq, format_iso8601_utc, now_epoch_ms, random_hex,
@@ -301,6 +302,19 @@ impl SharedServerState {
 pub fn serve_foreground(paths: ChildPaths, listen_port: u16) -> Result<(), String> {
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], listen_port)))
         .map_err(|e| format!("failed to bind 127.0.0.1:{listen_port}: {e}"))?;
+    let state = match read_child_state(&paths.state_file) {
+        StateReadOutcome::Valid(state)
+            if state.pending_operation.is_none() && state.listen_port == listen_port =>
+        {
+            state
+        }
+        _ => return Err("serve refused: child state changed during startup".to_owned()),
+    };
+    if !matches!(validate_existing_journal_paths(&paths), Ok(true))
+        || read_verified_link_key(&paths.key_file, &state.token_fingerprint).is_err()
+    {
+        return Err("serve refused: child recovery state changed during startup".to_owned());
+    }
     let actual_port = listener
         .local_addr()
         .map_err(|e| format!("local_addr failed: {e}"))?
@@ -468,18 +482,22 @@ fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> st
             let StateReadOutcome::Valid(state) = read_child_state(&shared.paths.state_file) else {
                 return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
             };
-            let Some(listener_proof) = compute_child_shutdown_proof(&state.shutdown_secret, "listener", nonce) else {
-                return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
-            };
-            let Some(caller_proof) = compute_child_shutdown_proof(&state.shutdown_secret, "caller", nonce) else {
-                return Ok(());
-            };
-            if !valid_frame(&req) || challenge_count != 1 {
+            if !valid_frame(&req) || challenge_count != 1 || !crate::relay_auth::is_valid_hex64(nonce) {
                 return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
             }
+            let Ok(server_nonce) = random_hex(32) else {
+                return write_json_response(&mut writer, 503, "Service Unavailable", &[], br#"{"error":"unavailable"}"#);
+            };
+            let binding = format!("{nonce}{server_nonce}");
+            let Some(listener_proof) = compute_child_shutdown_proof(&state.shutdown_secret, "listener", &binding) else {
+                return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
+            };
+            let Some(caller_proof) = compute_child_shutdown_proof(&state.shutdown_secret, "caller", &binding) else {
+                return Ok(());
+            };
             write!(
                 writer,
-                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nx-ocx-child-shutdown-proof: {listener_proof}\r\nConnection: keep-alive\r\n\r\n"
+                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nx-ocx-child-shutdown-nonce: {server_nonce}\r\nx-ocx-child-shutdown-proof: {listener_proof}\r\nConnection: keep-alive\r\n\r\n"
             )?;
             writer.flush()?;
             let Ok(next) = read_request_head(&mut reader) else { return Ok(()) };

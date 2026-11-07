@@ -7,7 +7,93 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryIdentity {
+    pub volume: u64,
+    pub file_id: [u8; 16],
+}
+
+pub fn directory_identity(path: &Path) -> Result<DirectoryIdentity, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let directory = File::open(path).map_err(|e| format!("cannot open directory: {e}"))?;
+        let metadata = directory
+            .metadata()
+            .map_err(|e| format!("cannot inspect directory: {e}"))?;
+        if !metadata.is_dir() {
+            return Err("expected a directory".to_owned());
+        }
+        let mut file_id = [0u8; 16];
+        file_id[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+        Ok(DirectoryIdentity {
+            volume: metadata.dev(),
+            file_id,
+        })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        struct FileIdInfo {
+            volume: u64,
+            file_id: [u8; 16],
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandleEx(
+                file: *mut std::ffi::c_void,
+                class: u32,
+                info: *mut std::ffi::c_void,
+                size: u32,
+            ) -> i32;
+        }
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(0x02000000 | 0x00200000)
+            .open(path)
+            .map_err(|e| format!("cannot open directory: {e}"))?;
+        let metadata = directory
+            .metadata()
+            .map_err(|e| format!("cannot inspect directory: {e}"))?;
+        if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
+            return Err("expected a directory".to_owned());
+        }
+        let mut info = FileIdInfo {
+            volume: 0,
+            file_id: [0; 16],
+        };
+        // SAFETY: The open directory handle and output buffer remain valid for the call.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                directory.as_raw_handle(),
+                18,
+                (&mut info as *mut FileIdInfo).cast(),
+                std::mem::size_of::<FileIdInfo>() as u32,
+            )
+        } == 0
+        {
+            return Err(format!(
+                "cannot inspect directory identity: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(DirectoryIdentity {
+            volume: info.volume,
+            file_id: info.file_id,
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err("directory identity is unavailable on this platform".to_owned())
+    }
+}
 
 /// Zeroes sensitive heap bytes on drop using volatile writes so the compiler cannot elide scrubbing.
 pub struct SecretBytes(Vec<u8>);

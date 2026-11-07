@@ -15,13 +15,16 @@ pub const LINK_RELAY_AUTH_VERSION: &str = "2";
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub fn compute_child_shutdown_proof(secret: &str, role: &str, nonce: &str) -> Option<String> {
+pub fn compute_child_shutdown_proof(secret: &str, role: &str, binding: &str) -> Option<String> {
     if secret.len() != 48
         || !secret
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         || (role != "caller" && role != "listener")
-        || !is_valid_hex64(nonce)
+        || binding.len() != 128
+        || !binding
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return None;
     }
@@ -32,7 +35,7 @@ pub fn compute_child_shutdown_proof(secret: &str, role: &str, nonce: &str) -> Op
     mac.update(b"opencodex-child-shutdown-v1\0");
     mac.update(role.as_bytes());
     mac.update(b"\0");
-    mac.update(nonce.as_bytes());
+    mac.update(binding.as_bytes());
     Some(hex_encode(&mac.finalize().into_bytes()))
 }
 

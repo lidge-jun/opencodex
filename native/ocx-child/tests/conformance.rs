@@ -602,6 +602,99 @@ fn detach_accepts_an_alias_of_the_same_canonical_codex_home() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn detach_refuses_a_retargeted_codex_home_alias() {
+    use std::os::unix::fs::symlink;
+
+    let (guard, original, other, settings) = homes_fixture();
+    let alias = guard.0.join("codex-alias");
+    symlink(&original.codex_home, &alias).unwrap();
+    let aliased = ChildPaths::new(original.opencodex_home.clone(), alias.clone());
+    apply_attach_or_sync(
+        &aliased,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let original_config = fs::read(original.codex_config_path()).unwrap();
+    let original_journal = fs::read(&original.journal_file).unwrap();
+    fs::remove_file(&alias).unwrap();
+    symlink(&other.codex_home, &alias).unwrap();
+
+    assert!(matches!(
+        offline_detach(&aliased, false),
+        Err(DetachError::Conflict(_))
+    ));
+    assert!(fs::read(original.codex_config_path()).unwrap() == original_config);
+    assert!(fs::read(&original.journal_file).unwrap() == original_journal);
+    assert!(!other.codex_config_path().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn detach_refuses_a_replaced_codex_home_directory() {
+    let (guard, original, _other, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &original,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let saved = guard.0.join("saved-codex");
+    fs::rename(&original.codex_home, &saved).unwrap();
+    fs::create_dir(&original.codex_home).unwrap();
+
+    assert!(matches!(
+        offline_detach(&original, false),
+        Err(DetachError::Conflict(_))
+    ));
+    assert!(original.journal_file.is_file());
+    assert!(saved.join("config.toml").is_file());
+}
+
+#[test]
+fn detach_refuses_missing_or_invalid_catalog_snapshot_before_mutation() {
+    for damaged in [serde_json::Value::Null, serde_json::json!("not base64!")] {
+        let (_guard, paths, _other, settings) = homes_fixture();
+        fs::write(
+            paths.codex_catalog_path(),
+            br#"{"models":[{"slug":"prior"}]}"#,
+        )
+        .unwrap();
+        apply_attach_or_sync(
+            &paths,
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            br#"{"models":[{"slug":"home"}]}"#,
+            &settings,
+        )
+        .unwrap();
+        let config_before = fs::read(paths.codex_config_path()).unwrap();
+        let catalog_before = fs::read(paths.codex_catalog_path()).unwrap();
+        let mut journal: serde_json::Value =
+            serde_json::from_slice(&fs::read(&paths.journal_file).unwrap()).unwrap();
+        journal["preAttachCatalogBytesB64"] = damaged;
+        fs::write(&paths.journal_file, serde_json::to_vec(&journal).unwrap()).unwrap();
+        let journal_before = fs::read(&paths.journal_file).unwrap();
+
+        assert!(matches!(
+            offline_detach(&paths, false),
+            Err(DetachError::Conflict(_))
+        ));
+        assert!(fs::read(paths.codex_config_path()).unwrap() == config_before);
+        assert!(fs::read(paths.codex_catalog_path()).unwrap() == catalog_before);
+        assert!(fs::read(&paths.journal_file).unwrap() == journal_before);
+    }
+}
+
 #[test]
 fn detach_refuses_a_journal_with_a_foreign_catalog_target() {
     let (_guard, original, other, settings) = homes_fixture();
@@ -709,6 +802,39 @@ fn detach_recovers_a_durable_incomplete_attach_snapshot() {
     );
     assert!(!paths.rollback_file.exists());
     assert!(!paths.journal_file.exists());
+    assert!(!paths.codex_config_path().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_recovery_refuses_a_replaced_codex_home_directory() {
+    let (guard, paths, _other, settings) = homes_fixture();
+    let snapshot = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    fs::remove_file(paths.codex_config_path()).unwrap();
+    fs::create_dir(paths.codex_config_path()).unwrap();
+    assert!(snapshot.restore(&paths).is_err());
+    let saved = guard.0.join("saved-codex");
+    fs::rename(&paths.codex_home, &saved).unwrap();
+    fs::create_dir(&paths.codex_home).unwrap();
+
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .arg("detach")
+        .env("OPENCODEX_HOME", &paths.opencodex_home)
+        .env("CODEX_HOME", &paths.codex_home)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(paths.rollback_file.is_file());
+    assert!(saved.join("config.toml").is_dir());
     assert!(!paths.codex_config_path().exists());
 }
 

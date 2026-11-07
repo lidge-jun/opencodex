@@ -6,7 +6,7 @@ use std::io::{BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -15,12 +15,13 @@ use ocx_child::daemon::pick_ephemeral_link_port;
 #[cfg(unix)]
 use ocx_child::daemon::stop_owned_daemon;
 use ocx_child::http_wire::{
-    read_bounded_body, read_request_head, validate_and_sanitize_request_headers,
+    read_bounded_body, read_request_head, read_response_head, validate_and_sanitize_request_headers,
 };
 use ocx_child::parity::{LinkChildParityReport, parse_link_child_parity_report};
 use ocx_child::platform::{FileLock, process_is_alive};
 use ocx_child::relay_auth::{
-    compute_connection_proof, compute_relay_proof, relay_proof_matches, token_fingerprint_hex,
+    compute_child_shutdown_proof, compute_connection_proof, compute_relay_proof,
+    relay_proof_matches, token_fingerprint_hex,
 };
 use ocx_child::state::ChildPaths;
 #[cfg(unix)]
@@ -30,6 +31,8 @@ struct MockHomeState {
     spoof_listener_proof: AtomicBool,
     fast_mode: Mutex<Option<bool>>,
     catalog_slug: Mutex<String>,
+    catalog_status: AtomicU16,
+    settings_status: AtomicU16,
     used_nonces: Mutex<HashSet<String>>,
     parity_reports: Mutex<Vec<LinkChildParityReport>>,
     observed_data_headers: Mutex<Vec<Vec<(String, String)>>>,
@@ -54,6 +57,8 @@ impl MockHomeServer {
             spoof_listener_proof: AtomicBool::new(false),
             fast_mode: Mutex::new(None),
             catalog_slug: Mutex::new("home-initial".to_owned()),
+            catalog_status: AtomicU16::new(200),
+            settings_status: AtomicU16::new(200),
             used_nonces: Mutex::new(HashSet::new()),
             parity_reports: Mutex::new(Vec::new()),
             observed_data_headers: Mutex::new(Vec::new()),
@@ -219,6 +224,14 @@ fn handle_mock_home_socket(
             let _ = writer.write_all(b);
         }
         ("GET", "/v1/catalog") => {
+            let status = st.catalog_status.load(Ordering::SeqCst);
+            if status != 200 {
+                let _ = write!(
+                    writer,
+                    "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                return;
+            }
             let slug = st.catalog_slug.lock().unwrap().clone();
             let b = format!("{{\"models\":[{{\"slug\":\"{slug}\"}}]}}\n");
             let _ = write!(
@@ -228,6 +241,14 @@ fn handle_mock_home_socket(
             );
         }
         ("GET", "/v1/link-management/codex-settings") => {
+            let status = st.settings_status.load(Ordering::SeqCst);
+            if status != 200 {
+                let _ = write!(
+                    writer,
+                    "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                return;
+            }
             let fm = *st.fast_mode.lock().unwrap();
             let doc = serde_json::json!({
                 "version": 1,
@@ -358,6 +379,135 @@ fn detached_foreground_serve_refuses_to_start() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("detached"));
     assert!(TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], listen_port))).is_ok());
+}
+
+#[test]
+fn direct_foreground_server_revalidates_attachment_after_binding() {
+    const MARKER: &str = "OCX_TEST_DIRECT_FOREGROUND_CHILD";
+    if let Some(root) = std::env::var_os(MARKER) {
+        let port: u16 = std::env::var("OCX_TEST_DIRECT_FOREGROUND_PORT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let root = std::path::PathBuf::from(root);
+        let paths = ChildPaths::new(root.join("opencodex"), root.join("codex"));
+        assert!(ocx_child::relay::serve_foreground(paths, port).is_err());
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-direct-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    fs::create_dir_all(&scratch).unwrap();
+    let port = pick_ephemeral_link_port().unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "direct_foreground_server_revalidates_attachment_after_binding",
+        ])
+        .env(MARKER, &scratch)
+        .env("OCX_TEST_DIRECT_FOREGROUND_PORT", port.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut exited = false;
+    for _ in 0..100 {
+        if child.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !exited {
+        child.kill().unwrap();
+    }
+    let status = child.wait().unwrap();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        exited && status.success(),
+        "detached direct server did not refuse startup"
+    );
+    assert!(TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).is_ok());
+}
+
+#[test]
+fn detach_stops_authenticated_foreground_without_recorded_pid() {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-foreground-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let port = pick_ephemeral_link_port().unwrap();
+    let raw_token = format!("ocx_data_{}", "a".repeat(40));
+    let key_id = "link:rust-test";
+    let link_id = "lnk_0123456789abcdef";
+    let mut home = MockHomeServer::start(&raw_token, key_id, link_id);
+    let creds = format!(r#"{{"apiKeyId":"{key_id}","key":"{raw_token}"}}"#);
+    let (connect, _, _) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &[
+            "connect",
+            "--link",
+            "--key-stdin",
+            "--tunnel-port",
+            &home.port.to_string(),
+            "--link-id",
+            link_id,
+        ],
+        Some(creds.as_bytes()),
+    );
+    assert_eq!(connect, 0);
+    let child = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .args(["serve", "--foreground", "--listen-port", &port.to_string()])
+        .env("OPENCODEX_HOME", &ocx_home)
+        .env("CODEX_HOME", &codex_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut ready = false;
+    for _ in 0..100 {
+        if TcpStream::connect(SocketAddr::from(([127, 0, 0, 1], port))).is_ok() {
+            ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let child = Arc::new(Mutex::new(child));
+    let waiter_child = Arc::clone(&child);
+    let waiter = thread::spawn(move || {
+        loop {
+            if let Some(status) = waiter_child.lock().unwrap().try_wait().unwrap() {
+                break status;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let (detach, _, _) = run_bin(&ocx_home, &codex_home, port, &["detach"], None);
+    if detach != 0 {
+        let _ = child.lock().unwrap().kill();
+    }
+    let stopped = waiter.join().unwrap().success();
+    if detach != 0 {
+        let _ = run_bin(&ocx_home, &codex_home, port, &["detach"], None);
+    }
+    home.shutdown();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(ready, "foreground server never became ready");
+    assert_eq!(
+        detach, 0,
+        "authenticated foreground server must be detachable"
+    );
+    assert!(stopped, "foreground daemon remained running after detach");
 }
 
 #[cfg(unix)]
@@ -532,6 +682,224 @@ fn native_attach_starts_authorized_daemon_and_clears_rollback_snapshot() {
     let (detach_code, _, detach_error) = run_bin(&ocx_home, &codex_home, port, &["detach"], None);
     assert_eq!(detach_code, 0, "detach failed: {detach_error}");
     home.shutdown();
+}
+
+#[test]
+fn captured_shutdown_proof_cannot_be_replayed_on_another_connection() {
+    struct Cleanup {
+        root: std::path::PathBuf,
+        ocx: std::path::PathBuf,
+        codex: std::path::PathBuf,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let result = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+                .arg("detach")
+                .env("OPENCODEX_HOME", &self.ocx)
+                .env("CODEX_HOME", &self.codex)
+                .output();
+            if result.is_ok_and(|output| output.status.success()) {
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+    }
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-replay-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let _cleanup = Cleanup {
+        root: scratch,
+        ocx: ocx_home.clone(),
+        codex: codex_home.clone(),
+    };
+    let port = pick_ephemeral_link_port().unwrap();
+    let raw_token = format!("ocx_data_{}", "a".repeat(40));
+    let key_id = "link:rust-test";
+    let link_id = "lnk_0123456789abcdef";
+    let _home = MockHomeServer::start(&raw_token, key_id, link_id);
+    let creds = format!(r#"{{"apiKeyId":"{key_id}","key":"{raw_token}"}}"#);
+    let (code, _, stderr) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &[
+            "attach",
+            "--key-stdin",
+            "--tunnel-port",
+            &_home.port.to_string(),
+            "--link-id",
+            link_id,
+            "--listen-port",
+            &port.to_string(),
+        ],
+        Some(creds.as_bytes()),
+    );
+    assert_eq!(code, 0, "fixture attach failed: {stderr}");
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(ocx_home.join("child").join("state.json")).unwrap())
+            .unwrap();
+    let secret = state["shutdownSecret"].as_str().unwrap();
+    let nonce = "b".repeat(64);
+    let challenge = format!(
+        "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nx-ocx-child-shutdown-challenge: {nonce}\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+    );
+    let mut first = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    first.write_all(challenge.as_bytes()).unwrap();
+    let mut first_reader = BufReader::new(first);
+    let first_head = read_response_head(&mut first_reader).unwrap();
+    assert_eq!(first_head.status, 204);
+    let binding = first_head
+        .header("x-ocx-child-shutdown-nonce")
+        .map(|server_nonce| format!("{nonce}{server_nonce}"))
+        .unwrap_or_else(|| nonce.clone());
+    let captured = compute_child_shutdown_proof(secret, "caller", &binding).unwrap();
+    drop(first_reader);
+
+    let mut second = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    second.write_all(challenge.as_bytes()).unwrap();
+    let mut reader = BufReader::new(second.try_clone().unwrap());
+    assert_eq!(read_response_head(&mut reader).unwrap().status, 204);
+    let replay = format!(
+        "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nx-ocx-child-shutdown-proof: {captured}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    second.write_all(replay.as_bytes()).unwrap();
+    let response = read_response_head(&mut reader).unwrap();
+    assert_eq!(
+        response.status, 404,
+        "captured shutdown authorization was replayed"
+    );
+}
+
+#[test]
+fn rejected_home_authentication_never_becomes_a_stale_sync_success() {
+    struct Cleanup {
+        root: std::path::PathBuf,
+        ocx: std::path::PathBuf,
+        codex: std::path::PathBuf,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let result = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+                .arg("detach")
+                .env("OPENCODEX_HOME", &self.ocx)
+                .env("CODEX_HOME", &self.codex)
+                .output();
+            if result.is_ok_and(|output| output.status.success()) {
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+    }
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-auth-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let _cleanup = Cleanup {
+        root: scratch,
+        ocx: ocx_home.clone(),
+        codex: codex_home.clone(),
+    };
+    let port = pick_ephemeral_link_port().unwrap();
+    let raw_token = format!("ocx_data_{}", "a".repeat(40));
+    let key_id = "link:rust-test";
+    let link_id = "lnk_0123456789abcdef";
+    let home = MockHomeServer::start(&raw_token, key_id, link_id);
+    let creds = format!(r#"{{"apiKeyId":"{key_id}","key":"{raw_token}"}}"#);
+    let (code, _, stderr) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &[
+            "attach",
+            "--key-stdin",
+            "--tunnel-port",
+            &home.port.to_string(),
+            "--link-id",
+            link_id,
+            "--listen-port",
+            &port.to_string(),
+        ],
+        Some(creds.as_bytes()),
+    );
+    assert_eq!(code, 0, "fixture attach failed: {stderr}");
+    let paths = ChildPaths::new(ocx_home.clone(), codex_home.clone());
+    let config_before = fs::read(paths.codex_config_path()).unwrap();
+    let journal_before = fs::read(&paths.journal_file).unwrap();
+    let state_before = fs::read(&paths.state_file).unwrap();
+
+    for status in [401, 403] {
+        home.state.catalog_status.store(status, Ordering::SeqCst);
+        let (code, output, _) = run_bin(
+            &ocx_home,
+            &codex_home,
+            port,
+            &["sync", "--expect-link", link_id, "--json"],
+            None,
+        );
+        assert_ne!(
+            code, 0,
+            "HTTP {status} must not be reported as stale success"
+        );
+        assert!(!output.contains("\"state\":\"stale\""));
+        assert!(fs::read(paths.codex_config_path()).unwrap() == config_before);
+        assert!(fs::read(&paths.journal_file).unwrap() == journal_before);
+        assert!(fs::read(&paths.state_file).unwrap() == state_before);
+    }
+    home.state.catalog_status.store(503, Ordering::SeqCst);
+    home.state.settings_status.store(401, Ordering::SeqCst);
+    let (code, _, _) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &["sync", "--expect-link", link_id, "--json"],
+        None,
+    );
+    assert_ne!(
+        code, 0,
+        "settings authentication refusal must not be hidden by stale catalog"
+    );
+    home.state.catalog_status.store(200, Ordering::SeqCst);
+    home.state.settings_status.store(200, Ordering::SeqCst);
+    home.state
+        .spoof_listener_proof
+        .store(true, Ordering::SeqCst);
+    let (code, _, _) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &["sync", "--expect-link", link_id, "--json"],
+        None,
+    );
+    assert_ne!(
+        code, 0,
+        "listener proof failure must not become stale success"
+    );
+    home.state
+        .spoof_listener_proof
+        .store(false, Ordering::SeqCst);
+    home.state.catalog_status.store(503, Ordering::SeqCst);
+    home.state.settings_status.store(503, Ordering::SeqCst);
+    let (code, output, stderr) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &["sync", "--expect-link", link_id, "--json"],
+        None,
+    );
+    assert_eq!(
+        code, 0,
+        "temporary Home failure should retain offline sync: {stderr}"
+    );
+    assert!(output.contains("\"state\":\"stale\""));
 }
 
 #[test]
