@@ -50,15 +50,15 @@ export interface MuseKeyQuotaDeps {
 const backoffUntil = new Map<string, number>();
 const lastSuccessAt = new Map<string, number>();
 /**
- * One in-flight probe per account and captured owner.
+ * One in-flight probe per account, tagged with its captured owner.
  *
  * The TTL check alone is not atomic: `?refresh=1` and the reset poller can both pass it
  * before either writes `lastSuccessAt`, which would spend two mints inside one window.
- * Concurrent callers for the same owner share the first request instead of racing it;
- * a replaced credential cannot join an older owner's result. Backoff and successful-mint
- * spacing remain account-scoped.
+ * Concurrent callers for the same owner share the first request instead of racing it.
+ * A replacement cannot receive the older result or start another mint while it is in flight;
+ * a later poll can retry subject to the account-scoped success spacing or failure backoff.
  */
-const inFlight = new Map<string, Promise<ProviderQuota | null>>();
+const inFlight = new Map<string, { identity: string; promise: Promise<ProviderQuota | null> }>();
 
 /** Test seam only. */
 export function resetMuseKeyQuotaBackoff(): void {
@@ -78,21 +78,22 @@ export async function fetchMuseKeyQuotaSnapshot(
   signal?: AbortSignal,
   identity?: string,
 ): Promise<ProviderQuota | null> {
-  const probeKey = identity ? `${accountId}\0${identity}` : accountId;
   const now = deps.now ?? Date.now;
   const at = now();
   if (museKeyQuotaBackoffRemainingMs(accountId, at) > 0) return null;
   // Success spacing, enforced even for a forced refresh. See SUCCESS_TTL_MS.
   const last = lastSuccessAt.get(accountId);
   if (last !== undefined && at - last < SUCCESS_TTL_MS) return null;
-  const running = inFlight.get(probeKey);
-  if (running) return await running;
+  const flightIdentity = new Bun.CryptoHasher("sha256").update(JSON.stringify([identity, oauthAccessToken])).digest("hex");
+  const running = inFlight.get(accountId);
+  if (running) return running.identity === flightIdentity ? await running.promise : null;
   const attempt = probe(accountId, oauthAccessToken, deps, signal);
-  inFlight.set(probeKey, attempt);
+  const entry = { identity: flightIdentity, promise: attempt };
+  inFlight.set(accountId, entry);
   try {
     return await attempt;
   } finally {
-    if (inFlight.get(probeKey) === attempt) inFlight.delete(probeKey);
+    if (inFlight.get(accountId) === entry) inFlight.delete(accountId);
   }
 }
 
