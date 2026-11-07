@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import QuotaSummaryBar from "../src/components/quota-summary-bar/QuotaSummaryBar";
 import { LanguageProvider } from "../src/i18n/provider";
+import { PassiveKeyLimitCache } from "../../src/providers/quota/passive-key-limits";
 
 const globals = ["document", "window", "navigator", "fetch", "requestAnimationFrame", "cancelAnimationFrame", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -155,6 +156,21 @@ test("Groq daily request and minute token windows retain their distinct periods"
   expect(chip?.textContent).toContain("5 / 10");
   expect(chip?.textContent).toContain("minute");
   expect(chip?.textContent).toContain("6 / 20");
+});
+
+test("the quota strip renders unknown families from passive cache with their observation time", async () => {
+  const cache = new PassiveKeyLimitCache({ retentionMs: 120_000 });
+  const identity = { owner: "gui-fixture", provider: "mistral" as const, model: "model" };
+  cache.record(identity, new Headers({ "x-ratelimit-remaining-req-minute": "0" }), now - 60_000, 1);
+  const view = await mount("", 0, [], [{ provider: "mistral", keyId: "opaque", model: "model", windows: cache.get(identity, now) }], true);
+  const chip = view.host.querySelector('a[href="#providers?provider=mistral&tab=accounts"]');
+  expect(chip?.textContent).toContain("0 / Unknown");
+  expect(chip?.textContent?.match(/Unknown \/ Unknown/g)).toHaveLength(2);
+  expect(chip?.textContent).toContain("minute");
+  expect(chip?.textContent).toContain("month");
+  await act(async () => { chip!.dispatchEvent(new testWindow.PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }) as unknown as Event); });
+  expect(view.host.textContent).toContain("Observed 1m ago");
+  expect(view.host.textContent).not.toContain("Resets");
 });
 
 test("malformed passive readings do not render or invent counts", async () => {

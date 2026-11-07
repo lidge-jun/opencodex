@@ -6,6 +6,21 @@ const identity = { owner: "opaque-owner-a", provider: "openai" as const, model: 
 const headers = (values: Record<string, string>) => new Headers(values);
 
 describe("passive key limit parsing", () => {
+  test("missing header families produce timestamped unknown dimensions", () => {
+    for (const [provider, dimensions] of [
+      ["openai", [{ dimension: "requests" }, { dimension: "tokens" }]],
+      ["xai", [{ dimension: "requests" }, { dimension: "tokens" }]],
+      ["groq", [{ dimension: "requests", window: "day" }, { dimension: "tokens", window: "minute" }]],
+      ["anthropic", [{ dimension: "requests" }, { dimension: "input-tokens" }, { dimension: "output-tokens" }, { dimension: "tokens" }]],
+      ["mistral", [{ dimension: "requests", window: "minute" }, { dimension: "tokens", window: "minute" }, { dimension: "tokens", window: "month" }]],
+    ] as const) {
+      expect(parsePassiveKeyLimits(provider, headers({}), at)).toEqual(dimensions.map(row => ({ ...row, observedAt: at })));
+    }
+    expect(parsePassiveKeyLimits("groq", headers({ "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-tokens": "1s" }), at)).toEqual([
+      { dimension: "requests", window: "day", observedAt: at, remaining: 0 },
+      { dimension: "tokens", window: "minute", observedAt: at, resetAt: at + 1000 },
+    ]);
+  });
   for (const provider of ["openai", "xai", "groq"] as const) {
     test(`${provider} preserves request and token counts and exact reset durations`, () => {
       expect(parsePassiveKeyLimits(provider, headers({
@@ -21,14 +36,14 @@ describe("passive key limit parsing", () => {
   test("untrusted malformed values stay unknown and durations cannot be rounded or overflow", () => {
     for (const reset of ["1.0001s", "1s junk", "-1s", "1e3s", "999999999999999999h", "1s1m", "1m1m", "31d"]) {
       expect(parsePassiveKeyLimits("openai", headers({ "x-ratelimit-limit-requests": "23", "x-ratelimit-reset-requests": reset }), at))
-        .toEqual([{ dimension: "requests", observedAt: at, limit: 23 }]);
+        .toEqual([{ dimension: "requests", observedAt: at, limit: 23 }, { dimension: "tokens", observedAt: at }]);
     }
     expect(parsePassiveKeyLimits("groq", headers({
       "x-ratelimit-limit-requests": "-1", "x-ratelimit-remaining-requests": "2e3",
       "x-ratelimit-limit-tokens": "1000000000001", "x-ratelimit-remaining-tokens": "NaN",
-    }), at)).toEqual([]);
+    }), at)).toEqual([{ dimension: "requests", window: "day", observedAt: at }, { dimension: "tokens", window: "minute", observedAt: at }]);
     expect(parsePassiveKeyLimits("openai", headers({ "x-ratelimit-remaining-requests": "3" }), at))
-      .toEqual([{ dimension: "requests", observedAt: at, remaining: 3 }]);
+      .toEqual([{ dimension: "requests", observedAt: at, remaining: 3 }, { dimension: "tokens", observedAt: at }]);
   });
   test("Anthropic validates dates and preserves each independent token family", () => {
     const values = headers({
@@ -60,6 +75,26 @@ describe("passive key limit parsing", () => {
 
 describe("passive key observation cache", () => {
   const response = (n: number, reset = "10s") => headers({ "x-ratelimit-remaining-requests": String(n), "x-ratelimit-reset-requests": reset });
+  test("unknown families are bounded and preserve older measured families with their own age", () => {
+    const cache = new PassiveKeyLimitCache({ retentionMs: 20000 });
+    expect(cache.record(identity, headers({}), at, 1)).toBe(true);
+    expect(cache.get(identity, at - 1)).toEqual([]);
+    expect(cache.get(identity, at)).toEqual([
+      { dimension: "requests", observedAt: at, stale: false },
+      { dimension: "tokens", observedAt: at, stale: false },
+    ]);
+    expect(cache.record(identity, response(7, "1s"), at + 10, 2)).toBe(true);
+    expect(cache.record(identity, headers({}), at + 20, 3)).toBe(true);
+    expect(cache.get(identity, at + 1010)).toEqual([
+      { dimension: "requests", observedAt: at + 10, remaining: 7, resetAt: at + 1010, stale: true },
+      { dimension: "tokens", observedAt: at + 20, stale: false },
+    ]);
+    expect(cache.get(identity, at + 20010)).toEqual([
+      { dimension: "requests", observedAt: at + 20, stale: false },
+      { dimension: "tokens", observedAt: at + 20, stale: false },
+    ]);
+    expect(cache.get(identity, at + 20020)).toEqual([]);
+  });
   test("eviction cannot make an older in-flight response fresh", () => {
     const cache = new PassiveKeyLimitCache({ maxEntries: 1 });
     const other = { ...identity, model: "other" };
@@ -82,9 +117,9 @@ describe("passive key observation cache", () => {
   test("empty newer observations fence older reserved sends", () => {
     const cache = new PassiveKeyLimitCache();
     const old = cache.reserve(identity, 1)!;
-    expect(cache.reserve(identity, 2)!.record(headers({}), at)).toBe(false);
+    expect(cache.reserve(identity, 2)!.record(headers({}), at)).toBe(true);
     expect(old.record(response(1), at)).toBe(false);
-    expect(cache.get(identity, at)).toEqual([]);
+    expect(cache.get(identity, at)).toEqual([{ dimension: "requests", observedAt: at, stale: false }, { dimension: "tokens", observedAt: at, stale: false }]);
   });
   test("cancel, duplicate settlement and clear invalidate reservations", () => {
     const cache = new PassiveKeyLimitCache({ maxEntries: 1 });
@@ -128,15 +163,15 @@ describe("passive key observation cache", () => {
     expect(cache.record(identity, response(7), at, 2)).toBe(true);
     expect(cache.record(identity, response(2), at + 50, 1)).toBe(false);
     expect(cache.record(identity, response(1), at + 50, 2)).toBe(false);
-    expect(cache.get(identity, at + 100)).toEqual([{ dimension: "requests", observedAt: at, remaining: 7, resetAt: at + 10000, stale: false }]);
+    expect(cache.get(identity, at + 100)).toEqual([{ dimension: "requests", observedAt: at, remaining: 7, resetAt: at + 10000, stale: false }, { dimension: "tokens", observedAt: at, stale: false }]);
   });
   test("empty newer responses fence earlier sends, including the first response", () => {
     const cache = new PassiveKeyLimitCache();
-    expect(cache.record(identity, headers({}), at, 5)).toBe(false);
+    expect(cache.record(identity, headers({}), at, 5)).toBe(true);
     expect(cache.record(identity, response(1), at, 4)).toBe(false);
-    expect(cache.get(identity, at)).toEqual([]);
+    expect(cache.get(identity, at)).toEqual([{ dimension: "requests", observedAt: at, stale: false }, { dimension: "tokens", observedAt: at, stale: false }]);
     expect(cache.record(identity, response(8), at, 6)).toBe(true);
-    expect(cache.record(identity, headers({}), at, 9)).toBe(false);
+    expect(cache.record(identity, headers({}), at, 9)).toBe(true);
     expect(cache.record(identity, response(1), at, 7)).toBe(false);
     expect(cache.get(identity, at)[0]?.remaining).toBe(8);
   });
@@ -187,8 +222,8 @@ describe("passive key observation cache", () => {
     cache.record({ ...identity, model: "model-b" }, response(2), at, 2);
     cache.record({ ...identity, owner: "other" }, response(9), at, 3);
     expect(cache.list(identity.owner, identity.provider, at)).toEqual([
-      { model: identity.model, windows: [{ dimension: "requests", observedAt: at, remaining: 5, resetAt: at + 10000, stale: false }] },
-      { model: "model-b", windows: [{ dimension: "requests", observedAt: at, remaining: 2, resetAt: at + 10000, stale: false }] },
+      { model: identity.model, windows: [{ dimension: "requests", observedAt: at, remaining: 5, resetAt: at + 10000, stale: false }, { dimension: "tokens", observedAt: at, stale: false }] },
+      { model: "model-b", windows: [{ dimension: "requests", observedAt: at, remaining: 2, resetAt: at + 10000, stale: false }, { dimension: "tokens", observedAt: at, stale: false }] },
     ]);
   });
   test("invalid bounds, sequence, timestamps and empty observations cannot replace data", () => {
@@ -196,7 +231,7 @@ describe("passive key observation cache", () => {
     expect(() => new PassiveKeyLimitCache({ retentionMs: 86400001 })).toThrow();
     const cache = new PassiveKeyLimitCache();
     expect(cache.record(identity, response(1), at, 1)).toBe(true);
-    expect(cache.record(identity, headers({}), at, 2)).toBe(false);
+    expect(cache.record(identity, headers({}), at, 2)).toBe(true);
     expect(cache.record(identity, response(2), at, -1)).toBe(false);
     expect(cache.record(identity, response(2), NaN, 2)).toBe(false);
     expect(cache.get(identity, at)[0]?.remaining).toBe(1);

@@ -74,7 +74,7 @@ test("a large request with model after its input still retains the wire identity
   const config = fixture("large-model-last");
   const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "large-model-last", routedProviderConfig("large-model-last", config.providers["large-model-last"]!));
   await send("https://api.groq.com/openai/v1/chat/completions", { ...init, body: JSON.stringify({ messages: [{ content: "x".repeat(128000) }], model: "model" }) });
-  expect(getPassiveKeyLimits(config, "large-model-last", "model")).toMatchObject([{ remaining: 5 }]);
+  expect(getPassiveKeyLimits(config, "large-model-last", "model")).toMatchObject([{ remaining: 5 }, { dimension: "tokens", window: "minute" }]);
 });
 
 test("changed wire auth and rewritten destinations cannot claim an account's reading", async () => {
@@ -111,7 +111,7 @@ test("a later send cannot be overwritten by an older response", async () => {
   await send("https://api.groq.com/openai/v1/chat/completions", init);
   release();
   await older;
-  expect(getPassiveKeyLimits(config, "ordering", "model")).toMatchObject([{ remaining: 10 }]);
+  expect(getPassiveKeyLimits(config, "ordering", "model")).toMatchObject([{ remaining: 10 }, { dimension: "tokens", window: "minute" }]);
 });
 
 test("clearing on key management retires old rows and pending responses", async () => {
@@ -121,7 +121,7 @@ test("clearing on key management retires old rows and pending responses", async 
   let count = 0;
   const send = passiveKeyPhysicalFetch(trusted(async () => { if (++count === 2) await wait; return response(); }), config, "cleared", routedProviderConfig("cleared", config.providers.cleared!));
   await send("https://api.groq.com/openai/v1/chat/completions", init);
-  expect(getPassiveKeyLimits(config, "cleared", "model")).toHaveLength(1);
+  expect(getPassiveKeyLimits(config, "cleared", "model")).toHaveLength(2);
   const pending = send("https://api.groq.com/openai/v1/chat/completions", init);
   observations.clearPassiveKeyLimits();
   release();
@@ -137,7 +137,7 @@ test("retiring one provider does not clear another provider's observation", asyn
   }
   observations.clearPassiveKeyLimits("provider-a");
   expect(getPassiveKeyLimits(a, "provider-a", "model")).toEqual([]);
-  expect(getPassiveKeyLimits(b, "provider-b", "model")).toMatchObject([{ remaining: 5 }]);
+  expect(getPassiveKeyLimits(b, "provider-b", "model")).toMatchObject([{ remaining: 5 }, { dimension: "tokens", window: "minute" }]);
 });
 
 test("pause and unpause retire the prior key incarnation, including its in-flight send", async () => {
@@ -214,7 +214,7 @@ test.each(["get", "list", "send"] as const)("passive %s does not observe or inva
     const routed = routedProviderConfig(name, provider);
     const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, name, routed);
     await send("https://api.groq.com/openai/v1/chat/completions", init);
-    expect(getPassiveKeyLimits(config, name, "model")).toHaveLength(1);
+    expect(getPassiveKeyLimits(config, name, "model")).toHaveLength(2);
     expect(listPassiveKeyLimits(config)).toHaveLength(1);
     const windows = [{ window: "5h" as const, percent: 25, observedAt: Date.now() }];
     decision.publishDecisionKeyQuota(name, provider, windows);
@@ -254,7 +254,7 @@ test("keychain replacement retires passive ownership while normal credential rea
     const routed = routedProviderConfig("passive-keychain", provider);
     const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "passive-keychain", routed);
     await send("https://api.groq.com/openai/v1/chat/completions", init);
-    expect(getPassiveKeyLimits(config, "passive-keychain", "model")).toHaveLength(1);
+    expect(getPassiveKeyLimits(config, "passive-keychain", "model")).toHaveLength(2);
     stored = "replacement-synthetic-key";
     invalidateResolvedProviderKeyCache();
     const windows = [{ window: "5h" as const, percent: 25, observedAt: Date.now() }];

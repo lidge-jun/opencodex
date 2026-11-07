@@ -63,7 +63,6 @@ export function parsePassiveKeyLimits(provider: PassiveKeyProvider, headers: Hea
   const result: PassiveKeyLimit[] = [];
   const add = (dimension: PassiveKeyLimit["dimension"], limit: number | undefined, remaining: number | undefined,
     resetAt?: number, window?: PassiveKeyLimit["window"]) => {
-    if (limit === undefined && remaining === undefined) return;
     result.push({ dimension, ...(window ? { window } : {}), observedAt,
       ...(limit !== undefined ? { limit } : {}), ...(remaining !== undefined ? { remaining } : {}),
       ...(resetAt !== undefined && timestamp(resetAt) ? { resetAt } : {}) });
@@ -173,15 +172,14 @@ export class PassiveKeyLimitCache {
     if (!key || !timestamp(observedAt) || !Number.isSafeInteger(sequence) || sequence < 0) return false;
     const current = this.entries.get(key);
     if (current && sequence <= current.sequence) return false;
-    const rows = parsePassiveKeyLimits(identity.provider, headers, observedAt);
-    // A later response with no usable counters still fences earlier in-flight sends.
-    if (!rows.length) {
-      this.entries.delete(key);
-      if (current) current.sequence = sequence;
-      this.entries.set(key, current ?? { sequence, rows: [], pending: 0, namespace: identity.namespace, account: identity.account });
-      this.evictOverflow();
-      return false;
-    }
+    const rows = parsePassiveKeyLimits(identity.provider, headers, observedAt).flatMap(row => {
+      if (row.limit !== undefined || row.remaining !== undefined || row.resetAt !== undefined) return [row];
+      const previous = current?.rows.find(item => item.dimension === row.dimension && item.window === row.window
+        && (item.limit !== undefined || item.remaining !== undefined || item.resetAt !== undefined)
+        && observedAt >= item.observedAt && observedAt - item.observedAt < this.retentionMs);
+      // Keep the new unknown observation as a fallback after the older measurement expires.
+      return previous ? [previous, row] : [row];
+    });
     if (current?.timer) clearTimeout(current.timer);
     const entry: Entry = current ?? { sequence, rows, pending: 0, namespace: identity.namespace, account: identity.account };
     entry.sequence = sequence;
@@ -208,7 +206,14 @@ export class PassiveKeyLimitCache {
     const entry = this.entries.get(key);
     if (!entry) return [];
     entry.rows = entry.rows.filter(row => now < row.observedAt || now - row.observedAt < this.retentionMs);
-    const rows = entry.rows.filter(row => now >= row.observedAt);
+    const seen = new Set<string>();
+    const rows = entry.rows.filter(row => {
+      if (now < row.observedAt) return false;
+      const kind = `${row.dimension}:${row.window ?? ""}`;
+      if (seen.has(kind)) return false;
+      seen.add(kind);
+      return true;
+    });
     // Keep the sequence fence until eviction; freshness applies to the returned rows.
     this.entries.delete(key);
     this.entries.set(key, entry);

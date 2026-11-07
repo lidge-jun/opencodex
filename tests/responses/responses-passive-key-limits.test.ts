@@ -12,6 +12,35 @@ import { ManagementRequest } from "../helpers/management-auth";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
+test("a proxied response without rate headers publishes unknown Groq dimensions without a probe", async () => {
+  const config = getDefaultConfig();
+  config.defaultProvider = "unknown-fixture";
+  config.defaultModel = "unknown-model";
+  config.providers = { "unknown-fixture": { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1",
+    authMode: "key", apiKey: "synthetic-unknown-key", models: ["unknown-model"], liveModels: false } };
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends++;
+    return Response.json({ id: "synthetic", object: "chat.completion", model: "unknown-model",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] });
+  }) as typeof fetch;
+  const before = Date.now();
+  const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "unknown-fixture/unknown-model", input: "hi", stream: false, store: false }) });
+  await (await handleResponses(request, config, { provider: "", model: "" }, {})).text();
+  const url = new URL("http://localhost/api/provider-quotas");
+  const body = await (await handleManagementAPI(new ManagementRequest(url), url, config))!.json();
+  const row = body.passiveKeyLimits.find((item: { provider: string }) => item.provider === "unknown-fixture");
+  expect(row.windows).toEqual([
+    { dimension: "requests", window: "day", observedAt: expect.any(Number), stale: false },
+    { dimension: "tokens", window: "minute", observedAt: expect.any(Number), stale: false },
+  ]);
+  expect(row.windows[0].observedAt).toBeGreaterThanOrEqual(before);
+  expect(row.windows[0].observedAt).toBeLessThanOrEqual(Date.now());
+  expect(row.windows[1].observedAt).toBe(row.windows[0].observedAt);
+  expect(sends).toBe(1);
+});
+
 test("Responses dispatch records canonical key headers for the physical wire model", async () => {
   const config = getDefaultConfig();
   config.defaultProvider = "fixture";
@@ -32,13 +61,13 @@ test("Responses dispatch records canonical key headers for the physical wire mod
   const response = await handleResponses(req, config, { provider: "fixture", model: "wire-model" }, {});
   await response.text();
   expect(sends).toBe(1);
-  expect(observations.getPassiveKeyLimits(config, "fixture", "wire-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 42 }]);
-  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "fixture", model: "wire-model", windows: [{ dimension: "requests", limit: 100, remaining: 42 }] }]);
+  expect(observations.getPassiveKeyLimits(config, "fixture", "wire-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 42 }, { dimension: "tokens", window: "minute" }]);
+  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "fixture", model: "wire-model", windows: [{ dimension: "requests", limit: 100, remaining: 42 }, { dimension: "tokens", window: "minute" }] }]);
   const url = new URL("http://localhost/api/provider-quotas");
   const report = await handleManagementAPI(new ManagementRequest(url), url, config);
   const json = await report!.json();
   expect(report!.status).toBe(200);
-  expect(json.passiveKeyLimits).toMatchObject([{ provider: "fixture", model: "wire-model", windows: [{ remaining: 42 }] }]);
+  expect(json.passiveKeyLimits).toMatchObject([{ provider: "fixture", model: "wire-model", windows: [{ remaining: 42 }, { dimension: "tokens", window: "minute" }] }]);
   expect(JSON.stringify(json)).not.toContain("synthetic-key");
   expect(sends).toBe(1);
 });
@@ -63,7 +92,7 @@ test("native Anthropic Messages records the actual API-key limits", async () => 
     const response = await handleClaudeMessages(request, config, { provider: "", model: "" });
     await response.text();
     expect(response.status).toBe(200);
-    expect(observations.getPassiveKeyLimits(config, "anthropic-fixture", "claude-test-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 42 }]);
+    expect(observations.getPassiveKeyLimits(config, "anthropic-fixture", "claude-test-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 42 }, { dimension: "input-tokens" }, { dimension: "output-tokens" }, { dimension: "tokens" }]);
   } finally { release(); }
 });
 
@@ -83,7 +112,7 @@ test("native Chat records the physical key's rate-limit headers", async () => {
   const response = await handleChatCompletions(request, config, { provider: "", model: "" });
   await response.text();
   expect(response.status).toBe(200);
-  expect(observations.getPassiveKeyLimits(config, "chat-fixture", "chat-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 34 }]);
+  expect(observations.getPassiveKeyLimits(config, "chat-fixture", "chat-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 34 }, { dimension: "tokens", window: "minute" }]);
   } finally { release(); }
 });
 
@@ -102,7 +131,7 @@ test("compact sends record the physical OpenAI key's limits", async () => {
     const response = await handleResponsesCompact(request, config, { provider: "", model: "" });
     await response.text();
     expect(response.status).toBe(200);
-    expect(observations.getPassiveKeyLimits(config, "openai-apikey", "compact-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 21 }]);
+    expect(observations.getPassiveKeyLimits(config, "openai-apikey", "compact-model")).toMatchObject([{ dimension: "requests", limit: 100, remaining: 21 }, { dimension: "tokens" }]);
   } finally { release(); }
 });
 
@@ -124,7 +153,9 @@ for (const fixture of [
     const response = await handleResponses(request, config, { provider: "", model: "" }, {});
     await response.text();
     expect(response.status).toBe(200);
-    expect(observations.getPassiveKeyLimits(config, fixture.name, fixture.model)).toMatchObject([{ dimension: "tokens", remaining: 23 }]);
+    expect(observations.getPassiveKeyLimits(config, fixture.name, fixture.model)).toMatchObject(fixture.name === "mistral"
+      ? [{ dimension: "requests", window: "minute" }, { dimension: "tokens", window: "minute", remaining: 23 }, { dimension: "tokens", window: "month" }]
+      : [{ dimension: "requests" }, { dimension: "tokens", remaining: 23 }]);
   });
 }
 
@@ -151,5 +182,5 @@ test("an in-flight response stays attributed to its key after another key become
   config.providers["rotating-fixture"]!.apiKey = "second-synthetic-key";
   finish();
   await (await pending).text();
-  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "rotating-fixture", keyId: "first", model: "wire-model", windows: [{ remaining: 42 }] }]);
+  expect(observations.listPassiveKeyLimits(config)).toMatchObject([{ provider: "rotating-fixture", keyId: "first", model: "wire-model", windows: [{ remaining: 42 }, { dimension: "tokens", window: "minute" }] }]);
 });
