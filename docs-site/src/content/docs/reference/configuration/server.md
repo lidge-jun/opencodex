@@ -63,6 +63,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+| `telemetry?` | `OcxTelemetryConfig` | default-on after human disclosure | Anonymous daily usage telemetry consent state (`decision`, `decidedAt`, `noticeShownAt`). Nothing is sent until a person has seen the notice or opted in. Overridden by `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1`. See [Telemetry (`telemetry`)](#telemetry-telemetry) and [Telemetry and Privacy](/guides/telemetry/). |
 
 On Linux x64/arm64 with pidfd support, service health recovery binds termination to the proxy's
 kernel process identity, so PID reuse cannot redirect it. The sentinel's watching log ends in
@@ -486,6 +487,39 @@ way.
 block exists, because `config set` walks into existing objects and never creates them. Write the
 whole object instead — `ocx config set privacy '{"maskEmails":false}'` — or add the block to
 `config.json` by hand.
+
+## Telemetry (`telemetry`)
+
+Anonymous daily usage telemetry defaults to on only after a person has seen the disclosure notice
+(in the GUI popup or an interactive terminal prompt). The `telemetry` block in `config.json` records
+that consent state:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | unset (undecided) | Explicit user choice. `"declined"` disables telemetry and deletes `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` enables daily reports. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Completed UTC days before `decidedAt ?? noticeShownAt` are never backfilled. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | unset | UTC timestamp when a human saw the disclosure in the web dashboard or an interactive terminal. When `decision` is unset, telemetry sends only if `noticeShownAt` is set (`default-on`); without it the proxy remains in `awaiting-notice`. |
+
+The collector endpoint (`https://telemetry.opencodex.me/v1/events`) is a code constant and cannot
+be configured in `config.json`.
+
+Two environment variables override `config.json` and disable telemetry immediately without modifying
+saved configuration:
+
+- `OCX_TELEMETRY=0` (also accepts `false`, `off`, or `no`, case-insensitive)
+- `DO_NOT_TRACK=1` (also accepts `true` or `yes`, case-insensitive)
+
+`ocx config set telemetry` and `ocx config unset telemetry` are refused so automated callers cannot record consent through generic config writes; use `ocx telemetry enable`, `ocx telemetry disable`, `ocx telemetry status [--json]`, or the dashboard **Proxy details** toggle instead. See [Telemetry and Privacy](/guides/telemetry/) for the full payload schema and retention policy.
 
 ## Storage cleanup
 

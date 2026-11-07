@@ -1,7 +1,8 @@
 # Telemetry
 
 Anonymous, default-on daily usage telemetry owned by `src/telemetry/`, `src/types/telemetry.ts`,
-`src/server/management/telemetry-routes.ts`, and `src/cli/telemetry.ts`.
+`src/server/management/telemetry-routes.ts`, `src/cli/telemetry.ts`, and
+`services/telemetry-collector/`, with public user documentation in `docs-site/src/content/docs/guides/telemetry.md`.
 
 ## Wire contract and vocabularies
 
@@ -52,3 +53,14 @@ sum matches `usageDisplayTotalTokens` in `src/usage/totals.ts`.
 with a 10-second `signalWithTimeout`. `src/telemetry/scheduler.ts` runs an unref'd background
 timer started lazily from `src/server/background-lifecycle.ts`, re-reading config from disk on
 each tick and sending at most one completed post-consent day per tick.
+
+## Collector and public documentation
+
+`services/telemetry-collector/` is the Cloudflare Worker + D1 service (`services/telemetry-collector/src/index.ts`,
+`services/telemetry-collector/src/ingest.ts`, `services/telemetry-collector/src/stats.ts`,
+`services/telemetry-collector/src/prune.ts`, and `services/telemetry-collector/schema.sql`) that imports
+`src/telemetry/contract.ts` directly, deduplicates reports on `(day, install_day_hash)` in a single
+atomic conditional D1 batch, rate-limits `POST /v1/events` by salted hourly IP hashes without
+storing raw IP addresses, and serves cached aggregate rollups from `GET /v1/stats`.
+
+`docs-site/src/content/docs/guides/telemetry.md` documents the payload schema, consent and agent boundaries, opt-out controls, payload preview, and collector retention.
