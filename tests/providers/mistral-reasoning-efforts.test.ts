@@ -52,6 +52,18 @@ describe("Mistral reasoning effort ladders (#8254)", () => {
     }
   });
 
+  test("native Chat clamps medium to the existing rung at or below it", () => {
+    for (const id of ["deepseek-v4-1-flash-1017", "zai-glm-5-3", "zai-glm-5-3-flash"]) {
+      expect(wireEffort(mistral(), id, "medium")).toBe("low");
+    }
+    expect(wireEffort(mistral(), "mistral-large-4", "medium")).toBe("medium");
+    expect(wireEffort(mistral(), "deepseek-v4-1-flash-1017", "none")).toBe("none");
+    for (const effort of ["low", "high", "xhigh", "max"]) {
+      expect(wireEffort(mistral(), "deepseek-v4-1-flash-1017", effort)).toBe(effort);
+    }
+    expect(wireEffort(mistral({ modelReasoningEfforts: { "zai-glm-5-3": ["low", "medium", "high"] } }), "zai-glm-5-3", "medium")).toBe("medium");
+  });
+
   test("an operator ladder for a model still replaces the shipped one", () => {
     const provider = mistral({ modelReasoningEfforts: { "zai-glm-5-3": ["low", "medium", "high"] } });
     expect(exportedVariants(provider, "zai-glm-5-3").v2).toEqual(["low", "medium", "high"]);

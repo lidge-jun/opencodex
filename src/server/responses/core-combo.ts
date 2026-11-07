@@ -1335,7 +1335,7 @@ export async function executeComboResponses(
     let failure: ConsumedComboFailure;
     try {
       failure = consumedChildFailure
-        ?? await consumeComboFailure(response, options.abortSignal);
+        ?? await consumeComboFailure(response, options.abortSignal, Date.now(), childLog);
       if (hasProxyErrorMessage(childLog, failure.upstreamMessage ?? "", { type: failure.upstreamType, code: failure.upstreamCode })) markProxyError(failure.response);
       if (preflightModelRefusal !== undefined) failure = { ...failure, codexModelRefusal: preflightModelRefusal };
     } catch (error) {

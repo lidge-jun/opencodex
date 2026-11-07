@@ -78,7 +78,8 @@ inactive, while only active model-specific weekly limits affect that model famil
 The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
 metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
 (the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
-failing the usage read. Claude account rows use ordinal labels and omit account IDs and emails.
+failing the usage read. Claude account rows prefer your alias, then a masked email, and
+fall back to a numbered label when no safe identity is available.
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.

@@ -1,7 +1,7 @@
 import { useI18n, type TKey } from "../i18n/shared";
 import { confirmAction } from "../action-dialogs";
-import { desktopBadgeKey, desktopManagesStartup, startupRiskDetailKey } from "../startup-health-ui";
-import { IconAlert, IconCheck, IconPower, IconTerminal } from "../icons";
+import { desktopBadgeKey, desktopManagesStartup, desktopSupervisionFailed, startupPresentation, startupRiskDetailKey } from "../startup-health-ui";
+import { IconAlert, IconCheck, IconInfo, IconPower, IconTerminal } from "../icons";
 import type {
   StartupHealthData,
   StartupInstallAction,
@@ -25,14 +25,15 @@ export function StartupHeroSection({
   data: StartupHealthData;
 }) {
   const { t } = useI18n();
-  const statusClass = failed
+  const unverified = startupPresentation(data, failed) === "unverified";
+  const statusClass = unverified ? "startup-hero--native" : failed
     ? "startup-hero--risk"
     : data.status === "protected"
       ? "startup-hero--safe"
       : data.status === "at-risk"
         ? "startup-hero--risk"
         : "startup-hero--native";
-  const StatusIcon = failed || data.status === "at-risk" ? IconAlert : IconCheck;
+  const StatusIcon = unverified ? IconInfo : failed || data.status === "at-risk" ? IconAlert : IconCheck;
 
   const routingKey: TKey = data.routingKind === "opencodex-local" ? "startup.routing.proxy"
     : data.routingKind === "custom-local" ? "startup.routing.customLocal"
@@ -45,11 +46,12 @@ export function StartupHeroSection({
       <section className={`panel startup-hero ${statusClass}`} aria-live="polite">
         <div className="startup-hero-icon"><StatusIcon /></div>
         <div className="startup-hero-copy">
-          <span className={`badge ${failed || data.status === "at-risk" ? "badge-amber" : "badge-green"}`}>
-            {t(failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
+          <span className={`badge ${unverified ? "badge-muted" : failed || data.status === "at-risk" ? "badge-amber" : "badge-green"}`}>
+            {t(unverified ? "startup.unverified" : failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
           </span>
-          <h3>{t(failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
-          <p>{failed
+          <h3>{t(unverified ? desktopManagesStartup(data) ? "startup.loginUnverifiedTitle" : "startup.unverified" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
+          <p>{unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : (data.status === "at-risk" && data.routingKind === "opencodex-local" && desktopManagesStartup(data) && !desktopSupervisionFailed(data))
+            ? t("startup.loginUnverifiedAction") : failed
             ? t("startup.staleData")
             : data.status === "at-risk"
               ? t(startupRiskDetailKey(data))
@@ -60,7 +62,7 @@ export function StartupHeroSection({
             sentence rather than a title attribute.
           */}
           <p className="muted startup-state-line">
-            {t(routingKey)} · {t(PROTECTION_KEYS[data.protection])} · {t(data.autostartEnabled ? "startup.enabled" : "startup.disabled")}
+            {t(routingKey)} · {t(unverified ? "startup.unverified" : PROTECTION_KEYS[data.protection])} · {t(data.autostartEnabled ? "startup.enabled" : "startup.disabled")}
           </p>
           <p className="muted text-label">{t("startup.subtitle")}</p>
         </div>
@@ -103,9 +105,9 @@ export function StartupDetailsSection({
       </div>
       {data.desktop && (
         <div className="startup-detail-row">
-          <div><strong>{t("startup.protection.desktop")}</strong><span>{t(!failed && data.desktop.viable ? "startup.desktopHint" : startupRiskDetailKey(data))}</span></div>
+          <div><strong>{t("startup.protection.desktop")}</strong>{!failed && data.desktop.viable ? <span>{t("startup.desktopHint")}</span> : !failed && data.desktop.running ? <span>{t("startup.desktopRunning")}</span> : null}</div>
           <div className="startup-detail-actions">
-            <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t(desktopBadgeKey(data.desktop, failed))} />
+            {startupPresentation(data, failed) === "unverified" ? <span className="badge badge-muted">{t("startup.loginUnverifiedTitle")}</span> : <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t(desktopBadgeKey(data.desktop, failed))} />}
           </div>
         </div>
       )}
@@ -261,9 +263,8 @@ export function StartupRecoverySection({
         The one-click install/repair buttons above are the primary path; the copyable
         commands are the fallback. Open by default only while protection is missing.
       */}
-      <details className="startup-recovery-details" open={data.status !== "protected"}>
+      <details className="startup-recovery-details" open={startupPresentation(data) === "at-risk"}>
         <summary className="muted">{t(desktopManagesStartup(data) ? "startup.protection.desktop" : "startup.recoveryHint")}</summary>
-      {desktopManagesStartup(data) && <p className="muted">{t(startupRiskDetailKey(data))}</p>}
       <div className="startup-command-list">
         {data.serviceSupported && !desktopManagesStartup(data) && (
           <div className="startup-command-row">

@@ -171,10 +171,10 @@ function fmtExclusion(code: string, t: ReturnType<typeof useT>): string {
 
 
 function parseProfiles(raw: unknown): RoutingProfileDto[] {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid-profiles-response");
   const profiles = (raw as { profiles?: unknown }).profiles;
-  if (!Array.isArray(profiles)) return [];
-  return profiles.filter((profile): profile is RoutingProfileDto => {
+  if (!Array.isArray(profiles)) throw new Error("invalid-profiles-response");
+  const valid = profiles.filter((profile): profile is RoutingProfileDto => {
     if (!isPlainObject(profile)) return false;
     // Validate the complete DTO shape: routingProfileDraftFromDto dereferences
     // these nested objects, so a management response that omits any of them
@@ -187,7 +187,9 @@ function parseProfiles(raw: unknown): RoutingProfileDto[] {
       && isPlainObject(profile.optimize)
       && isPlainObject(profile.limits)
       && isPlainObject(profile.unknownEvidence);
-  }).map(profile => {
+  });
+  if (profiles.length > 0 && valid.length === 0) throw new Error("invalid-profiles-response");
+  return valid.map(profile => {
     const compatibility = normalizeCompatibilityDto(
       "compatibility" in profile ? profile.compatibility : undefined,
     );
@@ -258,6 +260,7 @@ export default function RoutingProfiles({
   const compatibilityFieldLabels = ROUTING_COMPATIBILITY_FIELD_LABELS[locale];
   const unavailable = t("routing.unavailable");
   const [profiles, setProfiles] = useState<RoutingProfileDto[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [providerNames, setProviderNames] = useState<string[]>([]);
   const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
@@ -345,6 +348,7 @@ export default function RoutingProfiles({
     loadAbortRef.current = controller;
     const { signal } = controller;
     const generation = ++loadGenerationRef.current;
+    setLoaded(false);
     setLoadError("");
     try {
       const [profilesRes, analyticsRes, configRes, modelsRes, catalogRes] = await Promise.all([
@@ -382,6 +386,7 @@ export default function RoutingProfiles({
 
       selectedRef.current = refreshed;
       setProfiles(nextProfiles);
+      setLoaded(true);
       setSelected(refreshed);
       setDraft(refreshed ? routingProfileDraftFromDto(refreshed) : null);
       setAnalytics(analyticsJson);
@@ -622,6 +627,7 @@ export default function RoutingProfiles({
 
       {loadError ? <Notice tone="err">{t("routing.loadFailed")}: {loadError}</Notice> : null}
       {status ? <Notice tone={status.ok ? "ok" : "err"}>{status.message}</Notice> : null}
+      {loaded && !loadError && profiles.length === 0 && !draft ? <p className="muted">{t("routing.empty")}</p> : null}
 
       {profiles.length > 0 ? (
         <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 12 }}>

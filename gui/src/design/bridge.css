@@ -657,7 +657,7 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
    34×20 track, 14px knob, raised track with a hairline when off, the primary
    track with a contrasting knob when on. gui/tests/switch-rule.test.ts keeps new
    switches on one of these three classes. */
-:is(.switch, .toggle, .remote-link-switch) {
+:is(.switch:where(:not(.switch-labeled)), .toggle, .remote-link-switch) {
   width: 34px;
   height: 20px;
   flex: 0 0 auto;
@@ -668,8 +668,8 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
 /* On and mixed states for every drawing. The spec above sits in the bridge layer, so it
    outranks v1's own `.switch.on` fill: each state has to be restated here, or an "on"
    switch keeps the off track (dark on dark). switch-rule.test.ts checks all three. */
-:is(.switch.on, .toggle.on, .remote-link-switch[aria-checked="true"]) { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
-.switch.mixed { background: var(--amber-soft); border-color: var(--amber); }
+:is(.switch.on:where(:not(.switch-labeled)), .toggle.on, .remote-link-switch[aria-checked="true"]) { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
+.switch.mixed:where(:not(.switch-labeled)) { background: var(--amber-soft); border-color: var(--amber); }
 .toggle-knob { width: 14px; height: 14px; left: 2px; background: light-dark(#ffffff, #ececec); box-shadow: 0 0 0 1px rgb(16 24 40 / 0.08), 0 1px 1px rgb(16 24 40 / 0.18); }
 .toggle.on .toggle-knob { left: 16px; background: var(--toggle-dot-color); }
 .toggle:has(> input) { border: 0; background: transparent; }

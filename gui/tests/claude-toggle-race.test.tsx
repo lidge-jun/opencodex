@@ -250,7 +250,7 @@ test("rapid Claude toggle clicks issue only one PUT until the first settles", as
 
   const sw = claudeSwitch();
   expect(sw.disabled).toBe(false);
-  expect(sw.getAttribute("aria-pressed")).toBe("false");
+  expect(sw.getAttribute("aria-checked")).toBe("false");
 
   await act(async () => {
     sw.click();
@@ -299,14 +299,14 @@ test("CLI first-party waits for one PUT and a confirmed GET", async () => {
   });
   expect(putBodies).toEqual([{ cliFirstParty: true }]);
   expect(firstPartySwitch().disabled).toBe(true);
-  expect(firstPartySwitch().getAttribute("aria-pressed")).toBe("false");
+  expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
 
   await act(async () => {
     releasePut?.();
     releasePut = null;
     await Promise.resolve();
   });
-  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "true");
+  await waitFor(() => firstPartySwitch().getAttribute("aria-checked") === "true");
 });
 
 const refusalCases = [
@@ -325,7 +325,7 @@ for (const [code, message] of refusalCases) {
     await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
     await act(async () => { firstPartySwitch().click(); });
     await waitFor(() => (container.textContent ?? "").includes(message));
-    expect(firstPartySwitch().getAttribute("aria-pressed")).toBe("false");
+    expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
   });
 }
 
@@ -335,20 +335,20 @@ test("CLI first-party success trusts the divergent GET state", async () => {
   await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
   await act(async () => { firstPartySwitch().click(); });
   await waitFor(() => !firstPartySwitch().disabled);
-  expect(firstPartySwitch().getAttribute("aria-pressed")).toBe("false");
+  expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
 });
 
 test("CLI first-party can turn off while the proxy is stopped", async () => {
   cliFirstParty = true;
   claudeEnabled = false;
   await mountApp();
-  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "true");
+  await waitFor(() => firstPartySwitch().getAttribute("aria-checked") === "true");
   await act(async () => {
     firstPartySwitch().click();
     releasePut?.();
     releasePut = null;
   });
-  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "false");
+  await waitFor(() => firstPartySwitch().getAttribute("aria-checked") === "false");
   expect(putBodies).toEqual([{ cliFirstParty: false }]);
 });
 
@@ -356,7 +356,7 @@ test("the Save payload does not overwrite CLI first-party intent", async () => {
   cliFirstParty = true;
   claudeEnabled = true;
   await mountApp();
-  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "true");
+  await waitFor(() => firstPartySwitch().getAttribute("aria-checked") === "true");
   const save = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Save") as HTMLButtonElement | undefined;
   if (!save) throw new Error("Claude Code Save button not found");
   await act(async () => {

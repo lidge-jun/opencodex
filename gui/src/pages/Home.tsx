@@ -5,6 +5,8 @@ import { IconRefresh } from "../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { recentFailures, type HomeLogRow } from "./home-failures";
+import { startupChecklistDone } from "../startup-health-ui";
+import { useStartupChecklist } from "../hooks/useStartupChecklist";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
@@ -24,7 +26,6 @@ interface Health { version?: string; uptime?: number }
 interface UsageDay { requests?: number; totalTokens?: number }
 interface UsageBody { summary?: { requests?: number; totalTokens?: number }; days?: UsageDay[] }
 interface ConfigBody { providers?: Record<string, unknown> }
-interface StartupBody { protection?: string; serviceInstalled?: boolean; shimInstalled?: boolean }
 interface LogRow extends HomeLogRow { model?: string; provider?: string; errorCode?: string; upstreamError?: string }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,8 +48,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
     signal => getJson<UsageBody>(`${apiBase}/api/usage?range=7d`, signal), { pollMs: 60_000 });
   const config = useKeyedClientResource(`home-config:${apiBase}`, [apiBase],
     signal => getJson<ConfigBody>(`${apiBase}/api/config`, signal));
-  const startup = useKeyedClientResource(`home-startup:${apiBase}`, [apiBase],
-    signal => getJson<StartupBody>(`${apiBase}/api/startup-health`, signal));
+  const startup = useStartupChecklist(apiBase);
   // The 24-hour window is cut when the rows arrive, so render never reads the clock.
   const failureRead = useKeyedClientResource(`home-failures:${apiBase}`, [apiBase],
     async signal => {
@@ -73,7 +73,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
     { key: "request", done: requests7d > 0, title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"), go: () => navigate("integrations") },
     {
       key: "autostart",
-      done: Boolean(startup.data && (startup.data.protection !== "none" || startup.data.serviceInstalled || startup.data.shimInstalled)),
+      done: startup.data ? startupChecklistDone(startup.data) : undefined,
       title: t("shellV2.stepAutostart"), hint: t("shellV2.stepAutostartHint"), go: () => navigate("startup"),
     },
   ];
@@ -125,7 +125,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
           ) : (
             <ol className="m-0 flex list-none flex-col gap-1 p-0">
               {steps.map((step, index) => {
-                const current = !step.done && steps.findIndex(s => !s.done) === index;
+                const current = step.done === false && steps.findIndex(s => s.done === false) === index;
                 return (
                   <li key={step.key}>
                     <button type="button" onClick={step.go}
@@ -139,9 +139,9 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
                       )} aria-hidden>{step.done ? "✓" : index + 1}</span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className={cn("text-[14px] font-medium", step.done && "text-fg-subtle line-through")}>{step.title}</span>
-                        {!step.done && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
+                        {step.done === false && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
                       </span>
-                      {!step.done && <span className="text-[13px] font-medium text-highlight opacity-0 transition-opacity group-hover:opacity-100">{t("shellV2.stepOpen")} →</span>}
+                      {step.done === false && <span className="text-[13px] font-medium text-highlight opacity-0 transition-opacity group-hover:opacity-100">{t("shellV2.stepOpen")} →</span>}
                     </button>
                   </li>
                 );

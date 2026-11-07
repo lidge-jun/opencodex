@@ -1,3 +1,4 @@
+import { applyChatDestinationPolicy, mistralNativeChatEffort } from "./destination-policy";
 import { protectGlmSummaryBudget } from "./summary-budget";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { AdapterRequest } from "../base";
@@ -107,6 +108,11 @@ export function buildOpenAIChatPassthroughRequest(
     if (folded === undefined) delete body.reasoning_effort;
     else body.reasoning_effort = folded;
   }
+  if (typeof body.reasoning_effort === "string") {
+    const effort = mistralNativeChatEffort(provider, modelId, body.reasoning_effort);
+    if (effort === undefined) delete body.reasoning_effort;
+    else body.reasoning_effort = effort;
+  }
   const hasTools = Array.isArray(rawBody.tools) && rawBody.tools.length > 0;
   const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
   const explicitThinkingEnabled = rawBody.reasoning !== null && typeof rawBody.reasoning === "object"
@@ -196,6 +202,7 @@ export function buildOpenAIChatPassthroughRequest(
     body.stream_options = rawBody.stream_options;
   }
 
+  applyChatDestinationPolicy(body, provider);
   const transformedBody = () => applyGithubCopilotContextTier(body, provider, modelId, providerName);
   // The binding constraint is the final size base + net, so a shrinking replay may legitimately
   // measure a base above the cap; only a base above max - net makes the result unserializable.

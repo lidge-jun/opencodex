@@ -198,6 +198,11 @@ test("fetchStartupHealth reports whether the server answer is still being resolv
     expect(settled).toEqual({ status: "protected", stale: false });
     expect(probeNeedsFastRetry(settled)).toBe(false);
 
+    globalThis.fetch = (async () => Response.json({ status: "at-risk", diagnosticStale: false,
+      routingKind: "opencodex-local", desktop: { owned: true, loginState: "unknown", running: false, viable: false } })) as typeof fetch;
+    expect(await fetchStartupHealth("http://test", new AbortController().signal))
+      .toEqual({ status: "at-risk", stale: false, desktopManaged: true });
+
     // A hard failure is the normal poll's job; re-asking every 2s would just hammer it.
     globalThis.fetch = (async () => new Response("nope", { status: 503 })) as typeof fetch;
     const failed = await fetchStartupHealth("http://test", new AbortController().signal);

@@ -6,37 +6,10 @@ import { LanguageProvider } from "../src/i18n/provider";
 import type { TFn } from "../src/i18n/shared";
 import { DEFAULT_LOG_FILTER_STATE, hasActiveLogFilters, type LogFilterState } from "../src/pages/logs-filter";
 import { LogsFilterBar } from "../src/pages/logs-filter-bar";
-import { logsSurfaceKeyDown } from "../src/pages/logs-surface-keydown";
 import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
 
 /** A filter dropdown (the app's Select trigger), found by its accessible name. */
 const filterSelect = (field: string) => `[role="combobox"][aria-label="logs.filter.${field}.label"]`;
-
-test("surface radios support wrapping arrows and Home/End with roving focus", () => {
-  const previousDocument = globalThis.document;
-  const win = new Window();
-  Object.defineProperty(globalThis, "document", { configurable: true, value: win.document });
-  try {
-    for (const surface of ["all", "claude", "codex", "grok"]) {
-      const button = win.document.createElement("button");
-      button.id = `logs-surface-${surface}`;
-      win.document.body.append(button);
-    }
-    const selected: string[] = [];
-    const key = (value: string) => ({ key: value, preventDefault() {}, } as never);
-    logsSurfaceKeyDown(key("ArrowRight"), "grok", surface => selected.push(surface));
-    expect(selected).toEqual(["all"]);
-    expect(win.document.activeElement?.id).toBe("logs-surface-all");
-    logsSurfaceKeyDown(key("Home"), "codex", surface => selected.push(surface));
-    expect(selected).toEqual(["all", "all"]);
-    expect(win.document.activeElement?.id).toBe("logs-surface-all");
-    logsSurfaceKeyDown(key("Enter"), "all", surface => selected.push(surface));
-    expect(selected).toHaveLength(2);
-  } finally {
-    Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument });
-    win.close();
-  }
-});
 
 const translate: TFn = (key, vars) => key === "logs.filter.showingCount"
   ? `Showing ${vars?.count} of ${vars?.total}` : key;
@@ -118,9 +91,9 @@ test("LogsFilterBar speed choices have non-overlapping bounds and clear both bou
   });
 });
 
-test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores focus to All and clears every field", async activation => {
+test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores focus to persistent search and clears every field", async activation => {
   await withFilterBar({
-    ...DEFAULT_LOG_FILTER_STATE, surface: "grok", status: "errors", provider: "xai",
+    ...DEFAULT_LOG_FILTER_STATE, status: "errors", provider: "xai",
     model: "model-a", timeWindow: "1h", minTokPerSec: 50, interceptedOnly: true,
     conversationId: "conversation-a", conversationQueryHash: ["cached-hash"],
   }, async ui => {
@@ -129,8 +102,8 @@ test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores foc
     expect(reset).not.toBeNull();
     reset.focus();
     expect(document.activeElement).toBe(reset);
-    const all = ui.container.querySelector<HTMLButtonElement>("#logs-surface-all")!;
-    const focus = jest.spyOn(all, "focus");
+    const search = ui.container.querySelector<HTMLInputElement>('input[type="search"]')!;
+    const focus = jest.spyOn(search, "focus");
     try {
       // Native buttons dispatch click with detail=0 for keyboard activation.
       // Browser QA separately exercises Enter/Space's native event synthesis.
@@ -139,9 +112,8 @@ test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores foc
           bubbles: true, cancelable: true, detail: activation === "keyboard" ? 0 : 1,
         }));
       });
-      expect(document.activeElement).toBe(all);
-      expect(all.getAttribute("aria-checked")).toBe("true");
-      expect(all.tabIndex).toBe(0);
+      expect(document.activeElement === search).toBe(true);
+      expect(search.isConnected).toBe(true);
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     } finally {
       focus.mockRestore();
@@ -154,30 +126,13 @@ test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores foc
   });
 });
 
-test("LogsFilterBar rendered radios move selection, focus and the single tab stop together", async () => {
+test("LogsFilterBar has no surface radios or hidden client controls", async () => {
   await withFilterBar({ ...DEFAULT_LOG_FILTER_STATE }, async ui => {
-    const radio = (surface: string) => ui.container.querySelector<HTMLButtonElement>(`#logs-surface-${surface}`)!;
-    radio("all").focus();
-    const moves = [
-      ["ArrowLeft", "grok"], ["ArrowRight", "all"], ["ArrowDown", "claude"],
-      ["ArrowUp", "all"], ["End", "grok"], ["Home", "all"],
-    ] as const;
-    for (const [key, expected] of moves) {
-      const event = new ui.win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      await act(async () => { document.activeElement!.dispatchEvent(event); });
-      expect(event.defaultPrevented).toBe(true);
-      expect(ui.filters().surface).toBe(expected);
-      expect(document.activeElement).toBe(radio(expected));
-      expect(radio(expected).getAttribute("aria-checked")).toBe("true");
-      const radios = [...ui.container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-      expect(radios.filter(button => button.tabIndex === 0)).toEqual([radio(expected)]);
-      expect(radios.filter(button => button.getAttribute("aria-checked") === "true")).toEqual([radio(expected)]);
-    }
-    const unrelated = new ui.win.KeyboardEvent("keydown", { key: "q", bubbles: true, cancelable: true });
-    await act(async () => { radio("all").dispatchEvent(unrelated); });
-    expect(unrelated.defaultPrevented).toBe(false);
-    expect(ui.filters().surface).toBe("all");
-    expect(document.activeElement).toBe(radio("all"));
+    expect(ui.container.querySelector('[role="radiogroup"]') === null).toBe(true);
+    expect(ui.container.querySelector('[role="radio"]') === null).toBe(true);
+    expect(ui.container.querySelector('[id^="logs-surface-"]') === null).toBe(true);
+    expect([...ui.container.querySelectorAll('[role="combobox"]')].map(node => node.getAttribute("aria-label")))
+      .toEqual(["provider", "model", "time", "speed", "status", "protocol"].map(field => `logs.filter.${field}.label`));
   });
 });
 
