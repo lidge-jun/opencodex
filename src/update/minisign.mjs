@@ -1,6 +1,7 @@
 // Offline minisign primitives. These results prove only cryptographic validity;
 // update authority is assigned separately by the signed-supply policy.
 import { createHash, createPublicKey, verify } from "node:crypto";
+import { snapshotUpdateBytes } from "./update-bytes.mjs";
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const TRUSTED_PREFIX = "trusted comment: ";
@@ -54,15 +55,24 @@ function verifyBox(bytes, signatureBox, key, legacy) {
   const algorithm = packet.subarray(0, 2).toString("utf8");
   if (algorithm !== "ED") throw new Error(`Unsupported signature algorithm: ${JSON.stringify(algorithm)}`);
   const keyId = packet.subarray(2, 10).toString("hex");
-  if (keyId !== key.keyId) throw new Error(`Signature was made by key ${keyId}, not the pinned updater key ${key.keyId}`);
+  const expectedKeyId = key.keyId;
+  if (keyId !== expectedKeyId) throw new Error(`Signature was made by key ${keyId}, not the pinned updater key ${expectedKeyId}`);
+  // Capture one public-key representation, then reconstruct a private verifier
+  // so caller-controlled accessors cannot change the signer between checks.
+  let publicKeyDer;
+  try { publicKeyDer = snapshotUpdateBytes(key.publicKey.export({ format: "der", type: "spki" }), 44); }
+  catch { throw new Error("Malformed minisign public key"); }
+  if (publicKeyDer.length !== 44 || !Buffer.from(publicKeyDer.subarray(0, 12)).equals(ED25519_SPKI_PREFIX)) {
+    throw new Error("Malformed minisign public key");
+  }
+  const publicKey = createPublicKey({ key: Buffer.from(publicKeyDer), format: "der", type: "spki" });
   const signature = packet.subarray(10);
   const digest = createHash("blake2b512").update(bytes).digest();
-  if (!verify(null, digest, key.publicKey, signature)) throw new Error("Signature verification failed");
+  if (!verify(null, digest, publicKey, signature)) throw new Error("Signature verification failed");
   const exactComment = lines[2].slice(TRUSTED_PREFIX.length);
   const trustedComment = legacy ? exactComment.trim() : exactComment;
   const message = Buffer.concat([signature, Buffer.from(trustedComment, "utf8")]);
-  if (!verify(null, message, key.publicKey, commentSignature)) throw new Error("Comment signature verification failed");
-  const publicKeyDer = key.publicKey.export({ format: "der", type: "spki" });
+  if (!verify(null, message, publicKey, commentSignature)) throw new Error("Comment signature verification failed");
   const fingerprint = createHash("sha256").update(publicKeyDer.subarray(-32)).digest("hex");
   return { keyId, fingerprint, trustedComment };
 }

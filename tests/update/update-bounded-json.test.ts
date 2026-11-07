@@ -35,6 +35,17 @@ describe("bounded unverified update JSON", () => {
     expect(parse("[".repeat(16) + "0" + "]".repeat(16))).toBeDefined();
   });
 
+  test("does not trust a caller-shadowed byte length when enforcing the raw cap", () => {
+    const oversized = Buffer.from(`{}${" ".repeat(4095)}`);
+    Object.defineProperty(oversized, "byteLength", { value: 0 });
+    expect(() => parseBoundedJson(oversized, 4096)).toThrow();
+    const valid = Buffer.from("{}");
+    let reads = 0;
+    Object.defineProperty(valid, "byteLength", { get() { reads++; return 0; } });
+    expect(parseBoundedJson(valid, 4096)).toEqual({});
+    expect(reads).toBe(0);
+  });
+
   test("bounds aggregate values while retaining the largest planned capability-array shape", () => {
     const entries = Array.from({ length: 4096 }, (_, index) => ({ id: `item-${index}`, version: 1 }));
     const capabilityShape = Object.fromEntries(

@@ -1,4 +1,5 @@
 // Parsing produces data only. It does not establish schema validity or trust.
+import { snapshotUpdateBytes } from "./update-bytes.mjs";
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 const MAX_DEPTH = 16;
 const MAX_MEMBERS = 32;
@@ -26,10 +27,11 @@ function validUnicode(text) {
 /** Parse bounded UTF-8 JSON, refusing ambiguous names and unsafe numbers. */
 export function parseBoundedJson(bytes, maxBytes) {
   if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(maxBytes)
-      || maxBytes < 1 || maxBytes > MAX_DOCUMENT_BYTES || bytes.byteLength > maxBytes) invalid();
+      || maxBytes < 1 || maxBytes > MAX_DOCUMENT_BYTES) invalid();
   let source;
   try {
-    source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const snapshot = snapshotUpdateBytes(bytes, maxBytes);
+    source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(snapshot);
   } catch {
     invalid();
   }

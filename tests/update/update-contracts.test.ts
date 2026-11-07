@@ -74,6 +74,10 @@ describe("closed unverified update contracts", () => {
     expect(() => parseUpdateDocument(bytes(fixtures()["ocx.update.policy/1"]), "ocx.update.tree/1")).toThrow();
     expect(() => Reflect.apply(parseUpdateDocument, null, [Buffer.from("{}"), "__proto__"])).toThrow();
     const release = fixtures()["ocx.update.release/1"];
+    const policyBytes = bytes(fixtures()["ocx.update.policy/1"]);
+    const oversizedPolicy = Buffer.concat([policyBytes, Buffer.alloc(4097 - policyBytes.length, 32)]);
+    Object.defineProperty(oversizedPolicy, "byteLength", { value: 0 });
+    expect(() => parseUpdateDocument(oversizedPolicy, "ocx.update.policy/1")).toThrow();
     release.releaseNotes = [{title: "é", body: "é"}];
     const raw = bytes(release);
     const exact = Buffer.concat([raw, Buffer.alloc(1048576 - raw.length, 32)]);

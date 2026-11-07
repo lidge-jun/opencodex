@@ -23,6 +23,16 @@ const key = decodePublicKey(`untrusted comment: upstream key\n${fixture.publicKe
 const signature = Buffer.from(fixture.signatureBox).toString("base64");
 assert.equal(verifyMinisignBytes(Buffer.from(fixture.payload), signature, key).keyId, key.keyId);
 assert.throws(() => verifyMinisignBytes(Buffer.from("changed"), signature, key));
+const pairA = generateKeyPairSync("ed25519"), pairB = generateKeyPairSync("ed25519"), pairC = generateKeyPairSync("ed25519");
+const hostileBytes = Buffer.from("key-snapshot"), hostileId = Buffer.alloc(8, 42), hostileComment = "version:1.2.3";
+const hostilePayload = sign(null, createHash("blake2b512").update(hostileBytes).digest(), pairA.privateKey);
+const hostileGlobal = sign(null, Buffer.concat([hostilePayload, Buffer.from(hostileComment)]), pairB.privateKey);
+const hostilePacket = Buffer.concat([Buffer.from("ED"), hostileId, hostilePayload]).toString("base64");
+const hostileBox = Buffer.from(`untrusted comment: fixture\n${hostilePacket}\ntrusted comment: ${hostileComment}\n${hostileGlobal.toString("base64")}\n`).toString("base64");
+let keyReads = 0;
+const hostileKey = { keyId: hostileId.toString("hex"), get publicKey() { return [pairA.publicKey, pairB.publicKey, pairC.publicKey][keyReads++] ?? pairC.publicKey; } };
+assert.throws(() => verifyMinisignBytes(hostileBytes, hostileBox, hostileKey));
+assert.equal(keyReads, 1);
 
 assert.equal(deriveCandidateId("00".repeat(32), "linux-x64-npm"), "496737c902f9e38cbd89b81b0ba6935e245a026f4d0a931904ddd4617eafc7c4");
 assert.ok(sameSignedVersion("18446744073709551615.0.0+build", "v18446744073709551615.0.0+build"));
@@ -34,6 +44,9 @@ assert.ok(!trustedCommentMatchesVersion("version:1.2.3\tversion:1.2.3", "1.2.3")
 const encode = (text) => new TextEncoder().encode(text);
 assert.equal(parseBoundedJson(encode('{"a":[1,true]}'), 65536).a[0], 1);
 assert.throws(() => parseBoundedJson(encode('{"a":1,"\\u0061":2}'), 65536));
+const oversizedView = Buffer.from(`{}${" ".repeat(4095)}`);
+Object.defineProperty(oversizedView, "byteLength", { value: 0 });
+assert.throws(() => parseBoundedJson(oversizedView, 4096));
 const group = `[${Array(4096).fill("{}").join(",")}]`;
 assert.throws(() => parseBoundedJson(encode(`[${Array(20).fill(group).join(",")}]`), 16777216));
 

@@ -6,6 +6,22 @@ import { decodePublicKey, verifyMinisignBytes, verifyLegacyMinisignBytes } from 
 import { verifySignatureThreshold } from "../../src/update/update-signature-threshold.mjs";
 
 describe("offline minisign verification", () => {
+  test("uses one key identity for both signatures and the returned fingerprint", () => {
+    const a = generateKeyPairSync("ed25519"), b = generateKeyPairSync("ed25519"), c = generateKeyPairSync("ed25519");
+    const bytes = Buffer.from("fixture"), id = Buffer.alloc(8, 7), comment = "version:1.2.3";
+    const payload = sign(null, createHash("blake2b512").update(bytes).digest(), a.privateKey);
+    const global = sign(null, Buffer.concat([payload, Buffer.from(comment)]), b.privateKey);
+    const packet = Buffer.concat([Buffer.from("ED"), id, payload]).toString("base64");
+    const box = Buffer.from(`untrusted comment: fixture\n${packet}\ntrusted comment: ${comment}\n${global.toString("base64")}\n`).toString("base64");
+    let reads = 0;
+    const key = { keyId: id.toString("hex"), get publicKey() { return [a.publicKey, b.publicKey, c.publicKey][reads++] ?? c.publicKey; }, fingerprint: "" };
+    expect(() => verifyMinisignBytes(bytes, box, key)).toThrow();
+    expect(reads).toBe(1);
+    const sameKeyGlobal = sign(null, Buffer.concat([payload, Buffer.from(comment)]), a.privateKey);
+    const sameKeyBox = Buffer.from(`untrusted comment: fixture\n${packet}\ntrusted comment: ${comment}\n${sameKeyGlobal.toString("base64")}\n`).toString("base64");
+    Object.defineProperty(a.publicKey, "export", { value: () => c.publicKey.export({ format: "der", type: "spki" }) });
+    expect(() => verifyMinisignBytes(bytes, sameKeyBox, { keyId: id.toString("hex"), publicKey: a.publicKey, fingerprint: "" })).toThrow(/Signature verification failed/);
+  });
   test("accepts the independent upstream prehashed vector and rejects changed bytes", () => {
     const fixture = JSON.parse(readFileSync(repoPath("tests/fixtures/minisign/prehashed-vector.json"), "utf8"));
     const key = decodePublicKey(`untrusted comment: upstream key\n${fixture.publicKeyBase64}\n`);
