@@ -11,6 +11,7 @@ export interface MuseQuotaOwner {
   accountKey: string;
   isCurrent: () => boolean;
   isAccountCurrent: () => boolean;
+  isConfigCurrent?: (config: OcxConfig) => boolean;
 }
 
 /** Bind the caller's enabled provider and destination without retaining credentials in DTOs. */
@@ -19,13 +20,15 @@ export function bindMuseQuotaConfig(owner: MuseQuotaOwner | null, config: OcxCon
   if (!owner || !initial || initial.disabled || initial.authMode !== "oauth") return null;
   const adapter = initial.adapter, baseUrl = initial.baseUrl;
   const generation = captureConfigGeneration();
-  const configCurrent = () => {
-    const current = config.providers[provider];
-    return captureConfigGeneration() === generation && current === initial && !current.disabled && current.authMode === "oauth"
-      && current.adapter === adapter && current.baseUrl === baseUrl;
+  let retired = false;
+  const configCurrent = (candidate: OcxConfig) => {
+    const current = candidate.providers[provider];
+    if (current !== initial || current.disabled || current.authMode !== "oauth"
+      || current.adapter !== adapter || current.baseUrl !== baseUrl) retired = true;
+    return !retired;
   };
-  return { ...owner, isCurrent: () => configCurrent() && owner.isCurrent(),
-    isAccountCurrent: () => configCurrent() && owner.isAccountCurrent() };
+  return { ...owner, isCurrent: () => captureConfigGeneration() === generation && configCurrent(config) && owner.isCurrent(),
+    isAccountCurrent: () => configCurrent(config) && owner.isAccountCurrent(), isConfigCurrent: configCurrent };
 }
 
 /** Capture the serving account and the independent operator selection without publishing a roster. */
