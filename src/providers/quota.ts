@@ -215,11 +215,16 @@ export function flushProviderQuotaObservationsForTests(): Promise<void> {
   return pendingProviderObservation;
 }
 
+// External store changes need an active observation after each suspension, before accepting reports.
+function observeAntigravityOwner(config: OcxConfig): void {
+  if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
+}
+
 /** Collect provider quota reports, using the cache unless refresh is forced, and publish the secret-free decision evidence from the collected reports. */
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   // A passive read (a Remote Link Child's, #6959) shows the held reports and starts nothing.
   if (isPassiveRead()) return heldProviderQuotaReports(config);
-  if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
+  observeAntigravityOwner(config);
   // A Pool report's cache signature and provider fetch must share one account snapshot.
   // Preserve force semantics when deciding whether that snapshot refreshes upstream data.
   const prefetchedCodexSnapshot = hasCodexPoolProvider(config)
@@ -227,6 +232,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     : undefined;
   const keyCandidate = cacheKeyWithAggregationState(config, prefetchedCodexSnapshot);
   const key = typeof keyCandidate === "string" ? keyCandidate : await keyCandidate;
+  observeAntigravityOwner(config);
   const writerGeneration = captureConfigGeneration();
   const providerEpochs = captureProviderReportEpochs();
   const now = Date.now();
@@ -244,7 +250,11 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       && providerReportCurrentForConfig(item, config.providers[item.provider]));
   if (!forceRefresh && cacheFresh) return currentCache!.response;
   const joinable = inflight.get(key);
-  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return validateJoinedReports(await joinable.promise, config);
+  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) {
+    const joined = await joinable.promise;
+    observeAntigravityOwner(config);
+    return validateJoinedReports(joined, config);
+  }
   // A forced probe takes commit authority: older in-flight probes must not overwrite its result.
   if (forceRefresh) bumpProviderQuotaInvalidationEpoch();
   const epoch = invalidationEpoch;
@@ -272,12 +282,12 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       )),
     );
     await providerQuotaBeforePublishForTests?.();
-    if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
     let commitKey: string | null = null;
     if (epoch === invalidationEpoch) {
       const commitKeyCandidate = cacheKeyWithAggregationState(config);
       commitKey = typeof commitKeyCandidate === "string" ? commitKeyCandidate : await commitKeyCandidate;
     }
+    observeAntigravityOwner(config);
 
     // Keep bounded last-good rows when a probe fails transiently; terminal-invalid provider
     // responses explicitly suppress their old row. Never re-stamp preserved timestamps.
@@ -329,7 +339,9 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const entry = { epoch, promise };
   inflight.set(key, entry);
   try {
-    return await promise;
+    const result = await promise;
+    observeAntigravityOwner(config);
+    return validateJoinedReports(result, config);
   } finally {
     if (inflight.get(key) === entry) inflight.delete(key);
   }

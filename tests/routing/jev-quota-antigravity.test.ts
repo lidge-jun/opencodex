@@ -15,6 +15,8 @@ import { getAuthStorePath, loadAuthStore, type AuthStore } from "../../src/oauth
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import type { OcxConfig } from "../../src/types";
+import * as codexAuth from "../../src/codex/auth-api";
+import { getProviderQuotaReportCache, inflight } from "../../src/providers/quota/report-cache";
 
 const now = 2_000_000_000_000;
 const reset = now + 3_600_000;
@@ -90,6 +92,78 @@ test("passive reads withhold an Antigravity report after an external credential 
   store["google-antigravity"]!.accounts[0]!.credential.access = "external-replacement";
   writeFileSync(getAuthStorePath(), JSON.stringify(store));
   expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
+});
+
+function addCodexPool(): void {
+  config.providers.openai = { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "pool" };
+}
+
+function externalReplacement(kind: "credential" | "account" = "credential"): void {
+  const set = store["google-antigravity"]!;
+  if (kind === "credential") set.accounts[0]!.credential.access = "external-replacement";
+  else {
+    set.accounts.push({ id: "fixture-b", credential: { ...set.accounts[0]!.credential, access: "other-access" } });
+    set.activeAccountId = "fixture-b";
+  }
+  writeFileSync(getAuthStorePath(), JSON.stringify(store));
+}
+
+for (const path of ["cached", "fresh", "last-good"] as const) for (const replacement of ["none", "credential", "account"] as const) {
+  test(`Codex snapshot suspension ${path} with ${replacement} replacement`, async () => {
+    addCodexPool();
+    let count = 0; let release!: () => void; let started!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    let delayAt = 0;
+    const spy = spyOn(codexAuth, "listCodexAuthAccountsSnapshot").mockImplementation(async () => {
+      if (++count === delayAt) { started(); await waiting; }
+      return { accounts: [], mainIdentityGeneration: 0 };
+    });
+    try {
+      if (path !== "fresh") {
+        expect((await fetchProviderQuotaReports(config, true)).reports.map(row => row.provider)).toContain("google-antigravity");
+        if (path === "last-good" || replacement !== "none") setAntigravityAccountQuotaTransportForTests({ resolveAddresses: async () => { throw new Error("offline"); } });
+      }
+      const previousCache = getProviderQuotaReportCache();
+      delayAt = count + (path === "cached" ? 1 : 2);
+      const flight = fetchProviderQuotaReports(config, path !== "cached");
+      await entered;
+      if (replacement !== "none") externalReplacement(replacement);
+      release();
+      const result = await flight;
+      expect(result.reports.some(row => row.provider === "google-antigravity")).toBe(replacement === "none");
+      expect(signal("gemini-3.8-flash").tier).toBe(replacement === "none" ? "healthy" : "unknown");
+      if (replacement !== "none") {
+        expect(getProviderQuotaReportCache()).toBe(previousCache);
+        expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports.some(row => row.provider === "google-antigravity")).toBe(false);
+      }
+    } finally { release?.(); spy.mockRestore(); }
+  });
+}
+
+for (const replace of [false, true]) test(`a joined collector ${replace ? "rejects replacement" : "keeps the unchanged owner"} after the shared promise resolves`, async () => {
+  addCodexPool();
+  const spy = spyOn(codexAuth, "listCodexAuthAccountsSnapshot").mockImplementation(async () => ({ accounts: [], mainIdentityGeneration: 0 }));
+  let release!: () => void; let started!: () => void; let probes = 0;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => { probes++; started(); await waiting; return Response.json(summary); },
+  });
+  try {
+    const first = fetchProviderQuotaReports(config); await entered;
+    const shared = [...inflight.values()][0]!.promise;
+    if (replace) shared.then(() => externalReplacement());
+    const joined = fetchProviderQuotaReports(config);
+    // Allow the joining call's snapshot to resolve and attach to the shared promise.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    release();
+    await first;
+    expect((await joined).reports.some(row => row.provider === "google-antigravity")).toBe(!replace);
+    expect(probes).toBe(1);
+    expect(signal("gemini-3.8-flash").tier).toBe(replace ? "unknown" : "healthy");
+  } finally { release?.(); spy.mockRestore(); }
 });
 
 test("a switch during the network probe cannot return or publish the old account report", async () => {
