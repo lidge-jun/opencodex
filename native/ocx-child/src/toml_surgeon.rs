@@ -545,11 +545,13 @@ fn strip_owned_web_search(content_lf: &str, injected_val: Option<&str>) -> Strin
             let marker_above =
                 i > 0 && structural[i - 1] && is_ocx_routing_marker_line(lines[i - 1]);
             let value_match = injected_val == Some(val.as_str());
-            if marker_above || value_match {
+            if value_match {
                 drop[i] = true;
                 if marker_above {
                     drop[i - 1] = true;
                 }
+            } else if marker_above && injected_val.is_some() {
+                drop[i - 1] = true;
             }
         }
     }

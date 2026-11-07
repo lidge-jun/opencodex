@@ -15,7 +15,7 @@ use crate::http_wire::{
 use crate::journal::validate_existing_journal_paths;
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
-    SecretBytes, constant_time_eq, format_iso8601_utc, now_epoch_ms, random_hex,
+    FileLock, SecretBytes, constant_time_eq, format_iso8601_utc, now_epoch_ms, random_hex,
 };
 use crate::relay_auth::{
     LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
@@ -300,6 +300,8 @@ impl SharedServerState {
 }
 
 pub fn serve_foreground(paths: ChildPaths, listen_port: u16) -> Result<(), String> {
+    let startup_gate = FileLock::acquire_blocking(&paths.child_dir.join("daemon-start.lock"))
+        .map_err(|_| "serve refused: daemon startup gate unavailable".to_owned())?;
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], listen_port)))
         .map_err(|e| format!("failed to bind 127.0.0.1:{listen_port}: {e}"))?;
     let state = match read_child_state(&paths.state_file) {
@@ -315,6 +317,7 @@ pub fn serve_foreground(paths: ChildPaths, listen_port: u16) -> Result<(), Strin
     {
         return Err("serve refused: child recovery state changed during startup".to_owned());
     }
+    drop(startup_gate);
     let actual_port = listener
         .local_addr()
         .map_err(|e| format!("local_addr failed: {e}"))?

@@ -16,7 +16,7 @@ use ocx_child::http_wire::{
 };
 use ocx_child::journal::{
     DetachError, DetachOutcome, JournalWriteFault, apply_attach_or_sync,
-    apply_attach_or_sync_with_fault, offline_detach,
+    apply_attach_or_sync_with_fault, offline_detach, offline_detach_deferred,
 };
 use ocx_child::parity::parse_link_child_parity_report;
 use ocx_child::relay_auth::{
@@ -24,6 +24,148 @@ use ocx_child::relay_auth::{
 };
 use ocx_child::routes::{RelayAuthKind, RouteDecision, classify_child_ingress};
 use ocx_child::state::ChildPaths;
+use ocx_child::toml_surgeon::{apply_design_b_config, surgical_detach_config};
+
+#[test]
+fn detach_preserves_user_edited_web_search_with_managed_marker() {
+    let settings = HomeCodexSettings {
+        fast_mode: None,
+        multi_agent_mode: None,
+        web_search_sidecar_enabled: false,
+        subagent_defaults: None,
+    };
+    let (injected, ledger) = apply_design_b_config(
+        "web_search = \"cached\"\n",
+        10100,
+        "/tmp/catalog.json",
+        &settings,
+        None,
+    )
+    .unwrap();
+    let edited = injected.replace("web_search = \"disabled\"", "web_search = \"live\"");
+    assert_ne!(edited, injected);
+    let restored = surgical_detach_config(&edited, &ledger).unwrap().unwrap();
+    assert!(restored.contains("web_search = \"live\""), "{restored}");
+    assert!(!restored.contains("web_search = \"cached\""), "{restored}");
+}
+
+#[test]
+fn detached_reconciled_cache_can_be_retried_after_backup_cleanup() {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-retry-cache-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let _guard = ScratchGuard(scratch.clone());
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let paths = ChildPaths::new(ocx_home, codex_home);
+    let settings = HomeCodexSettings {
+        fast_mode: None,
+        multi_agent_mode: None,
+        web_search_sidecar_enabled: true,
+        subagent_defaults: None,
+    };
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"remote-model"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let cache_path = paths.codex_models_cache_path();
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(&cache_path).unwrap()).unwrap();
+    cache["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"slug":"local-added"}));
+    fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    offline_detach_deferred(&paths, false).unwrap();
+    let restored = fs::read(&cache_path).unwrap();
+    fs::remove_file(&paths.catalog_backup_file).unwrap();
+    offline_detach_deferred(&paths, false).expect("retry must not depend on removed backup");
+    assert_eq!(fs::read(cache_path).unwrap(), restored);
+    assert!(String::from_utf8(restored).unwrap().contains("local-added"));
+}
+
+#[test]
+fn sync_preserves_new_external_cache_models_through_detach() {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-sync-cache-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let _guard = ScratchGuard(scratch.clone());
+    let ocx = scratch.join("opencodex");
+    let codex = scratch.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let paths = ChildPaths::new(ocx, codex);
+    let settings = HomeCodexSettings {
+        fast_mode: None,
+        multi_agent_mode: None,
+        web_search_sidecar_enabled: true,
+        subagent_defaults: None,
+    };
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"remote-v1"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let cache_path = paths.codex_models_cache_path();
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(&cache_path).unwrap()).unwrap();
+    cache["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"slug":"local-added"}));
+    fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"remote-v2"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    assert!(
+        fs::read_to_string(&cache_path)
+            .unwrap()
+            .contains("local-added")
+    );
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"remote-v3"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    assert!(
+        fs::read_to_string(&cache_path)
+            .unwrap()
+            .contains("local-added")
+    );
+    offline_detach(&paths, false).unwrap();
+    let detached = fs::read_to_string(cache_path).unwrap();
+    assert!(detached.contains("local-added"));
+    assert!(
+        !detached.contains("remote-v1")
+            && !detached.contains("remote-v2")
+            && !detached.contains("remote-v3")
+    );
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -657,6 +799,22 @@ fn detach_refuses_a_replaced_codex_home_directory() {
     ));
     assert!(original.journal_file.is_file());
     assert!(saved.join("config.toml").is_file());
+}
+
+#[test]
+fn immediate_rollback_refuses_a_replaced_codex_home() {
+    let (guard, original, _other, _settings) = homes_fixture();
+    fs::write(original.codex_config_path(), b"original config").unwrap();
+    let rollback = AttachRollbackSnapshot::capture(&original, None).unwrap();
+    fs::rename(&original.codex_home, guard.0.join("saved-home")).unwrap();
+    fs::create_dir(&original.codex_home).unwrap();
+    fs::write(original.codex_config_path(), b"replacement config").unwrap();
+    assert!(rollback.restore(&original).is_err());
+    assert_eq!(
+        fs::read(original.codex_config_path()).unwrap(),
+        b"replacement config"
+    );
+    assert!(original.rollback_file.exists());
 }
 
 #[test]

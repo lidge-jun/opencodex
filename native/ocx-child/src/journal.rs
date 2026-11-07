@@ -50,6 +50,8 @@ pub struct ChildJournalV1 {
     pub latest_models_cache_sha256: Option<String>,
     #[serde(default)]
     pub previous_models_cache_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retained_external_cache_entries: bool,
     pub ledger: ChildInjectedLedger,
 }
 
@@ -211,12 +213,20 @@ pub fn prepare_codex_models_cache(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("failed reading models_cache.json: {e}")),
     };
+    render_codex_models_cache(existing_bytes.as_deref(), catalog_models, false)
+}
+
+fn render_codex_models_cache(
+    existing_bytes: Option<&[u8]>,
+    catalog_models: &[serde_json::Value],
+    retain_unmarked: bool,
+) -> Result<(Option<Vec<u8>>, String), String> {
     let catalog_slugs: HashSet<&str> = catalog_models
         .iter()
         .filter_map(|m| m.get("slug").and_then(serde_json::Value::as_str))
         .collect();
     let mut observed_native = Vec::new();
-    if let Some(raw) = &existing_bytes
+    if let Some(raw) = existing_bytes
         && let Ok(val) = serde_json::from_slice::<serde_json::Value>(raw)
         && let Some(arr) = val.get("models").and_then(serde_json::Value::as_array)
     {
@@ -229,7 +239,12 @@ pub fn prepare_codex_models_cache(
                 .get("slug")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            if is_obs && !slug.is_empty() && !catalog_slugs.contains(slug) {
+            if retain_unmarked && slug.is_empty() {
+                return Err(
+                    "client_models_cache_conflict: local model is missing a slug".to_owned(),
+                );
+            }
+            if (is_obs || retain_unmarked) && !slug.is_empty() && !catalog_slugs.contains(slug) {
                 observed_native.push(entry.clone());
             }
         }
@@ -246,7 +261,7 @@ pub fn prepare_codex_models_cache(
         .map_err(|e| format!("failed serializing models_cache.json: {e}"))?;
     rendered.push(b'\n');
     let digest = sha256_hex(&rendered);
-    let to_write = (existing_bytes.as_deref() != Some(rendered.as_slice())).then_some(rendered);
+    let to_write = (existing_bytes != Some(rendered.as_slice())).then_some(rendered);
     Ok((to_write, digest))
 }
 
@@ -415,43 +430,107 @@ pub fn apply_attach_or_sync_with_fault(
         }
     };
 
-    let (pre_cache_existed, pre_cache_b64, prev_cache_sha) = if let Some(prev) = &existing_journal {
-        let carried_prev_cache = match fs::read(&cache_path) {
-            Ok(existing_cache) => {
-                let existing_cache_sha = sha256_hex(&existing_cache);
-                let matches_owned = Some(existing_cache_sha.as_str())
-                    == prev.latest_models_cache_sha256.as_deref()
-                    || Some(existing_cache_sha.as_str())
-                        == prev.previous_models_cache_sha256.as_deref();
-                if matches_owned {
-                    Some(existing_cache_sha)
-                } else {
-                    prev.previous_models_cache_sha256
-                        .clone()
-                        .or_else(|| prev.latest_models_cache_sha256.clone())
+    let (mut pre_cache_existed, mut pre_cache_b64, prev_cache_sha) =
+        if let Some(prev) = &existing_journal {
+            let carried_prev_cache = match fs::read(&cache_path) {
+                Ok(existing_cache) => {
+                    let existing_cache_sha = sha256_hex(&existing_cache);
+                    let matches_owned = Some(existing_cache_sha.as_str())
+                        == prev.latest_models_cache_sha256.as_deref()
+                        || Some(existing_cache_sha.as_str())
+                            == prev.previous_models_cache_sha256.as_deref();
+                    if matches_owned {
+                        Some(existing_cache_sha)
+                    } else {
+                        prev.previous_models_cache_sha256
+                            .clone()
+                            .or_else(|| prev.latest_models_cache_sha256.clone())
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => prev
+                    .previous_models_cache_sha256
+                    .clone()
+                    .or_else(|| prev.latest_models_cache_sha256.clone()),
+                Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+            };
+            (
+                prev.pre_attach_models_cache_existed,
+                prev.pre_attach_models_cache_bytes_b64.clone(),
+                carried_prev_cache,
+            )
+        } else {
+            match fs::read(&cache_path) {
+                Ok(b) => (true, Some(BASE64.encode(&b)), None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None, None),
+                Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+            }
+        };
+
+    let mut retained_external_cache_entries = existing_journal
+        .as_ref()
+        .is_some_and(|j| j.retained_external_cache_entries);
+    let (prepared_cache, latest_cache_sha) = if let Some(prev) = &existing_journal {
+        let current = match fs::read(&cache_path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("failed reading models_cache.json: {e}")),
+        };
+        let externally_modified = current.as_ref().is_some_and(|bytes| {
+            let hash = sha256_hex(bytes);
+            Some(hash.as_str()) != prev.latest_models_cache_sha256.as_deref()
+                && Some(hash.as_str()) != prev.previous_models_cache_sha256.as_deref()
+        });
+        if current.is_some() && (externally_modified || retained_external_cache_entries) {
+            let original = match (
+                &prev.pre_attach_models_cache_bytes_b64,
+                prev.pre_attach_models_cache_existed,
+            ) {
+                (Some(encoded), true) => Some(
+                    BASE64
+                        .decode(encoded)
+                        .map_err(|e| format!("bad models_cache snapshot: {e}"))?,
+                ),
+                (None, false) => None,
+                _ => return Err("missing pre-attach models_cache snapshot".to_owned()),
+            };
+            let current = current
+                .as_deref()
+                .ok_or("models_cache disappeared during sync")?;
+            let reconciled = reconcile_modified_models_cache(
+                current,
+                original.as_deref(),
+                &paths.catalog_backup_file,
+            )?;
+            let local: serde_json::Value = serde_json::from_slice(&reconciled)
+                .map_err(|e| format!("invalid reconciled models_cache.json: {e}"))?;
+            let local_models = local
+                .get("models")
+                .and_then(serde_json::Value::as_array)
+                .ok_or("reconciled models_cache.json missing models array")?;
+            for entry in local_models {
+                if let Some(slug) = entry.get("slug").and_then(serde_json::Value::as_str)
+                    && catalog_models.iter().any(|model| {
+                        model.get("slug").and_then(serde_json::Value::as_str) == Some(slug)
+                            && model != entry
+                    })
+                {
+                    return Err(format!(
+                        "client_models_cache_conflict: local model {slug} conflicts with Home catalog"
+                    ));
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => prev
-                .previous_models_cache_sha256
-                .clone()
-                .or_else(|| prev.latest_models_cache_sha256.clone()),
-            Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
-        };
-        (
-            prev.pre_attach_models_cache_existed,
-            prev.pre_attach_models_cache_bytes_b64.clone(),
-            carried_prev_cache,
-        )
-    } else {
-        match fs::read(&cache_path) {
-            Ok(b) => (true, Some(BASE64.encode(&b)), None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None, None),
-            Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+            let (rendered, hash) =
+                render_codex_models_cache(Some(&reconciled), &catalog_models, true)?;
+            pre_cache_existed = true;
+            pre_cache_b64 = Some(BASE64.encode(&reconciled));
+            retained_external_cache_entries = true;
+            (rendered.or(Some(reconciled)), hash)
+        } else {
+            prepare_codex_models_cache(&cache_path, &catalog_models)?
         }
+    } else {
+        prepare_codex_models_cache(&cache_path, &catalog_models)?
     };
-
-    let (prepared_cache, latest_cache_sha) =
-        prepare_codex_models_cache(&cache_path, &catalog_models)?;
 
     let journal = ChildJournalV1 {
         schema: CHILD_JOURNAL_SCHEMA.to_owned(),
@@ -483,6 +562,7 @@ pub fn apply_attach_or_sync_with_fault(
         pre_attach_models_cache_bytes_b64: pre_cache_b64,
         latest_models_cache_sha256: Some(latest_cache_sha),
         previous_models_cache_sha256: prev_cache_sha,
+        retained_external_cache_entries,
         ledger: next_ledger,
     };
     // Persist recovery journal BEFORE mutating any file in $CODEX_HOME (write-ahead durability).
@@ -547,7 +627,7 @@ fn offline_detach_inner(
     keep_catalog: bool,
     defer_cleanup: bool,
 ) -> Result<DetachOutcome, DetachError> {
-    let Some(journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
+    let Some(mut journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
         return Ok(DetachOutcome::NotAttached);
     };
     validate_journal_paths(paths, &journal).map_err(DetachError::Conflict)?;
@@ -721,6 +801,28 @@ fn offline_detach_inner(
             write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
         }
     }
+
+    // A retry after cleanup starts must recognize the restored cache without
+    // relying on the catalog backup, which cleanup may already have removed.
+    match fs::read(&cache_path) {
+        Ok(restored) => {
+            journal.pre_attach_models_cache_existed = true;
+            journal.pre_attach_models_cache_bytes_b64 = Some(BASE64.encode(&restored));
+            journal.latest_models_cache_sha256 = Some(sha256_hex(&restored));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            journal.pre_attach_models_cache_existed = false;
+            journal.pre_attach_models_cache_bytes_b64 = None;
+            journal.latest_models_cache_sha256 = None;
+        }
+        Err(e) => {
+            return Err(DetachError::Io(format!(
+                "failed reading restored cache: {e}"
+            )));
+        }
+    }
+    journal.previous_models_cache_sha256 = None;
+    write_journal(&paths.journal_file, &journal).map_err(DetachError::Io)?;
 
     if !defer_cleanup {
         remove_optional_file(&paths.catalog_backup_file).map_err(DetachError::Io)?;

@@ -433,6 +433,80 @@ fn direct_foreground_server_revalidates_attachment_after_binding() {
 }
 
 #[test]
+fn foreground_startup_waits_for_teardown_gate_before_binding() {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-start-gate-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let port = pick_ephemeral_link_port().unwrap();
+    let raw_token = format!("ocx_data_{}", "a".repeat(40));
+    let key_id = "link:rust-test";
+    let link_id = "lnk_0123456789abcdef";
+    let _home = MockHomeServer::start(&raw_token, key_id, link_id);
+    let creds = format!(r#"{{"apiKeyId":"{key_id}","key":"{raw_token}"}}"#);
+    let (connect, _, error) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &[
+            "connect",
+            "--link",
+            "--key-stdin",
+            "--tunnel-port",
+            &_home.port.to_string(),
+            "--link-id",
+            link_id,
+        ],
+        Some(creds.as_bytes()),
+    );
+    assert_eq!(connect, 0, "{error}");
+    let gate = ocx_child::platform::FileLock::acquire_blocking(
+        &ocx_home.join("child").join("daemon-start.lock"),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .args(["serve", "--foreground", "--listen-port", &port.to_string()])
+        .env("OPENCODEX_HOME", &ocx_home)
+        .env("CODEX_HOME", &codex_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(300));
+    let bound_before_release = TcpStream::connect(("127.0.0.1", port)).is_ok();
+    fs::remove_file(ocx_home.join("child").join("state.json")).unwrap();
+    drop(gate);
+    let mut exited = false;
+    for _ in 0..100 {
+        if child.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !exited {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let _ = run_bin(&ocx_home, &codex_home, port, &["detach"], None);
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        !bound_before_release,
+        "server bound before teardown gate was released"
+    );
+    assert!(
+        exited,
+        "server remained running after attachment state was removed"
+    );
+}
+
+#[test]
 fn detach_stops_authenticated_foreground_without_recorded_pid() {
     let scratch = std::env::temp_dir().join(format!(
         "ocx-child-foreground-{}-{}",
@@ -672,6 +746,14 @@ fn native_attach_starts_authorized_daemon_and_clears_rollback_snapshot() {
     );
     assert_eq!(code, 0, "native attach failed: {stderr}");
     assert!(!ocx_home.join("child").join("attach-rollback.json").exists());
+    let (sync_code, _, sync_error) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &["sync", "--restart-app-server-only"],
+        None,
+    );
+    assert_eq!(sync_code, 0, "documented sync flag rejected: {sync_error}");
     assert!(
         raw_http_exchange(
             port,

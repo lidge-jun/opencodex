@@ -216,6 +216,10 @@ fn fetch_home_settings_doc(
 }
 
 pub struct AttachRollbackSnapshot {
+    opencodex_home: String,
+    codex_home: String,
+    opencodex_home_identity: DirectoryIdentity,
+    codex_home_identity: DirectoryIdentity,
     prior_state: Option<ChildStateV1>,
     prior_was_serving: bool,
     journal: Option<Vec<u8>>,
@@ -330,10 +334,28 @@ impl AttachRollbackSnapshot {
     }
 
     pub fn capture(paths: &ChildPaths, prior_state: Option<ChildStateV1>) -> Result<Self, String> {
+        ensure_private_dir(&paths.child_dir)?;
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&paths.codex_home)
+            .map_err(|e| format!("cannot create Codex home for rollback: {e}"))?;
+        let (opencodex_home, codex_home) = Self::canonical_homes(paths)?;
+        let opencodex_home_identity = directory_identity(std::path::Path::new(&opencodex_home))?;
+        let codex_home_identity = directory_identity(std::path::Path::new(&codex_home))?;
         let prior_was_serving = prior_state.as_ref().is_some_and(|st| {
             probe_local_healthz(st.listen_port, Duration::from_millis(300)).is_some()
         });
         let snapshot = Self {
+            opencodex_home,
+            codex_home,
+            opencodex_home_identity,
+            codex_home_identity,
             prior_state,
             prior_was_serving,
             journal: Self::read_optional(&paths.journal_file)?,
@@ -344,6 +366,7 @@ impl AttachRollbackSnapshot {
             key: Self::read_optional(&paths.key_file)?.map(SecretBytes::new),
             state_bytes: Self::read_optional(&paths.state_file)?,
         };
+        snapshot.validate_homes(paths)?;
         snapshot.persist(paths)?;
         Ok(snapshot)
     }
@@ -356,6 +379,18 @@ impl AttachRollbackSnapshot {
         let ocx = ocx.to_str().ok_or("OpenCodex home is not UTF-8")?;
         let codex = codex.to_str().ok_or("Codex home is not UTF-8")?;
         Ok((ocx.to_owned(), codex.to_owned()))
+    }
+
+    fn validate_homes(&self, paths: &ChildPaths) -> Result<(), String> {
+        let (ocx, codex) = Self::canonical_homes(paths)?;
+        if ocx != self.opencodex_home
+            || codex != self.codex_home
+            || directory_identity(std::path::Path::new(&ocx))? != self.opencodex_home_identity
+            || directory_identity(std::path::Path::new(&codex))? != self.codex_home_identity
+        {
+            return Err("rollback snapshot belongs to a different home".to_owned());
+        }
+        Ok(())
     }
 
     fn persist(&self, paths: &ChildPaths) -> Result<(), String> {
@@ -376,13 +411,13 @@ impl AttachRollbackSnapshot {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("cannot inspect rollback snapshot: {e}")),
         }
-        let (opencodex_home, codex_home) = Self::canonical_homes(paths)?;
+        self.validate_homes(paths)?;
         let record = AttachRollbackRecordRef {
             schema: "ocx.child.attach-rollback/1",
-            opencodex_home_identity: directory_identity(std::path::Path::new(&opencodex_home))?,
-            codex_home_identity: directory_identity(std::path::Path::new(&codex_home))?,
-            opencodex_home,
-            codex_home,
+            opencodex_home_identity: self.opencodex_home_identity.clone(),
+            codex_home_identity: self.codex_home_identity.clone(),
+            opencodex_home: self.opencodex_home.clone(),
+            codex_home: self.codex_home.clone(),
             prior_state: &self.prior_state,
             prior_was_serving: self.prior_was_serving,
             journal: self.journal.as_deref(),
@@ -439,6 +474,10 @@ impl AttachRollbackSnapshot {
             }
         }
         let snapshot = Self {
+            opencodex_home: record.opencodex_home.clone(),
+            codex_home: record.codex_home.clone(),
+            opencodex_home_identity: record.opencodex_home_identity.clone(),
+            codex_home_identity: record.codex_home_identity.clone(),
             prior_state: record.prior_state.take(),
             // A recovery requested by detach restores files without starting a daemon.
             prior_was_serving: false,
@@ -481,6 +520,7 @@ impl AttachRollbackSnapshot {
     }
 
     pub fn restore(&self, paths: &ChildPaths) -> Result<(), String> {
+        self.validate_homes(paths)?;
         let mut errors = Vec::new();
         Self::restore_path(
             &paths.codex_config_path(),
@@ -992,7 +1032,10 @@ fn cmd_sync(args: &[String]) -> u8 {
         if arg == "--json" {
             json_mode = true;
             i += 1;
-        } else if arg == "--local-only" || arg == "--restart-codex" {
+        } else if arg == "--local-only"
+            || arg == "--restart-codex"
+            || arg == "--restart-app-server-only"
+        {
             i += 1;
         } else if arg == "--expect-link" {
             expect_count += 1;
@@ -1301,6 +1344,14 @@ fn cmd_detach(args: &[String]) -> u8 {
         Ok(l) => l,
         Err(_) => {
             eprintln!("detach failed: child lifecycle lock busy");
+            return 1;
+        }
+    };
+    let _startup_gate = match FileLock::acquire_blocking(&paths.child_dir.join("daemon-start.lock"))
+    {
+        Ok(lock) => lock,
+        Err(_) => {
+            eprintln!("detach failed: daemon startup gate unavailable");
             return 1;
         }
     };
