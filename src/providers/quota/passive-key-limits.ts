@@ -90,7 +90,11 @@ export function parsePassiveKeyLimits(provider: PassiveKeyProvider, headers: Hea
   return result;
 }
 
-type Entry = { sequence: number; rows: PassiveKeyLimit[]; namespace?: string; timer?: ReturnType<typeof setTimeout> };
+type Entry = { sequence: number; rows: PassiveKeyLimit[]; pending: number; namespace?: string; timer?: ReturnType<typeof setTimeout> };
+export type PassiveKeyLimitReservation = {
+  record(headers: Headers, observedAt: number): boolean;
+  cancel(): void;
+};
 
 /** In-memory only. Callers supply opaque owner IDs and globally increasing send sequences. */
 export class PassiveKeyLimitCache {
@@ -123,6 +127,46 @@ export class PassiveKeyLimitCache {
     return JSON.stringify([ownerHash, identity.provider, identity.model]);
   }
 
+  /**
+   * Reserve immediately before the physical send. Record once on an eligible response;
+   * cancel in finally on failures, cancellation, or an ineligible response. Eviction
+   * or clear invalidates the reservation even if the same identity is later recreated.
+   * Reservations live with the caller, not in an unbounded cache-side collection.
+   */
+  reserve(identity: PassiveKeyIdentity, sequence: number): PassiveKeyLimitReservation | undefined {
+    const key = this.key(identity);
+    if (!key || !Number.isSafeInteger(sequence) || sequence < 0) return undefined;
+    let entry = this.entries.get(key);
+    if (!entry) {
+      entry = { sequence: -1, rows: [], pending: 0, namespace: identity.namespace };
+      this.entries.set(key, entry);
+      this.evictOverflow();
+    }
+    const reservedEntry = entry;
+    const reservedIdentity = { ...identity };
+    reservedEntry.pending++;
+    let active = true;
+    const release = () => {
+      if (!active) return false;
+      active = false;
+      reservedEntry.pending--;
+      if (reservedEntry.pending === 0 && reservedEntry.sequence === -1 && this.entries.get(key) === reservedEntry) {
+        this.entries.delete(key);
+      }
+      return true;
+    };
+    return {
+      record: (headers, observedAt) => {
+        if (!active) return false;
+        try {
+          return this.entries.get(key) === reservedEntry && this.record(reservedIdentity, headers, observedAt, sequence);
+        } finally { release(); }
+      },
+      cancel: () => { release(); },
+    };
+  }
+
+  /** Legacy response-only API; use reserve at send time to fence eviction races. */
   record(identity: PassiveKeyIdentity, headers: Headers, observedAt: number, sequence: number): boolean {
     const key = this.key(identity);
     if (!key || !timestamp(observedAt) || !Number.isSafeInteger(sequence) || sequence < 0) return false;
@@ -133,12 +177,14 @@ export class PassiveKeyLimitCache {
     if (!rows.length) {
       this.entries.delete(key);
       if (current) current.sequence = sequence;
-      this.entries.set(key, current ?? { sequence, rows: [], namespace: identity.namespace });
+      this.entries.set(key, current ?? { sequence, rows: [], pending: 0, namespace: identity.namespace });
       this.evictOverflow();
       return false;
     }
     if (current?.timer) clearTimeout(current.timer);
-    const entry: Entry = { sequence, rows, namespace: identity.namespace };
+    const entry: Entry = current ?? { sequence, rows, pending: 0, namespace: identity.namespace };
+    entry.sequence = sequence;
+    entry.rows = rows;
     entry.timer = setTimeout(() => { entry.rows = []; entry.timer = undefined; }, this.retentionMs);
     entry.timer.unref();
     this.entries.delete(key);

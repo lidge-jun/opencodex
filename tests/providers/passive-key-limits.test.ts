@@ -60,6 +60,69 @@ describe("passive key limit parsing", () => {
 
 describe("passive key observation cache", () => {
   const response = (n: number, reset = "10s") => headers({ "x-ratelimit-remaining-requests": String(n), "x-ratelimit-reset-requests": reset });
+  test("eviction cannot make an older in-flight response fresh", () => {
+    const cache = new PassiveKeyLimitCache({ maxEntries: 1 });
+    const other = { ...identity, model: "other" };
+    const older = cache.reserve(identity, 1)!;
+    const newer = cache.reserve(identity, 2)!;
+    expect(newer.record(response(7), at)).toBe(true);
+    expect(cache.reserve(other, 3)!.record(response(3), at)).toBe(true);
+    expect(older.record(response(2), at + 50)).toBe(false);
+    expect(cache.get(identity, at + 50)).toEqual([]);
+  });
+  test("evicted reservations stay invalid even after the same identity is reserved again", () => {
+    const cache = new PassiveKeyLimitCache({ maxEntries: 1 });
+    const old = cache.reserve(identity, 1)!;
+    cache.reserve({ ...identity, model: "other" }, 2)!.cancel();
+    const current = cache.reserve(identity, 3)!;
+    expect(old.record(response(1), at)).toBe(false);
+    expect(current.record(response(3), at)).toBe(true);
+    expect(cache.get(identity, at)[0]?.remaining).toBe(3);
+  });
+  test("empty newer observations fence older reserved sends", () => {
+    const cache = new PassiveKeyLimitCache();
+    const old = cache.reserve(identity, 1)!;
+    expect(cache.reserve(identity, 2)!.record(headers({}), at)).toBe(false);
+    expect(old.record(response(1), at)).toBe(false);
+    expect(cache.get(identity, at)).toEqual([]);
+  });
+  test("cancel, duplicate settlement and clear invalidate reservations", () => {
+    const cache = new PassiveKeyLimitCache({ maxEntries: 1 });
+    const cancelled = cache.reserve(identity, 1)!;
+    cancelled.cancel();
+    cancelled.cancel();
+    expect(cancelled.record(response(1), at)).toBe(false);
+    const cleared = cache.reserve(identity, 2)!;
+    cache.clear();
+    expect(cleared.record(response(2), at)).toBe(false);
+    const settled = cache.reserve(identity, 3)!;
+    expect(settled.record(response(3), at)).toBe(true);
+    expect(settled.record(response(4), at)).toBe(false);
+    settled.cancel();
+    expect(cache.get(identity, at)[0]?.remaining).toBe(3);
+  });
+  test("cancelled sends release empty reservations without evicting observations", () => {
+    const cache = new PassiveKeyLimitCache({ maxEntries: 2 });
+    const other = { ...identity, model: "other" }, third = { ...identity, model: "third" };
+    expect(cache.reserve(identity, 1)!.record(response(1), at)).toBe(true);
+    const pending = cache.reserve(other, 2)!;
+    pending.cancel();
+    expect(cache.reserve(third, 3)!.record(response(3), at)).toBe(true);
+    expect(cache.get(identity, at)[0]?.remaining).toBe(1);
+    expect(cache.reserve({ ...identity, model: "bad model" }, 4)).toBeUndefined();
+    expect(cache.reserve(identity, -1)).toBeUndefined();
+  });
+  test("a failed send releases its reservation without invalidating another send", async () => {
+    const cache = new PassiveKeyLimitCache({ maxEntries: 2 });
+    const surviving = cache.reserve(identity, 1)!;
+    const failed = cache.reserve(identity, 2)!;
+    await expect((async () => {
+      try { throw new Error("send failed"); } finally { failed.cancel(); }
+    })()).rejects.toThrow("send failed");
+    expect(failed.record(response(2), at)).toBe(false);
+    expect(surviving.record(response(1), at)).toBe(true);
+    expect(cache.get(identity, at)[0]?.remaining).toBe(1);
+  });
   test("newer send sequences win, even when an older response arrives later", () => {
     const cache = new PassiveKeyLimitCache();
     expect(cache.record(identity, response(7), at, 2)).toBe(true);
