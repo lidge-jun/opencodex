@@ -5,10 +5,8 @@ import { formatProviderDisplayName } from "../provider-icons";
 import { PROTOCOL_MODE_KEYS } from "../components/protocols/protocol-labels";
 import { chip, fieldControl, fieldLabel, quietButton } from "../components/v2-logs/classes";
 import { cn } from "@/lib/utils";
-import { SegmentThumb, SegmentThumbGroup } from "@/components/ui-v2/segment-thumb";
 import { Select } from "../ui";
 import { LOG_PROTOCOL_MODE_FILTERS, type LogFilterState, type LogProtocolModeFilter, type LogStatusFilter, type LogTimeWindow } from "./logs-filter";
-import { logsSurfaceKeyDown } from "./logs-surface-keydown";
 
 interface LogsFilterBarProps {
   filters: LogFilterState;
@@ -27,7 +25,6 @@ interface LogsFilterBarProps {
 const FILTER_SELECT = { fullWidth: true, size: "sm", triggerClassName: "px-2.5 text-fg" } as const;
 
 type SpeedChoice = "all" | "slow" | "medium" | "fast";
-const SURFACES = ["all", "claude", "codex", "grok"] as const;
 
 function speedChoice(filters: LogFilterState): SpeedChoice {
   if (filters.maxTokPerSec === 15) return "slow";
@@ -45,7 +42,7 @@ function speedBounds(value: string): Pick<LogFilterState, "minTokPerSec" | "maxT
 
 /*
  * The Logs toolbar (React Bits monitoring-5 + data-table-1): one row with the conversation
- * search, the surface switch, a Filters disclosure and the column toggles; the rest of the
+ * search, a Filters disclosure and the column toggles; the rest of the
  * filters fold into a panel under it, and whatever is active shows as removable chips with
  * the match count and one reset. The folded panel stays mounted so its fields keep their
  * state and remain reachable by label.
@@ -53,13 +50,12 @@ function speedBounds(value: string): Pick<LogFilterState, "minTokPerSec" | "maxT
 export function LogsFilterBar({
   filters, options, hasActiveFilters, filteredCount, totalCount, t, onFilterChange, onResetFilters, trailing,
 }: LogsFilterBarProps) {
-  const thumbId = useId();
   const panelId = useId();
   const [open, setOpen] = useState(false);
-  const allSurfaceRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const resetFilters = () => {
     onResetFilters();
-    allSurfaceRef.current?.focus({ preventScroll: true });
+    searchRef.current?.focus({ preventScroll: true });
   };
   const set = (patch: Partial<LogFilterState>) => onFilterChange({ ...filters, ...patch });
   const currentSpeed = speedChoice(filters);
@@ -81,6 +77,7 @@ export function LogsFilterBar({
         <div className="relative min-w-0 flex-1 basis-56 sm:max-w-72">
           <IconSearch aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-fg-subtle" />
           <input
+            ref={searchRef}
             type="search"
             className={cn(fieldControl, "mono pl-8")}
             value={filters.conversationId}
@@ -88,39 +85,6 @@ export function LogsFilterBar({
             placeholder={t("logs.filter.conversation.placeholder")}
             aria-label={t("logs.filter.conversation.label")}
           />
-        </div>
-
-        <div
-          role="radiogroup"
-          aria-label={t("logs.filter.surface.label")}
-          className="relative inline-flex max-w-full items-center gap-0.5 rounded-control bg-bg p-0.5 ring-1 ring-inset ring-line"
-        >
-          <SegmentThumbGroup>
-            {SURFACES.map(surface => {
-              const selected = filters.surface === surface;
-              return (
-                <button
-                  key={surface}
-                  ref={surface === "all" ? allSurfaceRef : undefined}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  id={`logs-surface-${surface}`}
-                  tabIndex={selected ? 0 : -1}
-                  onClick={() => set({ surface })}
-                  onKeyDown={event => logsSurfaceKeyDown(event, surface, nextSurface => set({ surface: nextSurface }))}
-                  className={cn(
-                    "ui-v2 relative inline-flex h-7 min-w-8 cursor-pointer items-center justify-center rounded-[8px] px-3 text-[13px] font-medium transition-colors duration-200",
-                    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
-                    selected ? "text-fg" : "text-fg-subtle hover:text-fg-muted",
-                  )}
-                >
-                  {selected && <SegmentThumb layoutId={thumbId} />}
-                  <span className="relative">{t(`logs.filter.surface.${surface}`)}</span>
-                </button>
-              );
-            })}
-          </SegmentThumbGroup>
         </div>
 
         <button

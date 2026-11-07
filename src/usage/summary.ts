@@ -1,6 +1,7 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
+import { usageApp, type UsageApp, type UsageAppSummary } from "./app-breakdown";
 import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
@@ -210,6 +211,7 @@ export interface UsageSummary {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  apps: UsageAppSummary[];
   accounts: UsageAccount[];
   sourceFilter?: UsageSourceFilter;
   legacyUnclassifiedRequests?: number;
@@ -779,6 +781,7 @@ interface UsagePartition {
   oldestTimestamp: number | null;
   legacyUnclassifiedRequests: number;
   totals: UsageSummaryTotals;
+  apps: Map<UsageApp, UsageSummaryTotals>;
   models: Map<string, UsageModelAccumulator>;
   providers?: Map<string, UsageModelAccumulator>;
   accounts: Map<string, UsageAccountAccumulator>;
@@ -1367,6 +1370,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       cloned.partitions.set(key, {
         ...partition,
         totals: { ...partition.totals },
+        apps: new Map([...partition.apps].map(([client, totals]) => [client, { ...totals }])),
         models,
         ...(providers ? { providers } : {}),
         accounts,
@@ -1402,6 +1406,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         oldestTimestamp: null,
         legacyUnclassifiedRequests: 0,
         totals: blankTotals(),
+        apps: new Map(),
         models: new Map(),
         ...(this.mode === "row-unique" ? { providers: new Map() } : {}),
         accounts: new Map(),
@@ -1606,6 +1611,16 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     addCacheProvenanceTotals(partition.totals, entry);
     addThroughputTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
+    const client = usageApp(entry.client);
+    let app = partition.apps.get(client);
+    if (!app) {
+      app = blankTotals();
+      partition.apps.set(client, app);
+      this.estimatedRetainedBytes += ESTIMATED_BREAKDOWN_BYTES;
+    }
+    bumpStatus(app, entry.usageStatus);
+    addTokens(app, entry);
+    addEstimatedCost(app, entry, costInfo);
 
     const requestKey = this.mode === "exact" ? this.requestKey(entry.requestId) : null;
     const attributions = usageAttributions(entry);
@@ -1666,6 +1681,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     const totals = blankTotals();
     const models = new Map<string, UsageModelAccumulator>();
     const providers = new Map<string, UsageModelAccumulator>();
+    const apps = new Map<UsageApp, UsageSummaryTotals>();
     const accounts = new Map<string, UsageAccountAccumulator>();
     const dayAccumulators = new Map<string, UsageDayAccumulator>();
     const modelOverlaps: UsageModelOverlap[] = [];
@@ -1677,6 +1693,11 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       if (!this.window && since !== null && partition.dayStart < since) continue;
       legacyUnclassifiedRequests += partition.legacyUnclassifiedRequests;
       mergeTotals(totals, partition.totals);
+      for (const [client, app] of partition.apps) {
+        const combined = apps.get(client) ?? blankTotals();
+        mergeTotals(combined, app);
+        apps.set(client, combined);
+      }
       mergeModelMaps(models, partition.models);
       if (partition.providers) mergeModelMaps(providers, partition.providers);
       modelOverlaps.push(...partition.modelOverlaps.values());
@@ -1750,6 +1771,9 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       days,
       models: buildUsageModels(models, totals.totalTokens, modelOverlaps),
       providers: buildUsageProviders(this.mode === "row-unique" ? providers : models, totals.totalTokens),
+      apps: [...apps].map(([client, app]) => ({ client, requests: app.requests, measuredRequests: app.measuredRequests,
+        totalTokens: app.totalTokens, ...(app.pricedRequests ? { estimatedCostUsd: app.estimatedCostUsd } : {}), pricedRequests: app.pricedRequests,
+        unpricedRequests: app.unpricedRequests + app.unmeteredRequests, shareRatio: totals.totalTokens === 0 ? 0 : Math.min(1, app.totalTokens / totals.totalTokens) })),
       accounts: buildUsageAccounts(accounts),
       ...(this.filter?.sourceFilter ? { sourceFilter: { client: this.filter.sourceFilter.client,
         device: { ...this.filter.sourceFilter.device } }, legacyUnclassifiedRequests } : {}),
@@ -1851,6 +1875,7 @@ export function projectUsageSummary<T extends UsageSummary>(
     days: projected.days,
     models: projected.models,
     providers: projected.providers,
+    apps: projected.apps,
     accounts: projected.accounts,
     ...(projected.sourceFilter ? { sourceFilter: projected.sourceFilter, legacyUnclassifiedRequests: projected.legacyUnclassifiedRequests } : {}),
     filter: projected.filter,
