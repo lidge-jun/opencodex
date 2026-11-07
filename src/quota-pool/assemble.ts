@@ -25,6 +25,8 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { isDisplayOnlyQuota } from "../providers/quota-types";
+import { providerQuotaRoutingBinding } from "../providers/quota-routing-cache";
+import { resolveEnvValue } from "../config/proxy-env";
 import type { StoredAccountQuota } from "../codex/quota-types";
 import { isTerminalShortWindow, resetAtToMs } from "../codex/quota-types";
 import { runPassiveRead } from "../lib/passive-read";
@@ -33,7 +35,7 @@ import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { latestCodexQuotaObservationSource } from "../codex/quota";
 import { ACCOUNT_LOG_LABEL_RE, oauthAccountLogLabel } from "../codex/account-label";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers-destination";
-import { hasCodexPoolProvider, heldProviderQuotaReports, type ProviderQuotaReport } from "../providers/quota/report-cache";
+import { hasCodexPoolProvider, heldProviderQuotaReports, keyReportCredentialIds, routingEvidence, type ProviderQuotaReport } from "../providers/quota/report-cache";
 import {
   accountCacheKey,
   accountQuotaCache,
@@ -332,9 +334,15 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
     if (!tracked && !report) continue;
     // Account rows are the evidence a held report was computed from, at least as new and with
     // their own observation times; the report stands in only where there are no rows.
+    const evidence = report && routingEvidence.get(report);
+    const credential = resolveEnvValue(provider.apiKey)?.trim();
+    const reportQuota = report && (keyReportCredentialIds.has(report)
+      ? (provider.apiKeyPool?.length ?? 0) <= 1 && credential && evidence?.binding === providerQuotaRoutingBinding(name, provider, credential)
+        ? evidence.quota : undefined
+      : report.quota);
     const windows = poolFromRows && rows.length > 0
       ? pooledWindows(rows.map(row => row.pool), now)
-      : report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
+      : report && reportQuota ? providerQuotaWindows(reportQuota, reportSource(report), now) : [];
     const pooled: QuotaPoolProvider["pooled"] = { windows };
     const next = nextResetAt(windows);
     if (next) pooled.nextResetAt = next;

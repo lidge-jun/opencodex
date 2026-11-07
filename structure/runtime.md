@@ -407,7 +407,7 @@ A 429 rotation inside either loop splits the request into one attempt row per ac
 inference-wide projection. A matching credential alone does not grant veto authority. Display-only
 account, model-group, search and legacy MCP windows remain visible but cannot exclude a provider.
 The private WeakMap binds provider name, adapter, destination and captured credential; neither
-credential nor binding enters report JSON.
+credential nor binding enters report JSON. Provider reports capture auth mode, adapter and destination before a probe awaits; publication, cache reuse, joined callers and passive held reads require a matching enabled provider and reject unbound reports. Account-currentness and key-credential checks remain in force. Passive reads do not resolve OS keychain credentials or publish routing evidence; account-level DTOs are unchanged.
 
 `src/providers/quota-routing-cache.ts` rechecks the live single key, effective authentication,
 static credential headers and key-pool size. Unknown, invalid, future or 30-minute-old evidence

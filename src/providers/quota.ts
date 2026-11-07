@@ -34,7 +34,7 @@ import {
   LAST_GOOD_MAX_AGE_MS,
   providerQuotaBeforePublishForTests,
   routingEvidence, publishCollectedDecisionQuota,
-  keyReportCredentialIds, keyReportCredentialCurrent, validateJoinedReports,
+  keyReportCredentialIds, providerReportCurrentForConfig, validateJoinedReports, bindProviderReportProbe,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
   type CodexAuthAccountsSnapshotPromise,
@@ -259,7 +259,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     && currentCache.response.reports.every(item =>
       (item.observed === true || now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)
       && isProviderQuotaReportCurrent(item)
-      && keyReportCredentialCurrent(item, config.providers[item.provider]));
+      && providerReportCurrentForConfig(item, config.providers[item.provider]));
   if (!forceRefresh && cacheFresh) return currentCache!.response;
   const joinable = inflight.get(key);
   if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return validateJoinedReports(await joinable.promise, config);
@@ -273,7 +273,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     const providerEntries = Object.entries(config.providers);
     const probeResults = await Promise.all(
       providerEntries.map(([name, provider]) => (
-        maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
+        bindProviderReportProbe(maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot), name, provider)
       )),
     );
     const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
@@ -308,11 +308,11 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       // Same exemption as the fast path. A passive row reaching `previous` is not a probe
       // that went quiet — there is no probe — so age cannot condemn it.
       if (item.observed !== true && item.updatedAt < cutoff) continue;
-      if (isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, config.providers[item.provider])) byProvider.set(item.provider, item);
+      if (isProviderQuotaReportCurrent(item) && providerReportCurrentForConfig(item, config.providers[item.provider])) byProvider.set(item.provider, item);
       else generationMismatchedProviders.add(item.provider);
     }
     for (const item of fresh) {
-      if (isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, config.providers[item.provider])) {
+      if (isProviderQuotaReportCurrent(item) && providerReportCurrentForConfig(item, config.providers[item.provider])) {
         byProvider.set(item.provider, item);
         generationMismatchedProviders.delete(item.provider);
       } else {

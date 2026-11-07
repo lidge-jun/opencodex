@@ -5,7 +5,7 @@ import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectErro
 import { getValidAccessToken } from "../../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../../oauth/store";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
-import { antigravityEvidence, report, type ProviderQuotaReport } from "./report-cache";
+import { antigravityEvidence, bindProviderReportProbe, report, type ProviderQuotaReport } from "./report-cache";
 import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
 import { antigravityDecisionWindows } from "../quota-decision-publication";
 import { antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
@@ -362,7 +362,11 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
 }
 
 /** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
-export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+export function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+  return bindProviderReportProbe(fetchAntigravityQuotaBound(provider, { ...config }), provider, config);
+}
+
+async function fetchAntigravityQuotaBound(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
   const credential = getCredential(provider);
   if (!credential?.projectId) return null;
   let accessToken: string;

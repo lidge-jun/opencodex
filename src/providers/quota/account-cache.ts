@@ -18,6 +18,7 @@ import { getProviderRegistryEntry } from "../registry";
 import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProviderQuotaReportCache } from "./report-cache";
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
+import { isDisplayOnlyQuota, markDisplayOnlyQuota } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
@@ -97,6 +98,7 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
       else delete result.customWindows;
     }
   }
+  if (isDisplayOnlyQuota(quota)) markDisplayOnlyQuota(result);
   return hasQuotaRows(result) ? result : null;
 }
 
@@ -164,6 +166,8 @@ export function persistAccountQuotaCache(): void {
       [accountCacheKey("kiro", account.id), account]) ?? []);
     for (const [key, entry] of accountQuotaCache) {
       const quota = isAnthropicAccountCacheKey(key) ? normalizeAnthropicQuota(entry.quota, now) : entry.quota;
+      // The in-memory provenance is not serialized; never restore display-only bars as decisions.
+      if (quota && isDisplayOnlyQuota(quota)) continue;
       if (quota && key.startsWith("kiro\0")) {
         const account = liveKiro.get(key);
         if (account && entry.identity === kiroEvidenceIdentity(account))
@@ -229,6 +233,7 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
     if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
   }
   if (entry?.isCurrent && !entry.isCurrent()) return null;
+  if (entry?.quota && isDisplayOnlyQuota(entry.quota)) return null;
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }
 
@@ -311,6 +316,7 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   const generation = credential && credentialGeneration(credential);
   const previous = candidate?.isCurrent?.() === false
     || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
+  const previousQuota = previous?.quota && !isDisplayOnlyQuota(previous.quota) ? previous.quota : null;
   if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
   accountQuotaCache.set(key, {
     ...previous,
@@ -318,8 +324,8 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
     quota: normalizeAnthropicQuota({
-      ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
-      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
+      ...normalizeAnthropicQuota(previousQuota, observed.updatedAt), ...observed,
+      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previousQuota?.customWindows, observed.customWindows) } : {}),
     }, observed.updatedAt),
   });
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.

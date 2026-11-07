@@ -23,12 +23,16 @@ import {
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearAccountQuotaCache, fetchProviderQuotaReports, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
-import { getProviderQuotaReportCache, keyReport, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
+import { bindProviderReportProbe, getProviderQuotaReportCache, keyReport, report, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import { clearCachedProviderQuotas, getCachedProviderQuota, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
 import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import { markDisplayOnlyQuota } from "../../src/providers/quota-types";
+import { isDisplayOnlyQuota } from "../../src/providers/quota-types";
+import { getCachedProviderAccountQuota, normalizeAnthropicQuota } from "../../src/providers/quota/account-cache";
+import { accountHeadroomPercent } from "../../src/oauth/account-quota-rank";
+import { kiroAccountEvidence } from "../../src/providers/kiro-usage";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
@@ -81,10 +85,10 @@ beforeEach(async () => {
       customWindows: [{ label: "Opus", percent: 100, resetAt: NOW + 72 * HOUR, scope: "model" }],
     },
   }));
-  setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-    provider: "openrouter", label: "OpenRouter", source: "fixture", updatedAt: NOW - 120_000,
-    quota: { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 },
-  }] } });
+  const openrouter = config().providers.openrouter!;
+  const quota = { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 };
+  const held = keyReport("openrouter", "fixture", quota, openrouter, "fixture-openrouter-key", quota)!;
+  setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
 });
 
 afterEach(() => {
@@ -116,7 +120,7 @@ for (const reader of ["provider", "pool"] as const) {
     setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { keychainReads++; return key; }, setPassword: () => {}, deletePassword: () => true }));
     expect(resolveProviderApiKey(providers.keychain!.apiKey)).toBe(key);
     const quota = { weeklyPercent: 42, updatedAt: NOW };
-    const reports = names.map(name => keyReport(name, "fixture", quota, providers[name]!, key)!);
+    const reports = names.map(name => keyReport(name, "fixture", quota, providers[name]!, key, quota)!);
     setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports } });
     const held = getProviderQuotaReportCache();
     providers.changed!.apiKey = "fixture-replacement-key";
@@ -164,17 +168,135 @@ for (const reader of ["provider", "pool"] as const) {
 }
 
 describe("ocx.quota-pool/1 producer", () => {
+  test("uses key inference projections in the real assembled pool", async () => {
+    ensureQuotaPoolIdentity();
+    const providers = {
+      synthetic: { adapter: "openai-chat", baseUrl: "https://api.synthetic.new/openai/v1", apiKey: "fixture-key" },
+    } as OcxConfig["providers"];
+    const current = { port: 0, defaultProvider: "synthetic", providers } as OcxConfig;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({ data: { rollingFiveHourLimit: 10, search: { hourly: 100 } } }); }) as typeof fetch;
+    try {
+      const reports = await fetchProviderQuotaReports(current, true);
+      expect(reports.reports[0]?.quota.customWindows?.[0]?.percent).toBe(100);
+      expect(calls).toBe(1);
+      const result = await readQuotaPool(current);
+      if (!result.ok) throw new Error(result.error);
+      expect(QuotaPoolSchema.parse(result.pool)).toEqual(result.pool);
+      expect(result.pool.providers[0]?.pooled.windows.map(w => [w.id, w.usedPercent, w.exhausted])).toEqual([["5h", 10, false]]);
+      expect(calls).toBe(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("key reports require inference evidence while OAuth reports and positive projections remain usable", async () => {
+    ensureQuotaPoolIdentity();
+    const base = { adapter: "openai-chat", baseUrl: "https://fixture.example/v1", apiKey: "fixture-key" } as const;
+    const providers = { positive: { ...base }, absent: { ...base }, mistral: { ...base }, override: { ...base }, multiple: { ...base }, oauth: { ...base, authMode: "oauth" } } as OcxConfig["providers"];
+    const current = { port: 0, defaultProvider: "positive", providers } as OcxConfig;
+    const quota = { weeklyPercent: 100, updatedAt: NOW };
+    const oauth = await bindProviderReportProbe(Promise.resolve({ provider: "oauth", label: "oauth", source: "oauth", quota, updatedAt: NOW }), "oauth", providers.oauth!);
+    const reports = [
+      keyReport("positive", "fixture", quota, providers.positive!, "fixture-key", quota)!,
+      keyReport("absent", "fixture", quota, providers.absent!, "fixture-key")!,
+      keyReport("mistral", "fixture", markDisplayOnlyQuota({ ...quota }), providers.mistral!, "fixture-key")!,
+      keyReport("override", "fixture", quota, providers.override!, "fixture-key", quota)!,
+      keyReport("multiple", "fixture", quota, providers.multiple!, "fixture-key", quota)!,
+      oauth,
+    ];
+    providers.override!.headers = { Authorization: "fixture-override" };
+    providers.multiple!.apiKeyPool = [{ id: "one", key: "fixture-key" }, { id: "two", key: "fixture-key-two" }];
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports } });
+    // No OAuth rows: an ownership-bound account report remains usable.
+    const result = await readQuotaPool(current, { now: () => NOW });
+    if (!result.ok) throw new Error(result.error);
+    expect(QuotaPoolSchema.parse(result.pool)).toEqual(result.pool);
+    const byName = Object.fromEntries(result.pool.providers.map(row => [row.provider, row.pooled.windows]));
+    expect(byName.positive?.map(w => [w.id, w.exhausted])).toEqual([["weekly", true]]);
+    expect(byName.absent).toEqual([]);
+    expect(byName.mistral).toEqual([]);
+    expect(byName.override).toEqual([]);
+    expect(byName.multiple).toEqual([]);
+    expect(byName.oauth?.map(w => [w.id, w.exhausted])).toEqual([["weekly", true]]);
+  });
+
+  test("Mistral budget producer remains display-only in the assembled pool", async () => {
+    ensureQuotaPoolIdentity();
+    const current = { port: 0, defaultProvider: "mistral", providers: { mistral: { adapter: "openai-chat", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-key" } } } as OcxConfig;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (input) => {
+      calls++;
+      return Response.json(String(input).includes("subscription") ? { plan_name: "FREE" } : {
+        api_budget: { initial_budget: 10, usage_percentage: 100, currency: "USD" },
+      });
+    }) as typeof fetch;
+    try {
+      const reports = await fetchProviderQuotaReports(current, true);
+      expect(reports.reports[0]?.quota.customWindows?.[0]?.percent).toBe(100);
+      expect(calls).toBe(2);
+      const result = await readQuotaPool(current);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.pool.providers[0]?.pooled.windows).toEqual([]);
+      expect(calls).toBe(2);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("OpenRouter's inference-wide key cap remains in the assembled pool", async () => {
+    ensureQuotaPoolIdentity();
+    const current = { port: 0, defaultProvider: "openrouter", providers: { openrouter: { adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", apiKey: "fixture-key" } } } as OcxConfig;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({ data: { usage: 20, limit: 20, limit_remaining: 0 } }); }) as typeof fetch;
+    try {
+      expect((await fetchProviderQuotaReports(current, true)).reports).toHaveLength(1);
+      const result = await readQuotaPool(current);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.pool.providers[0]?.pooled.windows).toMatchObject([{ usedPercent: 100, exhausted: true }]);
+      expect(calls).toBe(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("preserves display-only account provenance through normalization and decisions", async () => {
+    ensureQuotaPoolIdentity();
+    await saveCredential("anthropic", { access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + HOUR, accountId: "fixture-anthropic" } as never);
+    const id = getAccountSet("anthropic")!.accounts[0]!.id;
+    const now = Date.now();
+    const quota = markDisplayOnlyQuota({ fiveHourPercent: 100, weeklyPercent: 25, weeklyResetAt: now - HOUR, updatedAt: now });
+    const normalized = normalizeAnthropicQuota(quota, now)!;
+    expect(normalized).not.toBe(quota);
+    expect(isDisplayOnlyQuota(normalized)).toBe(true);
+    setCachedProviderAccountQuotaForTests("anthropic", id, quota);
+    expect(getCachedProviderAccountQuota("anthropic", id)).toBeNull();
+    expect(accountHeadroomPercent("anthropic", id)).toBeNull();
+    const current = { port: 0, defaultProvider: "anthropic", providers: { anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } } } as OcxConfig;
+    const result = await readQuotaPool(current);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.pool.providers[0]?.accounts[0]?.state).toBe("unknown");
+    expect(result.pool.providers[0]?.pooled.windows).toEqual([]);
+    clearAccountQuotaCache("anthropic");
+  });
   test("display-only account quota is unknown and cannot constrain the pool", async () => {
     ensureQuotaPoolIdentity();
     setCachedProviderAccountQuotaForTests("xai", xaiIds[0]!, markDisplayOnlyQuota({
       weeklyPercent: 100, weeklyResetAt: NOW + HOUR, updatedAt: NOW,
     }));
+    expect(getCachedProviderAccountQuota("xai", xaiIds[0]!)).toBeNull();
+    expect(accountHeadroomPercent("xai", xaiIds[0]!)).toBeNull();
     const result = await read();
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(row => row.provider === "xai")!;
     expect(xai.accounts.map(account => account.state)).toEqual(["unknown", "unknown"]);
     expect(xai.accounts.every(account => account.windows.length === 0)).toBe(true);
     expect(xai.pooled).toEqual({ windows: [] });
+  });
+
+  test("Kiro's separate account evidence reader excludes display-only quota", async () => {
+    await saveCredential("kiro", { access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + HOUR, accountId: "fixture-kiro" } as never);
+    const account = getAccountSet("kiro")!.accounts[0]!;
+    setCachedProviderAccountQuotaForTests("kiro", account.id, markDisplayOnlyQuota({ monthlyPercent: 100, updatedAt: Date.now() }));
+    expect(kiroAccountEvidence(account, Date.now(), { hydrate: false }).quotaPercent).toBeUndefined();
+    clearAccountQuotaCache("kiro");
   });
 
   test("reports the identity as unavailable instead of minting one on the read path", async () => {
@@ -260,10 +382,9 @@ describe("ocx.quota-pool/1 producer", () => {
   test("a held report never stands in for the account rows of a tracked provider", async () => {
     ensureQuotaPoolIdentity();
     // A report claiming a newer, emptier pool than the rows it would have been computed from.
-    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW,
-      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW },
-    }] } });
+    const held = report("xai", "fixture", { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW })!;
+    await bindProviderReportProbe(Promise.resolve(held), "xai", config().providers.xai!);
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
     const result = await read();
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
@@ -273,12 +394,11 @@ describe("ocx.quota-pool/1 producer", () => {
 
   test("a per-account provider configured with an API key keeps its key's report as the pool", async () => {
     ensureQuotaPoolIdentity();
-    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW - 120_000,
-      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 },
-    }] } });
     const keyed = config();
-    keyed.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
+    keyed.providers.xai = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
+    const quota = { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 };
+    const held = keyReport("xai", "fixture", quota, keyed.providers.xai, "fixture-xai-key", quota)!;
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
     const result = await readQuotaPool(keyed, { now: () => NOW, claudeUsageStatePath: admissionPath });
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
