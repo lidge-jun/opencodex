@@ -7,12 +7,13 @@ import { deriveCandidateId } from "./update-candidate-id.mjs";
 
 // Handles are module-owned and contain no caller-mutable trust data.
 const ROOTS = new WeakMap();
+const TRANSITIONS = new WeakMap();
 const RELEASES = new WeakMap();
 const CANDIDATES = new WeakMap();
 
 function currentRoot(handle, nowMs) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("Invalid trust clock");
-  const state = ROOTS.get(handle);
+  const state = ROOTS.get(handle) || TRANSITIONS.get(handle);
   if (!state || Date.parse(state.root.expiresAt) <= nowMs) throw new Error("Invalid or expired update root");
   return state;
 }
@@ -30,9 +31,36 @@ export function bootstrapEmbeddedRoot(bytes, nowMs) {
   return handle;
 }
 
-/** Verify exact release bytes under an opaque, current embedded root. */
-export function verifyReleaseRecord(bytes, envelopeBytes, trustedRoot, expectedChannel, nowMs) {
-  const state = currentRoot(trustedRoot, nowMs);
+/** Verify a dual-threshold root transition as evidence, without promoting trust. */
+export function verifyRootTransition(predecessorBasis, bytes, envelopeBytes, nowMs) {
+  const previous = currentRoot(predecessorBasis, nowMs);
+  const nextBytes = snapshotUpdateBytes(bytes, 65536);
+  const signatureBytes = snapshotUpdateBytes(envelopeBytes, 65536);
+  const envelope = parseSignatureEnvelope(signatureBytes);
+  verifySignatureThreshold(nextBytes, envelope, previous.root.rootKeys, previous.root.rootThreshold);
+  const root = parseUpdateDocument(nextBytes, "ocx.update.root/1");
+  if (root.revision <= previous.root.revision || Date.parse(root.expiresAt) <= nowMs) {
+    throw new Error("Invalid successor root");
+  }
+  verifySignatureThreshold(nextBytes, envelope, root.rootKeys, root.rootThreshold);
+  const digest = createHash("sha256").update(nextBytes).digest("hex");
+  const handle = Object.freeze(Object.create(null));
+  TRANSITIONS.set(handle, { root, bytes: nextBytes, digest, predecessorDigest: previous.digest,
+    predecessorRevision: previous.root.revision, envelopeBytes: signatureBytes });
+  return handle;
+}
+
+/** Return diagnostic data only; this does not promote or persist a root. */
+export function inspectTransition(transition) {
+  const state = TRANSITIONS.get(transition);
+  if (!state) throw new Error("Invalid root transition evidence");
+  return Object.freeze({ predecessorDigest: state.predecessorDigest, predecessorRevision: state.predecessorRevision,
+    successorDigest: state.digest, successorRevision: state.root.revision });
+}
+
+/** Verify exact release bytes under a root basis as evidence only. */
+export function verifyReleaseEvidence(bytes, envelopeBytes, rootBasis, expectedChannel, nowMs) {
+  const state = currentRoot(rootBasis, nowMs);
   if (!state.root.channels.includes(expectedChannel)) throw new Error("Unsupported update channel");
   const releaseBytes = snapshotUpdateBytes(bytes, 1048576);
   const signatureBytes = snapshotUpdateBytes(envelopeBytes, 65536);
@@ -43,13 +71,13 @@ export function verifyReleaseRecord(bytes, envelopeBytes, trustedRoot, expectedC
   if (release.channel !== expectedChannel) throw new Error("Signed release channel mismatch");
   const digest = createHash("sha256").update(releaseBytes).digest("hex");
   const handle = Object.freeze(Object.create(null));
-  RELEASES.set(handle, { release, root: trustedRoot, digest });
+  RELEASES.set(handle, { release, root: rootBasis, digest });
   return handle;
 }
 
 /** Select a signed tuple; the resulting identity is a lookup, not install authority. */
-export function selectVerifiedTarget(verifiedRelease, selection) {
-  const state = RELEASES.get(verifiedRelease);
+export function selectTargetEvidence(releaseEvidence, selection) {
+  const state = RELEASES.get(releaseEvidence);
   const fields = ["platform", "arch", "owner", "artifactKind", "bundleKind"];
   if (!state || !selection || typeof selection !== "object" || Array.isArray(selection)
       || Object.keys(selection).length !== fields.length || !fields.every((field) => Object.hasOwn(selection, field))) {
@@ -59,6 +87,6 @@ export function selectVerifiedTarget(verifiedRelease, selection) {
   if (matches.length !== 1) throw new Error("Update target unavailable");
   const candidateId = deriveCandidateId(state.digest, matches[0].id);
   const handle = Object.freeze({ candidateId });
-  CANDIDATES.set(handle, { release: verifiedRelease, root: state.root, target: matches[0] });
+  CANDIDATES.set(handle, { release: releaseEvidence, root: state.root, target: matches[0] });
   return handle;
 }
