@@ -213,6 +213,72 @@ afterEach(async () => {
   await win.happyDOM.close();
 });
 
+test("an OAuth selection refresh hides stale roster until successful reconciliation", async () => {
+  const rows = ["a", "b"].map(id => ({ id, active: id === "a", quotaMode: "unsupported" as const }));
+  respond = async () => Response.json({ activeAccountId: "a", accounts: rows });
+  await act(async () => { expect(await pools.fetchAccountSets(["fixture"])).toBe(true); });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+  const pending = deferred<Response>();
+  respond = async () => pending.promise;
+  let refresh!: Promise<boolean>;
+  await act(async () => { refresh = pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }); });
+  expect(pools.accountLoadStates.fixture).toBe("loading");
+  await act(async () => { pending.resolve(new Response(null, { status: 503 })); expect(await refresh).toBe(false); });
+  expect(pools.accountLoadStates.fixture).toBe("error");
+  respond = async () => Response.json({ activeAccountId: "b", accounts: rows });
+  await act(async () => { expect(await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" })).toBe(true); });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+  expect(pools.accountSets.fixture.accounts.find(row => row.active)?.id).toBe("b");
+});
+
+test("a malformed or stale OAuth roster cannot publish a verified selection", async () => {
+  const rows = ["a", "b"].map(id => ({ id, active: id === "a", quotaMode: "unsupported" as const }));
+  respond = async () => Response.json({ activeAccountId: "a", accounts: rows });
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  respond = async () => Response.json({ accounts: null });
+  await act(async () => { expect(await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" })).toBe(false); });
+  expect(pools.accountLoadStates.fixture).toBe("error");
+  const old = deferred<Response>();
+  respond = async () => old.promise;
+  let pending!: Promise<boolean>;
+  await act(async () => { pending = pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }); });
+  respond = async () => Response.json({ activeAccountId: "b", accounts: rows });
+  await act(async () => { expect(await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" })).toBe(true); });
+  await act(async () => { old.resolve(new Response(null, { status: 503 })); expect(await pending).toBe(false); });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+  expect(pools.accountSets.fixture.accounts.find(row => row.active)?.id).toBe("b");
+});
+
+test("an aborted OAuth roster refresh leaves the retained selection unverified", async () => {
+  const rows = ["a", "b"].map(id => ({ id, active: id === "a", quotaMode: "unsupported" as const }));
+  respond = async () => Response.json({ activeAccountId: "a", accounts: rows });
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  const pending = deferred<Response>();
+  respond = async () => pending.promise;
+  const controller = new AbortController();
+  let refresh!: Promise<boolean>;
+  await act(async () => { refresh = pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }, controller.signal); });
+  await act(async () => { controller.abort(); pending.resolve(Response.json({ activeAccountId: "a", accounts: rows })); expect(await refresh).toBe(false); });
+  expect(pools.accountLoadStates.fixture).toBe("error");
+});
+
+test("an OAuth quota roster cannot verify identity while account selection is pending", async () => {
+  const rows = ["a", "b"].map(id => ({ id, active: id === "a", quotaMode: "unsupported" as const }));
+  respond = async () => Response.json({ activeAccountId: "a", accounts: rows });
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  const put = deferred<Response>();
+  respond = async (_url, _signal, init) => init?.method === "PUT" ? put.promise
+    : Response.json({ activeAccountId: "a", accounts: rows });
+  let switching!: Promise<unknown>;
+  await act(async () => { switching = pools.switchAccount("fixture", rows[1]); });
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  expect(pools.accountLoadStates.fixture).toBe("loading");
+  respond = async () => Response.json({ activeAccountId: "b", accounts: rows });
+  await act(async () => { put.resolve(Response.json({ activeAccountId: "b" })); await switching; });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+  expect(pools.accountSets.fixture.accounts.find(row => row.active)?.id).toBe("b");
+});
+
 for (const kind of ["oauth", "api-key"] as const) {
   test(`${kind} push refresh overtakes a slow quota probe while late quota cannot change selection or resurrect rows`, async () => {
     const quota = deferred<Response>();

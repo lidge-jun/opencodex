@@ -13,6 +13,8 @@ import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
 import { useT, type TFn } from "../src/i18n/shared";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
+import ProviderDetails from "../src/components/provider-workspace/ProviderDetails";
+import { renderToStaticMarkup } from "react-dom/server";
 import CatalogAccountRow from "../src/components/provider-catalog/CatalogAccountRow";
 import type { OAuthAccountRow, ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
@@ -364,6 +366,24 @@ test("UX-05: equal account IDs keep pool-keyed rosters and thresholds in the acc
 });
 
 for (const item of [POOL_A, POOL_B]) {
+  test(`${item.name} Overview shows only a verified current account label`, () => {
+    const renderOverview = (rows: OAuthAccountRow[], accountLoadState: "idle" | "loading" | "ready" | "error", loggedIn: boolean) => renderToStaticMarkup(
+      <LanguageProvider><ProviderDetails item={item} accounts={rows} accountLoadState={accountLoadState} oauth={{ loggedIn }} oauthEmail={`raw@${item.name}.test`}
+        availableModels={[]} hasLiveModels={false} selectedModels={[]} modelRows={[]} modelRevision="test" modelRowsReady
+        onOpenModels={() => {}} onDeselect={() => {}} apiBase="" /></LanguageProvider>,
+    );
+    const rows = accounts(item.name).map((account, index) => ({ ...account,
+      alias: index === 0 ? "Work" : undefined, maskedLabel: index === 0 ? "s***d@example.test" : "o***r@example.test" }));
+    expect(renderOverview(rows, "ready", true)).toContain("Current account</dt><dd>Work");
+    expect(renderOverview(rows.map(row => ({ ...row, alias: undefined })), "ready", true)).toContain("Current account</dt><dd>s***d@example.test");
+    expect(renderOverview(rows.map((row, index) => ({ ...row, alias: undefined, active: index === 1 })), "ready", true)).toContain("Current account</dt><dd>o***r@example.test");
+    expect(renderOverview(rows.map(row => ({ ...row, alias: undefined, maskedLabel: undefined })), "ready", true)).toContain("Current account</dt><dd>Account 1");
+    for (const state of ["idle", "loading", "error"] as const) expect(renderOverview(rows, state, true)).not.toContain("Current account</dt><dd>Work");
+    const loggedOut = renderOverview(rows, "ready", false);
+    expect(loggedOut).toContain("Current account</dt><dd>Work");
+    expect(loggedOut).not.toContain("Logged in as Work");
+    expect(loggedOut).not.toContain(`raw@${item.name}.test`);
+  });
   test(`${item.name} account rows prefer aliases and masked labels without rendering raw email`, async () => {
     respond = async request => request.path === "/api/pool/settings"
       ? Response.json(poolSettings(item.name, false, 55)) : Response.json(grantSnapshot(item.name, 1));

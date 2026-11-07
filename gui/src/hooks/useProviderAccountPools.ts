@@ -232,7 +232,8 @@ export function useProviderAccountPools(deps: {
           activeAccountId: data.activeAccountId ?? null,
           accounts: mergeQuotaRows(rows, current[provider]?.accounts ?? [], false),
         } } : current);
-        setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "ready" } : current);
+        setAccountLoadStates(current => currentRoster() ? { ...current,
+          [provider]: selectionMutationsRef.current.has(key) ? "loading" : "ready" } : current);
         if (!rows.some(supportsQuotaRead)) return true;
 
         const enrich = async (): Promise<boolean> => {
@@ -352,13 +353,16 @@ export function useProviderAccountPools(deps: {
       if (selectionMutationsRef.current.has(key)) return false;
       const generation = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = generation;
-      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-        && !signal?.aborted && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
+      const ownsRoster = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+        && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
+      const currentRequest = () => ownsRoster() && !signal?.aborted;
+      if (kind === "oauth") setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "loading" } : current);
       try {
         if (kind === "oauth") {
           const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(
             `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`, signal);
-          if (!Array.isArray(data.accounts) || !currentRequest()) return false;
+          if (!Array.isArray(data.accounts)) throw new Error("Invalid account roster");
+          if (!currentRequest()) return false;
           const rows = selectionRows(data.accounts, data.activeAccountId);
           setAccountSets(current => currentRequest() ? { ...current, [provider]: {
             activeAccountId: data.activeAccountId === undefined ? rows.find(row => row.active)?.id ?? null : data.activeAccountId,
@@ -375,6 +379,7 @@ export function useProviderAccountPools(deps: {
         return true;
       } catch {
         // A missed invalidation read does not change quota health; recovery retries it.
+        if (kind === "oauth") setAccountLoadStates(current => ownsRoster() ? { ...current, [provider]: "error" } : current);
         return false;
       }
     }));
@@ -385,6 +390,9 @@ export function useProviderAccountPools(deps: {
     const key = `${kind === "oauth" ? "oauth" : "key"}:${provider}`;
     accountRequestGenerationRef.current[key] = (accountRequestGenerationRef.current[key] ?? 0) + 1;
     rosterGenerationRef.current[key] = (rosterGenerationRef.current[key] ?? 0) + 1;
+    if (kind === "oauth" && aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+      setAccountLoadStates(current => ({ ...current, [provider]: "loading" }));
+    }
     // The independent quota generation still owns pending/error flags for surviving IDs.
     return key;
   };
@@ -602,6 +610,7 @@ export function useProviderAccountPools(deps: {
     const rememberedRetry = affinityResetRetries(apiBase)[provider];
     const target = { provider, accountId };
     const mutation = Symbol();
+    invalidateSelectionReads(provider, "oauth");
     selectionMutationsRef.current.set(key, mutation);
     switchingAccountRef.current.set(provider, target);
     setSwitchingAccounts(current => ({ ...current, [provider]: target }));
@@ -632,7 +641,13 @@ export function useProviderAccountPools(deps: {
       if (currentRetry()) notify(t("prov.affinityResetPending"), false);
     } finally {
       receipt();
-      if (selectionMutationsRef.current.get(key) === mutation) selectionMutationsRef.current.delete(key);
+      if (selectionMutationsRef.current.get(key) === mutation) {
+        selectionMutationsRef.current.delete(key);
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+          invalidateSelectionReads(provider, "oauth");
+          void refreshAccountRosters({ provider, kind: "oauth" });
+        }
+      }
       if (switchingAccountRef.current.get(provider) === target) {
         switchingAccountRef.current.delete(provider);
         if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
@@ -810,14 +825,17 @@ export function useProviderAccountPools(deps: {
         notify(t("prov.accountRemoved", { email: label }), true);
       }
       await fetchAccountSets([provider]);
-      await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
+      void fetchOauth().catch(() => {
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) notify(t("pws.accountsLoadFailed"), false);
+      });
+      await fetchProviderQuotas(true);
     } catch {
       if (current()) notify(t(committed ? "pws.accountsLoadFailed" : "prov.accountRemoveFail", { email: label }), false);
     } finally {
       receipt();
       if (selectionMutationsRef.current.get(key) === mutation) {
         selectionMutationsRef.current.delete(key);
-        if (committed && aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
           invalidateSelectionReads(provider, "oauth");
           void refreshAccountRosters({ provider, kind: "oauth" });
         }

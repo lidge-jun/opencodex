@@ -213,7 +213,11 @@ function useAccountSelectionEvents(
   return useCallback(() => recoverRef.current(), []);
 }
 
-export default function Providers({ apiBase }: { apiBase: string }) {
+export default function Providers(props: { apiBase: string }) {
+  return <ProvidersPage key={props.apiBase} {...props} />;
+}
+
+function ProvidersPage({ apiBase }: { apiBase: string }) {
   const t = useT();
   const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
   const [config, setConfig] = useState<ProvidersConfig | null>(

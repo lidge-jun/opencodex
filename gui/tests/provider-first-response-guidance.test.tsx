@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, type ReactNode } from "react";
+import { act, useLayoutEffect, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import ProviderModelsNotice from "../src/components/ProviderModelsNotice";
@@ -330,6 +330,37 @@ describe("first-response progression states on ProviderOverview", () => {
 });
 
 describe("ProviderDetails raw ID disambiguation and Providers page integration", () => {
+  test("switching API targets never paints the previous server's account", async () => {
+    let firstNewPaint = "";
+    function Inspect({ apiBase }: { apiBase: string }) {
+      useLayoutEffect(() => { if (apiBase === "/new") firstNewPaint = host.textContent ?? ""; }, [apiBase]);
+      return <Providers apiBase={apiBase} />;
+    }
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path.startsWith("/new/")) return new Promise<Response>(() => {});
+      if (path === "/old/api/config") return Response.json({ port: 0, defaultProvider: "anthropic", providers: {
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
+      } });
+      if (path === "/old/api/providers") return Response.json([{ name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" }]);
+      if (path === "/old/api/oauth/providers") return Response.json({ providers: ["anthropic"] });
+      if (path === "/old/api/oauth/status") return Response.json({ loggedIn: true });
+      if (path === "/old/api/oauth/accounts") return Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, alias: "Old Server Account" }] });
+      if (path === "/old/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/old/api/models") return Response.json([]);
+      if (path === "/old/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/old/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/old/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    await render(<Inspect apiBase="/old" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    expect(host.textContent).toContain("Old Server Account");
+    await render(<Inspect apiBase="/new" />);
+    expect(firstNewPaint).not.toContain("Old Server Account");
+    expect(host.textContent).not.toContain("Old Server Account");
+  });
   test("ProviderDetails header shows both display name and raw config ID when they differ", async () => {
     await render(
       <ProviderDetails

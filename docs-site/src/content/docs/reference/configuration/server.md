@@ -463,13 +463,16 @@ use `ssh -g -L`, broad container publishing, or forwarding modes that expose the
 
 ## Account email masking (`privacy`)
 
-Stored account emails are masked everywhere they leave the proxy — the dashboard account lists,
+Stored account emails are masked by default wherever they leave the proxy — the dashboard account lists,
 `GET /api/codex-auth/accounts`, `GET /api/oauth/status`, and the `ocx status` logins section all
 show `p***n@example.com` rather than the address on file.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to show stored account emails in full. Absent, `true`, and any malformed value all keep masking, so only a deliberate `false` reveals an address. |
+| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to reveal stored account emails in projected email fields. Absent, `true`, and any malformed value keep masking, so only a deliberate `false` reveals an address. |
+
+Claude dashboard account labels remain masked even when this flag is `false`; an account alias
+takes precedence over the masked label. The active account uses the same label in Overview.
 
 Turn it off when you run many accounts on a machine you control and cannot tell them apart from
 masked forms. Read the flag as a disclosure decision rather than a display preference: management
