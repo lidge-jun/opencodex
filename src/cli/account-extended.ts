@@ -285,9 +285,9 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   add("5h", quota.fiveHourPercent, quota.fiveHourResetAt);
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
-  for (const window of quota.customWindows ?? []) add(window.displayLabel === undefined ? window.label : terminalSafeText(window.displayLabel), window.percent, window.resetAt);
+  for (const window of quota.customWindows ?? []) add(terminalSafeText(window.displayLabel ?? window.label), window.percent, window.resetAt);
   for (const window of quota.unknownBudgetWindows ?? []) {
-    parts.push(`${window.label} unknown`);
+    parts.push(`${terminalSafeText(window.label)} unknown`);
     const reset = resetIso(window.resetAt);
     if (reset) parts.push(`resets ${reset}`);
   }

@@ -8,7 +8,6 @@ import {
   AUTHORITATIVE_EMPTY_QUOTA,
   hasQuotaRows,
   keyReport,
-  report,
   TERMINAL_QUOTA_FAILURE,
   type ProviderQuotaProbeResult,
   type ProviderQuotaReport,
@@ -442,10 +441,10 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
   const label = grantedBalance !== undefined && grantedBalance > 0
     ? `API balance (${amount(balance)} total, ${amount(grantedBalance)} granted)`
     : `API balance (${amount(balance)})`;
-  return report(provider, "deepseek:balance", {
+  return keyReport(provider, "deepseek:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -869,10 +868,10 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
     }
   }
   if (customWindows.length === 0) return null;
-  return report(provider, "minimax:token-plan-remains", {
+  return keyReport(provider, "minimax:token-plan-remains", {
     customWindows,
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -914,10 +913,10 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
   const label = voucher !== undefined && cash !== undefined
     ? `Balance (${money(available)} ${unit} available, ${money(voucher)} voucher)`
     : `Balance (${money(available)} ${unit} available)`;
-  return report(provider, "moonshot:balance", {
+  return keyReport(provider, "moonshot:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -952,15 +951,15 @@ async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Pr
   if (epochAllocated !== undefined && epochAllocated > 0 && epochUsed !== undefined) {
     const percent = normalizePercent((epochUsed / epochAllocated) * 100);
     if (percent === undefined) return null;
-    return report(provider, "venice:billing-balance", {
+    return keyReport(provider, "venice:billing-balance", {
       customWindows: [{ label, percent }],
       updatedAt: Date.now(),
-    });
+    }, config, apiKey);
   }
-  return report(provider, "venice:billing-balance", {
+  return keyReport(provider, "venice:billing-balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -1044,15 +1043,15 @@ async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig):
     const spent = total !== undefined && total > 0 ? total : Math.max(0, spendLimit - available);
     const percent = normalizePercent((spent / spendLimit) * 100);
     if (percent === undefined) return null;
-    return report(provider, "deepinfra:billing-checklist", {
+    return keyReport(provider, "deepinfra:billing-checklist", {
       customWindows: [{ label: `Billing cycle spend ($${spent.toFixed(2)} of $${spendLimit.toFixed(2)})`, percent }],
       updatedAt: Date.now(),
-    });
+    }, config, apiKey);
   }
-  return report(provider, "deepinfra:billing-checklist", {
+  return keyReport(provider, "deepinfra:billing-checklist", {
     customWindows: [{ label: `Prepaid balance ($${available.toFixed(2)})`, percent: 0 }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -1101,7 +1100,7 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
       windows += 1;
     }
   }
-  return windows > 0 ? report(provider, "neuralwatt:quota", quota) : null;
+  return windows > 0 ? keyReport(provider, "neuralwatt:quota", quota, config, apiKey) : null;
 }
 
 /**

@@ -60,6 +60,17 @@ test("unknown budget windows survive CLI projection and have no fabricated perce
   expect(providerQuotaLine("mistral", { provider: "mistral", quota })).toContain("API budget (EDU) unknown");
 });
 
+test("account refresh escapes control characters in unknown budget labels", async () => {
+  const quota = { updatedAt: 1, unknownBudgetWindows: [{ label: "API\u001b[31m\nunsafe" }] };
+  const deps = depsFor({ reports: [{ provider: "openrouter", quota }] });
+  expect(await cmdAccount(["refresh", "openrouter"], deps)).toBe(0);
+  expect(logs).toHaveLength(1);
+  expect(logs[0]).not.toContain("\u001b");
+  expect(logs[0]).not.toContain("\n");
+  expect(logs[0]).toContain("\\x1b");
+  expect(logs[0]).toContain("\\x0a");
+});
+
 test("measured budget display details survive both CLI quota views", () => {
   const quota = { updatedAt: 1, customWindows: [
     { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5 },
@@ -79,6 +90,13 @@ test("display labels cannot inject terminal lines into CLI quota output", () => 
     expect(text).not.toContain("\n");
   }
   expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 1, customWindows: [{ label: "x", percent: 1, displayLabel: 4 }] } })]), "mistral")).toThrow("Malformed");
+});
+
+test("stable labels without a display label are safe in account refresh", () => {
+  const quota = { updatedAt: 1, customWindows: [{ label: "budget\u001b[31m\nunsafe", percent: 10 }] };
+  const text = providerQuotaLine("mistral", { provider: "mistral", quota });
+  expect(text).not.toContain("\u001b");
+  expect(text).not.toContain("\n");
 });
 
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
