@@ -17,6 +17,8 @@ import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { MistralBudgetPacer } from "../../src/providers/mistral-transport";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -370,4 +372,101 @@ for (const scenario of [
       removeTreeWithRetry(home);
     }
   }, 60_000);
+}
+
+for (const { status, stream } of [{ status: 200, stream: false }, { status: 400, stream: false }, { status: 200, stream: true }]) {
+  test(`Mistral observations follow physical send order after pacing (${status}, stream=${stream})`, async () => {
+    const config = getDefaultConfig();
+    const model = `pacer-order-${status}-${stream}`;
+    config.defaultProvider = "mistral-order";
+    config.defaultModel = model;
+    config.providers = { "mistral-order": { adapter: "openai-chat", baseUrl: "https://api.mistral.ai/v1",
+      authMode: "key", apiKey: `synthetic-order-${status}`, models: [model], liveModels: false,
+      retryOn429: { enabled: false } } };
+    const wire: string[] = [];
+    let releaseB!: () => void, sentA!: () => void, sentB!: () => void;
+    const bGate = new Promise<void>(resolve => { releaseB = resolve; });
+    const aSent = new Promise<void>(resolve => { sentA = resolve; });
+    const bSent = new Promise<void>(resolve => { sentB = resolve; });
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      const label = JSON.stringify(body).includes("request-A") ? "A" : JSON.stringify(body).includes("request-B") ? "B" : "warm";
+      wire.push(label);
+      if (label === "B") { sentB(); await bGate; }
+      if (label === "A") sentA();
+      const headers = { "x-ratelimit-remaining-tokens-minute": label === "A" ? "11" : label === "B" ? "22" : "0",
+        ...(label === "warm" ? { "retry-after": "0.5" } : {}) };
+      if (label !== "warm" && status === 200 && stream) {
+        const chunk = { id: "synthetic", object: "chat.completion.chunk", model, choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }] };
+        return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+          { headers: { ...headers, "content-type": "text/event-stream" } });
+      }
+      return label === "warm" || status === 200
+        ? Response.json({ id: "synthetic", object: "chat.completion", model,
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }, { headers })
+        : Response.json({ error: { message: "fixture refusal", type: "invalid_request_error" } }, { status, headers });
+    }) as typeof fetch;
+    const request = (input: string) => new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: `mistral-order/${model}`, input, stream: input === "warm" ? false : stream, store: false }) });
+    let spy: ReturnType<typeof spyOn> | undefined;
+    try {
+      await (await handleResponses(request("warm"), config, { provider: "", model: "" }, {})).text();
+      let enteredA!: () => void;
+      const waitingA = new Promise<void>(resolve => { enteredA = resolve; });
+      const acquire = MistralBudgetPacer.prototype.acquire;
+      spy = spyOn(MistralBudgetPacer.prototype, "acquire").mockImplementation(function (...args) {
+        enteredA();
+        return acquire.apply(this, args);
+      });
+      const a = handleResponses(request("request-A"), config, { provider: "", model: "" }, {});
+      await waitingA;
+      config.providers["mistral-order"]!.requestPacing = { enabled: false };
+      const b = handleResponses(request("request-B"), config, { provider: "", model: "" }, {});
+      await bSent;
+      await aSent;
+      const aResponse = await a;
+      const aBody = await aResponse.text();
+      releaseB();
+      const bResponse = await b;
+      const bBody = await bResponse.text();
+      expect([aResponse.status, bResponse.status]).toEqual([status, status]);
+      if (status === 200) { expect(aBody).toContain("ok"); expect(bBody).toContain("ok"); }
+      expect(wire).toEqual(["warm", "B", "A"]);
+      expect(observations.getPassiveKeyLimits(config, "mistral-order", model)).toMatchObject([
+        { dimension: "requests" }, { dimension: "tokens", window: "minute", remaining: 11 }, { dimension: "tokens", window: "month" },
+      ]);
+    } finally { spy?.mockRestore(); releaseB(); observations.clearPassiveKeyLimits(); }
+  });
+}
+
+for (const rewrite of ["destination", "credential"] as const) {
+  test(`Mistral plugin ${rewrite} rewrite cannot publish another owner's limits`, async () => {
+    const config = getDefaultConfig();
+    config.defaultProvider = "mistral-rewrite";
+    config.defaultModel = "wire-model";
+    config.providers = { "mistral-rewrite": { adapter: "openai-chat", baseUrl: "https://api.mistral.ai/v1",
+      authMode: "key", apiKey: "synthetic-key", models: ["wire-model"], liveModels: false } };
+    let sends = 0;
+    const unregister = registerUpstreamRewriter("fixture", target => {
+      if (rewrite === "destination") target.url = "http://127.0.0.1:9191/v1/chat/completions";
+      else target.headers.set("authorization", "Bearer synthetic-plugin-key");
+    });
+    globalThis.fetch = (async (input, init) => {
+      sends++;
+      expect(rewrite === "destination" ? String(input) : new Headers(init?.headers).get("authorization"))
+        .toBe(rewrite === "destination" ? "http://127.0.0.1:9191/v1/chat/completions" : "Bearer synthetic-plugin-key");
+      return Response.json({ id: "synthetic", object: "chat.completion", model: "wire-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] },
+      { headers: { "x-ratelimit-remaining-tokens-minute": "42" } });
+    }) as typeof fetch;
+    try {
+      const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "mistral-rewrite/wire-model", input: "hi", stream: false, store: false }) });
+      const response = await handleResponses(request, config, { provider: "", model: "" }, {});
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(sends).toBe(1);
+      expect(observations.getPassiveKeyLimits(config, "mistral-rewrite", "wire-model")).toEqual([]);
+    } finally { unregister(); observations.clearPassiveKeyLimits(); }
+  });
 }

@@ -1,6 +1,6 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
-import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
+import { isPassiveKeyDeferred, isPassiveKeyTransparent, PASSIVE_KEY_SEND } from "../lib/passive-key-fetch-proof";
 import { isKeychainReference, passiveKeychainGeneration, peekResolvedProviderKey, resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 import { extractPassiveWireModel } from "./quota/passive-wire-model";
@@ -66,18 +66,20 @@ function currentKey(reference: string): string | undefined {
   return resolveProviderApiKeyPassively(reference);
 }
 
-function remember(name: string, id: string, owner: string): void {
+function remember(name: string, id: string, owner: string): { name: string; owner: string } {
   const scope = accountScope(name, id);
   const previous = incarnations.get(scope);
   if (previous && previous.owner !== owner) clearPassiveKeyAccount(name, id);
   incarnations.delete(scope);
-  incarnations.set(scope, { name, owner });
+  const incarnation = previous?.owner === owner ? previous : { name, owner };
+  incarnations.set(scope, incarnation);
   if (incarnations.size > MAX_INCARNATIONS) {
     const oldest = incarnations.keys().next().value!;
     const entry = incarnations.get(oldest)!;
     passiveKeyLimits.clear(entry.name, oldest);
     incarnations.delete(oldest);
   }
+  return incarnation;
 }
 
 /** Poll only accounts already observed; a changed value revokes every model and flight. */
@@ -146,23 +148,42 @@ export function passiveKeyPhysicalFetch(
       try { owned = !headers.has("api-key") && expectedAuth && stillConfigured(config, name, snapshot); }
       catch { owned = false; /* An unprovable owner cannot receive a passive observation. */ }
     }
-    const model = owned ? extractPassiveWireModel(init?.body) : undefined;
-    const attempt = ++sequence;
+    const wireBody = init?.body;
+    const model = owned ? extractPassiveWireModel(wireBody) : undefined;
+    const delayed = isPassiveKeyDeferred(physicalFetch);
     const generation = isKeychainReference(snapshot._apiKeyAttempt!.reference!) ? passiveKeychainGeneration(snapshot._apiKeyAttempt!.reference!, key) : undefined;
     let reservation: ReturnType<typeof passiveKeyLimits.reserve>;
+    let atSend: ((wireInput: RequestInfo | URL, wireInit?: RequestInit) => void) | undefined;
     try {
       if (owned && vendor && model) {
         const reference = snapshot._apiKeyAttempt!.reference!;
         const id = snapshot._apiKeyAttempt!.entryId ?? keyId(reference);
         const owner = identity(name, snapshot, id, reference, key);
         if (owner) {
-          remember(name, id, owner);
-          reservation = passiveKeyLimits.reserve({ owner, provider: vendor, model, namespace: name, account: accountScope(name, id) }, attempt);
+          const scope = accountScope(name, id);
+          const incarnation = remember(name, id, owner);
+          atSend = (wireInput, wireInit) => {
+            try {
+              if (delayed) {
+                const wireUrl = wireInput instanceof Request ? wireInput.url : String(wireInput);
+                const headers = new Headers(wireInit?.headers ?? (wireInput instanceof Request ? wireInput.headers : undefined));
+                const authMatches = vendor === "anthropic" && snapshot.apiKeyTransport !== "bearer"
+                  ? headers.get("x-api-key") === key && !headers.has("authorization")
+                  : headers.get("authorization") === `Bearer ${key}` && !headers.has("x-api-key");
+                if (wireUrl !== url || headers.has("api-key") || !authMatches || wireInit?.body !== wireBody) return;
+              }
+              if (incarnations.get(scope) !== incarnation || !stillConfigured(config, name, snapshot)
+                || (isKeychainReference(reference) && (generation === undefined || generation !== passiveKeychainGeneration(reference, key)))) return;
+              reservation = passiveKeyLimits.reserve({ owner, provider: vendor, model, namespace: name, account: scope }, ++sequence);
+            } catch { /* Observation cannot prevent a proxied send. */ }
+          };
         }
       }
     } catch { /* Reservation failure cannot prevent a proxied send. */ }
     try {
-      const response = await physicalFetch(input, init);
+      if (!delayed) atSend?.(input, init);
+      const physicalInit = delayed && atSend ? Object.assign({}, init, { [PASSIVE_KEY_SEND]: atSend }) : init;
+      const response = await physicalFetch(input, physicalInit);
       const reused = seenResponses.has(response);
       seenResponses.add(response);
       try {

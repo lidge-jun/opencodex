@@ -13,6 +13,7 @@ import { addProviderApiKey, apiKeyPoolEntryId, removeProviderApiKey } from "../.
 import * as decision from "../../src/providers/quota-decision-snapshot";
 import { storeProviderKeyInKeychain } from "../../src/providers/key-store";
 import { providerKeychainEntry } from "../../src/providers/api-key-resolve";
+import { MistralBudgetPacer, resolveMistralTransport } from "../../src/providers/mistral-transport";
 
 function fixture(name: string): OcxConfig {
   return { port: 0, defaultProvider: name, providers: { [name]: { adapter: "openai-chat", authMode: "key",
@@ -21,6 +22,77 @@ function fixture(name: string): OcxConfig {
 const init = { method: "POST", headers: { authorization: "Bearer synthetic-key" }, body: JSON.stringify({ model: "model" }) };
 const response = () => new Response(null, { headers: { "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "5" } });
 const trusted = (fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) => markPassiveKeyTransparent(fetcher as typeof globalThis.fetch);
+
+test("Mistral pacing does not make an opaque executor trusted for passive limits", async () => {
+  const name = "opaque-mistral", config = fixture(name), provider = config.providers[name]!;
+  provider.baseUrl = "https://api.mistral.ai/v1";
+  const routed = routedProviderConfig(name, provider);
+  let sends = 0;
+  const opaque = (async () => { sends++; return new Response(null, { headers: { "x-ratelimit-remaining-tokens-minute": "9" } }); }) as typeof fetch;
+  const transport = resolveMistralTransport({ ...routed, fetch: opaque });
+  try {
+    await passiveKeyPhysicalFetch(transport.fetch!, config, name, routed)("https://api.mistral.ai/v1/chat/completions", init);
+    expect(sends).toBe(1);
+    expect(getPassiveKeyLimits(config, name, "model")).toEqual([]);
+  } finally { observations.clearPassiveKeyLimits(); }
+});
+
+test.each(["invalidate", "replace", "rewrite", "evict", "abort"] as const)("queued Mistral send respects %s before its physical reservation", async action => {
+  const name = `queued-${action}`, config = fixture(name), provider = config.providers[name]!;
+  provider.baseUrl = "https://api.mistral.ai/v1";
+  provider.apiKeyPool = [{ id: "account", key: "synthetic-key" }];
+  let now = 0, wake!: () => void, entered!: () => void, sends = 0;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { wake = resolve; });
+  const pacer = new MistralBudgetPacer(() => now, async (_ms, signal) => {
+    entered();
+    await Promise.race([gate, new Promise<never>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }))]);
+    now = 1001;
+  });
+  const base = trusted(async () => {
+    sends++;
+    return new Response(null, { headers: { "x-ratelimit-remaining-tokens-minute": sends === 1 ? "0" : sends === 2 ? "22" : "11",
+      ...(sends === 1 ? { "retry-after": "1" } : {}) } });
+  });
+  const routed = routedProviderConfig(name, provider);
+  const makeSend = (paced: boolean) => passiveKeyPhysicalFetch(resolveMistralTransport({ ...routed, fetch: base,
+    requestPacing: { enabled: paced } }, pacer).fetch!, config, name, routed);
+  const url = "https://api.mistral.ai/v1/chat/completions";
+  const controller = new AbortController();
+  try {
+    await makeSend(true)(url, init);
+    const headers = new Headers(init.headers);
+    const queued = makeSend(true)(url, { ...init, headers, signal: controller.signal });
+    const outcome = queued.then(() => "sent", () => "aborted");
+    await waiting;
+    if (action === "abort") {
+      controller.abort();
+      expect(await outcome).toBe("aborted");
+      expect(sends).toBe(1);
+      expect(getPassiveKeyLimits(config, name, "model")[1]?.remaining).toBe(0);
+    } else {
+      if (action === "invalidate") observations.clearPassiveKeyAccount(name, routed._apiKeyAttempt!.entryId ?? apiKeyPoolEntryId("synthetic-key"));
+      else if (action === "replace") {
+        provider.apiKey = "synthetic-replacement"; provider.apiKeyPool![0]!.key = "synthetic-replacement";
+        observations.listPassiveKeyLimits(config);
+        provider.apiKey = "synthetic-key"; provider.apiKeyPool![0]!.key = "synthetic-key";
+      } else if (action === "rewrite") headers.set("authorization", "Bearer rewritten-key");
+      else {
+        for (let i = 0; i < 512; i++) {
+          const other = `queue-eviction-${i}`;
+          config.providers[other] = fixture(other).providers[other]!;
+          await passiveKeyPhysicalFetch(trusted(async () => response()), config, other,
+            routedProviderConfig(other, config.providers[other]!))("https://api.groq.com/openai/v1/chat/completions", init);
+        }
+      }
+      await makeSend(false)(url, init);
+      wake();
+      expect(await outcome).toBe("sent");
+      expect(sends).toBe(3);
+      expect(getPassiveKeyLimits(config, name, "model")[1]?.remaining).toBe(22);
+    }
+  } finally { wake(); observations.clearPassiveKeyLimits(); }
+});
 
 test.each(["remove", "remove-readd", "add", "store"] as const)("unrelated %s preserves verified keychain cached and pending observations", async operation => {
   const name = `scoped-keychain-${operation}`, reference = `keychain:${name}/first`;
