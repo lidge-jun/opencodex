@@ -1365,7 +1365,7 @@ export async function executeComboResponses(
       attempt,
       failure.response.status,
       Date.now() - started,
-      failure.usage,
+      failure.usage ?? childLog.usage,
     );
     if (isReplayRefusalResponse(failure.response)) {
       // Numeric 429 is a client replay policy here, not an upstream quota observation.

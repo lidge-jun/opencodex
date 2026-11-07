@@ -136,7 +136,9 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
   // A terminal-only upstream can carry output without preceding delta/item events.
-  if (reason === undefined) return !Array.isArray(event.response?.output) || event.response.output.length === 0;
+  const emptyOutput = !Array.isArray(event.response?.output) || event.response.output.length === 0;
+  if (reason === undefined) return emptyOutput;
+  if (reason === "max_output_tokens") return emptyOutput;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
 
@@ -158,6 +160,10 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
       const output = (response as { output?: unknown }).output;
       if (Array.isArray(output) && output.length > 0) return true;
     }
+  }
+  if (type === "response.output_text.delta") {
+    const delta = (payload as { delta?: unknown }).delta;
+    if (delta === undefined || (typeof delta === "string" && delta.length === 0)) return false;
   }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);
 }
@@ -246,10 +252,16 @@ function failedTerminalResponse(
       type: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
         ? "invalid_request_error" : "upstream_error",
       code: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
-        ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null) : "upstream_server_error",
+        ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null)
+        : (terminalPayload.type === "response.incomplete"
+          && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
+            ? "zero_output_token_limit" : "upstream_server_error"),
       message: typeof terminalPayload.message === "string"
         ? terminalPayload.message
-        : logCtx.upstreamError ?? "Provider stream failed before producing output",
+        : (terminalPayload.type === "response.incomplete"
+          && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
+            ? "Provider reached its output token limit before producing output"
+            : logCtx.upstreamError ?? "Provider stream failed before producing output"),
     };
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json");
