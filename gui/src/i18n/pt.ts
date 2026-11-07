@@ -2153,6 +2153,7 @@ export const pt: Record<TKey, string> = {
   "modal.getApiKey": "Obtenha sua chave de API de {label}",
   "modal.apiKey": "Chave de API",
   "modal.vertexProject": "ID do projeto (opcional)",
+  "modal.vertexStaticHint": "Usa a lista de modelos configurada; o teste de conexão não verifica as credenciais Vertex.",
   "modal.vertexLocation": "Localização (opcional)",
   "pws.vertexUnverified": "Credenciais não verificadas",
   "pws.vertexSavedUnverified": "Salvo — credenciais do proxy não verificadas",

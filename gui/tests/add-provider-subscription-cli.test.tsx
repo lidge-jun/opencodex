@@ -174,7 +174,7 @@ test("Vertex accepts ADC project and location without a dummy API key", async ()
     .find(el => el.textContent === "Add provider") as unknown as HTMLButtonElement;
   await act(async () => { addButton.click(); await new Promise(r => setTimeout(r, 20)); });
   expect(posted).toHaveLength(1);
-  expect(posted[0]?.provider).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "us-central1" });
+  expect(posted[0]?.provider).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "us-central1", liveModels: false });
   expect(posted[0]?.provider).not.toHaveProperty("apiKey");
 });
 

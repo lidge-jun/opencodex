@@ -437,6 +437,8 @@ that environment key takes precedence. ADC also needs a project and location, su
 form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
 host. Adding the provider does not verify that credentials or permissions are usable. A key
 without an explicit project uses Vertex express mode.
+The dashboard preset uses a static catalog seeded by the configured default model; its connection
+test does not verify Vertex credentials or permissions.
 
 - **Location denials are permission errors, not invalid requests.** Google rejects unsupported
   geographic or datacenter locations with HTTP 400 `FAILED_PRECONDITION: User location is not

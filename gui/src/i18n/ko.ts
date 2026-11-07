@@ -3361,6 +3361,7 @@ export const ko: Record<TKey, string> = {
   "modal.getApiKey": "{label} API 키 받기",
   "modal.apiKey": "API 키",
   "modal.vertexProject": "프로젝트 ID (선택)",
+  "modal.vertexStaticHint": "설정한 모델 목록을 사용하며 연결 테스트로 Vertex 자격증명을 검증하지 않아요.",
   "modal.vertexLocation": "리전 (선택)",
   "pws.vertexUnverified": "자격증명 미확인",
   "pws.vertexSavedUnverified": "저장됨 — 프록시 자격증명 미확인",

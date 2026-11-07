@@ -3314,6 +3314,7 @@ export const de: Record<TKey, string> = {
   "modal.getApiKey": "{label}-API-Schlüssel holen",
   "modal.apiKey": "API-Schlüssel",
   "modal.vertexProject": "Projekt-ID (optional)",
+  "modal.vertexStaticHint": "Die konfigurierte Modellliste wird verwendet; der Verbindungstest prüft keine Vertex-Zugangsdaten.",
   "modal.vertexLocation": "Standort (optional)",
   "pws.vertexUnverified": "Zugangsdaten ungeprüft",
   "pws.vertexSavedUnverified": "Gespeichert — Proxy-Zugangsdaten ungeprüft",

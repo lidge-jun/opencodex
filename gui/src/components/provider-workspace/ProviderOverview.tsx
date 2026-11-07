@@ -84,11 +84,13 @@ export default function ProviderOverview({
   const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
   const effectiveStatus = item.disabled === true
     ? "disabled"
+    : vertexUnverified && !needsAttention ? "unverified"
     : needsAttention || needsOAuthLogin || status === "needs-setup"
       ? "needs-setup"
       : "ready";
   const statusText = effectiveStatus === "ready"
     ? t("pws.status.ready")
+    : effectiveStatus === "unverified" ? t("pws.vertexUnverified")
     : effectiveStatus === "needs-setup"
       ? (needsAttention ? t("pws.status.needsAttention") : vertexUnverified ? t("pws.vertexUnverified") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
@@ -169,7 +171,7 @@ export default function ProviderOverview({
       ? "needs-attention"
       : needsOAuthLogin
         ? "needs-login"
-        : effectiveStatus === "needs-setup"
+        : effectiveStatus === "needs-setup" || effectiveStatus === "unverified"
           ? "needs-setup"
           : "saved";
   const providerStepText = providerStepState === "disabled"

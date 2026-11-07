@@ -63,7 +63,7 @@ function matchesConfiguredSelection(
   const expected = routedProvider._apiKeyAttempt;
   const current = currentKeyProvider(config, name, expected, allowCooling);
   return current !== null && expected !== undefined
-    && vertexEnvironmentKeyIsCurrent(expected)
+    && vertexEnvironmentKeyIsCurrent(expected, current)
     && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey
     && current.authMode === routedProvider.authMode

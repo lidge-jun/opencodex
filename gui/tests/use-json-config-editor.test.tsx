@@ -23,6 +23,7 @@ const config: Config = {
       allowPrivateNetwork: true,
       hasApiKey: true,
       hasHeaders: true,
+      vertexCredentialKind: "marker",
       initialModelSelection: { version: 1, registrationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "pending" },
       note: "derived registry note",
     },

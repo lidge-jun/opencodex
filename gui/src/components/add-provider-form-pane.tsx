@@ -184,7 +184,8 @@ export function AddProviderFormPane({
         </>
       )}
       {preset.id === "google-vertex" && form.adapter === "google" && <>
-        <p className="muted text-hint">{t("modal.vertexAdcHint")}</p>
+        <p className="muted text-hint" style={{ margin: 0 }}>{t("modal.vertexAdcHint")}</p>
+        <p className="muted text-hint" style={{ margin: 0 }}>{t("modal.vertexStaticHint")}</p>
         <AddProviderField label={t("modal.vertexProject")}>
           <input className="input" value={form.project ?? ""} onChange={e => onFormChange({ ...form, project: e.target.value })} />
         </AddProviderField>

@@ -2155,6 +2155,7 @@ export const tr: Record<TKey, string> = {
   "modal.getApiKey": "{label} API anahtarınızı alın",
   "modal.apiKey": "API anahtarı",
   "modal.vertexProject": "Proje kimliği (isteğe bağlı)",
+  "modal.vertexStaticHint": "Yapılandırılan model listesi kullanılır; bağlantı testi Vertex kimlik bilgilerini doğrulamaz.",
   "modal.vertexLocation": "Konum (isteğe bağlı)",
   "pws.vertexUnverified": "Kimlik bilgileri doğrulanmadı",
   "pws.vertexSavedUnverified": "Kaydedildi — proxy kimlik bilgileri doğrulanmadı",

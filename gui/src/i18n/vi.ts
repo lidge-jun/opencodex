@@ -2139,6 +2139,7 @@ export const vi: Record<TKey, string> = {
   "modal.getApiKey": "Lấy API key {label} của bạn",
   "modal.apiKey": "API key",
   "modal.vertexProject": "ID dự án (tùy chọn)",
+  "modal.vertexStaticHint": "Dùng danh sách mô hình đã cấu hình; kiểm tra kết nối không xác minh thông tin Vertex.",
   "modal.vertexLocation": "Vị trí (tùy chọn)",
   "pws.vertexUnverified": "Chưa xác minh thông tin xác thực",
   "pws.vertexSavedUnverified": "Đã lưu — chưa xác minh thông tin của proxy",

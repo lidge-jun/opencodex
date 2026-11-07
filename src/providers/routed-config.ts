@@ -116,7 +116,7 @@ function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConf
   if (provider.adapter !== "google" || provider.googleMode !== "vertex") return provider;
   const marker = provider.apiKey?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) === true;
   const configuredKey = provider.apiKey && !provider.apiKey.startsWith("<") && provider.apiKey !== "N/A" ? provider.apiKey : undefined;
-  captureVertexEnvironmentKey(provider._apiKeyAttempt, provider.apiKey);
+  captureVertexEnvironmentKey(provider._apiKeyAttempt, provider);
   if (!marker && (configuredKey || process.env.GOOGLE_CLOUD_API_KEY)) return provider;
   return {
     ...provider,

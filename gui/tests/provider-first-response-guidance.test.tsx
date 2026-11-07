@@ -134,6 +134,8 @@ describe("first-response progression states on ProviderOverview", () => {
     expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Credentials unverified");
     expect(stepText("provider")).toContain("proxy credentials unverified");
     expect(stepText("provider")).not.toContain("credentials required");
+    await render(<ProviderOverview item={{ ...item, hasApiKey: true, vertexCredentialKind: "marker" }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Credentials unverified");
     await render(<ProviderOverview item={{ ...item, hasApiKey: true }} apiBase="" />);
     expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Ready");
     await render(<ProviderOverview item={{ ...item, googleMode: "ai-studio" }} apiBase="" />);

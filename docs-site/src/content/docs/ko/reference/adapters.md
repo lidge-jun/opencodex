@@ -144,6 +144,8 @@ API 키를 비우고 `GOOGLE_CLOUD_API_KEY`가 설정되지 않았다면 **프�
 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 및 `GOOGLE_CLOUD_LOCATION`으로 설정합니다.
 provider를 추가했다고 자격증명이나 권한의 유효성이 검증되는 것은 아닙니다. API 키에
 프로젝트를 지정하지 않으면 Vertex express 모드를 사용합니다.
+대시보드 프리셋은 설정한 기본 모델로 시작하는 정적 목록을 사용하며, 연결 테스트는 Vertex
+자격증명이나 권한을 검증하지 않습니다.
 
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.

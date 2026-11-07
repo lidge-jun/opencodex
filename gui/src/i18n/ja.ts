@@ -2037,6 +2037,7 @@ export const ja: Record<TKey, string> = {
   "modal.getApiKey": "{label} の API キーを取得",
   "modal.apiKey": "API キー",
   "modal.vertexProject": "プロジェクト ID（任意）",
+  "modal.vertexStaticHint": "設定したモデル一覧を使用します。接続テストでは Vertex の認証情報を検証しません。",
   "modal.vertexLocation": "ロケーション（任意）",
   "pws.vertexUnverified": "認証情報は未確認",
   "pws.vertexSavedUnverified": "保存済み — プロキシの認証情報は未確認",

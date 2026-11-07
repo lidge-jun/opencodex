@@ -2142,6 +2142,7 @@ export const fr: Record<TKey, string> = {
   "modal.getApiKey": "Obtenir votre clé API {label}",
   "modal.apiKey": "Clé API",
   "modal.vertexProject": "ID du projet (facultatif)",
+  "modal.vertexStaticHint": "La liste de modèles configurée est utilisée ; le test de connexion ne vérifie pas les identifiants Vertex.",
   "modal.vertexLocation": "Emplacement (facultatif)",
   "pws.vertexUnverified": "Identifiants non vérifiés",
   "pws.vertexSavedUnverified": "Enregistré — identifiants du proxy non vérifiés",

@@ -88,6 +88,7 @@ export interface ProviderPayload {
   googleMode?: "vertex";
   project?: string;
   location?: string;
+  liveModels?: boolean;
 }
 
 export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload {
@@ -101,6 +102,7 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
   }
   if (form.adapter.trim() === "google" && form.googleMode === "vertex") {
     provider.googleMode = "vertex";
+    provider.liveModels = false;
     if (form.project?.trim()) provider.project = form.project.trim();
     if (form.location?.trim()) provider.location = form.location.trim();
   }

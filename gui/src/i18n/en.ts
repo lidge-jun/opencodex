@@ -2169,6 +2169,7 @@ export const en = {
   "modal.getApiKey": "Get your {label} API key",
   "modal.apiKey": "API key",
   "modal.vertexProject": "Project ID (optional)",
+  "modal.vertexStaticHint": "Uses the configured model list; the connection test does not verify Vertex credentials.",
   "modal.vertexLocation": "Location (optional)",
   "pws.vertexUnverified": "Credentials unverified",
   "pws.vertexSavedUnverified": "Saved — proxy credentials unverified",

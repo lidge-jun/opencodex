@@ -37,6 +37,7 @@ import {
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
+import { captureVertexAmbientKey, vertexAmbientKeyIsCurrent } from "../providers/vertex-environment-authority";
 import { resolveVertexApiKeyProject, VERTEX_PROJECT_AUTO } from "./google-vertex-key-project";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
@@ -1226,6 +1227,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const apiKey = resolveVertexApiKey(provider.apiKey);
+        const ambientAuthority = apiKey && (!provider.apiKey || provider.apiKey.startsWith("<") || provider.apiKey === "N/A")
+          ? captureVertexAmbientKey(apiKey) : undefined;
+        const beforeCredentialSend = () => {
+          incoming?.beforePhysicalSend?.();
+          if (ambientAuthority && !vertexAmbientKeyIsCurrent(ambientAuthority)) throw new Error("Vertex credential authority changed before auxiliary send");
+        };
         let vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
         if (apiKey && vertexEndpoint.kind === "project" && vertexEndpoint.project === VERTEX_PROJECT_AUTO) {
           // Unresolved keys use express for this request so Google's status drives key failover.
@@ -1233,6 +1240,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             signal: incoming?.abortSignal,
             provider,
             providerName: incoming?.providerName,
+            beforeSend: beforeCredentialSend,
           });
           vertexEndpoint = project ? { ...vertexEndpoint, project } : { kind: "express" };
         }
@@ -1259,13 +1267,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         else {
           // Resolve each marker per request; never share a process-global active account.
           const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
-          adcAuthority = await getVertexAccessTokenWithAuthority({ markerAccount, signal: incoming?.abortSignal });
+          adcAuthority = await getVertexAccessTokenWithAuthority({ markerAccount, signal: incoming?.abortSignal, beforeSend: beforeCredentialSend });
           headers["Authorization"] = `Bearer ${adcAuthority.token}`;
         }
         const request = { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
         if (adcAuthority) bindVertexRequestAuthority(request, url, headers["Authorization"]!, { source: adcAuthority.source, generation: adcAuthority.generation, markerAccount: adcAuthority.markerAccount });
-        else if (apiKey && (!provider.apiKey || provider.apiKey.startsWith("<") || provider.apiKey === "N/A")) {
-          bindVertexRequestAuthority(request, url, apiKey, { ambientKey: apiKey });
+        else if (apiKey && ambientAuthority) {
+          bindVertexRequestAuthority(request, url, apiKey, { ambientKey: ambientAuthority });
         }
         return request;
       }

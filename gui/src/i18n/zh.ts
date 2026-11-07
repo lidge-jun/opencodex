@@ -3334,6 +3334,7 @@ export const zh: Record<TKey, string> = {
   "modal.getApiKey": "获取 {label} API 密钥",
   "modal.apiKey": "API 密钥",
   "modal.vertexProject": "项目 ID（可选）",
+  "modal.vertexStaticHint": "使用配置的模型列表；连接测试不会验证 Vertex 凭据。",
   "modal.vertexLocation": "位置（可选）",
   "pws.vertexUnverified": "凭据未验证",
   "pws.vertexSavedUnverified": "已保存 — 代理凭据未验证",

@@ -2128,6 +2128,7 @@ export const ru: Record<TKey, string> = {
   "modal.getApiKey": "Получить API-ключ {label}",
   "modal.apiKey": "API-ключ",
   "modal.vertexProject": "ID проекта (необязательно)",
+  "modal.vertexStaticHint": "Используется заданный список моделей; проверка соединения не проверяет данные Vertex.",
   "modal.vertexLocation": "Регион (необязательно)",
   "pws.vertexUnverified": "Учётные данные не проверены",
   "pws.vertexSavedUnverified": "Сохранено — данные прокси не проверены",

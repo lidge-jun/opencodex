@@ -1812,6 +1812,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.getApiKey": "取得 {label} API 金鑰",
   "modal.apiKey": "API 金鑰",
   "modal.vertexProject": "專案 ID（選填）",
+  "modal.vertexStaticHint": "使用設定的模型清單；連線測試不會驗證 Vertex 憑證。",
   "modal.vertexLocation": "位置（選填）",
   "pws.vertexUnverified": "憑證未驗證",
   "pws.vertexSavedUnverified": "已儲存 — 代理憑證未驗證",

@@ -66,6 +66,17 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
 }
 
 describe("applyActiveAccountReauth", () => {
+  test("Vertex host and marker credentials have an unverified group", () => {
+    const vertex = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex" } as const;
+    const sections = buildProviderWorkspace({
+      ambient: { ...vertex, hasApiKey: false, vertexCredentialKind: "ambient" },
+      marker: { ...vertex, hasApiKey: true, vertexCredentialKind: "marker" },
+      key: { ...vertex, hasApiKey: true, vertexCredentialKind: "api-key" },
+    } as never);
+    expect(sections.unverified.map(p => p.name)).toEqual(["ambient", "marker"]);
+    expect(sections.needsSetup).toEqual([]);
+    expect(sections.ready.map(p => p.name)).toEqual(["key"]);
+  });
   test("tags ready provider when active account needs reauth without moving sections", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),

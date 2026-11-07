@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { readFileSync } from "node:fs";
 import { createHmac, randomBytes } from "node:crypto";
 import { GCP_CREDENTIAL_MARKER_PREFIX, providerKeychainEntry } from "../providers/api-key-resolve";
+import { vertexAmbientKeyIsCurrent, type VertexAmbientKeyAuthority } from "../providers/vertex-environment-authority";
 export { isGcpCredentialMaterial } from "./gcp-credential-input";
 import {
   captureConfigGeneration,
@@ -117,7 +118,8 @@ interface TokenResponse {
 
 const tokenCache = new Map<string, CachedToken>();
 type VertexTokenAuthority = { token: string; source: string; generation: number; markerAccount?: string };
-const inflight = new Map<string, Promise<VertexTokenAuthority>>();
+type InflightToken = { controller: AbortController; promise: Promise<VertexTokenAuthority>; waiters: number; settled: boolean };
+const inflight = new Map<string, InflightToken>();
 const sourceObservations = new Map<string, { source: string; generation: number }>();
 let sourceEpoch = 0;
 let lastReconciledGeneration = 0;
@@ -304,10 +306,11 @@ function tokenTimeoutSignal(parent: AbortSignal | undefined): AbortSignal {
  * bad grant) fail fast. The error message carries only the status code, never the response body
  * (which can leak grant/account details) or the token/key.
  */
-async function postForToken(body: URLSearchParams, signal: AbortSignal | undefined, fetchImpl: FetchImpl): Promise<TokenResponse> {
+async function postForToken(body: URLSearchParams, signal: AbortSignal | undefined, fetchImpl: FetchImpl, beforeSend: () => void): Promise<TokenResponse> {
   let lastError: unknown;
   for (let attempt = 0; attempt < TOKEN_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw signal.reason ?? new Error("Google OAuth token exchange aborted");
+    beforeSend();
     let response: Response;
     try {
       response = await fetchImpl(OAUTH_TOKEN_URL, {
@@ -334,17 +337,17 @@ async function postForToken(body: URLSearchParams, signal: AbortSignal | undefin
   throw lastError instanceof Error ? lastError : new Error("Google OAuth token exchange failed");
 }
 
-async function exchangeJwtForToken(creds: ServiceAccountCredentials, signal: AbortSignal | undefined, fetchImpl: FetchImpl): Promise<TokenResponse> {
+async function exchangeJwtForToken(creds: ServiceAccountCredentials, signal: AbortSignal | undefined, fetchImpl: FetchImpl, beforeSend: () => void): Promise<TokenResponse> {
   const now = Math.floor(Date.now() / 1000);
   const assertion = await signJwtRs256(
     { iss: creds.client_email, scope: CLOUD_PLATFORM_SCOPE, aud: OAUTH_TOKEN_URL, exp: now + 3600, iat: now },
     creds.private_key,
     creds.private_key_id,
   );
-  return postForToken(new URLSearchParams({ grant_type: JWT_BEARER_GRANT, assertion }), signal, fetchImpl);
+  return postForToken(new URLSearchParams({ grant_type: JWT_BEARER_GRANT, assertion }), signal, fetchImpl, beforeSend);
 }
 
-async function exchangeRefreshToken(creds: AuthorizedUserCredentials, signal: AbortSignal | undefined, fetchImpl: FetchImpl): Promise<TokenResponse> {
+async function exchangeRefreshToken(creds: AuthorizedUserCredentials, signal: AbortSignal | undefined, fetchImpl: FetchImpl, beforeSend: () => void): Promise<TokenResponse> {
   return postForToken(
     new URLSearchParams({
       client_id: creds.client_id,
@@ -354,6 +357,7 @@ async function exchangeRefreshToken(creds: AuthorizedUserCredentials, signal: Ab
     }),
     signal,
     fetchImpl,
+    beforeSend,
   );
 }
 
@@ -373,14 +377,15 @@ async function fetchMetadataToken(signal: AbortSignal | undefined, fetchImpl: Fe
   }
 }
 
-async function resolveAccessTokenUncached(markerAccount: string | undefined, signal: AbortSignal | undefined, fetchImpl: FetchImpl): Promise<{ source: string; token: TokenResponse }> {
+async function resolveAccessTokenUncached(markerAccount: string | undefined, signal: AbortSignal | undefined, fetchImpl: FetchImpl, beforeSend: () => void): Promise<{ source: string; token: TokenResponse }> {
   const adc = loadAdcCredentials(markerAccount);
   if (adc) {
     const token = adc.creds.type === "service_account"
-      ? await exchangeJwtForToken(adc.creds, signal, fetchImpl)
-      : await exchangeRefreshToken(adc.creds, signal, fetchImpl);
+      ? await exchangeJwtForToken(adc.creds, signal, fetchImpl, beforeSend)
+      : await exchangeRefreshToken(adc.creds, signal, fetchImpl, beforeSend);
     return { source: adc.source, token };
   }
+  beforeSend();
   const metadata = await fetchMetadataToken(signal, fetchImpl);
   if (metadata) return { source: "metadata", token: metadata };
   throw new Error(
@@ -389,12 +394,13 @@ async function resolveAccessTokenUncached(markerAccount: string | undefined, sig
 }
 
 /** Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed). */
-export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string }): Promise<VertexTokenAuthority> {
+export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string; beforeSend?: () => void }): Promise<VertexTokenAuthority> {
   // The marker travels as an argument, never as process-global state: a module-level "active
   // marker" written by the router would race across concurrent requests for different providers
   // and could resolve one provider's Vertex call with another provider's service account. The
   // adapter passes `gcpCredentialMarkerAccount(provider.apiKey)` per request instead.
   const markerAccount = options?.markerAccount;
+  options?.signal?.throwIfAborted();
   const fetchImpl = options?.fetch ?? globalThis.fetch.bind(globalThis);
   const skew = getRefreshSkewMs();
   const now = Date.now();
@@ -420,12 +426,19 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
   // Dedup in-flight fetches PER source, not globally: if the credential source changes while a
   // fetch is in flight, a new caller must not reuse the old source's promise (cross-source bleed).
   const cacheKey = `${expectedSource}:${expected.generation}`;
-  const existing = inflight.get(cacheKey);
-  if (existing) return existing;
-
-  const promise = (async () => {
+  let entry = inflight.get(cacheKey);
+  if (!entry) {
+    const controller = new AbortController();
+    entry = { controller, waiters: 0, settled: false, promise: undefined as unknown as Promise<VertexTokenAuthority> };
+    const owned = entry;
+    const beforeSend = () => {
+      const current = observeAdcSource(markerAccount);
+      if (current.source !== expected.source || current.generation !== expected.generation) throw new Error("Vertex ADC source changed before token exchange");
+      options?.beforeSend?.();
+    };
+    owned.promise = (async () => {
     try {
-      const { source, token } = await resolveAccessTokenUncached(markerAccount, options?.signal, fetchImpl);
+      const { source, token } = await resolveAccessTokenUncached(markerAccount, controller.signal, fetchImpl, beforeSend);
       const current = observeAdcSource(markerAccount);
       if (source !== expectedSource || current.source !== source || current.generation !== expected.generation) {
         throw new Error("Vertex ADC source changed during token exchange");
@@ -437,11 +450,31 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
       }
       return { token: token.access_token, source, generation: expected.generation, markerAccount };
     } finally {
-      inflight.delete(cacheKey);
+      owned.settled = true;
+      if (inflight.get(cacheKey) === owned) inflight.delete(cacheKey);
     }
-  })();
-  inflight.set(cacheKey, promise);
-  return promise;
+    })();
+    inflight.set(cacheKey, owned);
+  }
+  const owned = entry;
+  owned.waiters++;
+  return new Promise<VertexTokenAuthority>((resolve, reject) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return false;
+      finished = true;
+      options?.signal?.removeEventListener("abort", onAbort);
+      owned.waiters--;
+      if (owned.waiters === 0 && !owned.settled) {
+        if (inflight.get(cacheKey) === owned) inflight.delete(cacheKey);
+        owned.controller.abort();
+      }
+      return true;
+    };
+    const onAbort = () => { if (finish()) reject(options?.signal?.reason ?? new Error("Google OAuth token exchange aborted")); };
+    options?.signal?.addEventListener("abort", onAbort, { once: true });
+    owned.promise.then(value => { if (finish()) resolve(value); }, error => { if (finish()) reject(error); });
+  });
 }
 
 /** Compatibility wrapper for callers that only need the access token. */
@@ -449,7 +482,7 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
   return (await getVertexAccessTokenWithAuthority(options)).token;
 }
 
-type VertexRequestAuthority = { source?: string; generation?: number; markerAccount?: string; ambientKey?: string; target: string; headerDigest: string };
+type VertexRequestAuthority = { source?: string; generation?: number; markerAccount?: string; ambientKey?: VertexAmbientKeyAuthority; target: string; headerDigest: string };
 const requestAuthorities = new WeakMap<object, VertexRequestAuthority>();
 const requestDigestKey = randomBytes(32);
 function requestDigest(value: string): string {
@@ -458,10 +491,10 @@ function requestDigest(value: string): string {
 
 /** Bind the exact credential and target used by a built Vertex request without storing the secret. */
 export function bindVertexRequestAuthority(request: object, target: string, header: string,
-  authority: { source: string; generation: number; markerAccount?: string } | { ambientKey: string }): void {
+  authority: { source: string; generation: number; markerAccount?: string } | { ambientKey: VertexAmbientKeyAuthority }): void {
   requestAuthorities.set(request, {
     target, headerDigest: requestDigest(header),
-    ...("ambientKey" in authority ? { ambientKey: requestDigest(authority.ambientKey) } : authority),
+    ...authority,
   });
 }
 
@@ -484,7 +517,7 @@ export function vertexRequestAuthorityIsCurrent(request: object, target?: string
     const current = observeAdcSource(authority.markerAccount);
     if (current.source !== authority.source || current.generation !== authority.generation) return false;
   }
-  if (authority.ambientKey && requestDigest(process.env.GOOGLE_CLOUD_API_KEY || "") !== authority.ambientKey) return false;
+  if (authority.ambientKey && !vertexAmbientKeyIsCurrent(authority.ambientKey)) return false;
   if (target !== undefined && target !== authority.target) return false;
   if (headers) {
     const actual = authority.source ? headers.get("authorization") : headers.get("x-goog-api-key");
@@ -496,6 +529,7 @@ export function vertexRequestAuthorityIsCurrent(request: object, target?: string
 /** Test seam: restores complete process-local token and reconciliation state. */
 export function __resetVertexTokenCache(): void {
   tokenCache.clear();
+  for (const entry of inflight.values()) entry.controller.abort();
   inflight.clear();
   sourceObservations.clear();
   lastReconciledGeneration = 0;
