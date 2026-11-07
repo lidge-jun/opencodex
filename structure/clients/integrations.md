@@ -7,8 +7,7 @@ The client-integration subsystem writes one generated OpenCodex provider contrib
 > Decision record: [ADR-0107](../decisions/ADR-0107-uninstall-integration-recovery.md)
 
 Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
-raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
-The OrcaRouter login ceiling applies to its key exchange; client configuration files retain the
+raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation. The OrcaRouter login ceiling applies to its key exchange; client configuration files retain the
 parsing and ownership rules below.
 
 ## Module Responsibilities
@@ -27,11 +26,12 @@ parsing and ownership rules below.
 | `src/integrations/writer.ts` | Apply, refresh, disable, and restore transactions, including snapshot-first ordering, compare-before-commit, and compensation. Freezing an input copies the proxy configuration and the model roster as plain data before the first await, so the plan a revalidation approves and the document that follows it read one input; an input that cannot be copied is refused rather than read twice. Aside captures the same configuration copy when its context is created, because its preference write edits the live configuration between the check and the profile writes. |
 | `src/integrations/mutation-plan.ts` | The shared observation both a preview and a mutation read, and the value-free plan an operator confirms. It owns no IO of its own, takes no lock, and must never import `writer.ts`. |
 | `src/integrations/store.ts` / `journal.ts` | One-root persistence for ownership records, operation history, snapshots, and retention maintenance. |
+
 Native route materialization resolves Codex and Desktop paths from the device process environment. Desktop inherited gateway enable refuses an effective first-party mode; Home gateway file and marker writes share picker/lifecycle/config exclusion with mode switches. Offline first-party CLI apply retains one cross-process lifecycle lease through settings, gateway removal, mode save and rollback; nested writers validate and reuse it. Connected off uses remote-store ownership. Explicit takeover of an edited, selected, settled remote-owned projection snapshots its current JSON privately before the ordinary pending transaction, retaining owner, token, path and selection checks. Approved external Codex providers retain the existing injector's URL routing contract. Aside off with no strict ownership record requires no account manifest. Owned legacy/profile records must still match a registered profile; missing registration or unreadable ownership remains an incomplete apply. Missing common receipts allow Link disconnect only when ownership and selected file-config absence prove no materialization occurred; Droid rows are inspected independently of the current model roster, refusing OpenCodex labels and local-listener endpoints. Local opt-outs validate and invalidate the common receipt before publication.
+
 Factory Droid's explicit integration writes only documented `customModels` rows in
 `~/.factory/settings.json` (`%USERPROFILE%\\.factory\\settings.json` on Windows). Each
-row is addressed by its `model` and `OpenCodex:` prefixed `displayName`; `baseUrl`
-remains in the protected row value. Duplicate matches refuse. Rows whose model ID
+row is addressed by its `model` and `OpenCodex:` prefixed `displayName`; `baseUrl` remains in the protected row value. Duplicate matches refuse. Rows whose model ID
 or display name cannot be represented by that selector are omitted from both the
 export document and managed fragments. A nonempty catalog that yields no rows refuses.
 Direct and management exports use the live listener policy and refuse when Droid

@@ -1,4 +1,6 @@
-import { beforeEach, afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import * as policyState from "../../src/routing/route-intent-state";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { handleLinkRoutes } from "../../src/server/management/link-routes";
 import { compensateNewLink, type LinkRouteState } from "../../src/server/management/link-route-state";
@@ -53,4 +55,22 @@ test("enrollment prunes valid accumulated orphan state before adding a new devic
   expect(Object.keys(next.revisions ?? {}).sort()).toEqual(["home", retired, active].sort());
   expect(next.devices[retired]?.codex?.enabled).toBe(true);
   expect(next.defaults.aside?.accounts).toEqual(["user-a"]);
+});
+
+test("standalone seed callers hold one config lease across retirement, defaults and selection", () => {
+  const f = fixture();
+  const update = policyState.updateRouteIntentState;
+  let observations = 0;
+  const check = spyOn(policyState, "updateRouteIntentState").mockImplementation(mutate => {
+    const competing = new Database(home.path("config-mutation.sqlite"));
+    try {
+      expect(() => competing.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
+      observations++;
+    } finally { try { competing.exec("ROLLBACK"); } catch {} competing.close(); }
+    return update(mutate);
+  });
+  try { seedRouteDeviceClients(f.ctx.config, "test", retired, ["codex"], [active, retired]); }
+  finally { check.mockRestore(); }
+  expect(observations).toBeGreaterThanOrEqual(3);
+  expect(readRouteIntentState().devices[retired]?.codex?.enabled).toBe(true);
 });

@@ -7,6 +7,7 @@ import { listAsideProfileStores } from "../integrations/aside-profile-context";
 import { asideHomeDir } from "../clients/config-export";
 import { parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteIntentState } from "../link/route-intent";
 import { readRouteIntentState, updateRouteIntentState } from "./route-intent-state";
+import { withConfigMutationLockSync } from "../config/mutation-lock";
 import type { OcxConfig } from "../types";
 
 export function readHomeRouteIntentState(config: OcxConfig, options: { store?: IntegrationStateStore; home?: string; state?: RouteIntentState } = {}): RouteIntentState {
@@ -64,17 +65,19 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
 
 /** Provisioning runs under Home authority, before the read-only Child starts. */
 export function seedRouteDeviceClients(config: OcxConfig, version: string, deviceId: string, selected: readonly RouteClientId[] = ["codex", "claude"], activeDeviceIds?: readonly string[]): void {
-  if (activeDeviceIds) reconcileHomeRouteDevices(activeDeviceIds);
-  initializeHomeRouteIntentDefaults(config, version);
-  updateRouteIntentState(state => {
-    const overrides = (state.devices[deviceId] ??= {});
-    const revisions = ((state.revisions ??= {})[deviceId] ??= {});
-    for (const client of ROUTE_CLIENT_IDS) {
-      if (client !== "codex" && client !== "claude" && !selected.includes(client)) continue;
-      overrides[client] = { ...(overrides[client] ?? {}), enabled: selected.includes(client) };
-      revisions[client] = (revisions[client] ?? 0) + 1;
-    }
-    return state;
+  withConfigMutationLockSync(() => {
+    if (activeDeviceIds) reconcileHomeRouteDevices(activeDeviceIds);
+    initializeHomeRouteIntentDefaults(config, version);
+    updateRouteIntentState(state => {
+      const overrides = (state.devices[deviceId] ??= {});
+      const revisions = ((state.revisions ??= {})[deviceId] ??= {});
+      for (const client of ROUTE_CLIENT_IDS) {
+        if (client !== "codex" && client !== "claude" && !selected.includes(client)) continue;
+        overrides[client] = { ...(overrides[client] ?? {}), enabled: selected.includes(client) };
+        revisions[client] = (revisions[client] ?? 0) + 1;
+      }
+      return state;
+    });
   });
 }
 
