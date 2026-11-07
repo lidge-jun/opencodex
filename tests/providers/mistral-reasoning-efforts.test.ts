@@ -85,6 +85,8 @@ describe("Mistral reasoning effort ladders (#8254)", () => {
     });
     expect(wireEffort(gateway({ max: "high" }), "any", "ultra")).toBe("high");
     expect(wireEffort(gateway({ max: "__omit__" }), "any", "ultra")).toBeUndefined();
+    // An operator alias wins before the ladder clamp, even when it names `ultra` itself.
+    expect(wireEffort(gateway({ max: "ultra" }), "any", "ultra")).toBe("ultra");
     // Caller values the proxy did not rewrite keep their spelling.
     expect(wireEffort(gateway({ max: "high" }), "any", "max")).toBe("max");
   });
