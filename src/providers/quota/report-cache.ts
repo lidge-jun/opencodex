@@ -266,6 +266,7 @@ export function publicCapacityAggregation(
 export function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is ProviderQuota {
   if (!quota) return false;
   return typeof quota.fiveHourPercent === "number"
+    || (quota.unknownBudgetWindows?.length ?? 0) > 0
     || typeof quota.weeklyPercent === "number"
     || typeof quota.monthlyPercent === "number"
     || quota.creditsUsd?.unlimited === true

@@ -35,6 +35,7 @@ const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const MISTRAL_BASE_URL = "https://api.mistral.ai";
 const CLINE_BASE_URL = "https://api.cline.bot";
 const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
@@ -68,6 +69,59 @@ function isCanonicalOpenRouterBaseUrl(baseUrl: string): boolean {
 function isCanonicalDeepSeekBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === DEEPSEEK_BASE_URL || normalized === `${DEEPSEEK_BASE_URL}/v1`;
+}
+
+function isCanonicalMistralBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === MISTRAL_BASE_URL || normalized === `${MISTRAL_BASE_URL}/v1`;
+}
+
+async function fetchMistralQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalMistralBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const init: RequestInit = {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  };
+  const [budgetResponse, subscriptionResponse] = await Promise.all([
+    quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/budget`, init),
+    quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/subscription`, init),
+  ]);
+  if (!budgetResponse.ok || !subscriptionResponse.ok) {
+    const statuses = [budgetResponse.status, subscriptionResponse.status];
+    return statuses.some(status => status >= 400 && status < 500 && status !== 408 && status !== 429)
+      ? TERMINAL_QUOTA_FAILURE : null;
+  }
+  const [budgetValue, subscriptionValue] = await Promise.all([
+    readQuotaJson(budgetResponse), readQuotaJson(subscriptionResponse),
+  ]);
+  if (budgetValue === QUOTA_JSON_READ_FAILURE || subscriptionValue === QUOTA_JSON_READ_FAILURE) return null;
+  const budget = asRecord(budgetValue);
+  const subscription = asRecord(subscriptionValue);
+  if (!budget || !subscription) return null;
+  const plan = typeof subscription.plan_name === "string" && ["FREE", "INDIVIDUAL", "EDU", "TEAM"].includes(subscription.plan_name)
+    ? subscription.plan_name : undefined;
+  const customWindows: NonNullable<ProviderQuota["customWindows"]> = [];
+  const unknownBudgetWindows: NonNullable<ProviderQuota["unknownBudgetWindows"]> = [];
+  for (const [key, label] of [["api_budget", "API budget"], ["vibe_budget", "Vibe budget"]] as const) {
+    const row = asRecord(budget[key]);
+    const resetAt = normalizeResetAt(row?.reset_at);
+    const reset = resetAt === undefined ? {} : { resetAt };
+    const suffix = plan ? ` (${plan})` : "";
+    const initial = toFiniteNumber(row?.initial_budget);
+    const percent = toFiniteNumber(row?.usage_percentage);
+    const currency = typeof row?.currency === "string" && /^[A-Za-z]{3}$/.test(row.currency) ? row.currency.toUpperCase() : undefined;
+    if (initial === undefined || initial <= 0 || percent === undefined || percent < 0 || percent > 100 || !currency) {
+      unknownBudgetWindows.push({ label: `${label}${suffix}`, ...reset });
+      continue;
+    }
+    const used = initial * (percent / 100);
+    customWindows.push({ label: `${label} (${currency} ${used.toFixed(2)} of ${currency} ${initial.toFixed(2)} used${plan ? `; ${plan}` : ""})`, percent, ...reset });
+  }
+  const quota: ProviderQuota = { customWindows, unknownBudgetWindows, updatedAt: Date.now() };
+  // Vibe and PAYG entitlements are display information, not inference eligibility evidence.
+  return keyReport(provider, "mistral:budget", quota, config, apiKey);
 }
 
 function isCanonicalClineBaseUrl(baseUrl: string): boolean {
@@ -1451,6 +1505,7 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (isCanonicalA6apiBaseUrl(provider.baseUrl)) return fetchA6apiQuota;
   if (name === "openrouter" && isCanonicalOpenRouterBaseUrl(provider.baseUrl)) return fetchOpenRouterQuota;
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
+  if (isCanonicalMistralBaseUrl(provider.baseUrl)) return fetchMistralQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;
   // #4201: the Responses preset is the same domestic GLM Coding Plan subscription on the OpenAI

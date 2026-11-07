@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cmdAccount, formatAccountTable, type AccountDeps } from "../../src/cli/account";
 import { fetchRows } from "../../src/cli/account-api";
-import { projectApiKeyQuotaRows } from "../../src/cli/account-key-quota";
+import { apiKeyQuotaText, projectApiKeyQuotaRows } from "../../src/cli/account-key-quota";
+import { providerQuotaLine } from "../../src/cli/account-extended";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
 import { getProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import * as quotaApi from "../../src/providers/quota";
@@ -51,6 +52,13 @@ function depsFor(reply: unknown): AccountDeps {
       : path === "/api/codex-auth/active" ? { activeCodexAccountId: null } : reply);
   }) as typeof fetch };
 }
+
+test("unknown budget windows survive CLI projection and have no fabricated percentage", () => {
+  const quota = { updatedAt: 1, unknownBudgetWindows: [{ label: "API budget (EDU)", resetAt: 1796083200000 }] };
+  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
+  expect(apiKeyQuotaText(result.rows[0]!)).toContain("API budget (EDU) unknown");
+  expect(providerQuotaLine("mistral", { provider: "mistral", quota })).toContain("API budget (EDU) unknown");
+});
 
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];

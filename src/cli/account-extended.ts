@@ -285,6 +285,11 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
   for (const window of quota.customWindows ?? []) add(window.label, window.percent, window.resetAt);
+  for (const window of quota.unknownBudgetWindows ?? []) {
+    parts.push(`${window.label} unknown`);
+    const reset = resetIso(window.resetAt);
+    if (reset) parts.push(`resets ${reset}`);
+  }
   return parts;
 }
 

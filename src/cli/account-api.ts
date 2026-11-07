@@ -318,6 +318,7 @@ export interface ProviderQuotaDto extends CodexQuotaDto {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
   customWindows?: ProviderQuotaWindowDto[];
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   updatedAt?: number;
 }
 

@@ -53,6 +53,8 @@ export interface ProviderQuotaCreditsUsd {
 }
 
 export interface ProviderQuota {
+  /** Display-only budget windows for which the upstream did not provide a usable entitlement. */
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   /** Display-only subscription credits; not a routing or exhaustion window. */
   workbuddyCredits?: import("./workbuddy-credit-balance").WorkBuddyCreditBalance;
   fiveHourPercent?: number;

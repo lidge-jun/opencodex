@@ -15,6 +15,7 @@ export interface AccountQuota {
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number; modelId?: string }[];
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   creditsUsd?: {
     used: number;
     limit: number;

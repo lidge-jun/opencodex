@@ -23,6 +23,7 @@ export interface QuotaSummaryWindow {
   /** Provider-named window label, shown verbatim. */
   label?: string;
   percent?: number;
+  unknownBudget?: true;
   resetAt?: number;
   severity: QuotaSummarySeverity;
 }
@@ -66,6 +67,7 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       ...("key" in window && window.key ? { labelKey: window.key } : {}),
       ...("label" in window && typeof window.label === "string" ? { label: window.label } : {}),
       ...(percent !== undefined ? { percent } : {}),
+      ...("unknownBudget" in window && window.unknownBudget ? { unknownBudget: true as const } : {}),
       ...(resetMs !== null ? { resetAt: resetMs } : {}),
       severity: modelId === undefined ? quotaSeverity(percent) : "normal",
     };
@@ -110,7 +112,7 @@ function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undef
   if (!regular) regular = measured.find(window => window.labelKey !== "quotaSummary.credits");
   const credits = byLabel.get("quotaSummary.credits");
   if (credits && credits.severity === "critical" && regular?.severity !== "critical") return credits;
-  return regular ?? measured[0];
+  return regular ?? measured[0] ?? windows.find(window => window.unknownBudget);
 }
 
 /**
