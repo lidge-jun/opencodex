@@ -4231,6 +4231,7 @@ export const de: Record<TKey, string> = {
   "quotaSummary.warn": "Über 70 % genutzt",
   "quotaSummary.critical": "Über 90 % genutzt",
   "quotaSummary.credits": "Guthaben",
+  "quotaSummary.creditsUnavailable": "Nicht verfügbares Guthaben",
   "quotaSummary.refreshFailed": "Letzte Aktualisierung fehlgeschlagen; vorheriger Stand wird angezeigt",
   "quotaSummary.scrollPrev": "Anbieter nach links scrollen",
   "quotaSummary.scrollNext": "Anbieter nach rechts scrollen",

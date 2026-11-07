@@ -4253,6 +4253,7 @@ export const ja: Record<TKey, string> = {
   "quotaSummary.warn": "70%以上使用",
   "quotaSummary.critical": "90%以上使用",
   "quotaSummary.credits": "クレジット",
+  "quotaSummary.creditsUnavailable": "利用できないクレジット",
   "quotaSummary.refreshFailed": "最新の更新に失敗しました。前回の値を表示しています",
   "quotaSummary.scrollPrev": "プロバイダーを左へスクロール",
   "quotaSummary.scrollNext": "プロバイダーを右へスクロール",

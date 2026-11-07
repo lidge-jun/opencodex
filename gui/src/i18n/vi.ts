@@ -4223,6 +4223,7 @@ export const vi: Record<TKey, string> = {
   "quotaSummary.warn": "Đã dùng trên 70%",
   "quotaSummary.critical": "Đã dùng trên 90%",
   "quotaSummary.credits": "Tín dụng",
+  "quotaSummary.creditsUnavailable": "Tín dụng không khả dụng",
   "quotaSummary.refreshFailed": "Lần làm mới gần nhất thất bại; đang hiển thị số liệu trước đó",
   "quotaSummary.scrollPrev": "Cuộn nhà cung cấp sang trái",
   "quotaSummary.scrollNext": "Cuộn nhà cung cấp sang phải",

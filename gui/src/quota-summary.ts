@@ -83,12 +83,15 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
   }
   const workbuddy = quota.workbuddyCredits;
   if (workbuddy && workbuddy.total > 0) {
-    const percent = Math.min(100, workbuddy.used / workbuddy.total * 100);
+    // Remaining is authoritative and includes frozen credits; the meter is informational.
+    const raw = (1 - Math.min(workbuddy.remaining / workbuddy.total, 1)) * 100;
+    const integer = Math.round(raw);
+    const percent = Math.abs(raw - integer) <= Number.EPSILON * 100 ? integer : raw;
     windows.push({
-      id: "quotaSummary.credits",
-      labelKey: "quotaSummary.credits",
+      id: "quotaSummary.creditsUnavailable",
+      labelKey: "quotaSummary.creditsUnavailable",
       percent,
-      severity: quotaSeverity(percent),
+      severity: "normal",
     });
   }
   // Credits are appended after provider windows, whose labels can equal any fixed id.

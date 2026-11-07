@@ -52,21 +52,30 @@ describe("quota summary", () => {
     ]);
   });
 
-  test("WorkBuddy credit usage appears in the summary without treating expiry as a reset", () => {
-    const balance = (total: number, used: number) => ({
-      total, used, remaining: Math.max(0, total - used), frozen: 0, groups: [],
+  test("WorkBuddy shows unavailable credits neutrally, including frozen balance, without a reset", () => {
+    const balance = (total: number, used: number, remaining: number, frozen = 0) => ({
+      total, used, remaining, frozen, groups: [],
       expiring: { amount: 10, at: now + 3_600_000 },
     });
     const reports = freshQuotaReportsFromResponse([
-      { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 75) } },
-      { provider: "exhausted", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 125) } },
-      { provider: "zero-total", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0, 0) } },
+      { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 75, 25) } },
+      { provider: "frozen", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 0, 0, 100) } },
+      { provider: "fractional", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(9, 8.1, 9 - 8.1) } },
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.999, 10.001) } },
+      { provider: "zero-total", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0, 0, 0) } },
+      { provider: "malformed", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: { total: 100, used: 0 } } },
     ], now);
     const rows = buildQuotaSummary(reports, name);
     expect(rows.map(row => [row.provider, row.headline.labelKey, row.headline.percent, row.severity])).toEqual([
-      ["workbuddy-ai", "quotaSummary.credits", 75, "warn"],
-      ["exhausted", "quotaSummary.credits", 100, "critical"],
+      ["workbuddy-ai", "quotaSummary.creditsUnavailable", 75, "normal"],
+      ["frozen", "quotaSummary.creditsUnavailable", 100, "normal"],
+      ["fractional", "quotaSummary.creditsUnavailable", 90, "normal"],
+      ["below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
     ]);
+    expect(formatQuotaPercent(rows[2]!.headline.percent)).toBe("90%");
+    expect(rows[3]!.headline.percent).toBeCloseTo(89.999, 9);
+    expect(rows[3]!.headline.percent!).toBeLessThan(90);
+    expect(formatQuotaPercent(rows[3]!.headline.percent)).toBe("89%");
     expect(rows[0]!.headline.resetAt).toBeUndefined();
   });
 

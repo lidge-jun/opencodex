@@ -4254,6 +4254,7 @@ export const tr: Record<TKey, string> = {
   "quotaSummary.warn": "%70+ kullanıldı",
   "quotaSummary.critical": "%90+ kullanıldı",
   "quotaSummary.credits": "Krediler",
+  "quotaSummary.creditsUnavailable": "Kullanılamayan krediler",
   "quotaSummary.refreshFailed": "Son yenileme başarısız; önceki değer gösteriliyor",
   "quotaSummary.scrollPrev": "Sağlayıcıları sola kaydır",
   "quotaSummary.scrollNext": "Sağlayıcıları sağa kaydır",
