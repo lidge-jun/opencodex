@@ -47,6 +47,8 @@ ocx export --client pi
 
 モデル ID はプロキシの正規セレクターであるため、ルーティングされたモデルは `provider/model` (`anthropic/claude-opus-5`) として表示され、ネイティブ OpenAI スラグはプレフィックスなし (`gpt-5.6-sol`) のままになります。 `name` サフィックス (`(anthropic)`、`(native)`、`(routed)`) により、異なるアップストリームの 2 つの同じ名前のモデルが Pi のピッカーで区別できるようになります。
 
+Pi のエクスポートは、入れ子になったアップストリームのモデル ID のスラッシュを保持します。たとえば `openrouter/openrouter/free` は OpenRouter の `openrouter/free` モデルを選択します。カスタムエイリアスと合成 Fast セレクターの名前は変わりません。
+
 ## どこへ行くのか
 
 Pi のグローバル モデル設定は次のとおりです。

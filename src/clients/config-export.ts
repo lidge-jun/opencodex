@@ -29,6 +29,7 @@ import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../code
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
+import { routedSlug } from "../providers/slug-codec";
 import { expandFastExportModels } from "./config-export/fast-models";
 import { namedExportContext } from "./config-export/alias-selectors";
 import { probeHostname } from "../server/proxy-liveness";
@@ -896,6 +897,8 @@ export interface PiProviderCompat {
 
 interface PiExportOptions {
   sendSessionAffinityHeaders?: boolean;
+  /** Preserve upstream nested model IDs in Pi's routed selectors. */
+  rawNestedModelIds?: boolean;
   /**
    * Tell Pi to send its system prompt as `system` rather than `developer` (#5664).
    *
@@ -1076,7 +1079,11 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     // would fail at call time instead, so the row is dropped.
     if (input === null) continue;
     const entry: PiModelEntry = {
-      id: model.namespaced,
+      id: options.rawNestedModelIds && !model.native && typeof model.provider === "string"
+        && model.provider.length > 0 && model.provider !== "combo"
+        && typeof model.id === "string" && model.id.includes("/")
+        && model.namespaced === routedSlug(model.provider, model.id)
+        ? `${model.provider}/${model.id}` : model.namespaced,
       name: exportModelLabel(model),
       input,
     };
@@ -1125,6 +1132,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
  * its models.json `compat` block (docs/models.md, docs/custom-provider.md).
  */
 const PI_EXPORT_OPTIONS: PiExportOptions = { sendSessionAffinityHeaders: true, foldDeveloperRole: true };
+const PI_NATIVE_SELECTOR_OPTIONS: PiExportOptions = { ...PI_EXPORT_OPTIONS, rawNestedModelIds: true };
 
 /** Do not let provider-controlled catalog text become an environment lookup. */
 function containsEnvInterpolation(value: string): boolean {
@@ -1332,7 +1340,7 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 }
 
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+  const doc = buildPiClientConfig(ctx, PI_NATIVE_SELECTOR_OPTIONS);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1498,7 +1506,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => piConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    build: ctx => buildPiClientConfig(ctx, PI_NATIVE_SELECTOR_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPiContribution,

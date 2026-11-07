@@ -10,6 +10,9 @@ The public builders in `src/clients/config-export.ts` apply the policy;
 serializers consume the resulting rows without performing alias lookups.
 Other exporters reject alias mode and retain routed output. Combos retain their
 existing public key in either mode. `preferModelAliasIds` has no effect here.
+Pi exports the raw nested upstream model ID when the routed row uses its encoded
+Codex selector; explicit aliases, native rows and synthetic Fast selectors remain
+unchanged. Other Pi-format clients keep their existing selector spelling.
 
 ## Selector proof
 
