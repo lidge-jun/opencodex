@@ -171,7 +171,7 @@ describe("CI review lanes", () => {
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
     }
-    // The pull-request fast lane swaps the four full shards for `test changed`; every
+    // The pull-request fast lane swaps the five full shards for `test changed`; every
     // other event keeps the shards, and `fast` is only ever true on a pull request.
     const shards = ci.jobs?.test as { needs?: string; if?: string } | undefined;
     expect(shards?.needs).toBe("changes");

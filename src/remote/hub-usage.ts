@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { USAGE_SOURCE_CLIENTS } from "../usage/source-filter";
 
 export const MAX_HUB_USAGE_BYTES = 1024 * 1024;
 const count = z.number().finite().nonnegative();
@@ -20,6 +21,8 @@ const hubUsageSchema = z.object({
   days: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), ...costs })).max(366),
   filter: z.object({ provider: label.nullable(), model: label.nullable(),
     matched: z.boolean(), comboOverlap: z.boolean() }),
+  sourceFilter: z.object({ client: z.enum(USAGE_SOURCE_CLIENTS), scope: z.literal("authenticated-key") }).optional(),
+  legacyUnclassifiedRequests: count.optional(),
   usageIncomplete: z.literal(true).optional(),
   usageIncompleteReason: z.literal("oversized_rows").optional(),
 });

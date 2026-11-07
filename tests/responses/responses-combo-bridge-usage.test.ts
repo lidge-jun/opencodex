@@ -74,9 +74,10 @@ function bind(child: Child, usage: OcxUsage): void {
 async function runCombo(
   answer: (child: Child) => Response | Promise<Response>,
   options: Partial<HandleResponsesOptions> = {},
+  client?: RequestLogContext["client"],
 ): Promise<{ response: Promise<Response>; logCtx: RequestLogContext; children: Child[] }> {
   const children: Child[] = [];
-  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const logCtx: RequestLogContext = { model: "", provider: "", client };
   const req = new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -103,6 +104,17 @@ const refused = (): Response => Response.json(
 );
 
 describe("combo hands the committed child's bridge usage to the request context", () => {
+  test("success and failure adoption cannot replace the inbound client", async () => {
+    for (const succeeds of [true, false]) {
+      const run = await runCombo(child => {
+        child.log.client = "aside";
+        return succeeds ? ok() : refused();
+      }, {}, "codex_cli");
+      await run.response;
+      expect(run.logCtx.client).toBe("codex_cli");
+    }
+  });
+
   test("usage bound after the commit reaches the request context", async () => {
     const run = await runCombo(() => ok());
     expect((await run.response).status).toBe(200);

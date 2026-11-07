@@ -1,4 +1,5 @@
 {
+  "usage-client-attribution.test.ts": "usage",
   "request-log.test.ts": "usage",
   "request-log-normalization.test.ts": "usage",
   "request-log-error-detail.test.ts": "usage",

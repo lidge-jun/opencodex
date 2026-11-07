@@ -16,6 +16,7 @@
  * the shared abort helpers from here).
  */
 import { clearableDeadline } from "./abort";
+import { isDefiniteContextOverflow } from "./context-overflow-verdict";
 import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
 export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
 import { redactSecretString } from "./redact";
@@ -721,6 +722,82 @@ export async function fetchWithResetRetry(
   } finally { opts.onSendsConsumed?.close?.(); }
 }
 
+/** Bytes of a 5xx body read to look for a context-overflow verdict; the verdict caps its input too. */
+const CONTEXT_OVERFLOW_PEEK_BYTES = 16_384;
+/** A body that has not arrived by then is not evidence; the peek must never stall the retry. */
+const CONTEXT_OVERFLOW_PEEK_MS = 250;
+// A hypothetical, negated, or configuration-failure mention does not justify suppressing a retry.
+// Inspect the unwrapped provider message, not its JSON spelling or unrelated envelope fields.
+const NON_VERDICT_CONTEXT = /(?:\b(?:not|never|no|neither|nor|if|unless|whether)\b|n['\u2019]t\b)[^.!?\n]{0,100}\b(?:context(?:\s+(?:window|length))?|tokens?|(?:input|prompt)\s+is\s+too\s+long)\b|\b(?:context\s+(?:window|length)|token\s+limit|(?:input|prompt)\s+is\s+too\s+long)\b[^.!?\n]{0,40}\?/i;
+const CONTEXT_CONFIG_FAILURE = /\b(?:fail(?:ed|ure)?|unable|cannot|error)\b[^.!?\n]{0,100}\b(?:configuration|settings|documentation)\b|\b(?:configuration|settings|documentation)\b[^.!?\n]{0,100}\b(?:fail(?:ed|ure)?|unavailable|missing|error)\b/i;
+const CONTEXT_THROUGHPUT = /\bper (?:second|minute|hour|day)\b|\brate limit|\bquota\b|\btpm\b/i;
+
+function retryContextOverflowMessage(message: string): boolean {
+  if (CONTEXT_THROUGHPUT.test(message)) return false;
+  return message.split(/(?<=[.!?])\s+|[\r\n]+/).some(sentence => {
+    if (NON_VERDICT_CONTEXT.test(sentence) || CONTEXT_CONFIG_FAILURE.test(sentence)) return false;
+    const withoutGenericThrottle = sentence.replace(/too many tokens/gi, "");
+    return isDefiniteContextOverflow(503, withoutGenericThrottle)
+      || /\bprompt is too long\b/i.test(sentence);
+  });
+}
+
+/** Up to `maxBytes` of a clone of the body, or what arrived before the deadline. */
+async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number, signal?: AbortSignal): Promise<string> {
+  const reader = res.clone().body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  let emptyChunks = 0;
+  const deadlineAt = performance.now() + deadlineMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stop = () => {};
+  const timedOut = new Promise<null>(resolve => {
+    stop = () => resolve(null);
+    timer = setTimeout(stop, deadlineMs);
+    signal?.addEventListener("abort", stop, { once: true });
+    if (signal?.aborted) stop();
+  });
+  try {
+    while (bytes < maxBytes) {
+      if (signal?.aborted || performance.now() >= deadlineAt) break;
+      const chunk = await Promise.race([reader.read(), timedOut]);
+      if (!chunk || chunk.done) break;
+      if (chunk.value.byteLength === 0) {
+        if (++emptyChunks % 64 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
+        continue;
+      }
+      emptyChunks = 0;
+      const bounded = chunk.value.subarray(0, maxBytes - bytes);
+      bytes += bounded.byteLength;
+      text += decoder.decode(bounded, { stream: true });
+    }
+    return text;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", stop);
+    reader.cancel().catch(() => {});
+  }
+}
+
+/**
+ * True when a transient-status response's body is a definite context-overflow verdict. Peeks a
+ * clone within a byte and time bound, so the caller still receives the untouched body. A slow
+ * or endless body keeps the normal retry unless its observed prefix already proves overflow.
+ * "Too many tokens" alone is not enough here: a 5xx
+ * "Too many tokens, please wait" is a throttle that the retry exists for.
+ */
+async function isContextOverflowResponse(res: Response, signal?: AbortSignal): Promise<boolean> {
+  if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) return false;
+  try {
+    const text = await peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal);
+    return text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * fetchWithResetRetry plus the caller-selected transient-5xx policy, PRE-STREAM only.
  * A received HTTP error follows that policy; an ambiguous reset's non-replayable
@@ -782,10 +859,13 @@ export async function fetchWithTransientRetry(
     // thing about its own failure, so the ladder stops and hands the response back untouched.
     if (res.ok || !isTransientUpstreamStatus(res.status) || isNonReplayableResponse(res)
       || res.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE) return res;
+    if (opts.abortSignal?.aborted || Date.now() - attemptStart > slowAttemptMs) return res;
+    // A 5xx that says the input does not fit is deterministic: resending the same body is
+    // refused the same way, so it goes back for the caller to classify (#8127).
+    if (await isContextOverflowResponse(res, opts.abortSignal)) return res;
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives
     // a response whose body we just cancelled.
     if (opts.abortSignal?.aborted) return res;
-    if (Date.now() - attemptStart > slowAttemptMs) return res;
     const instructedDelay = retryAfterDelayMs(res.headers);
     // The deadline is the CALLER'S, not this module's default. Reading the constant directly
     // broke it in both directions: a caller with a 30s budget slept the full 45s an upstream

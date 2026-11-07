@@ -223,9 +223,9 @@ shows the Child's dashboard. If the port is held by something the app cannot use
 bound to an address other than `127.0.0.1`, the app stops retrying and waits for that to change. A
 recovery that finishes while the update page is open leaves that page on screen.
 
-The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own **Stop** button
-does not stop a proxy the app runs, because the app would start it again: it says so and changes
-nothing. What the app decided and why is
+The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own stop (pulling the
+proxy lever at the foot of the sidebar all the way down) does not stop a proxy the app runs,
+because the app would start it again: it says so and changes nothing. What the app decided and why is
 recorded in `runtime-supervisor.log` in the app's log directory (`~/Library/Logs/com.opencodex.desktop`
 on macOS).
 
@@ -294,7 +294,10 @@ Before uninstalling a supported Desktop installation, open **Terminal command** 
 dashboard or tray and choose **Remove terminal command**. Desktop removes only its unchanged
 managed configuration. Modified blocks or files are preserved and reported; resolve those
 issues before deleting the app. Uninstalling the app directly does not guarantee cleanup
-of shell files or the user `Path`.
+of shell files or the user `Path`. On macOS/Linux, a stale enabled Desktop command record
+also blocks eligible npm/pnpm launcher calls if the selected app executable is gone. Repair
+or remove the terminal command before deleting the app. `OCX_NO_DESKTOP_HANDOFF=1` permits
+one explicit package-launcher invocation; it does not repair the record, shim or PATH.
 
 On macOS, drag `OpenCodex.app` from Applications to the Trash. On Windows, remove
 OpenCodex from **Installed apps**. On Debian-based Linux systems, run:
