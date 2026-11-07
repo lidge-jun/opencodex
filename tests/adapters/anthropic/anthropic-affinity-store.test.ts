@@ -44,14 +44,43 @@ test("snapshot contains only digests, opaque account and timestamp", async () =>
   store.resetMemory(); expect(store.get(key)?.accountId).toBe(id);
 });
 test("back-to-back structural mutations are both persisted and raw keys are refused", async () => {
-  const store = owner(); const other = anthropicAffinityDigest("anthropic", "second");
+  let writes = 0; const store = owner("anthropic", (...args) => { writes++; atomicWriteFile(...args); });
+  const other = anthropicAffinityDigest("anthropic", "second");
   store.set(key, { accountId: id, lastUsedAt: Date.now() });
   store.set(other, { accountId: id, lastUsedAt: Date.now() });
   store.set(secret, { accountId: id, lastUsedAt: Date.now() });
+  expect(writes).toBe(0);
   await store.flush(); store.resetMemory();
-  expect(store.size).toBe(2); expect(store.get(other)?.accountId).toBe(id);
+  expect(writes).toBe(1); expect(store.size).toBe(2); expect(store.get(other)?.accountId).toBe(id);
   expect(readFileSync(path(), "utf8")).not.toContain(secret);
 });
+test("the publication timer writes the latest mutations without an explicit flush", async () => {
+  let writes = 0;
+  const store = owner("anthropic", (...args) => { writes++; atomicWriteFile(...args); });
+  const other = anthropicAffinityDigest("anthropic", "timer-second");
+  store.set(key, { accountId: id, lastUsedAt: Date.now() });
+  store.set(other, { accountId: id, lastUsedAt: Date.now() });
+  store.delete(key);
+  expect(writes).toBe(0);
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  expect((await settleBackgroundWork({ timeoutMs: 5_000 })).settled).toBe(true);
+  expect(writes).toBe(1);
+  expect(JSON.parse(readFileSync(path(), "utf8")).entries.map((row: { sessionDigest: string }) => row.sessionDigest)).toEqual([other]);
+}, 10_000);
+
+test("capacity ties preserve stable ordering and evict the newest equal-timestamp binding", async () => {
+  const { store, data } = await snapshot();
+  const now = Date.now();
+  data.entries = Array.from({ length: 2_000 }, (_, i) => ({ ...data.entries[0],
+    sessionDigest: i.toString(16).padStart(64, "0"), lastUsedAt: now }));
+  writeFileSync(path(), JSON.stringify(data)); store.resetMemory();
+  const newest = "f".repeat(64);
+  store.set(newest, { accountId: id, lastUsedAt: now });
+  expect(store.size).toBe(2_000);
+  expect(store.get(newest)).toBeUndefined();
+  expect(store.get("0".repeat(64))?.accountId).toBe(id);
+});
+
 test("load rejects expired and future rows and keeps the newest 2000", async () => {
   const { store, data } = await snapshot(); const now = Date.now(); const base = data.entries[0];
   data.entries = Array.from({ length: 2002 }, (_, i) => ({ ...base,
@@ -105,6 +134,25 @@ test("failed atomic publication retains previous bytes and reports no identifier
     expect(warning).toHaveBeenCalled(); expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
     store.resetMemory();
   } finally { warning.mockRestore(); }
+});
+test("confirmed flush reports a failed reset and succeeds on an explicit retry", async () => {
+  await snapshot();
+  const before = readFileSync(path(), "utf8");
+  let fail = true;
+  const store = owner("anthropic", (...args) => {
+    if (fail) throw new Error("fixture publication failure");
+    atomicWriteFileNoFollow(...args);
+  });
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    store.clear();
+    expect(await store.flushConfirmed()).toBe(false);
+    expect(readFileSync(path(), "utf8")).toBe(before);
+    fail = false;
+    expect(await store.flushConfirmed()).toBe(true);
+    expect(JSON.parse(readFileSync(path(), "utf8")).entries).toEqual([]);
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
+  } finally { store.resetMemory(); warning.mockRestore(); }
 });
 test("timestamp touches coalesce and shutdown flushes the latest use", async () => {
   let writes = 0; const store = owner("anthropic", (...args) => { writes++; atomicWriteFile(...args); });

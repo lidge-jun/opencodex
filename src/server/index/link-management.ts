@@ -19,6 +19,7 @@ import { linkStorePath } from "../../link/paths";
 import { readLinkStore } from "../../link/store";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { packageVersion } from "../../lib/package-version";
+import { parseUsageSource } from "../../usage/source-filter";
 
 const VERSION = packageVersion("0.0.0");
 const KEPT_RESPONSE_HEADERS = ["content-type", "content-language", "etag", "last-modified"];
@@ -83,6 +84,13 @@ export async function handleLinkManagementRequest(
   }
   const target = linkManagementTarget(url);
   if (!target) return notFound();
+  if (target.pathname === "/api/usage") {
+    const source = parseUsageSource(target.searchParams);
+    if (source.kind !== "legacy" && (source.kind !== "filtered" || !admittedKeyId
+      || source.filter.device.kind !== "key" || source.filter.device.id !== admittedKeyId)) {
+      return refused(403, "link_usage_scope_refused");
+    }
+  }
   const local = new URL(`${target.pathname}${target.search}`, "http://127.0.0.1");
   // The handlers branch on GET; an admitted HEAD runs as GET and its body is dropped below.
   const inner = new Request(local.href, {

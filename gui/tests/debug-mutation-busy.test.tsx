@@ -184,7 +184,7 @@ test("rapid Debug flag/reset keeps controls busy and applies only the latest mut
     await Promise.resolve();
   });
   await waitFor(() => usageSwitch()?.disabled === false);
-  expect(usageSwitch()?.getAttribute("aria-pressed")).toBe("false");
+  expect(usageSwitch()?.getAttribute("aria-checked")).toBe("false");
   expect(resetBtn()?.disabled).toBe(false);
 
   await act(async () => {
@@ -309,7 +309,7 @@ test("Debug PUTs are serialized so reverse-order response settlement cannot leav
   expect(maxInFlight).toBe(1);
   expect(serverSettings.usage).toBe(false);
   expect(serverSettings.runtimeOverride).toEqual({});
-  expect(usageSwitch()?.getAttribute("aria-pressed")).toBe("false");
+  expect(usageSwitch()?.getAttribute("aria-checked")).toBe("false");
   expect(serverSnapshots.at(-1)?.usage).toBe(false);
 
   await act(async () => {

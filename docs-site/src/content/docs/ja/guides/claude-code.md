@@ -362,9 +362,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 **接続 → Claude** で圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
 
-コンテキスト超過エラーの正規化では、プロバイダーのエラーメッセージの先頭 65,536 UTF-16 コード単位だけを使います。
-末尾の診断情報やトークン数は、省略を示す印なしで失われることがあります。
-詳しい制限とトークン数の扱いは[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
+Messages のエラー応答の正規化では、プロバイダーの文章やトークン数ではなく固定文を使います。認識したコンテキスト超過は `prompt is too long: The request exceeds the model's context window.` として返します。最初のフィールドが error イベントのストリームブロックは 1 MiB まで保持し、超過時は圧縮を促さない固定エラーにします。対象範囲と二つの例外は[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
 
 1M 未満のネイティブ Anthropic モデルには自動で標識を付けません。自分で export した圧縮値は起動スロットの標識に優先し、プロキシは**ユーザーが指定した**値を基準にどのモデルに安全に標識を付けるか決定します。ディスカバリー行はその export を無視し、固定の下限を保ちます。
 直接編集した設定値が不正な場合は 829,800 に戻ります。
@@ -568,7 +566,7 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 **エラー分類:** 400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`、
-それ以外の 5xx は `api_error` です。`Retry-After` はそのまま維持します。
+それ以外の 5xx は `api_error` です。`Retry-After` は整数の秒数で送信し（HTTP 日付は残り秒数に変換）、上限は 8 日です。
 
 ## プロンプトキャッシュとトークン使用量
 

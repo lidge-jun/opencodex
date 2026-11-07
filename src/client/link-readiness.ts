@@ -20,7 +20,9 @@ import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 export type LinkReadinessReason =
   | "tunnel_idle" | "tunnel_connecting" | "tunnel_failed" | "tunnel_unavailable" | "sidecar_invalid"
   | "home_unreachable" | "home_unauthorized" | "link_auth_failed" | "link_credential_unavailable"
-  | "link_unverified";
+  | "link_unverified"
+  /** The Child's durable connection no longer matches the one this runtime started with. */
+  | "client_state_changed";
 
 export type LinkReadiness = { ready: true } | { ready: false; reason: LinkReadinessReason };
 

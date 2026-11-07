@@ -1,3 +1,6 @@
+import { projectLocalModelRefusalLog } from "./request-log-failure-detail";
+import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
+import { markProxyError } from "../lib/client-error-body";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { isApiAuthRequired } from "./auth-cors";
 import type { OcxApiKeyEntry, OcxConfig } from "../types";
@@ -146,10 +149,10 @@ export class AdmissionModelDeniedError extends Error {
   readonly requestedModel: string;
   readonly deniedProvider: string;
   readonly deniedModel: string;
-  constructor(requestedModel: string, route: ScopedRoute) {
-    super("model " + requestedModel + " is not allowed for this API key");
+  constructor(requestedModel: ClientFacingModelLabel, route: ScopedRoute) {
+    super("model " + clientFacingModelText(requestedModel) + " is not allowed for this API key");
     this.name = "AdmissionModelDeniedError";
-    this.requestedModel = requestedModel;
+    this.requestedModel = clientFacingModelText(requestedModel);
     this.deniedProvider = route.providerName;
     this.deniedModel = route.modelId;
   }
@@ -189,13 +192,21 @@ export function admissionModelDeniedBody(error: AdmissionModelDeniedError): {
  * it to retry with another, and would make an operator's own denial
  * indistinguishable from a typo in the model name.
  */
+/** Project scope refusals before any caller finalizes its request log. */
+export function projectAdmissionModelDeniedLog(error: AdmissionModelDeniedError, logCtx: import("./request-log").RequestLogContext): AdmissionModelDeniedError {
+  projectLocalModelRefusalLog(logCtx, clientFacingModelLabel(error.requestedModel,
+    error.requestedModel === UNNAMED_DESTINATION_MODEL ? "unnamed" : "requested"));
+  logCtx.requestedModel = error.requestedModel;
+  return error;
+}
+
 export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): Response {
   const response = new Response(JSON.stringify(admissionModelDeniedBody(error)), {
     status: 403,
     headers: { "Content-Type": "application/json" },
   });
   markResponseNonReplayable(response);
-  return response;
+  return markProxyError(response, "scope");
 }
 
 /**
@@ -208,7 +219,7 @@ export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): 
  */
 export function assertRouteAllowedByScope(
   scope: AdmissionModelScope | undefined,
-  requestedModel: string,
+  requestedModel: ClientFacingModelLabel,
   route: ScopedRoute,
 ): void {
   if (!routeAllowedByScope(scope, route)) {
@@ -247,7 +258,7 @@ export function admissionScopeDenial(
     : routeAllowedByScope(scope, { providerName: destination.providerName, modelId: destination.modelId });
   if (allowed) return undefined;
   return admissionModelDeniedResponse(new AdmissionModelDeniedError(
-    requestedModel ?? UNNAMED_DESTINATION_MODEL,
+    clientFacingModelLabel(requestedModel, requestedModel === undefined ? "unnamed" : "requested"),
     {
       providerName: destination.providerName,
       modelId: destination.modelId ?? UNNAMED_DESTINATION_MODEL,

@@ -1,0 +1,19 @@
+/* ── Desktop first-launch star prompt ── */
+.star-onboarding-overlay { align-items: center; }
+.star-onboarding { max-width: 420px; padding: 28px 24px 20px; text-align: center; animation: star-onboarding-in 240ms cubic-bezier(.2, .8, .2, 1) both; }
+.star-onboarding-mark {
+  display: inline-grid; place-items: center; width: 48px; height: 48px; margin-bottom: 14px;
+  border-radius: var(--radius-round); background: var(--raised); color: var(--text);
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.star-onboarding-mark svg { width: 22px; height: 22px; }
+.star-onboarding-mark--done { background: var(--amber-soft); color: var(--amber); }
+.star-onboarding-title { margin: 0; font-size: var(--text-title); font-weight: var(--weight-semibold); line-height: var(--leading-tight); }
+.star-onboarding-body { margin: 8px auto 0; max-width: 32ch; color: var(--muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.star-onboarding-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
+.star-onboarding-actions .btn { width: 100%; min-height: var(--control-lg); }
+.star-onboarding-hint { margin: 14px 0 0; color: var(--faint); font-size: var(--text-caption); line-height: var(--leading-body); }
+.star-onboarding-link { appearance: none; border: 0; padding: 0; background: none; color: var(--text); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.star-onboarding-link:disabled { opacity: .55; cursor: default; }
+@keyframes star-onboarding-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .star-onboarding { animation: none; } }

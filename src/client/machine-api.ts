@@ -131,7 +131,8 @@ export async function handleMachineApi(
     }
     try {
       const result = input.action === "uninstall" ? await uninstallCodexShimAsync() : await installCodexShimAsync();
-      return Response.json({ success: true, action: input.action, result, shim: diagnoseCodexShim() });
+      // 200 either way so the dashboard re-reads the shim diagnosis; a refusal is not a success.
+      return Response.json({ success: !result.refused, action: input.action, result, shim: diagnoseCodexShim() });
     } catch (error) {
       return Response.json({ success: false, error: error instanceof Error ? error.message : "shim action failed" }, { status: 409 });
     }

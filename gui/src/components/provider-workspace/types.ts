@@ -45,6 +45,8 @@ export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required
 
 export type AccountQuotaMode = "probe" | "passive" | "unsupported";
 export interface AccountQuotaReading {
+  /** Subscription name supplied by management independently of quota availability. */
+  planLabel?: string;
   quotaMode?: AccountQuotaMode;
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;
@@ -57,6 +59,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
+  maskedLabel?: string;
   active: boolean;
   expiresAt?: number;
   needsReauth?: boolean;
@@ -101,6 +104,8 @@ export interface ProviderAuthHandlers {
   onReauth: (provider: string, accountId?: string) => void | Promise<void>;
   onSwitchAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
   onPauseAccount: (provider: string, account: OAuthAccountRow, paused: boolean) => void | Promise<void>;
+  pendingAffinityResets?: Readonly<Record<string, { accountId: string }>>;
+  onRetryAffinityReset?: (provider: string) => void | Promise<void>;
   onAccountThreshold?: (provider: string, account: OAuthAccountRow, threshold: number | null) => Promise<boolean>;
   onAccountPoolThreshold?: (provider: string, threshold: number) => void | Promise<boolean>;
   onRemoveAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;

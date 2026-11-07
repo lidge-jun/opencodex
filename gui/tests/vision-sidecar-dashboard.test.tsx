@@ -9,7 +9,7 @@ import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
-import { DashboardSidecarPanels } from "../src/pages/dashboard-overview-sections";
+import { DashboardCodexSection, DashboardSidecarPanels } from "../src/pages/dashboard-overview-sections";
 import type { SettingsData, SidecarData, SidecarPatch } from "../src/pages/dashboard-shared";
 import { mergeSidecarSetting } from "../src/pages/dashboard-shared";
 import { useDashboardData } from "../src/pages/use-dashboard-data";
@@ -124,7 +124,8 @@ async function mount(d: Dash) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     if (!root) root = createRoot(host);
-    root.render(<LanguageProvider><DashboardSidecarPanels d={d} /></LanguageProvider>);
+    // The Codex switches moved to their own section; mount both, as the page does.
+    root.render(<LanguageProvider><DashboardCodexSection d={d} /><DashboardSidecarPanels d={d} /></LanguageProvider>);
   });
 }
 

@@ -497,7 +497,7 @@ test("turning the switch off disables, even when the block is stale", async () =
   await mountClient();
 
   const sw = toggleSwitch();
-  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  expect(sw.getAttribute("aria-checked")).toBe("true");
   await act(async () => { sw.click(); });
   await confirmDialog("Disable");
 
@@ -607,7 +607,7 @@ test("an owned Kilo candidate conflict still offers Disable", async () => {
   await mountClient(true, "kilo");
   const sw = toggleSwitch();
   expect(sw.disabled).toBe(false);
-  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  expect(sw.getAttribute("aria-checked")).toBe("true");
   await act(async () => { sw.click(); });
   await confirmDialog("Disable");
   expect(requests.find(request => request.method === "PUT")?.body).toEqual({
@@ -621,7 +621,7 @@ test("Kilo can disable past an unsafe later candidate, but not an unsafe selecte
     candidateFailurePath: "/tmp/home/.config/kilo/opencode.jsonc", lastOpId: "owned-operation" }));
   await mountClient(true, "kilo");
   expect(toggleSwitch().disabled).toBe(false);
-  expect(toggleSwitch().getAttribute("aria-pressed")).toBe("true");
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("true");
 
   stateResponse = () => json(status({ clientId: "kilo", configPath, state: "unsafe", reason: "unparseable",
     candidateFailurePath: configPath, lastOpId: "owned-operation" }));
@@ -885,7 +885,7 @@ test("overview allows disabling an owned Kilo block during candidate conflict", 
   const card = container.querySelector('.integration-card[data-client="kilo"]')!;
   const sw = card.querySelector("button.switch") as HTMLButtonElement;
   expect(sw.disabled).toBe(false);
-  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  expect(sw.getAttribute("aria-checked")).toBe("true");
   await act(async () => { sw.click(); });
   expect(requests.some(request => request.url.endsWith("/api/client-integrations/preview")
     && (request.body as { operation?: string }).operation === "disable")).toBe(true);
@@ -1477,7 +1477,7 @@ test("a card toggles its own client without a trip to the sub-page", async () =>
 
   const sw = switchFor("hermes");
   expect(sw).toBeDefined();
-  expect(sw!.getAttribute("aria-pressed")).toBe("true");
+  expect(sw!.getAttribute("aria-checked")).toBe("true");
   await act(async () => { sw!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
   await act(async () => { buttonByText("Disable")!.click(); });
@@ -1562,7 +1562,7 @@ test("Codex disable uses Codex consequences and refreshes observed routing", asy
   await mountOverview();
 
   const sw = switchFor("codex");
-  expect(sw?.getAttribute("aria-pressed")).toBe("true");
+  expect(sw?.getAttribute("aria-checked")).toBe("true");
   await act(async () => { sw!.click(); });
 
   // Opening the consequence gate must not mutate anything, and it must name
@@ -1586,7 +1586,7 @@ test("Codex disable uses Codex consequences and refreshes observed routing", asy
   // The mock changes startup-health only after the mutation. This assertion
   // therefore proves the Codex observed resource, not merely the native toggle,
   // was refreshed.
-  expect(switchFor("codex")?.getAttribute("aria-pressed")).toBe("false");
+  expect(switchFor("codex")?.getAttribute("aria-checked")).toBe("false");
   expect(container.querySelector(".integration-card[data-client='codex'] .badge")
     ?.getAttribute("data-integration-state")).toBe("absent");
 });

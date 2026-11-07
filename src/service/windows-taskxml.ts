@@ -9,12 +9,19 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
 import { resolveServiceListenPort, resolvedProxyEnv } from "./definition";
-import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute } from "./state";
+import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute, currentWindowsServiceCodexHome, currentOpenCodexHome } from "./state";
 
+/**
+ * Escape a value for the quoted `set "NAME=value"` form every wrapper assignment uses.
+ * Inside the quotes cmd treats `^`, `&`, `|`, `<`, `>` and parentheses as literal, so a
+ * caret must stay single: doubling it would point the variable at a different path. Percent
+ * expansion still runs in a batch file, so `%` becomes `%%`. `!` is literal because the
+ * wrapper runs under DisableDelayedExpansion. A quote or line break cannot be represented
+ * and is dropped.
+ */
 function windowsBatchValue(value: string): string {
   return value
     .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
     .replace(/"/g, "")
     .replace(/[\r\n]/g, "");
 }
@@ -80,12 +87,14 @@ export function buildWindowsServiceScript(
     windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     windowsBatchSet("PATH", path, "pathList"),
-    windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
-    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
-    windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
+    windowsBatchSet("CODEX_HOME", currentWindowsServiceCodexHome()),
+    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows")),
+    windowsBatchSet("OPENCODEX_HOME", currentOpenCodexHome()),
     ...proxyEnv.map(({ name, value }) => windowsBatchSet(name, value)),
-    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
-    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
+    // Absolute like the homes above: a profile-variable form could read the token, or write
+    // the log, under another profile than the home the proxy is pinned to.
+    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath()),
+    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath()),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli ?? undefined, "path"),
     // Standalone executables have no npm package tree; recovery is "replace the executable", so no OCX_PKG_DIR/restore_backup wiring.

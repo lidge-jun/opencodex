@@ -266,6 +266,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   };
 }
 
+/** Build the regional Qoder adapter with a request-scoped capture-only tool catalog. */
 export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapterDeps = {}): ProviderAdapter {
   return {
     name: "qoder",
@@ -280,13 +281,19 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         emit({
           type: "error", status: 400, errorType: "invalid_request_error",
           code: "unsupported_input_modality", retryable: false,
-          message: "Qoder CN raw-image routing is verified only with qoderclicn 1.1.70, DeepSeek-Flash or Qwen3.8-Flash, and one base64 PNG in a single user turn on stream-json stdin. URL, multiple-image, tool-result and history replay surfaces remain unverified; use the vision sidecar for those inputs.",
+          message: "Qoder CN raw-image routing is verified only with qoderclicn 1.1.70, DeepSeek-Flash or Qwen3.8-Flash, and one base64 PNG in a single user turn on stream-json stdin. The PNG must be at most 1 MiB decoded, with each edge at most 8192 pixels and at most 16,000,000 total pixels. URL, multiple-image, tool-result and history replay surfaces remain unverified; use the vision sidecar for those inputs.",
         });
         return;
       }
       let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
       try {
         catalog = buildCodingAgentToolCatalog(parsed, QODER_MCP_SERVER_NAME);
+        for (const wireName of catalog.emittedNameMap.values()) {
+          const restored = catalog.emittedNameMap.get(wireName);
+          if (restored !== undefined && restored !== wireName) {
+            throw new CodingAgentToolCatalogError("ambiguous selected tool identity");
+          }
+        }
       } catch (error) {
         if (!(error instanceof CodingAgentToolCatalogError)) throw error;
         emit({
@@ -305,6 +312,8 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
             serverModulePath: QODER_MCP_SERVER_PATH,
             tools: catalog.tools,
             emittedNameMap: catalog.emittedNameMap,
+            // Qoder can mix exact client wire names with MCP names in one reply.
+            acceptWireToolNames: true,
             maxTurnToolCalls: MAX_TOOL_BLOCK_STARTS,
             projectHistoryToolNames: true,
             completeAssistantToolUse: true,
