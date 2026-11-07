@@ -2,6 +2,8 @@
 
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
+`src/cli/account-affinity-reset.ts` implements `ocx account reset-affinity <anthropic|anthropic2> [--json]` through the declared `PUT /api/oauth/accounts/affinity-reset` management route. It sends once, requires a matching provider and explicit durable confirmation, and reports unconfirmed or failed responses as nonzero exits. This provider-wide cleanup remains available without a configured pool or account roster; it never selects or resumes an account. See the [affinity persistence contract](providers/anthropic-account-pool.md#anthropic-account-pause).
+
 ## CLI readiness diagnostics
 
 `src/cli/sync-command.ts` runs the Home sync before calling the fan-out primitives in `src/cli/sync-fanout.ts`, `src/cli/sync-fanout-process.ts` and `src/cli/sync-link-status.ts`. Fan-out requires a committed converged catalog, limits concurrency to three, and reports partial failure as exit 6, including when a connected Child's sync is skipped. Such Child rows add an actionable `hint` to the existing JSON schema and human output; intentional skips retain their exit behavior. An unreadable link store produces a fixed path-free stderr message in human mode. A thrown Home error in JSON mode produces a sanitized stderr diagnostic. The subprocess helper bounds output, treats grace-cancelled pipes as incomplete, and escalates termination; the status helper shares one deadline across discovery and response body. Pinned and connected syncs do not fan out.

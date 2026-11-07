@@ -224,6 +224,7 @@ export async function prepareResponsesTransport(
   let genericFailovers = 0;
   let oauthSelection = route.provider.authMode === "oauth"
     ? captureOAuthAccountSelection(route.providerName) : null;
+  const anthropicManualSelectionGeneration = anthropicRouting?.captureAnthropicManualSelectionGeneration();
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
   // These owners also serve early passthrough and sidecar sends. A dispatch-time
   // rebuild must update every later builder, without entering a later block's TDZ.
@@ -273,6 +274,7 @@ export async function prepareResponsesTransport(
       // #7500: no admission, initial or a recovery/failover rebind, may land on an Antigravity
       // account whose own roster omits the model. Callers abandon the send on null.
       if (antigravityModelRefusal(config, route.providerName, candidate.accountId, route.modelId)) return null;
+      if (anthropicRouting && anthropicManualSelectionGeneration !== anthropicRouting.captureAnthropicManualSelectionGeneration()) return null;
       const committed = genericAffinityMode
         ? admitGenericSessionAccount(config, route.providerName, oauthSelection, candidate, route.modelId, genericAffinityMode)
         : await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
@@ -281,6 +283,8 @@ export async function prepareResponsesTransport(
         requireUsableAccount: true,
       });
       requireAnthropicAdmission();
+      // Reset-only publication does not change the OAuth revision, but must fence old bindings.
+      if (anthropicRouting && anthropicManualSelectionGeneration !== anthropicRouting.captureAnthropicManualSelectionGeneration()) return null;
       if (committed) {
         if (anthropicInstance) anthropicRouteDecision = currentAnthropicRouteDecision();
         if (anthropicInstance !== undefined && !anthropicRouting!.commitAnthropicSelectionRouting(

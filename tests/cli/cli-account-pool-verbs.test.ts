@@ -56,6 +56,50 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
   return { lines, errors, restore: () => { console.log = log; console.error = err; } };
 }
 
+describe("ocx account reset-affinity", () => {
+  test.each(["anthropic", "anthropic2"])("%s requires no roster or local config", async provider => {
+    const { cmdAccount } = await import("../../src/cli/account");
+    const calls: Captured[] = [];
+    const out = capture();
+    const d = deps(() => ({ json: { ok: true, provider, affinityResetConfirmed: true } }), calls);
+    d.loadConfigImpl = () => { throw new Error("must not require a roster or local configuration"); };
+    try {
+      expect(await cmdAccount(["reset-affinity", provider, "--json"], d)).toBe(0);
+      expect(calls).toEqual([{ path: "/api/oauth/accounts/affinity-reset", method: "PUT", body: { provider } }]);
+      expect(JSON.parse(out.lines.join(""))).toEqual({ ok: true, provider, affinityResetConfirmed: true });
+    } finally { out.restore(); }
+  });
+
+  test.each([
+    [503, { code: "affinity_reset_not_persisted", retryable: true }, "affinity_reset_not_persisted", true],
+    [503, { ok: true, provider: "anthropic", affinityResetConfirmed: true }, "affinity_reset_failed", false],
+    [200, { ok: true }, "affinity_reset_unconfirmed", false],
+    [200, null, "affinity_reset_unconfirmed", false],
+    [200, { ok: true, provider: "anthropic2", affinityResetConfirmed: true }, "affinity_reset_unconfirmed", false],
+    [200, { ok: true, provider: "anthropic", affinityResetConfirmed: false }, "affinity_reset_unconfirmed", false],
+  ] as const)("HTTP %s without matching durable confirmation fails (%#)", async (status, json, code, retryable) => {
+    const { cmdAccount } = await import("../../src/cli/account");
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAccount(["reset-affinity", "anthropic", "--json"], deps(() => ({ status, json }), calls))).toBe(1);
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(out.lines.join(""))).toEqual({ ok: false, code, retryable });
+    } finally { out.restore(); }
+  });
+
+  test.each([[], ["openai"], ["anthropic", "account-id"], ["anthropic", "--unknown"]].map(args => ({ args })))("rejects invalid arguments before dispatch (%#)", async ({ args }) => {
+    const { cmdAccount } = await import("../../src/cli/account");
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAccount(["reset-affinity", ...args, "--json"], deps(() => ({ json: {} }), calls))).toBe(1);
+      expect(calls).toHaveLength(0);
+      expect(JSON.parse(out.lines.join(""))).toMatchObject({ ok: false, code: "invalid_arguments" });
+    } finally { out.restore(); }
+  });
+});
+
 describe("ocx account pause / resume", () => {
   test("Anthropic ambiguous aliases fail without a write; exact ids still win", async () => {
     const out = capture();
