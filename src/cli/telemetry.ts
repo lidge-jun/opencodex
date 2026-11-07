@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isatty } from "node:tty";
 import { getConfigDir, mutatePersistedConfig, readConfigDiagnostics } from "../config";
+import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { resolveTelemetryStatus } from "../telemetry/consent";
@@ -95,7 +96,10 @@ export async function maybeShowTelemetryPrompt(): Promise<void> {
       const deferralPath = join(dir, TELEMETRY_DEFERRAL_FILE);
       let record: string | null = null;
       try {
-        if (existsSync(deferralPath)) record = readFileSync(deferralPath, "utf8");
+        const stat = lstatSync(deferralPath);
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+          record = readFileSync(deferralPath, "utf8");
+        }
       } catch { /* best-effort */ }
       const version = currentVersion();
       if (isTelemetryDeferralCurrent(record, version, Date.now())) return;
@@ -105,7 +109,7 @@ export async function maybeShowTelemetryPrompt(): Promise<void> {
       try {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
         recordOwnedConfigPath(dir, deferralPath);
-        writeFileSync(deferralPath, `${new Date().toISOString()} ${version}`, { encoding: "utf8", mode: 0o600 });
+        atomicWriteFileNoFollow(deferralPath, `${new Date().toISOString()} ${version}\n`);
       } catch { /* best-effort */ }
       return;
     }

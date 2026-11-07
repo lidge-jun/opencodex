@@ -335,9 +335,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
-        readCliConfigForMutation();
+        const current = readCliConfigForMutation();
+        const agentDriven = isAgentDriven();
         const rawInput = loadInput(path);
-        if (isAgentDriven() && rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
+        if (agentDriven && rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
           delete (rawInput as Record<string, unknown>).telemetry;
           console.warn("Note: dropped telemetry block during agent-driven config import; use `ocx telemetry` to manage telemetry consent.");
         }
@@ -347,6 +348,14 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
           if (client.kind === "connected" && (imported.runtimeRole !== "client"
             || JSON.stringify(imported.client) !== JSON.stringify(client.value))) {
             throw new Error("config import refused: disconnect the active client before replacing its connection");
+          }
+          if (agentDriven) {
+            const persistedTelemetry = readConfigDiagnostics({ passive: true }).config.telemetry ?? current.telemetry;
+            if (persistedTelemetry !== undefined) {
+              imported.telemetry = structuredClone(persistedTelemetry);
+            } else {
+              delete imported.telemetry;
+            }
           }
           saveConfig(imported);
         });

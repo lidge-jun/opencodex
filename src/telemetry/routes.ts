@@ -41,7 +41,7 @@ export async function buildTelemetryStatusSnapshot(
     ? computeInstallDayHash(identity.installId, day)
     : TELEMETRY_PREVIEW_HASH_PLACEHOLDER;
   const newInstall = identity
-    ? state.firstReportSentForInstallId !== identity.installId
+    ? identity.firstReportSent !== true
     : true;
   const preview = buildTelemetryPayloadV1({
     aggregate,

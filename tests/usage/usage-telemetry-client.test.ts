@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readConfigDiagnostics, telemetryConfigError } from "../../src/config/diagnostics";
@@ -35,7 +35,15 @@ import {
   telemetryIdPath,
 } from "../../src/telemetry/install-id";
 import { buildTelemetryPayloadV1, resolveInstallChannel } from "../../src/telemetry/payload";
-import { readTelemetryState, runTelemetryTick } from "../../src/telemetry/scheduler";
+import {
+  nudgeTelemetryScheduler,
+  readTelemetryState,
+  runTelemetryTick,
+  startTelemetryScheduler,
+  stopTelemetryScheduler,
+  telemetryStatePath,
+  writeTelemetryState,
+} from "../../src/telemetry/scheduler";
 import { sendTelemetryPayload, setTelemetrySenderOverridesForTests } from "../../src/telemetry/sender";
 import type { OcxConfig } from "../../src/types";
 import type { PersistedUsageEntry } from "../../src/usage/log";
@@ -346,6 +354,35 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     expect(aggregateTelemetryEntriesForDay(day, []).activeMinutes).toBe(0);
   });
 
+  test("disjointTelemetryTokens legacy fallback keeps 5-bucket sum equal to usageDisplayTotalTokens and ACCOUNT_SUFFIX_RE matches k + 32 hex", () => {
+    const legacyUsage = {
+      inputTokens: 250,
+      cacheReadInputTokens: 600,
+      cacheCreationInputTokens: 150,
+      outputTokens: 400,
+      reasoningOutputTokens: 120,
+      totalTokens: 1400,
+    };
+    const buckets = disjointTelemetryTokens(legacyUsage);
+    const sum =
+      buckets.inputTokens
+      + buckets.cacheReadTokens
+      + buckets.cacheWriteTokens
+      + buckets.outputTokens
+      + buckets.reasoningTokens;
+    expect(sum).toBe(usageDisplayTotalTokens(legacyUsage)!);
+    expect(buckets.inputTokens).toBe(750);
+    expect(buckets.cacheReadTokens).toBe(100);
+    expect(buckets.cacheWriteTokens).toBe(150);
+    expect(buckets.outputTokens).toBe(280);
+    expect(buckets.reasoningTokens).toBe(120);
+
+    expect(classifyProviderKind(`openai-k${"a1b2c3d4".repeat(4)}`)).toBe("openai");
+    expect(classifyProviderKind("openai-p123456")).toBe("openai");
+    expect(classifyProviderKind("openai-o123456")).toBe("openai");
+    expect(classifyProviderKind("openai-k123456")).toBe("other");
+  });
+
   test("installChannel mapping covers desktop, docker, and package managers", () => {
     expect(resolveInstallChannel({ env: { OCX_DESKTOP_SUPERVISED: "1" } })).toBe("desktop");
     expect(resolveInstallChannel({ env: {}, exists: p => p === "/.dockerenv" })).toBe("docker");
@@ -422,6 +459,82 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     });
     expect(tick3).toEqual({ sent: false, reason: "up-to-date" });
     expect(readTelemetryState(home).lastSentDay).toBe("2026-11-06");
+
+    // Deleting the install id after a successful tick leaves no trace of the raw installId in configDir.
+    const rawInstallId = readTelemetryInstallId(home)!.installId;
+    expect(deleteTelemetryInstallId(home)).toBe(true);
+    for (const entry of readdirSync(home)) {
+      const full = join(home, entry);
+      if (lstatSync(full).isFile()) {
+        expect(readFileSync(full, "utf8")).not.toContain(rawInstallId);
+      }
+    }
+  });
+
+  test("writeTelemetryState replaces a symlinked telemetry-state.json without following it", () => {
+    const victim = join(home, "victim.txt");
+    writeFileSync(victim, "preserve-me", "utf8");
+    const stateFile = telemetryStatePath(home);
+    symlinkSync(victim, stateFile);
+    expect(lstatSync(stateFile).isSymbolicLink()).toBe(true);
+
+    writeTelemetryState(
+      {
+        version: 1,
+        sentDays: { "2026-11-06": "2026-11-07T00:00:00.000Z" },
+        lastSentDay: "2026-11-06",
+        lastSentAt: "2026-11-07T00:00:00.000Z",
+      } as never,
+      home,
+      NOW,
+    );
+
+    expect(readFileSync(victim, "utf8")).toBe("preserve-me");
+    expect(lstatSync(stateFile).isSymbolicLink()).toBe(false);
+    expect(readTelemetryState(home).lastSentDay).toBe("2026-11-06");
+  });
+
+  test("nudgeTelemetryScheduler clears previous nudge timer and runtime env opt-out stops the scheduler in both nudge and tick", async () => {
+    const prevEnv = process.env.OCX_TELEMETRY;
+    const prevDnt = process.env.DO_NOT_TRACK;
+    delete process.env.OCX_TELEMETRY;
+    delete process.env.DO_NOT_TRACK;
+    const clearSpy = spyOn(globalThis, "clearTimeout");
+    try {
+      startTelemetryScheduler({ startupDelayMs: 60_000, intervalMs: 60_000 });
+      clearSpy.mockClear();
+      // First nudge clears startupTimer (1 call); second and third nudges clear the prior nudgeTimer.
+      nudgeTelemetryScheduler();
+      nudgeTelemetryScheduler();
+      nudgeTelemetryScheduler();
+      expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+      // Setting OCX_TELEMETRY=0 at runtime stops the scheduler when nudged.
+      process.env.OCX_TELEMETRY = "0";
+      nudgeTelemetryScheduler();
+      delete process.env.OCX_TELEMETRY;
+
+      // Because the scheduler stopped, a subsequent nudge is a no-op and sets no new timer.
+      clearSpy.mockClear();
+      nudgeTelemetryScheduler();
+      expect(clearSpy.mock.calls.length).toBe(0);
+
+      // Restart and set DO_NOT_TRACK=1 before startupTimer fires triggerBackgroundTick:
+      startTelemetryScheduler({ startupDelayMs: 5, intervalMs: 60_000 });
+      process.env.DO_NOT_TRACK = "1";
+      await new Promise(resolve => setTimeout(resolve, 25));
+      delete process.env.DO_NOT_TRACK;
+      clearSpy.mockClear();
+      nudgeTelemetryScheduler();
+      expect(clearSpy.mock.calls.length).toBe(0);
+    } finally {
+      stopTelemetryScheduler();
+      clearSpy.mockRestore();
+      if (prevEnv === undefined) delete process.env.OCX_TELEMETRY;
+      else process.env.OCX_TELEMETRY = prevEnv;
+      if (prevDnt === undefined) delete process.env.DO_NOT_TRACK;
+      else process.env.DO_NOT_TRACK = prevDnt;
+    }
   });
 
   test("sendTelemetryPayload enforces its timeout and does not retry", async () => {

@@ -13,6 +13,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 
@@ -22,6 +23,7 @@ export const TELEMETRY_PREVIEW_HASH_PLACEHOLDER = "0".repeat(64);
 export interface TelemetryInstallIdentity {
   installId: string;
   createdAt: string;
+  firstReportSent?: boolean;
 }
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -44,7 +46,11 @@ function parseTelemetryId(text: string): TelemetryInstallIdentity | null {
     if (!UUID_V4_RE.test(raw.installId) || Number.isNaN(Date.parse(raw.createdAt))) {
       return null;
     }
-    return { installId: raw.installId.toLowerCase(), createdAt: raw.createdAt };
+    return {
+      installId: raw.installId.toLowerCase(),
+      createdAt: raw.createdAt,
+      firstReportSent: raw.firstReportSent === true,
+    };
   } catch {
     return null;
   }
@@ -141,6 +147,7 @@ export function ensureTelemetryInstallId(
   const identity: TelemetryInstallIdentity = {
     installId: randomUUID().toLowerCase(),
     createdAt: new Date().toISOString(),
+    firstReportSent: false,
   };
   const content = `${JSON.stringify({ version: 1, ...identity })}\n`;
   const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
@@ -173,19 +180,47 @@ export function ensureTelemetryInstallId(
   return { identity, freshlyCreated: true };
 }
 
+/** Mark `firstReportSent: true` inside `<OPENCODEX_HOME>/telemetry-id.json` after the first report succeeds. */
+export function markTelemetryFirstReportSent(configDir = getConfigDir()): void {
+  const existing = readTelemetryInstallId(configDir);
+  if (!existing || existing.firstReportSent === true) return;
+  const path = telemetryIdPath(configDir);
+  const updated: TelemetryInstallIdentity = {
+    installId: existing.installId,
+    createdAt: existing.createdAt,
+    firstReportSent: true,
+  };
+  try { recordOwnedConfigPath(configDir, path); } catch { /* best-effort */ }
+  atomicWriteFileNoFollow(path, `${JSON.stringify({ version: 1, ...updated })}\n`);
+  memo = { path, identity: updated };
+}
+
 /** Delete `<OPENCODEX_HOME>/telemetry-id.json` when telemetry is declined. */
 export function deleteTelemetryInstallId(configDir = getConfigDir()): boolean {
   const path = telemetryIdPath(configDir);
   if (memo?.path === path) memo = null;
+  let deleted = false;
   try {
     const stat = lstatSync(path);
-    if (stat.isSymbolicLink() || !stat.isFile()) return false;
-    unlinkSync(path);
-    return true;
+    if (!stat.isSymbolicLink() && stat.isFile()) {
+      unlinkSync(path);
+      deleted = true;
+    }
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return false;
-    return false;
+    if (errorCode(error) !== "ENOENT") deleted = false;
   }
+  const statePath = join(configDir, "telemetry-state.json");
+  try {
+    const stat = lstatSync(statePath);
+    if (!stat.isSymbolicLink() && stat.isFile() && stat.size <= 64 * 1024) {
+      const raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      if (raw && typeof raw === "object" && !Array.isArray(raw) && "firstReportSentForInstallId" in raw) {
+        delete raw.firstReportSentForInstallId;
+        atomicWriteFileNoFollow(statePath, `${JSON.stringify(raw, null, 2)}\n`);
+      }
+    }
+  } catch { /* best-effort */ }
+  return deleted;
 }
 
 export function computeInstallDayHash(installId: string, day: string): string {

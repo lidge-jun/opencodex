@@ -1,5 +1,6 @@
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { readConfigDiagnostics } from "../config/diagnostics";
 import { getConfigDir } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -7,7 +8,7 @@ import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import type { OcxConfig } from "../types";
 import { aggregateTelemetryForDay, type DailyTelemetryAggregate } from "./aggregate";
 import { isTelemetryEnvOptOut, resolveTelemetryStatus } from "./consent";
-import { computeInstallDayHash, ensureTelemetryInstallId } from "./install-id";
+import { computeInstallDayHash, ensureTelemetryInstallId, markTelemetryFirstReportSent } from "./install-id";
 import { buildTelemetryPayloadV1, resolveInstallChannel, type ResolveInstallChannelOptions } from "./payload";
 import { sendTelemetryPayload, type TelemetrySendOptions, type TelemetrySendResult } from "./sender";
 
@@ -22,7 +23,6 @@ export interface TelemetryState {
   sentDays: Record<string, string>;
   lastSentDay: string | null;
   lastSentAt: string | null;
-  firstReportSentForInstallId: string | null;
 }
 
 export function telemetryStatePath(configDir = getConfigDir()): string {
@@ -35,7 +35,6 @@ function emptyState(): TelemetryState {
     sentDays: {},
     lastSentDay: null,
     lastSentAt: null,
-    firstReportSentForInstallId: null,
   };
 }
 
@@ -59,8 +58,6 @@ export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
       sentDays,
       lastSentDay: typeof raw.lastSentDay === "string" ? raw.lastSentDay : null,
       lastSentAt: typeof raw.lastSentAt === "string" ? raw.lastSentAt : null,
-      firstReportSentForInstallId:
-        typeof raw.firstReportSentForInstallId === "string" ? raw.firstReportSentForInstallId : null,
     };
   } catch {
     return emptyState();
@@ -81,9 +78,8 @@ export function writeTelemetryState(state: TelemetryState, configDir = getConfig
     sentDays: prunedSentDays,
     lastSentDay: state.lastSentDay,
     lastSentAt: state.lastSentAt,
-    firstReportSentForInstallId: state.firstReportSentForInstallId,
   };
-  writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  atomicWriteFileNoFollow(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 export function utcMidnightMs(epochMs: number): number {
@@ -155,7 +151,7 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
   }
 
   const { identity } = ensureTelemetryInstallId(configDir);
-  const newInstall = state.firstReportSentForInstallId !== identity.installId;
+  const newInstall = identity.firstReportSent !== true;
   const installDayHash = computeInstallDayHash(identity.installId, targetDay);
   const aggregate = await (options.aggregateDay
     ? options.aggregateDay(targetDay)
@@ -171,23 +167,29 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
   if (!sendResult.ok) {
     return { sent: false, day: targetDay, reason: "send-failed", sendResult };
   }
+  markTelemetryFirstReportSent(configDir);
   const nowIso = new Date(now).toISOString();
   state.sentDays[targetDay] = nowIso;
   state.lastSentDay = targetDay;
   state.lastSentAt = nowIso;
-  state.firstReportSentForInstallId = identity.installId;
   writeTelemetryState(state, configDir, now);
   return { sent: true, day: targetDay, reason: "sent", sendResult };
 }
 
 let startupTimer: ReturnType<typeof setTimeout> | null = null;
 let intervalTimer: ReturnType<typeof setInterval> | null = null;
+let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
 let detachShutdownHook: (() => void) | null = null;
 let activeTick: Promise<TelemetryTickResult> | null = null;
 let running = false;
 
 function triggerBackgroundTick(): void {
-  if (!running || activeTick) return;
+  if (!running) return;
+  if (isTelemetryEnvOptOut(process.env) !== null) {
+    stopTelemetryScheduler();
+    return;
+  }
+  if (activeTick) return;
   activeTick = runTelemetryTick()
     .catch((): TelemetryTickResult => ({ sent: false, reason: "tick-error" }))
     .finally(() => {
@@ -226,6 +228,10 @@ export function stopTelemetryScheduler(): void {
     clearInterval(intervalTimer);
     intervalTimer = null;
   }
+  if (nudgeTimer) {
+    clearTimeout(nudgeTimer);
+    nudgeTimer = null;
+  }
   if (detachShutdownHook) {
     const detach = detachShutdownHook;
     detachShutdownHook = null;
@@ -235,12 +241,21 @@ export function stopTelemetryScheduler(): void {
 
 export function nudgeTelemetryScheduler(): void {
   if (!running) return;
+  if (isTelemetryEnvOptOut(process.env) !== null) {
+    stopTelemetryScheduler();
+    return;
+  }
   if (startupTimer) {
     clearTimeout(startupTimer);
     startupTimer = null;
   }
-  const timer = setTimeout(() => {
+  if (nudgeTimer) {
+    clearTimeout(nudgeTimer);
+    nudgeTimer = null;
+  }
+  nudgeTimer = setTimeout(() => {
+    nudgeTimer = null;
     triggerBackgroundTick();
   }, 10);
-  timer.unref?.();
+  nudgeTimer.unref?.();
 }

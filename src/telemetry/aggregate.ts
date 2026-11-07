@@ -3,6 +3,7 @@ import { normalizeCostTokens } from "../usage/cost";
 import { scanUsageLedgerCooperatively } from "../usage/ledger-scanner";
 import { isKnownRequestFailureCause, type PersistedUsageEntry } from "../usage/log";
 import { classifyRequestOutcome } from "../usage/request-outcome";
+import { usageDisplayTotalTokens } from "../usage/totals";
 import {
   TELEMETRY_MAX_MODELS,
   parseCalendarUtcDayMs,
@@ -30,7 +31,7 @@ export interface DailyTelemetryAggregate {
   errors: TelemetryErrorsV1;
 }
 
-const ACCOUNT_SUFFIX_RE = /-(?:main|[pko][0-9a-f]{6})$/i;
+const ACCOUNT_SUFFIX_RE = /-(?:main|[po][0-9a-f]{6}|k[0-9a-f]{32})$/i;
 
 const PRESET_TO_PROVIDER_KIND: Readonly<Record<string, TelemetryProviderKind>> = Object.freeze({
   openai: "openai",
@@ -183,6 +184,11 @@ export function disjointTelemetryTokens(usage: OcxUsage | undefined): DisjointTe
   }
   const reasoningTokens = Math.min(totalOutput, nonNegInt(usage.reasoningOutputTokens));
   const outputTokens = Math.max(0, totalOutput - reasoningTokens);
+  const displayTotal = nonNegInt(usageDisplayTotalTokens(usage));
+  const accounted = inputTokens + cacheReadTokens + cacheWriteTokens + outputTokens + reasoningTokens;
+  if (displayTotal > accounted) {
+    inputTokens += displayTotal - accounted;
+  }
   return {
     inputTokens,
     cacheReadTokens,

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { ManagementRequestIngress } from "../../src/server/management/context";
-import { TELEMETRY_PREVIEW_HASH_PLACEHOLDER, ensureTelemetryInstallId, resetTelemetryInstallIdMemoForTests, telemetryIdPath } from "../../src/telemetry/install-id";
+import { TELEMETRY_PREVIEW_HASH_PLACEHOLDER, readTelemetryInstallId, resetTelemetryInstallIdMemoForTests, telemetryIdPath } from "../../src/telemetry/install-id";
+import { runTelemetryTick } from "../../src/telemetry/scheduler";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -143,9 +144,6 @@ describe("/api/telemetry management routes", () => {
   });
 
   test("PUT /api/telemetry accepts a human dashboard session and deletes telemetry-id.json on decline", async () => {
-    ensureTelemetryInstallId(home);
-    expect(existsSync(telemetryIdPath(home))).toBe(true);
-
     const accepted = await call("PUT", "/api/telemetry", {
       body: { decision: "accepted" },
       principal: "gui-session",
@@ -160,6 +158,17 @@ describe("/api/telemetry management routes", () => {
     });
     expect(config.telemetry?.decision).toBe("accepted");
 
+    const tick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: Date.now() + 2 * 86_400_000,
+      fetch: (async () => new Response(JSON.stringify({ ok: true }), { status: 202 })) as unknown as typeof fetch,
+    });
+    expect(tick.sent).toBe(true);
+    const rawInstallId = readTelemetryInstallId(home)!.installId;
+    expect(existsSync(telemetryIdPath(home))).toBe(true);
+
     const declined = await call("PUT", "/api/telemetry", {
       body: { decision: "declined" },
       principal: "gui-session",
@@ -173,5 +182,11 @@ describe("/api/telemetry management routes", () => {
       decision: "declined",
     });
     expect(existsSync(telemetryIdPath(home))).toBe(false);
+    for (const entry of readdirSync(home)) {
+      const full = join(home, entry);
+      if (lstatSync(full).isFile()) {
+        expect(readFileSync(full, "utf8")).not.toContain(rawInstallId);
+      }
+    }
   });
 });
