@@ -34,6 +34,7 @@ import { decodeRoutedModelId, decodeRoutedModelIdOrThrow, encodeRoutedModelId } 
 import { effectiveProviderAliasDecision, resolveModelAlias } from "./providers/default-aliases";
 import { resolveBlockedModelRedirect } from "./lib/shadow-call";
 import { workBuddyCatalogIdentity } from "./providers/workbuddy";
+import { codeBuddyAiCatalogIdentity } from "./providers/codebuddy-ai";
 import { getRoutingCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -179,6 +180,7 @@ export function knownModelIdsForProvider(
         || account.credential.expires <= Date.now()) return undefined;
       key = account.credential.access;
       if (provName === "workbuddy-ai") return workBuddyCatalogIdentity(key, account.credential.workbuddy);
+      if (provName === "codebuddy-ai") return codeBuddyAiCatalogIdentity(key, account.credential.codeBuddyAi);
       if (routed.adapter === "devin") destination = validateDevinApiBaseUrl(account.credential.apiBaseUrl) ?? routed.baseUrl;
     }
     if (!key) return undefined;

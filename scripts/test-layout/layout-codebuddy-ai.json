@@ -1,0 +1,6 @@
+{
+  "codebuddy-ai-login.test.ts": "oauth",
+  "codebuddy-ai-adapter.test.ts": "adapters",
+  "codebuddy-ai-provider.test.ts": "providers",
+  "codebuddy-ai-quota.test.ts": "providers"
+}

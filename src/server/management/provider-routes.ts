@@ -71,6 +71,7 @@ import {
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
 import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
+import { extractCodeBuddyAiModels } from "../../providers/codebuddy-ai-models";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
@@ -1708,7 +1709,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
+      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy, codeBuddyAi: snapshot?.codeBuddyAi,
     });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
@@ -1771,8 +1772,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const googleAiStudio = !ccaModels && isAiStudio
         ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
         : undefined;
+      const codeBuddyModels = discovery.spec?.format === "codebuddy-ai"
+        ? extractCodeBuddyAiModels(bounded.value, discovery.maxModels)
+        : undefined;
       const extracted = ccaModels
         ? undefined
+        : codeBuddyModels
+        ? codeBuddyModels
         : googleAiStudio?.ok
         ? googleAiStudio
         : Array.isArray(bounded.value) || Array.isArray(record?.data)
@@ -1787,7 +1793,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined)}`,
         });
       }
-      const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
+      const models = ccaModels?.length
+        ?? (codeBuddyModels && "items" in codeBuddyModels ? codeBuddyModels.items.length : undefined)
+        ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
       return jsonResponse({
         ok: true,
         latencyMs,

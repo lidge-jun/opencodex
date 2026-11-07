@@ -1,5 +1,6 @@
 import { createAnthropicAdapter } from "./anthropic";
 import { createWorkBuddyAdapter } from "./workbuddy";
+import { createCodeBuddyAiAdapter } from "./codebuddy-ai";
 import { createDshAccountAdapter } from "./dsh-account";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
@@ -78,6 +79,10 @@ export const ADAPTER_REGISTRY = {
   "workbuddy-ai": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createWorkBuddyAdapter(provider)),
+  },
+  "codebuddy-ai": {
+    contractParent: "openai-chat",
+    create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createCodeBuddyAiAdapter(provider)),
   },
   codebuddy: {
     wire: "codebuddy",
