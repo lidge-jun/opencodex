@@ -12,7 +12,7 @@ import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 export const AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 export const MAX_AFFINITY_ENTRIES = 2_000;
 export const MAX_AFFINITY_FILE_BYTES = 1_048_576;
-const TOUCH_DELAY_MS = 1_000;
+const WRITE_DELAY_MS = 1_000;
 type Entry = { accountId: string; lastUsedAt: number; loginFence?: string };
 type AccountSnapshot = ReturnType<typeof getAccountSet>;
 type Fences = ReadonlyMap<string, string | undefined>;
@@ -79,16 +79,22 @@ export class AnthropicSessionAffinityStore implements Iterable<[string, Entry]> 
   }
   private trim(scope: Scope): void {
     if (scope.rows.size <= MAX_AFFINITY_ENTRIES) return;
-    const ordered = [...scope.rows].sort((a, b) => b[1].lastUsedAt - a[1].lastUsedAt);
-    for (const [key] of ordered.slice(MAX_AFFINITY_ENTRIES)) scope.rows.delete(key);
+    if (scope.rows.size > MAX_AFFINITY_ENTRIES + 1) {
+      const ordered = [...scope.rows].sort((a, b) => b[1].lastUsedAt - a[1].lastUsedAt);
+      for (const [key] of ordered.slice(MAX_AFFINITY_ENTRIES)) scope.rows.delete(key);
+      return;
+    }
+    let oldest: [string, Entry] | undefined;
+    for (const row of scope.rows) {
+      if (!oldest || row[1].lastUsedAt <= oldest[1].lastUsedAt) oldest = row;
+    }
+    if (oldest) scope.rows.delete(oldest[0]);
   }
-  private changed(scope: Scope, touch = false): void {
+  private changed(scope: Scope): void {
     scope.dirty = true;
     scope.revision++;
-    if (touch) {
-      scope.timer ??= setTimeout(() => { scope.timer = undefined; void this.flushScope(scope); }, TOUCH_DELAY_MS);
-      scope.timer.unref();
-    } else { void this.flushScope(scope); }
+    scope.timer ??= setTimeout(() => { scope.timer = undefined; void this.flushScope(scope); }, WRITE_DELAY_MS);
+    scope.timer.unref();
   }
   private flushSync(scope: Scope): void {
     if (!scope.active || !scope.dirty || this.scope !== scope) return;
@@ -102,6 +108,14 @@ export class AnthropicSessionAffinityStore implements Iterable<[string, Entry]> 
   async flush(): Promise<void> {
     const scope = this.scope;
     if (scope) await this.flushScope(scope);
+  }
+  /** Operator acknowledgements require publication, not only completion of an attempt. */
+  async flushConfirmed(): Promise<boolean> {
+    const scope = this.scope;
+    if (!scope) return true;
+    await this.flushScope(scope);
+    if (scope.pending) await scope.pending;
+    return this.scope === scope && scope.active && !scope.dirty && getConfigDir() === scope.home;
   }
   private async flushScope(scope: Scope): Promise<void> {
     if (!scope?.active) return;
@@ -142,11 +156,10 @@ export class AnthropicSessionAffinityStore implements Iterable<[string, Entry]> 
     const fences = this.fences(snapshot);
     const scope = this.current(fences);
     if (!fences.has(value.accountId)) { this.delete(key); return; }
-    const previous = scope.rows.get(key);
     const loginFence = fences.get(value.accountId);
     scope.rows.set(key, { accountId: value.accountId, lastUsedAt: value.lastUsedAt, loginFence });
     this.trim(scope);
-    this.changed(scope, previous?.accountId === value.accountId && previous.loginFence === loginFence);
+    this.changed(scope);
   }
   /** Roster mutations validate every binding once, against one captured auth generation. */
   invalidate(snapshot: AccountSnapshot = getAccountSet(this.instance), keep: (accountId: string) => boolean = () => true): number {

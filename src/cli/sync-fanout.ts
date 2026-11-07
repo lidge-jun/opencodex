@@ -82,8 +82,19 @@ export function classifySyncResult(result: { code: number; stdout: string; stder
 }
 
 export type HomeResult = { state: "synced" | "stale" | "skipped" | "failed"; exit: number };
-export type ChildResult = { linkId: string; alias: string; state: "synced" | "skipped" | "failed" | "timed-out"; reason: string | null; exit: number | null };
+export type ChildResult = { linkId: string; alias: string; state: "synced" | "skipped" | "failed" | "timed-out"; reason: string | null; exit: number | null; hint?: string };
 export type FanoutDocument = { schema: "ocx.sync.fanout/1"; home: HomeResult; fanout: { state: "ran" | "disabled" | "not-applicable" | "failed"; reason: string | null }; children: ChildResult[] };
+
+function childSkipHint(reason: string | null, alias: string): string {
+  if (reason === "child-ocx-lacks-expect-link") return `Update OpenCodex on ${alias} to >= 2.93.0 using the installer that owns its selected ocx. For Desktop on headless Windows, use Check for Updates in the signed-in Desktop tray.`;
+  if (reason === "child-updating") return "Wait for the Child update to finish, then retry sync.";
+  if (reason === "child-link-mismatch:pending_operation" || reason === "child-link-mismatch:disconnect_pending") return "Wait for the Child's link operation to finish, then check its link and retry sync.";
+  if (reason === "child-link-mismatch:disconnected" || reason === "child-link-mismatch:other_link") return "Please re-link this Child to this Home, then retry sync.";
+  if (reason?.startsWith("child-link-mismatch")) return "Check the Child's Remote Link connection and re-link it to this Home if needed, then retry sync.";
+  if (reason === "child-ocx-version-unknown") return "Check the Child's selected OpenCodex installation and version, then retry sync.";
+  if (reason === "child-platform-unsupported") return "Check the Child's platform and Remote Link setup before retrying sync.";
+  return "Check the Child's sync status and retry sync.";
+}
 
 export async function runHomeFanout(deps: {
   home: HomeResult; catalogCurrent: boolean; localOnly?: boolean; applicable?: boolean;
@@ -130,7 +141,7 @@ export async function runHomeFanout(deps: {
             timer = setTimeout(() => resolve({ state: "timed-out", reason: "termination-unconfirmed", exit: null }), budget + (deps.terminationGraceMs ?? 3000));
           }),
         ]);
-        result.children[index] = { linkId: link.id, alias: link.alias, ...child };
+        result.children[index] = { linkId: link.id, alias: link.alias, ...child, ...(child.state === "skipped" ? { hint: childSkipHint(child.reason, link.alias) } : {}) };
       } catch { result.children[index] = classify(link, "failed", "internal-error"); }
       finally { if (timer !== undefined) clearTimeout(timer); }
     }
@@ -141,10 +152,10 @@ export async function runHomeFanout(deps: {
 
 export function fanoutExitCode(document: FanoutDocument): number {
   if (document.home.exit !== 0) return document.home.exit;
-  return document.fanout.state === "failed" || document.children.some(child => child.state === "failed" || child.state === "timed-out") ? SYNC_FANOUT_PARTIAL_EXIT : 0;
+  return document.fanout.state === "failed" || document.children.some(child => child.state === "failed" || child.state === "timed-out" || (child.state === "skipped" && child.hint !== undefined)) ? SYNC_FANOUT_PARTIAL_EXIT : 0;
 }
 
 export function renderFanoutJson(document: FanoutDocument): string { return JSON.stringify(document); }
 export function renderFanoutHuman(document: FanoutDocument): string[] {
-  return document.children.map(child => `${child.alias} (${child.linkId}): ${child.state}${child.reason ? ` (${child.reason})` : ""}`);
+  return document.children.map(child => `${child.alias} (${child.linkId}): ${child.state}${child.reason ? ` (${child.reason})` : ""}${child.hint ? ` — ${child.hint}` : ""}`);
 }

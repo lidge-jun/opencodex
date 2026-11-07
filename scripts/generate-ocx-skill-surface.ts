@@ -22,7 +22,7 @@ const DOMAINS = [
   { name: "agents-routing", roots: ["agent", "combo", "route", "fallback", "v2", "effort", "memory", "message", "advisor"] },
   { name: "integrations", roots: ["claude", "integration", "commandcode", "grok", "codex-shim"] },
   { name: "observe-system", roots: ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray"] },
-  { name: "access-remote", roots: ["link", "remote-workspace", "hub", "connect", "api", "access"] },
+  { name: "access-remote", roots: ["link", "remote-workspace", "hub", "connect", "disconnect", "api", "access"] },
   { name: "lab", roots: ["lab"] },
 ];
 

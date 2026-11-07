@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,11 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import * as proxyEnv from "../../src/lib/proxy-env";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 
 const originalFetch = globalThis.fetch;
 const originalHome = process.env.OPENCODEX_HOME;
@@ -23,6 +27,9 @@ const CREDITS = { type: "error", error: { type: "rate_limit_error", message: "Us
 const GENERIC = { type: "error", error: { type: "rate_limit_error", message: "Number of request tokens has exceeded your per-minute rate limit" } };
 let testDir = "";
 let releaseSpendHome: (() => void) | undefined;
+const inactiveFetch = (() => { throw new Error("No active in-memory fast-downgrade fixture"); }) as typeof fetch;
+let fixtureFetch = inactiveFetch;
+let configuredFetch: ReturnType<typeof spyOn> | undefined;
 
 function config(fastMode = true): OcxConfig {
   return {
@@ -37,6 +44,7 @@ function config(fastMode = true): OcxConfig {
         models: ["claude-opus-5-5"],
         // Anthropic Fast is opt-in; this suite exercises the enabled lane.
         fastEnabled: true,
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => fixtureFetch(input, init),
       },
     },
   } as OcxConfig;
@@ -74,10 +82,11 @@ interface Send {
 
 function fakeUpstream(answer: (index: number) => Response): Send[] {
   const sends: Send[] = [];
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  fixtureFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     sends.push({ body: JSON.parse(String(init?.body)) as Record<string, unknown>, headers: new Headers(init?.headers) });
     return answer(sends.length);
   }) as typeof fetch;
+  globalThis.fetch = fixtureFetch;
   return sends;
 }
 
@@ -87,6 +96,9 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-anthropic-fast-downgrade-"));
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
+  fixtureFetch = inactiveFetch;
+  // SOCKS dispatch may bypass global fetch, so pin the transport boundary as well.
+  configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => fixtureFetch(input, init));
 });
 
 function cleanupTestState(): void {
@@ -94,11 +106,14 @@ function cleanupTestState(): void {
     releaseSpendHome?.();
   } finally {
     releaseSpendHome = undefined;
+    fixtureFetch = inactiveFetch;
+    configuredFetch?.mockRestore(); configuredFetch = undefined;
     globalThis.fetch = originalFetch;
     if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = originalHome;
     rmSync(testDir, { recursive: true, force: true });
     resetWorkflowBudgetsForTest();
+    bindWorkflowBudgetConfig(null);
     clearKeyCooldowns();
   }
 }
@@ -164,9 +179,8 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
   });
 
   test("the standard resend is admitted through the request budget; a refused reservation keeps the original refusal", async () => {
-    // Anthropic's initial send runs on the reset-only leg, which does not charge the shared
-    // ledger (pre-existing, every adapter without a transient policy). The resend is the part
-    // this arm owns, so a zero-send budget must refuse it and hand the real refusal back.
+    // The root's initial send consumes its one request slot; a refused repair reservation
+    // preserves the provider's refusal without admitting another physical send.
     const sends = fakeUpstream(() => refusal(CREDITS));
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const rootId = "anthropic-fast-refused-repair-root";
@@ -174,16 +188,16 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
     expect(admitted?.admitted).toBe(true);
     if (admitted?.admitted) admitted.lease.release();
     const budget = createRequestExecutionBudget({
-      maxTotalModelSends: 0, baseSendAllowance: 0, finalRecoveryAllowance: 0,
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
       maxAlternateTargetSends: 0, maxTargetTransitions: 0,
-    }, "anthropic-fast-zero-send");
+    }, "anthropic-fast-one-send");
     const response = await handleResponses(request(rootId), config(), logCtx, { sendBudget: budget });
     const body = await response.text();
 
     expect(response.status).toBe(429);
     expect(body).toContain("Usage credits are required for fast mode.");
     expect(sends).toHaveLength(1);
-    expect(workflowBudgetSnapshot(rootId)?.sends).toBe(0);
+    expect(workflowBudgetSnapshot(rootId)?.sends).toBe(1);
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).not.toContain("anthropic-fast-downgrade");
   });
 
@@ -214,7 +228,7 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
     const admitted = admitWorkflowTurn(rootId, "interactive");
     expect(admitted?.admitted).toBe(true);
     if (admitted?.admitted) admitted.lease.release();
-    chargeWorkflowSends(rootId, DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends - 1);
+    chargeWorkflowSends(rootId, DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends - 2);
     const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
     const budget = createRequestExecutionBudget(undefined, "anthropic-fast-workflow-child");
     const response = await handleResponses(request(rootId), config(), { model: "", provider: "" }, { sendBudget: budget });
@@ -222,7 +236,7 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
 
     expect(response.status).toBe(200);
     expect(sends).toHaveLength(2);
-    expect(budget.used).toBe(1);
+    expect(budget.used).toBe(2);
     expect(workflowBudgetSnapshot(rootId)?.sends).toBe(DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends);
 
     const next = await handleResponses(request(rootId), config(), { model: "", provider: "" });
@@ -230,6 +244,187 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
     expect(await next.text()).toContain("the task reached its send ceiling");
     expect(sends).toHaveLength(2);
   });
+});
+
+test("a physical workflow denial stops a reserved fast downgrade before fetch", async () => {
+  const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
+  const budget = createRequestExecutionBudget(undefined, "fast-denied-at-dispatch", {
+    beforePhysicalSend: () => false, charge: () => true, refund: () => {},
+  });
+  const response = await handleResponses(request(), config(), { model: "", provider: "" }, { sendBudget: budget });
+  expect(response.status).toBe(429);
+  expect(await response.text()).toContain("request_send_budget_exhausted");
+  expect(sends).toHaveLength(1);
+  expect(budget.used).toBe(0);
+});
+
+test("the last prepaid fast downgrade slot is confirmed once", async () => {
+  const rootId = "fast-last-prepaid-root";
+  const admitted = admitWorkflowTurn(rootId, "interactive");
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
+  const budget = createRequestExecutionBudget({ maxTotalModelSends: 2, baseSendAllowance: 2,
+    finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+  const response = await handleResponses(request(rootId), config(), { model: "", provider: "" }, { sendBudget: budget });
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(sends).toHaveLength(2);
+  expect(budget.used).toBe(2);
+  expect(workflowBudgetSnapshot(rootId)?.sends).toBe(2);
+});
+
+test("a fast downgrade confirms its hop once while an authorized reset replacement keeps its own allowance", async () => {
+  const configured = config();
+  configured.providers["anthropic-apikey"]!.retryOnReset = { replacements: 1 };
+  const sends = fakeUpstream(index => {
+    if (index === 2) throw Object.assign(new Error("synthetic reset"), { code: "ECONNRESET" });
+    return index === 1 ? refusal(CREDITS) : success();
+  });
+  const budget = createRequestExecutionBudget({ maxTotalModelSends: 3, baseSendAllowance: 3,
+    finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+  const response = await handleResponses(request(), configured, { model: "", provider: "" }, { sendBudget: budget });
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(sends).toHaveLength(3);
+  expect(sends.map(send => send.body.speed)).toEqual(["fast", undefined, undefined]);
+  expect(budget.used).toBe(3);
+});
+
+test("a root-only fast downgrade counts each physical send once and preserves the next allowance", async () => {
+  const rootId = "fast-observed-root";
+  const policy = { ...DEFAULT_WORKFLOW_BUDGET_POLICY, maxPhysicalSends: 3 };
+  bindWorkflowBudgetConfig({ workflowBudget: { maxPhysicalSends: 3 } });
+  const admitted = admitWorkflowTurn(rootId, "interactive", policy);
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
+  const first = await handleResponses(request(rootId), config(), { model: "", provider: "" });
+  expect(first.status).toBe(200);
+  await first.text();
+  expect(sends).toHaveLength(2);
+  expect(workflowBudgetSnapshot(rootId, policy)?.sends).toBe(2);
+  const next = await handleResponses(request(rootId), config(), { model: "", provider: "" });
+  expect(next.status).toBe(200);
+  await next.text();
+  expect(workflowBudgetSnapshot(rootId, policy)?.sends).toBe(3);
+  const exhausted = await handleResponses(request(rootId), config(), { model: "", provider: "" });
+  expect(exhausted.status).toBe(429);
+  await exhausted.text();
+  expect(sends).toHaveLength(3);
+});
+
+for (const limit of [1, 2]) test(`a legacy request budget obeys the root ceiling before a fast replay (${limit})`, async () => {
+  const rootId = "fast-legacy-root";
+  const policy = { ...DEFAULT_WORKFLOW_BUDGET_POLICY, maxPhysicalSends: limit };
+  bindWorkflowBudgetConfig({ workflowBudget: { maxPhysicalSends: limit } });
+  const admitted = admitWorkflowTurn(rootId, "interactive", policy);
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
+  const budget = createRequestExecutionBudget();
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(rootId), config(), logCtx, { sendBudget: budget });
+  expect(response.status).toBe(limit === 1 ? 429 : 200);
+  const body = await response.json();
+  if (limit === 1) {
+    expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+    expect(body.error.code).toBe("rate_limit_exceeded");
+    expect(logCtx.errorCode).toBe("workflow_sends_exhausted");
+  } else expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+  expect(sends).toHaveLength(limit);
+  expect(workflowBudgetSnapshot(rootId, policy)?.sends).toBe(limit);
+  expect(budget.used).toBe(limit);
+});
+
+test("a root exhausted during initial admission has the workflow refusal header and code", async () => {
+  const rootId = "fast-initial-root-race";
+  const policy = { ...DEFAULT_WORKFLOW_BUDGET_POLICY, maxPhysicalSends: 1 };
+  bindWorkflowBudgetConfig({ workflowBudget: { maxPhysicalSends: 1 } });
+  const admitted = admitWorkflowTurn(rootId, "interactive", policy);
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(() => success());
+  let claimedByOtherChild = false;
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    startRequest: () => {
+      if (!claimedByOtherChild) { chargeWorkflowSends(rootId, 1); claimedByOtherChild = true; }
+    }, charge: () => true, refund: () => {},
+  });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(rootId), config(), logCtx, { sendBudget: budget });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_sends_exhausted");
+  expect((await response.json()).error.code).toBe("rate_limit_exceeded");
+  expect(logCtx.errorCode).toBe("workflow_sends_exhausted");
+  expect(sends).toHaveLength(0);
+  expect(budget.used).toBe(0);
+  expect(workflowBudgetSnapshot(rootId, policy)?.sends).toBe(1);
+});
+
+test("request-local exhaustion retains its own code while the workflow still has allowance", async () => {
+  const rootId = "fast-request-only-refusal";
+  const admitted = admitWorkflowTurn(rootId, "interactive");
+  if (admitted?.admitted) admitted.lease.release();
+  const sends = fakeUpstream(() => success());
+  const configured = config();
+  configured.providers["anthropic-apikey"]!.retryOnReset = { replacements: 1 };
+  const budget = createRequestExecutionBudget({ maxTotalModelSends: 0, baseSendAllowance: 0,
+    finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(rootId), configured, logCtx, { sendBudget: budget });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBeNull();
+  expect((await response.json()).error.code).toBe("request_send_budget_exhausted");
+  expect(logCtx.errorCode).not.toBe("workflow_sends_exhausted");
+  expect(sends).toHaveLength(0);
+  expect(workflowBudgetSnapshot(rootId)?.sends).toBe(0);
+});
+
+function legacyAdmissionFixture() {
+  const rootId = "legacy-initial-admission-root";
+  const policy = { ...DEFAULT_WORKFLOW_BUDGET_POLICY, maxPhysicalSends: 1 };
+  bindWorkflowBudgetConfig({ workflowBudget: { maxPhysicalSends: 1 } });
+  const admitted = admitWorkflowTurn(rootId, "interactive", policy);
+  if (admitted?.admitted) admitted.lease.release();
+  const budget = createRequestExecutionBudget();
+  const translatorBudget = createTranslatorBudget();
+  const owner = createResponsesSendBudget({ req: request(rootId), logCtx: { model: "m", provider: "fixture" },
+    options: { sendBudget: budget, translatorBudget } });
+  if (owner instanceof Response) { translatorBudget.dispose(); throw new Error("fixture admission refused"); }
+  return { rootId, budget, owner, close: () => translatorBudget.dispose(),
+    sends: () => workflowBudgetSnapshot(rootId, policy)!.sends };
+}
+
+test("legacy initial admission releases an unused permit when another child exhausts the root", () => {
+  const fixture = legacyAdmissionFixture();
+  try {
+    const reservation = fixture.budget.reserveDispatch({ sendClass: "initial", targetKey: "fixture/m", countedExternally: true });
+    if (!reservation.allowed) throw new Error("fixture permit refused");
+    chargeWorkflowSends(fixture.rootId, 1);
+    expect(() => fixture.owner.noteInitialDispatch(reservation.permit)).toThrow("request send budget exhausted");
+    expect(fixture.budget.used).toBe(0);
+    expect(fixture.sends()).toBe(1);
+  } finally { fixture.close(); }
+});
+
+test("legacy initial admission cannot charge a root for a released permit", () => {
+  const fixture = legacyAdmissionFixture();
+  try {
+    const reservation = fixture.budget.reserveDispatch({ sendClass: "initial", targetKey: "fixture/m", countedExternally: true });
+    if (!reservation.allowed) throw new Error("fixture permit refused");
+    reservation.permit.release();
+    expect(() => fixture.owner.noteInitialDispatch(reservation.permit)).toThrow("request send budget exhausted");
+    expect(fixture.budget.used).toBe(0);
+    expect(fixture.sends()).toBe(0);
+  } finally { fixture.close(); }
+});
+
+test("a closed legacy reporter cannot claim another workflow send", () => {
+  const fixture = legacyAdmissionFixture();
+  try {
+    const reporter = fixture.owner.transientSendReporter();
+    reporter.close!();
+    expect(reporter.beforeSend!()).toBe(false);
+    expect(fixture.budget.used).toBe(0);
+    expect(fixture.sends()).toBe(0);
+  } finally { fixture.close(); }
 });
 
 for (const second of ["success", "rate", "billing"] as const) test(`key pool fast downgrade to ${second} counts each physical send once`, async () => {

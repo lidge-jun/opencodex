@@ -170,7 +170,7 @@ test("an aborted Usage fetch must not clear loading while its replacement is in 
     cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 1,
   };
   const usage = (generatedAt: number) => ({
-    range: "30d", surface: "all", sourceFilter: { client: "codex", device: { kind: "all" } }, legacyUnclassifiedRequests: 0, since: null, generatedAt,
+    range: "30d", surface: "all", sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0, since: null, generatedAt,
     summary, days: [], models: [], providers: [], historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
   });
   const STALE = usage(1);
