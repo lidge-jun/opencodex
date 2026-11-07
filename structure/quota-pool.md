@@ -50,6 +50,7 @@ reads, not added to the response path.
   passive read cannot establish currentness without consulting the OS keychain. The same rule
   applies to passive provider quota reads. Pool assembly selects enabled providers and validates
   held reports after the Codex snapshot yields, against the configuration used for projection.
+  Meta Muse account and provider rows also require their captured selection and credential owner to remain current; see the [provider contract](providers-and-adapters.md).
 
 Display-only `ProviderQuota` readings are excluded from both account and pooled decision windows.
 The rows remain present; without other evidence their quota is unknown. Account pause and reauth

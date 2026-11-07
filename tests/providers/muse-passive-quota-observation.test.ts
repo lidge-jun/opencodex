@@ -7,7 +7,7 @@
  * inspector and the real route handler rather than the helpers underneath them.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSseInspector } from "../../src/server/relay";
@@ -16,6 +16,7 @@ import {
   clearAccountQuotaCache,
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
+  flushProviderQuotaObservationsForTests,
   getCachedProviderAccountQuota,
   recordPassiveAccountQuota,
   resetProviderQuotaReconcileStateForTests,
@@ -26,6 +27,16 @@ import {
   parseMuseSubscriptionUsage,
 } from "../../src/providers/muse-subscription-usage";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
+import { setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { heldProviderQuotaReports, setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
+import { fetchMuseKeyQuota } from "../../src/providers/quota/vendor-probes-oauth";
+import { captureMuseQuotaOwner } from "../../src/providers/quota/muse-owner";
+import { resetMuseKeyQuotaBackoff } from "../../src/providers/muse-key-quota";
+import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
+import { handleResponses } from "../../src/server/responses";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { setQuotaResetSink } from "../../src/quota/reset-observer";
+import { resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -56,6 +67,17 @@ function writeMuseAccount(): void {
   }), { mode: 0o600 });
 }
 
+function writeTwoAccounts(withToken = false): void {
+  writeFileSync(join(testDir, "auth.json"), JSON.stringify({ "meta-muse": {
+    activeAccountId: ACCOUNT_ID,
+    accounts: [
+      { id: ACCOUNT_ID, credential: { access: "a", refresh: "a", expires: 9999999999999,
+        ...(withToken ? { muse: { oauthAccessToken: "account-token-a" } } : {}) } },
+      { id: "account-b", credential: { access: "b", refresh: "b", expires: 9999999999999 } },
+    ],
+  } }), { mode: 0o600 });
+}
+
 /** The frame Meta emits, wrapped as it arrives on the wire. */
 function usageFrame(fiveHour: number, weekly: number): string {
   return `data: ${JSON.stringify({
@@ -77,6 +99,7 @@ beforeEach(() => {
   // this file and would hand one test the previous test's row.
   clearProviderQuotaCache();
   resetProviderQuotaReconcileStateForTests();
+  resetMuseKeyQuotaBackoff();
 });
 
 afterEach(() => {
@@ -99,6 +122,29 @@ function observePayload(payload: unknown, servingAccountId: string | null, gener
 }
 
 describe("Muse subscription usage observed on the SSE seam", () => {
+  test.each([false, true])("real Responses dispatch checks account ABA (switch=%s)", async switched => {
+    writeTwoAccounts();
+    const original = globalThis.fetch;
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    globalThis.fetch = (async () => new Response(stream, { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, input: "hello" }),
+      }), museConfig(), { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      if (switched) {
+        expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+        expect(await setActiveAccount("meta-muse", ACCOUNT_ID)).toBe(true);
+      }
+      controller.enqueue(new TextEncoder().encode(usageFrame(40, 20) + 'data: {"type":"response.completed","response":{"id":"resp-test","status":"completed","output":[]}}\n\ndata: [DONE]\n\n'));
+      controller.close();
+      await response.text();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(switched ? undefined : 40);
+    } finally { release(); globalThis.fetch = original; }
+  });
   test("a stream carrying the frame writes the serving account's quota", () => {
     const generation = captureConfigGeneration();
     const inspector = createSseInspector({
@@ -209,6 +255,141 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
+  test("cached and held reports retire after an active-account switch", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 21, updatedAt: Date.now() }, captureConfigGeneration());
+    expect((await fetchProviderQuotaReports(config, true)).reports).toHaveLength(1);
+    expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+    expect(heldProviderQuotaReports(config).reports).toEqual([]);
+    expect((await fetchProviderQuotaReports(config)).reports).toEqual([]);
+    expect(await setActiveAccount("meta-muse", ACCOUNT_ID)).toBe(true);
+    expect(heldProviderQuotaReports(config).reports).toEqual([]);
+    expect((await fetchProviderQuotaReports(config)).reports).toEqual([]);
+  });
+
+  test("external credential replacement invalidates a held report without passive side effects", async () => {
+    const config = museConfig();
+    recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 21, updatedAt: Date.now() }, captureConfigGeneration());
+    expect((await fetchProviderQuotaReports(config, true)).reports).toHaveLength(1);
+    const path = join(testDir, "auth.json");
+    const store = JSON.parse(readFileSync(path, "utf8"));
+    store["meta-muse"].accounts[0].credential.access = "replacement";
+    writeFileSync(path, JSON.stringify(store));
+    const bytes = readFileSync(path, "utf8"), mode = statSync(path).mode;
+    let sinkCalls = 0, fetchCalls = 0;
+    const detach = registerDecisionQuotaSink(new Proxy({} as DecisionQuotaSink, { get: () => () => { sinkCalls++; } }));
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => { fetchCalls++; throw new Error("unexpected network"); }) as typeof fetch;
+    try {
+      expect(heldProviderQuotaReports(config).reports).toEqual([]);
+      expect(readFileSync(path, "utf8")).toBe(bytes);
+      expect(statSync(path).mode).toBe(mode);
+      expect(sinkCalls).toBe(0);
+      expect(fetchCalls).toBe(0);
+    } finally { globalThis.fetch = original; detach(); }
+  });
+
+  test("an in-band observation captured before an ABA switch cannot write", async () => {
+    writeTwoAccounts();
+    const owner = captureMuseQuotaOwner("meta-muse", ACCOUNT_ID);
+    expect(owner).not.toBeNull();
+    expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+    expect(await setActiveAccount("meta-muse", ACCOUNT_ID)).toBe(true);
+    recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 90, updatedAt: Date.now() }, captureConfigGeneration(), owner);
+    expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+  });
+
+  test("a delayed key probe cannot publish after selection or credential change", async () => {
+    writeTwoAccounts(true);
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const called = new Promise<void>(resolve => { started = resolve; });
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => { started(); return new Promise<Response>(resolve => { release = resolve; }); }) as typeof fetch;
+    try {
+      const pending = fetchMuseKeyQuota("meta-muse", museConfig());
+      await called;
+      expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+      expect(await setActiveAccount("meta-muse", ACCOUNT_ID)).toBe(true);
+      release(new Response(JSON.stringify({ is_subs_active: true, subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })));
+      expect(await pending).toBeNull();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = original; }
+  });
+
+  test("key probe checks replacement, disabled provider, and cache reset before writing", async () => {
+    for (const change of ["credential", "disabled", "paused", "reset"] as const) {
+      writeTwoAccounts(true);
+      clearAccountQuotaCache();
+      resetMuseKeyQuotaBackoff();
+      const config = museConfig();
+      let release!: (response: Response) => void;
+      let started!: () => void;
+      const called = new Promise<void>(resolve => { started = resolve; });
+      const original = globalThis.fetch;
+      globalThis.fetch = (() => { started(); return new Promise<Response>(resolve => { release = resolve; }); }) as typeof fetch;
+      try {
+        const pending = fetchMuseKeyQuota("meta-muse", config);
+        await called;
+        if (change === "credential") {
+          const path = join(testDir, "auth.json"), store = JSON.parse(readFileSync(path, "utf8"));
+          store["meta-muse"].accounts[0].credential.muse.oauthAccessToken = "new-account-token";
+          writeFileSync(path, JSON.stringify(store));
+        } else if (change === "disabled") config.providers["meta-muse"]!.disabled = true;
+        else if (change === "paused") await setAccountPaused("meta-muse", ACCOUNT_ID, true);
+        else clearAccountQuotaCache("meta-muse");
+        release(new Response(JSON.stringify({ is_subs_active: true, subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })));
+        expect(await pending).toBeNull();
+        expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      } finally { globalThis.fetch = original; }
+    }
+  });
+
+  test("an unchanged key probe publishes a bound report and cached row", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } }))) as typeof fetch;
+    try {
+      const response = await fetchProviderQuotaReports(config, true);
+      expect(response.reports[0]?.source).toBe("meta-muse:key-endpoint");
+      expect(response.reports[0]?.quota.fiveHourPercent).toBe(40);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+      expect(JSON.stringify(response)).not.toContain("account-token-a");
+      expect(heldProviderQuotaReports(config).reports).toHaveLength(1);
+      expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+      expect(heldProviderQuotaReports(config).reports).toEqual([]);
+    } finally { globalThis.fetch = original; }
+  });
+
+  test.each([false, true])("delayed reset observation checks its owner (switch=%s)", async switched => {
+    writeTwoAccounts();
+    const config = museConfig(), events: unknown[] = [];
+    resetQuotaResetStoreForTests();
+    setQuotaResetSink(event => events.push(event));
+    let release!: () => void, started!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    try {
+      recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 95, fiveHourResetAt: Date.now() - 1000, updatedAt: Date.now() }, captureConfigGeneration());
+      await fetchProviderQuotaReports(config, true);
+      await flushProviderQuotaObservationsForTests();
+      setProviderQuotaBeforeObservationForTests(async () => { started(); await waiting; });
+      recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 2, fiveHourResetAt: Date.now() + 3600000, updatedAt: Date.now() }, captureConfigGeneration());
+      await fetchProviderQuotaReports(config, true);
+      await entered;
+      if (switched) expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+      setProviderQuotaBeforeObservationForTests(null);
+      release();
+      await flushProviderQuotaObservationsForTests();
+      expect(events).toHaveLength(switched ? 0 : 1);
+    } finally {
+      setProviderQuotaBeforeObservationForTests(null);
+      setQuotaResetSink(null);
+      resetQuotaResetStoreForTests();
+    }
+  });
   test("carries the active account's observation with its observation time", async () => {
     const observedAt = Date.now() - 12 * 60_000;
     recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 21, weeklyPercent: 8, updatedAt: observedAt }, captureConfigGeneration());

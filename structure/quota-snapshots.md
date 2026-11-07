@@ -4,6 +4,7 @@
 quotas for restart recovery. The Codex snapshot also carries bounded observation history
 and separately identity-bound main-policy evidence; provider snapshots include Kiro's
 identity-bound exhaustion verdicts. Their existing hydration and expiry rules govern readers.
+Meta Muse rows carry a private owner digest and hydrate only while it matches the selected usable account and credential; legacy unbound rows are ignored. The digest is excluded from quota responses.
 
 ## Bounded write deferral
 
