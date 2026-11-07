@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Brazilian Portuguese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -123,6 +132,15 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Não foi possível salvar os limites de fluxo de trabalho.",
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
+  ...shellV2Copy("pt"),
+  ...modelsV2Copy("pt"),
+  ...accountsV2Copy("pt"),
+  ...subagentsV2Copy("pt"),
+  ...usageV2Copy("pt"),
+  ...logsV2Copy("pt"),
+  ...connectV2Copy("pt"),
+  ...startupV2Copy("pt"),
+  ...proxyV2Copy("pt"),
   "claude.tierDefaults.unset": "Não definido (manter configuração Claude)",
   "claude.tierDefaults.recovery": "Aplicação interrompida; restauração automática falhou. Verifique o backup abaixo antes de tentar novamente.",
   "claude.tierDefaults.title": "Modelos padrão da CLI",
@@ -2138,7 +2156,7 @@ export const pt: Record<TKey, string> = {
   "modal.useOauthLogin": "← Usar login OAuth",
   "nav.codexAuth": "Autenticação do Codex",
   "nav.codexSet": "Codex",
-  "nav.connect": "Conexão",
+  "nav.connect": "Rota",
   "nav.usageLogs": "Uso e logs",
   "nav.sectionNavigation": "Páginas da seção",
   "codexSet.tab.multiauth": "Multiautenticação",
@@ -3863,6 +3881,7 @@ export const pt: Record<TKey, string> = {
   "models.aliasStale": "obsoleto",
   "connection.discovering": "Descobrindo destinos locais e compartilhados…",
   "connection.machineUnavailable": "O plano da máquina local está indisponível. As requisições compartilhadas não foram redirecionadas para o local.",
+  "connection.clientStateChanged": "A conexão Remote Link salva deste Child está ausente ou agora aponta para outro proprietário ou link e não corresponde mais ao Child em execução. Pare ou reinicie este Child e verifique a conexão antes de vinculá-lo novamente.",
   "connection.linkManaged": "Gerenciado pelo Home {home} via Remote Link ({linkId}). Este painel mostra as configurações e a cota do Home somente para leitura; faça as alterações no Home.",
   "connection.linkManagedUnnamed": "Gerenciado pelo seu Home via Remote Link ({linkId}). Este painel mostra as configurações e a cota do Home somente para leitura; faça as alterações no Home.",
   "connection.disconnect": "Desconectar do hub",

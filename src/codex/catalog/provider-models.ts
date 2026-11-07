@@ -63,7 +63,7 @@ import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
-import { fetchQoderModels } from "../../adapters/qoder/live-models";
+import { discoverQoderModels, markQoderDiscoveryCommitted, qoderDiscoveryJoinable, uncommittedQoderDiscovery } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "../../adapters/codebuddy/profiles";
 import { fetchCodeBuddyModels } from "../../adapters/codebuddy/live-models";
@@ -451,19 +451,26 @@ export async function fetchProviderModelsWithAuth(
     // fingerprint so an account switch cannot observe another account's roster, even if a caller
     // bypasses the normal config mutation path that clears provider caches.
     const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
-    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    const discoveryScope = `${name}\0${cacheGeneration}`;
+    // A finished run no gather has stored yet (the dashboard test stopped waiting for it) outranks
+    // a fresh cached roster; the cached roster stays as the fallback until this one is stored (#8115).
+    const unstored = uncommittedQoderDiscovery(profile, apiKey, discoveryScope);
+    const fresh = unstored ? null : getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
-    if (isModelsFetchCoolingDown(name) && scopedStale) {
+    // A run another caller started (the dashboard test) is joined even inside the failure
+    // cooldown: its late success is what the catalog re-sync after it is waiting for.
+    if (!unstored && isModelsFetchCoolingDown(name) && scopedStale && !qoderDiscoveryJoinable(profile, apiKey, discoveryScope)) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       ), "degraded");
     }
-    const live = await fetchQoderModels(profile, apiKey);
+    // Background discovery: waits for the full CLI bound, shared with any concurrent caller.
+    const live = unstored ?? await discoverQoderModels(profile, apiKey, discoveryScope);
     if (live.ok) {
       const discovered = live.models.map(id => ({
         id,
@@ -474,6 +481,7 @@ export async function fetchProviderModelsWithAuth(
       if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      markQoderDiscoveryCommitted(profile, apiKey, discoveryScope);
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }

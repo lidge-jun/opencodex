@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saveFailed": "워크플로 한도를 저장하지 못했습니다.",
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
+  ...shellV2Copy("ko"),
+  ...modelsV2Copy("ko"),
+  ...accountsV2Copy("ko"),
+  ...subagentsV2Copy("ko"),
+  ...usageV2Copy("ko"),
+  ...logsV2Copy("ko"),
+  ...connectV2Copy("ko"),
+  ...startupV2Copy("ko"),
+  ...proxyV2Copy("ko"),
   "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
   "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",
   "claude.tierDefaults.title": "CLI 티어 기본 모델",
@@ -465,12 +483,12 @@ export const ko: Record<TKey, string> = {
   "startup.desktopReopenRecovery": "OpenCodex를 다시 열고 ‘로그인 시 시작’ 설정을 확인하세요.",
   "startup.protection.service": "백그라운드 서비스",
   "startup.protection.shim": "Launcher shim",
-  "startup.protection.none": "설치되지 않음",
+  "startup.protection.none": "미설치",
   "startup.details": "보호 상태 상세",
   "startup.service": "백그라운드 서비스",
   "startup.serviceHint": "로그인할 때 시작하고 프록시가 중단되면 다시 실행합니다.",
   "startup.installed": "설치됨",
-  "startup.notInstalled": "설치되지 않음",
+  "startup.notInstalled": "미설치",
   "startup.unsupported": "지원되지 않음",
   "startup.shim": "Codex launcher shim",
   "startup.shimHint": "지원되는 Codex 스크립트 런처가 시작될 때 ocx ensure를 실행합니다.",
@@ -500,7 +518,7 @@ export const ko: Record<TKey, string> = {
   "startup.tray.running": "실행 중",
   "startup.tray.stopped": "설치됨, 숨김",
   "startup.tray.stale": "복구 필요",
-  "startup.tray.notInstalled": "설치되지 않음",
+  "startup.tray.notInstalled": "미설치",
   "startup.tray.loading": "확인 중…",
   "startup.tray.unavailable": "상태 확인 불가",
   "startup.tray.install": "트레이 설치 및 표시",
@@ -1614,7 +1632,7 @@ export const ko: Record<TKey, string> = {
   "nav.api": "API",
 "nav.codexAuth": "Codex 인증",
   "nav.codexSet": "Codex",
-  "nav.connect": "연결",
+  "nav.connect": "라우트",
   "nav.usageLogs": "사용량 & 로그",
   "nav.sectionNavigation": "섹션 페이지",
   "codexSet.tab.multiauth": "다중 인증",
@@ -1970,7 +1988,7 @@ export const ko: Record<TKey, string> = {
   "integrations.error.generic": "연동 변경에 실패했습니다. 이전 상태는 유지되었습니다.",
   "integrations.error.nonLoopback": "{client}은(는) localhost 프록시에만 연결할 수 있습니다. 원격 바인드에 필요한 인증 헤더를 넣을 자리가 설정 파일에 없어 직접 작성해도 마찬가지입니다. 터널이나 로컬 포워더로 loopback 경로를 열어주세요.",
   "integrations.status.installed": "설치 감지됨",
-  "integrations.status.notInstalled": "설치되지 않음",
+  "integrations.status.notInstalled": "미설치",
   "integrations.status.appliedAt": "적용",
   "integrations.status.supersededStore": "이 클라이언트는 이제 {path}에서 프로바이더를 읽습니다. opencodex는 이 파일을 쓰지 않으므로 여기서 켜도 클라이언트가 불러오는 내용은 달라지지 않습니다.",
   "integrations.status.missingStore": "이 클라이언트는 프로바이더를 {path}에 보관하지만 이 파일이 없습니다. 클라이언트가 다음 시작 때 이전 설정 파일을 옮겨서 가져오므로, opencodex는 대신 그 설정 파일에 쓰지 않습니다. {path} 파일을 {document} 내용으로 만든 뒤 '적용'을 다시 누르세요.",
@@ -2394,7 +2412,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.oauthCancelled": "로그인이 취소되었습니다.",
   "codexAuth.loginFailed": "로그인에 실패했습니다",
   "codexAuth.needsReauth": "재로그인",
-  "codexAuth.reauthenticate": "Re-authenticate",
+  "codexAuth.reauthenticate": "재인증",
   "codexAuth.tokenExpired": "토큰 만료 — 이 계정을 다시 인증하세요",
   "codexAuth.mainTokenExpired": "토큰 만료 — 아래 디바이스 코드 또는 Codex 앱 로그인으로 다시 로그인하세요",
   "codexAuth.mainReauthSucceeded": "로그인됨",
@@ -3844,6 +3862,7 @@ export const ko: Record<TKey, string> = {
   "models.aliasStale": "오래됨",
   "connection.discovering": "로컬 및 공유 대상을 확인하는 중…",
   "connection.machineUnavailable": "로컬 머신 연결을 사용할 수 없습니다. 공유 요청을 로컬로 우회하지 않았습니다.",
+  "connection.clientStateChanged": "이 Child에 저장된 Remote Link 연결이 없거나 다른 소유자 또는 링크를 가리키고 있어, 실행 중인 Child와 더 이상 일치하지 않습니다. 다시 연결하기 전에 이 Child를 중지하거나 재시작하고 연결 상태를 확인하세요.",
   "connection.linkManaged": "Remote Link({linkId})를 통해 Home {home}이(가) 관리합니다. 이 대시보드는 Home의 설정과 할당량을 읽기 전용으로 보여 줍니다. 변경은 Home에서 하세요.",
   "connection.linkManagedUnnamed": "Remote Link({linkId})를 통해 Home이 관리합니다. 이 대시보드는 Home의 설정과 할당량을 읽기 전용으로 보여 줍니다. 변경은 Home에서 하세요.",
   "connection.disconnect": "허브 연결 해제",

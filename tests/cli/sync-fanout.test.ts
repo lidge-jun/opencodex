@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifySyncResult, classifyVersionProbe, fanoutExitCode, runHomeFanout } from "../../src/cli/sync-fanout";
+import { classifySyncResult, classifyVersionProbe, fanoutExitCode, renderFanoutHuman, renderFanoutJson, runHomeFanout } from "../../src/cli/sync-fanout";
 import { LinkStatusError } from "../../src/cli/sync-link-status";
 import type { LinkRecord } from "../../src/link/store";
 
@@ -108,4 +108,33 @@ test("three stalled workers release a fourth after one deadline wave", async () 
   expect(starts).toHaveLength(4);
   expect(starts[3]).toBeLessThan(300);
   expect(result.children.map(child => child.state)).toEqual(["timed-out", "timed-out", "timed-out", "synced"]);
+});
+
+test("connected skipped Children make fan-out partial with actionable hints", async () => {
+  const reasons = ["child-ocx-lacks-expect-link", "child-link-mismatch:disconnected", "child-link-mismatch:other_link", "child-updating"];
+  const links: LinkRecord[] = reasons.map((_, i) => ({ id: `lnk_${String(i).padStart(16, "0")}`, alias: `host${i}`, direction: "hub-initiated", hostKeyFingerprint: "SHA256:AAAAAAAAAAAAAAAA", tunnelPort: 25000 + i, apiKeyId: `key${i}`, createdAt: "2026-01-01T00:00:00Z" }));
+  const result = await runHomeFanout({
+    home: { state: "synced", exit: 0 }, catalogCurrent: true,
+    readStore: () => ({ version: 1, listenerPort: 27000, links }),
+    readLinkStatus: async () => ({ role: "home", listener: { state: "listening", port: 27000 }, child: null, links: links.map(link => ({ ...link, state: "connected", since: link.createdAt, reason: null, lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null })) }),
+    runChild: async link => ({ state: "skipped", reason: reasons[links.indexOf(link)]!, exit: 5 }),
+  });
+  expect(fanoutExitCode(result)).toBe(6);
+  const json = JSON.parse(renderFanoutJson(result));
+  expect(json.schema).toBe("ocx.sync.fanout/1");
+  expect(json.children.map((child: { reason: string }) => child.reason)).toEqual(reasons);
+  expect(json.children[0].hint).toContain("2.93.0");
+  expect(json.children[0].hint).toContain("host0");
+  expect(json.children[0].hint).toContain("installer that owns");
+  expect(json.children[0].hint).not.toContain("Update OpenCodex Desktop");
+  expect(json.children[0].hint).toContain("Check for Updates");
+  expect(json.children[1].hint).toContain("re-link");
+  expect(json.children[2].hint).toContain("re-link");
+  expect(json.children[3].hint).toContain("Wait");
+  const lines = renderFanoutHuman(result);
+  for (let i = 0; i < links.length; i++) {
+    expect(lines[i]).toContain(links[i]!.alias);
+    expect(lines[i]).toContain(json.children[i].hint);
+  }
+  expect(fanoutExitCode({ ...result, children: [result.children[0]!, { ...result.children[1]!, state: "synced", reason: null }] })).toBe(6);
 });

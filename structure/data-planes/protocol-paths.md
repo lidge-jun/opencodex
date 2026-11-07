@@ -225,9 +225,9 @@ the wire-silence heartbeat and live-destination stall watchdog ([timeout policy]
 converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
 (ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`,
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
-`anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
+`anthropicIncompleteOutcome`, `anthropicFailedStatus`, `isContextOverflowError`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector. Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
+the existing collector. Messages terminal errors use the shared overflow verdict for their code as well as their status: definite generic-coded refusals carry `context_length_exceeded` even when marked retryable; the deterministic undeclared-tool refusal keeps its code. Producer-marked reader exceptions retain transport classification even when their text contains overflow wording; `tests/claude-integration/messages-error-normalization.test.ts` checks that they do not acquire a context-overflow code. `tests/responses/protocol-direct-encoders-messages.test.ts` checks stream/fold parity for all four generic codes, plus an `upstream_error` type variant. The original adapter evidence and proxy/transport metadata still reach the [owned Messages formatter](error-detail.md#messages-error-bodies-and-headers). Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
@@ -524,7 +524,7 @@ terminal and applies the body stall and size guards; a non-streaming caller gets
 (or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
 translated lane answers (`message_start.message.model` in the first 64 KiB); explicit empty catalogs apply the
 [declared-tool guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire). Upstream errors answer in Anthropic shape with the translated lane's status
-policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
+policy (transient 5xx as 529, replay refusals kept non-retryable), with [Messages error normalization](error-detail.md#messages-error-bodies-and-headers). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
 `tests/adapters/anthropic/anthropic-beta-allowlist.test.ts`,

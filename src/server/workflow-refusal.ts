@@ -99,7 +99,7 @@ export function workflowRefusalResponse(
   // Without this a browser dashboard cannot read the header at all: the data plane never sets
   // Access-Control-Expose-Headers, so a cross-origin reader sees only the CORS-safelisted ones.
   refusal.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
-  return markProxyError(refusal);
+  return markProxyError(refusal, reason === "workflow-spend-exhausted" && spend && Object.hasOwn({ root: 1, identity: 1, pool: 1 }, spend.scope) ? (spend.includesUnboundPoolHistory ? "workflow_unbound" : "workflow") : undefined);
 }
 
 /** Render the approved conservative-overlay explanation after a dispatch reservation refuses. */

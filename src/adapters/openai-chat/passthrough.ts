@@ -4,6 +4,7 @@ import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
 import { applyExplicitChatDeveloperRole } from "./developer-role";
 import { singleLeadingSystemMessages } from "./single-system";
+import { limitMistralChatImages } from "./mistral-image-limit";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../../providers/service-tier";
@@ -78,11 +79,12 @@ export function buildOpenAIChatPassthroughRequest(
     // and the conversion changes the role of those messages and nothing else, so the position
     // of every message and every other field survive unchanged. Missing thinking history is
     // repaired below using the same preserve policy as the translated Chat builder.
-    // The explicit single-system policy can then merge instruction slots.
-    messages: singleLeadingSystemMessages(applyExplicitChatDeveloperRole(
+    // The explicit single-system policy can then merge instruction slots, and Mistral's
+    // per-request image cap applies as it does to translated Chat.
+    messages: limitMistralChatImages(singleLeadingSystemMessages(applyExplicitChatDeveloperRole(
       frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
       provider,
-    ), provider),
+    ), provider), provider, modelId),
     stream,
   };
   for (const field of CHAT_PASSTHROUGH_FIELDS) {

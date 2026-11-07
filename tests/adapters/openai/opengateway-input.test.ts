@@ -112,4 +112,21 @@ describe("OpenGateway input normalization", () => {
       { type: "function_call_output", call_id: "a", output },
     ], "https://api.openai.com/v1")[0]).toMatchObject({ output });
   });
+
+  test("repeated outputs for one call are joined even when every part is plain text", () => {
+    const input = project([
+      { type: "custom_tool_call", call_id: "toolu_exec", name: "exec", input: "await longJob()" },
+      { type: "custom_tool_call_output", call_id: "toolu_exec", output: "Script running with cell ID 108\n" },
+      { type: "custom_tool_call_output", call_id: "toolu_exec", output: "row 1" },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+      { type: "custom_tool_call_output", call_id: "toolu_exec", output: "row 2" },
+    ]);
+    const execOutputs = input.filter(item => (item as { call_id?: string }).call_id === "toolu_exec"
+      && String((item as { type?: string }).type).endsWith("_output"));
+    expect(execOutputs).toHaveLength(1);
+    expect(execOutputs[0]).toMatchObject({ output: "Script running with cell ID 108\n\n\nrow 1\n\nrow 2" });
+    expect(input.map(item => (item as { type: string }).type)).toEqual([
+      "custom_tool_call", "custom_tool_call_output", "message",
+    ]);
+  });
 });

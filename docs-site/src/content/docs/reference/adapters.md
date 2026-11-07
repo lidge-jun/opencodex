@@ -432,6 +432,8 @@ MiMo model Command Code serves.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- Antigravity's Gemini 4 Argon requests include the selected thinking tier when thought summaries
+  are enabled, allowing its thought summaries to appear in supported clients.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending
@@ -507,9 +509,46 @@ MiMo model Command Code serves.
   solely because the client permits parallel calls.
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
-  they are ignored rather than rejected. Structured output (`text.format` of type `json_schema`
-  or `json_object`) is still refused: the Kiro wire cannot constrain the response shape, and a
-  caller expecting JSON would otherwise receive prose.
+  they are ignored rather than rejected.
+- Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
+  Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
+  adapter advertises a private output tool whose input schema is the requested schema and returns
+  that tool's input as the response text. A plain-text reply that is already the requested JSON is
+  accepted as is. Any other reply, including an empty one, gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
+  with an `invalid_kiro_structured_output` error. Prose is not returned as the structured answer;
+  commentary preceding a real client tool call can still stream with that call.
+  Without `strict: true` the check covers JSON syntax, the root type and the root's required
+  properties. With `strict: true` the whole value is checked exactly against the schema, and a
+  strict schema outside this subset is refused before the request is sent:
+  - `type`, `properties`, `required`, `additionalProperties`, single-schema `items`, `enum`,
+    `const` and `anyOf`. A `const` or `enum` value that contains a number is refused: the proxy
+    receives the request already parsed, so a number such as `1.0000000000000001` arrives as `1`
+    and an exact match could accept a value the caller excluded.
+  - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root, with `~0` and
+    `~1` as the only JSON Pointer escapes. References such
+    as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
+    reach a property or item are refused, and so is a `$ref` with an assertion keyword beside it
+    (drafts disagree on whether such siblings apply), a `$id` below the root, and `$anchor`.
+  - `minLength`, `maxLength`, `minItems` and `maxItems` as non-negative integers.
+  - `minimum`, `maximum`, `exclusiveMinimum` and `exclusiveMaximum` as safe integers or decimals
+    with at most 15 significant digits. The model's numbers are compared exactly as written. This is
+    a heuristic for the bound itself: a bound written with more digits than a double holds can still
+    arrive rounded, so a value within about one unit in the last place of the bound may be judged on
+    the wrong side.
+  - `multipleOf`, `pattern` and `patternProperties` are refused in strict mode. Without
+    `strict: true` they are accepted and left to the light checks above.
+
+  Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
+  levels deep), including `const`/`enum` comparisons and every pass over `required` lists, object
+  entries, long strings and long numbers. A strict format without a JSON object schema is refused,
+  and so is a `type` list that repeats a type. An answer that needs more counts as not
+  matching the format. A strict schema with more than 10,000 nodes, or more than 10,000 values in
+  its `const`/`enum` literals, is refused. Error messages name the failed check only, never a
+  property name or path from the answer or the schema.
+  A Messages `output_config.format` schema always gets the `strict: true` checks, even when it
+  has optional properties and is therefore forwarded to OpenAI-compatible destinations without
+  `strict`: Anthropic promises an answer that conforms to the schema. A Messages schema outside
+  this subset is refused before the request is sent.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
   Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a

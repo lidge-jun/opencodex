@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
@@ -119,6 +128,15 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saveFailed": "無法儲存工作流程限制。",
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
+  ...shellV2Copy("zh-TW"),
+  ...modelsV2Copy("zh-TW"),
+  ...accountsV2Copy("zh-TW"),
+  ...subagentsV2Copy("zh-TW"),
+  ...usageV2Copy("zh-TW"),
+  ...logsV2Copy("zh-TW"),
+  ...connectV2Copy("zh-TW"),
+  ...startupV2Copy("zh-TW"),
+  ...proxyV2Copy("zh-TW"),
   "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
   "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",
   "claude.tierDefaults.title": "CLI 層級預設模型",
@@ -1797,7 +1815,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.useOauthLogin": "← 使用 OAuth 登入",
 "nav.codexAuth": "Codex 認證",
   "nav.codexSet": "Codex",
-  "nav.connect": "連線",
+  "nav.connect": "路由",
   "nav.usageLogs": "用量與日誌",
   "nav.sectionNavigation": "分區頁面",
   "codexSet.tab.multiauth": "多帳號認證",
@@ -3808,6 +3826,7 @@ export const zhTW: Record<TKey, string> = {
   "models.aliasStale": "過期",
   "connection.discovering": "正在探索本機與共享目標…",
   "connection.machineUnavailable": "本機機器平面無法使用。共享請求未改用本機資料。",
+  "connection.clientStateChanged": "此 Child 儲存的 Remote Link 連線已遺失，或現在指向其他擁有者或連結，與正在執行的 Child 不再一致。重新連結前，請停止或重新啟動此 Child 並檢查其連線。",
   "connection.linkManaged": "由 Home {home} 透過 Remote Link（{linkId}）管理。此儀表板以唯讀方式顯示 Home 的設定與配額；請在 Home 上進行變更。",
   "connection.linkManagedUnnamed": "由其 Home 透過 Remote Link（{linkId}）管理。此儀表板以唯讀方式顯示 Home 的設定與配額；請在 Home 上進行變更。",
   "connection.disconnect": "中斷 Hub 連線",

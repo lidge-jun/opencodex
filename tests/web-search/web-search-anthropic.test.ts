@@ -21,6 +21,7 @@ import {
 import { parseAnthropicSidecarSSE, runAnthropicWebSearch } from "../../src/web-search/anthropic-executor";
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { repoPath } from "../helpers/repo-root";
 
 const routedProvider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
 const forwardProvider: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" };
@@ -89,6 +90,106 @@ describe("web-search anthropic backend resolution", () => {
 });
 
 describe("parseAnthropicSidecarSSE", () => {
+  const partial = { type: "content_block_delta", delta: { type: "text_delta", text: "partial answer" } };
+  const delta = (reason: string) => ({ type: "message_delta", delta: { stop_reason: reason } });
+
+  test.each([
+    ["upstream error", [partial, { type: "error", error: { type: "overloaded_error" } }]],
+    ["missing completion", [partial]],
+    ["search tool error", [{ type: "content_block_start", content_block: { type: "web_search_tool_result", content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" } } }, partial, { type: "message_stop" }]],
+    ["max_tokens", [partial, delta("max_tokens"), { type: "message_stop" }]],
+    ["error stop reason", [partial, delta("error"), { type: "message_stop" }]],
+    ["empty stop reason", [partial, delta(""), { type: "message_stop" }]],
+    ["empty stop reason at EOF", [partial, delta("")]],
+    ["content after stop reason", [partial, delta("end_turn"), partial]],
+  ])("reports %s without losing partial text", async (_name, frames) => {
+    const out = await parseAnthropicSidecarSSE(sseResponse(frames));
+    expect(out.text).toContain("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts clean EOF after a complete successful message_delta and ping", async () => {
+    const out = await parseAnthropicSidecarSSE(sseResponse([partial, delta("end_turn"), { type: "ping" }]));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("does not accept an unterminated message_delta as clean EOF", async () => {
+    const out = await parseAnthropicSidecarSSE(sseResponse([partial, delta("end_turn")], { unterminated: true }));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not treat ping-named terminal data as completion", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\nevent: ping\ndata: {"type":"message_stop"}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("a partial frame after a completed delta invalidates clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nevent: content_block_delta\ndata: {"type":`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("a trailing SSE comment keeps the clean EOF completion", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\n: keepalive\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("complete field-only SSE blocks do not invalidate clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nid: 123\nretry: 500\n\nevent: custom\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("an unfinished field-only SSE block still invalidates clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nevent: content_block_delta`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts CR-only framing and a clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\r\rdata: ${JSON.stringify(delta("end_turn"))}\r\r`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("reports malformed data after message_stop", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: {"type":"message_stop"}\n\ndata: {`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not hide malformed data before message_stop", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: {broken\n\ndata: {"type":"message_stop"}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("reports a failed reader after preserving decoded text", async () => {
+    const encoded = new TextEncoder().encode(`data: ${JSON.stringify(partial)}\n\n`);
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(encoded); }
+        else controller.error(new Error("synthetic read failure"));
+      },
+    }, { highWaterMark: 0 });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
   test("folds web_search_tool_result + text + citations into {text, sources} and dedups by url", async () => {
     const res = sseResponse([
       { type: "message_start" },
@@ -194,6 +295,150 @@ describe("parseAnthropicSidecarSSE", () => {
 });
 
 describe("Anthropic sidecar byte boundaries", () => {
+  test.each(["\n", "\r\n", "\r"])("accepts a complete message_stop at the byte cap with %j framing", async (nl) => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}${nl}${nl}`;
+    const terminal = `data: {"type":"message_stop"}${nl}${nl}`;
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 1 - 2 * nl.length)}${nl}${nl}`;
+    const body = prefix + filler + terminal;
+    expect(new TextEncoder().encode(body).byteLength).toBe(size);
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("still reports max_tokens when its complete terminal lands at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "partial" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\ndata: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal));
+    expect(out.text).toBe("partial");
+    expect(out.error).toBe("anthropic sidecar produced an incomplete answer");
+  });
+
+  test("accepts a complete successful stop-reason delta and clean EOF at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("does not accept a successful stop-reason delta when EOF is not clean at the cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(prefix + filler + terminal));
+        controller.enqueue(new TextEncoder().encode('data: {"type":"error"}\n\n'));
+        controller.close();
+      },
+    });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not hide over-cap bytes after a complete terminal in the same chunk", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal + "x"));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not hide over-cap bytes in a later chunk after a terminal", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(prefix + filler + terminal));
+        controller.enqueue(new TextEncoder().encode('data: {"type":"error"}\n\n'));
+        controller.close();
+      },
+    });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts EOF after empty chunks following a terminal at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(prefix + filler + terminal)); },
+      pull(controller) {
+        if (pulls++ < 3) controller.enqueue(new Uint8Array(0));
+        else controller.close();
+      },
+    }, { highWaterMark: 0 });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("does not wait indefinitely when EOF cannot be verified at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(prefix + filler + terminal)); },
+      cancel() { cancelled = true; return new Promise<void>(() => {}); },
+    }, { highWaterMark: 0 });
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        parseAnthropicSidecarSSE(new Response(body)),
+        new Promise<"hung">(resolve => { watchdog = setTimeout(() => resolve("hung"), 3_000); }),
+      ]);
+      expect(outcome).not.toBe("hung");
+      if (outcome === "hung") throw new Error("sidecar parser did not finish");
+      expect(outcome.error).toBeDefined();
+      expect(cancelled).toBe(true);
+    } finally { if (watchdog !== undefined) clearTimeout(watchdog); }
+  });
+
+  test("synchronous empty chunks cannot starve the bounded EOF probe", async () => {
+    const script = `
+      import { parseAnthropicSidecarSSE } from ${JSON.stringify(repoPath("src/web-search/anthropic-executor.ts"))};
+      const prefix = 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"answer"}}\\n\\n';
+      const terminal = 'data: {"type":"message_stop"}\\n\\n';
+      const filler = ':' + 'x'.repeat(65536 - new TextEncoder().encode(prefix + terminal).length - 3) + '\\n\\n';
+      const body = new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode(prefix + filler + terminal)); },
+        pull(c) { c.enqueue(new Uint8Array(0)); },
+      }, { highWaterMark: 0 });
+      const outcome = await parseAnthropicSidecarSSE(new Response(body));
+      process.stdout.write(outcome.error ?? 'unexpected success');
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; child.kill(); }, 5_000);
+    try {
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect({ timedOut, status, stdout, stderr }).toEqual({
+        timedOut: false,
+        status: 0,
+        stdout: "anthropic sidecar response byte limit reached before EOF",
+        stderr: "",
+      });
+    } finally { clearTimeout(watchdog); }
+  }, 10_000);
   test.each([64 * 1024, 80 * 1024])("preserves complete prefix frames at %i bytes without awaiting cancel", async (size) => {
     const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "prefix 한글" } })}\n\n`;
     const tail = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "discard" } })}`;
@@ -209,7 +454,7 @@ describe("Anthropic sidecar byte boundaries", () => {
     }, { highWaterMark: 0 }));
     const out = await parseAnthropicSidecarSSE(res);
     expect(cancelled).toBe(true);
-    expect(out).toEqual({ text: "prefix 한글", sources: [] });
+    expect(out).toEqual({ text: "prefix 한글", sources: [], error: "anthropic sidecar response exceeded the byte limit" });
   });
 });
 

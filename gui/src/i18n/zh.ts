@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saveFailed": "无法保存工作流限制。",
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
+  ...shellV2Copy("zh"),
+  ...modelsV2Copy("zh"),
+  ...accountsV2Copy("zh"),
+  ...subagentsV2Copy("zh"),
+  ...usageV2Copy("zh"),
+  ...logsV2Copy("zh"),
+  ...connectV2Copy("zh"),
+  ...startupV2Copy("zh"),
+  ...proxyV2Copy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",
@@ -1587,7 +1605,7 @@ export const zh: Record<TKey, string> = {
   "nav.api": "API",
 "nav.codexAuth": "Codex 认证",
   "nav.codexSet": "Codex",
-  "nav.connect": "连接",
+  "nav.connect": "路由",
   "nav.usageLogs": "用量与日志",
   "nav.sectionNavigation": "分区页面",
   "codexSet.tab.multiauth": "多账号认证",
@@ -3843,6 +3861,7 @@ export const zh: Record<TKey, string> = {
   "models.aliasStale": "过期",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "此 Child 保存的 Remote Link 连接已丢失，或现在指向其他所有者或链接，与正在运行的 Child 不再一致。重新链接前，请停止或重启此 Child 并检查其连接。",
   "connection.linkManaged": "由 Home {home} 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.linkManagedUnnamed": "由其 Home 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.disconnect": "Disconnect from hub",

@@ -1,4 +1,13 @@
 export const KIRO_COMPLETION_TOOL_NAME = "codex_kiro_final_answer";
+/**
+ * Private terminal channel for Responses structured output (`text.format` json_schema/json_object).
+ *
+ * The CodeWhisperer wire has no schema-constrained response mode, but it does carry tool input
+ * schemas, and a tool call's input is JSON by construction. A turn that asks for structured output
+ * therefore advertises this tool INSTEAD of `KIRO_COMPLETION_TOOL_NAME` and relays its input as the
+ * assistant's text. Reserved in the same collision domain so a client tool can never claim it.
+ */
+export const KIRO_STRUCTURED_OUTPUT_TOOL_NAME = "codex_kiro_structured_output";
 
 /**
  * Request-scoped CodeWhisperer service profile for AWS Builder ID accounts.

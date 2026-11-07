@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
-import { recordOwnedConfigPath } from "./config-ownership";
+import { ConfigUninstallInProgressError, recordOwnedConfigPath } from "./config-ownership";
 import { redactSecretString, redactUrlForLog } from "./redact";
 import { sidecarBreadcrumb, activityBreadcrumb } from "./sidecar-tracker";
 import { retainedUtf8Bytes, truncateRetainedUtf8 } from "./admission";
@@ -32,7 +32,9 @@ function crashLogPath(): string {
   try {
     recordOwnedConfigPath(dir, join(dir, "crash.log"));
     mkdirSync(dir, { recursive: true });
-  } catch {
+  } catch (error) {
+    // During uninstall the log is skipped (both callers swallow this) rather than recreated.
+    if (error instanceof ConfigUninstallInProgressError) throw error;
     /* best-effort: directory usually already exists */
   }
   return join(dir, "crash.log");

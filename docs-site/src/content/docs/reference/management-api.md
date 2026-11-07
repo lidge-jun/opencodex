@@ -332,6 +332,8 @@ timing method unknown)** and a visible explanation of the timing method when a r
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
 | `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; 500 `{ "error": "read_failed" }` if storage cannot be read |
+| `GET /api/usage/devices` | List current Remote Link key IDs and aliases for an authorized dashboard session | 403 without the required dashboard session; 503 if the link store cannot be read |
+| `GET /api/usage/source-facets` | Count recent app and device choices for an authorized dashboard session | 400 for invalid filters; 403 without the required session; 503 if the scan or inventory is unavailable |
 | `GET /api/usage?jev=1` | Project persisted JEV decisions and their physical target sends. Optional `comboId` selects one Combo; `range` accepts `7d`, `30d`, or `all` (default `30d`). | 400 invalid `comboId`; 500 `{ "error": "read_failed" }` if the ledger cannot be read |
 | `GET /api/usage/timeline` | Bucketed usage by model/account; accepts `hours`, `bucketMinutes`, `metric`, `aggregation`, `grouping`, comma-separated `models` and repeated `hiddenProvider` filters | 400 invalid query or limits |
 | `GET /api/metrics` | Return process-local Prometheus text metrics for requests and cached Kiro quota. Kiro accounts use bounded opaque digest labels; raw account and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
@@ -423,6 +425,43 @@ reported usage from failed responses. Missing usage remains unreported. Routed a
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.
+
+For app and device attribution, `GET /api/usage` accepts both `client` and `device` together.
+`client` is `all`, `codex`, `claude_code`, `claude_desktop`, `grok`, `opencode`, `aside`,
+`other`, or `unknown`. `device` is `all`, `no-key`, `key`, or `unconfigured`; `key` requires exactly one
+case-sensitive `apiKeyId`. These filters require `surface=all` or an omitted surface and cannot
+be combined with the JEV or failure projections. Invalid or repeated source options return 400.
+The response echoes the applied `sourceFilter` and `legacyUnclassifiedRequests` so consumers can
+verify the filter was applied. Earlier records with no app field remain explicitly unclassified;
+the Codex selection includes legacy Codex-surface records in that count without assigning them a
+specific app. `no-key` includes requests without a configured key, including older and
+environment-admitted records; it does not prove a request came from a particular physical device.
+`unconfigured` requires a dashboard session and selects configured-admission rows whose key ID is
+absent from the current configured-key list. It describes current configuration, not proof that a
+key was deleted or which device used it; older rows without admission metadata are not included.
+The dashboard-session-only `/api/usage/source-facets` accepts the same `client` and `device`
+parameters and provides counts for a captured 30-day window, the filter echo and incomplete-read
+status. App counts respect the chosen device; device counts respect the chosen app. Individual key
+counts are limited to configured keys. Its `legacyUnclassifiedRequests` is the unclassified subset
+of the Codex option for the chosen device, regardless of the selected app. This endpoint and
+`unconfigured` reports use `no-store`.
+Configured IDs that cannot be selected exactly, such as IDs with surrounding whitespace, remain in
+the configured snapshot but are omitted from individual device choices and counted in
+`unavailableConfiguredKeys`; they are never silently trimmed or classified as unconfigured.
+If a dashboard session expires during an authorized facets or `unconfigured` scan, the server
+returns 401 instead of the 403 used for a credential that lacks the required dashboard scope.
+For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
+256 characters, or more than 65,536 total ID characters rather than silently truncating them.
+Client labels are best-effort classifications of inbound headers, not authentication, and raw
+headers are not stored as client attribution. The current classifier recognizes documented Codex,
+Claude and OpenCode signatures; it does not yet identify Grok, Aside or other Chat API apps
+automatically, so their unrecognized requests remain `unknown`. The `/v1/usage` data-key endpoint accepts `client`
+and echoes its authenticated-key scope without exposing the key ID. A Remote Link management relay
+accepts new source filters only for its authenticated link key; source-filtered snapshot bounds
+describe matching rows, not the whole ledger. The Child requires the Home to echo the requested
+scope and refuses an unconfirmed response. Source-filtered HEAD requests through the Child return
+405 because a bodyless response cannot confirm the scope. Existing requests without the new source
+dimensions retain their earlier behavior.
 
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather

@@ -138,6 +138,13 @@
       ]
     },
     {
+      "path": "config-ownership.md",
+      "tier": 4,
+      "title": "Config Ownership Manifest",
+      "scope": "Owner marker, uninstall manifest, its cross-process lock, and the uninstall tombstone.",
+      "documents": ["src/lib/config-ownership.ts", "src/lib/config-ownership-removal.ts"]
+    },
+    {
       "path": "config.md",
       "tier": 2,
       "title": "Config Surface",
@@ -537,7 +544,7 @@
       "path": "data-planes/error-detail.md",
       "tier": 3,
       "title": "Proxy-Owned Error Detail",
-      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs.",
+      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs. Messages error envelopes, construction-registered fixed local-refusal guidance, sliced outcome comparisons and baseline client recovery outcomes across special codes and catch returns, non-2xx passthrough envelopes and unchanged 2xx passthrough bodies and original collector evidence and error-event identity, overflow/native-stream golden parity and normalized Anthropic response headers with full-fraction reset dates and success media types.",
       "documents": [
         "src/usage/error-detail.ts",
         "src/lib/upstream-condition.ts",
@@ -554,7 +561,22 @@
         "src/server/admission-model-scope.ts",
         "src/server/responses/input-admission.ts",
         "src/oauth/generic-account-failover.ts",
-        "src/chat/failure-verdict.ts"
+        "src/chat/failure-verdict.ts",
+        "src/lib/messages-error-body.ts",
+        "src/claude/failure-verdict.ts",
+        "src/server/anthropic-rate-limit-headers.ts",
+        "src/server/messages-response-headers.ts",
+        "src/server/index/startup-warnings.ts",
+        "src/server/claude-messages.ts",
+        "src/server/messages-native.ts",
+        "src/claude/outbound.ts",
+        "src/protocols/encoders/messages.ts",
+        "src/protocols/encoders/adapter-events.ts",
+        "src/lib/messages-sse-error-presentation.ts",
+        "src/server/messages-sse-error-filter.ts",
+        "src/server/messages-native-tool-guard.ts",
+        "src/server/messages-shared.ts",
+        "src/server/sse-payload-rewrite.ts"
       ]
     },
     {
@@ -812,8 +834,9 @@
       "path": "providers/kiro.md",
       "tier": 4,
       "title": "Kiro Provider",
-      "scope": "Kiro parallel-tool hints, Responses text controls, and reasoning round-trip.",
+      "scope": "Kiro parallel-tool hints, Responses text controls, structured-output emulation, and reasoning round-trip.",
       "documents": [
+        "src/adapters/kiro/",
         "src/responses/"
       ]
     },
@@ -951,6 +974,25 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "usage-client-attribution.md",
+      "tier": 5,
+      "title": "Usage Client Attribution",
+      "scope": "Privacy-bounded client labels carried from request ingress into usage records.",
+      "documents": [
+        "src/usage/client.ts",
+        "src/usage/source-filter.ts",
+        "src/usage/summary.ts",
+        "src/server/request-log.ts",
+        "src/server/index/",
+        "src/server/management/logs-usage-routes.ts",
+        "src/server/management/usage-aggregate-cache.ts",
+        "src/server/hub-usage.ts",
+        "src/client/link-management-relay.ts",
+        "src/remote/hub-usage.ts",
+        "src/client/hub-client.ts"
       ]
     },
     {

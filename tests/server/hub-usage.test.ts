@@ -73,6 +73,22 @@ test("absent, environment, admin and unknown credentials cannot obtain usage on 
   }
 });
 
+test("client-filtered hub usage retains the authenticated key and safe echo", async () => {
+  server = startServer(0);
+  const response = await fetch(new URL("/v1/usage?range=all&surface=all&client=codex", server.url), {
+    headers: { "x-opencodex-api-key": KEYS[0]! },
+  });
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body).toMatchObject({ summary: { requests: 1 }, legacyUnclassifiedRequests: 1,
+    sourceFilter: { client: "codex", scope: "authenticated-key" } });
+  expect(JSON.stringify(body.sourceFilter)).not.toContain("client-0");
+  for (const query of ["client=codex&device=all", "client=codex&apiKeyId=client-1", "client=codex&surface=claude", "client=codex&client=all"]) {
+    const rejected = await fetch(new URL(`/v1/usage?${query}`, server.url), { headers: { "x-opencodex-api-key": KEYS[0]! } });
+    expect(rejected.status).toBe(400);
+  }
+});
+
 test("caller-selected identity, unknown or duplicate options and invalid bounds are rejected", async () => {
   server = startServer(0);
   for (const query of ["apiKeyId=client-1", "other=1", "range=all&range=today", "range=bad", "surface=bad", "since=10", "since=20&until=10"]) {

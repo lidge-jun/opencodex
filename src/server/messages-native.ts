@@ -1,3 +1,9 @@
+import { MessagesSseFrameContext, messagesSseEchoRenamedError, messagesSseFrameHooks } from "../lib/messages-sse-error-presentation";
+import { createMessagesSseErrorFilter } from "./messages-sse-error-filter";
+import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
+import { upstreamErrorIsLocal } from "./request-log-failure-detail";
+import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
+import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
@@ -38,7 +44,7 @@ import {
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
 import { effortFromOutputConfig, resolveInboundModel } from "../claude/inbound";
-import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
+import { anthropicErrorBody, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
@@ -76,7 +82,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { stampApiKeyAccountLabel } from "../providers/label";
-import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { publicOAuthErrorPresentation, OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { resolveProtocolSettings } from "../protocols/settings";
@@ -233,7 +239,7 @@ function messageStartWithModel(frame: string, model: string): string | undefined
  * (`responsesSseToAnthropicSse` is given the requested model). Works on bytes: frames before and
  * including `message_start` are split on the blank line, and everything after is relayed as is.
  */
-function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
+function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -268,7 +274,9 @@ function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string): Re
         pending = pending.subarray(end);
         const rewritten = messageStartWithModel(decoder.decode(frame), model);
         if (rewritten !== undefined) {
-          controller.enqueue(encoder.encode(rewritten));
+          const bytes = encoder.encode(rewritten);
+          if (messagesSseEchoRenamedError(decoder.decode(frame))) frames.register(bytes, { echoRenamedError: true });
+          controller.enqueue(bytes);
           scanning = false;
         } else {
           controller.enqueue(frame);
@@ -372,20 +380,40 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       attempt.usage = usage;
     }
   };
-  const fail = (status: number, message: string, type?: string, code?: string): Response => {
+  const fail = (status: number, message: string, type?: string, code?: string, originalMessage = message): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
-    return anthropicErrorResponse(status, safeMessage, type, code);
+    const legacy = anthropicErrorBody(status, redactSecretString(originalMessage), type, code);
+    return ownedAnthropicErrorResponse({ status, type, code, evidence: { status, message: originalMessage },
+      localError: markProxyError({ message: safeMessage }), overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
+  };
+  const failEvidence = (status: number, message: string, type: string, contract?: "transport_failed", overflow?: boolean, rawError?: Rec, legacyBody?: Rec): Response => {
+    finishLog(status, message);
+    const legacy = legacyBody ?? anthropicErrorBody(status, redactSecretString(message), type);
+    return ownedAnthropicErrorResponse({ status, type, evidence: { status, message, type: typeof rawError?.type === "string" ? rawError.type : undefined, code: typeof rawError?.code === "string" ? rawError.code : undefined }, contract,
+      overflow: overflow ?? messagesRelayedOverflowPresentation("", legacy) }, legacy);
+  };
+  const preparationFailure = (error: unknown): Response => {
+    const message = error instanceof Error ? error.message : String(error);
+    finishLog(400, message);
+    return fail(400, error instanceof Error && isProxyError(error) ? error.message : "The proxy could not translate the Messages request.", "invalid_request_error", undefined, message);
   };
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
-      const response = fail(429, error.message, "rate_limit_error");
+      const scope = error.routePosition === undefined ? "All Anthropic OAuth accounts" : "Anthropic OAuth accounts for this model route";
+      const reset = error.usageLimit?.resetsAt;
+      const date = typeof reset === "number" && Number.isFinite(reset) && reset >= 0 && reset <= 253402300799999
+        ? new Date(Math.floor(reset / 1000) * 1000).toISOString().replace(".000Z", "Z") : undefined;
+      const message = error.usageLimit === null ? `${scope} are temporarily rate-limited`
+        : `${scope} have reached their usage limit${date ? `; the first one resets at ${date}` : ""}`;
+      finishLog(429, error.message);
+      const response = markProxyError(fail(429, message, "rate_limit_error"), date === undefined ? undefined : "usage");
       const advice = error.retryAfterSeconds !== null ? formatClientRetryAfter(error.retryAfterSeconds) : undefined;
       if (advice !== undefined) response.headers.set("retry-after", advice);
       return response;
     }
-    if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error");
-    if (error instanceof OAuthLoginRequiredError) return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+    if (error instanceof OAuthAccountPausedError) return markProxyError(fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error"), publicOAuthErrorPresentation(error));
+    if (error instanceof OAuthLoginRequiredError) return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error"), publicOAuthErrorPresentation(error));
     return null;
   };
 
@@ -411,7 +439,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       return fail(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
     }
     // An AnthropicRequestError (empty tool id) or an image the guard cannot carry.
-    return fail(400, error instanceof Error ? error.message : String(error), "invalid_request_error");
+    return preparationFailure(error);
   }
 
   const upstream = new AbortController();
@@ -444,8 +472,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       const localRefusal = localOAuthFailure(error);
       if (localRefusal) return localRefusal;
       if (error instanceof NativeOAuthSelectionChangedError) return fail(409, error.message, "api_error");
-      if (error instanceof NativeOAuthModelRouteError) return fail(400, error.message, "invalid_request_error");
-      return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+      if (error instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error", undefined, error.message);
+      return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error"), publicOAuthErrorPresentation(error));
     }
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
@@ -455,7 +483,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     } catch (error) {
       cleanupAbort(); upstream.abort();
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
-      const refusal = fail(429, error.message, "rate_limit_error");
+      const refusal = markProxyError(fail(429, error.message, "rate_limit_error"), error.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(error.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
@@ -523,7 +551,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       logCtx.errorCode = "unsupported_feature";
       return fail(400, error.message, "invalid_request_error", "unsupported_feature");
     }
-    return fail(400, error instanceof Error ? error.message : String(error), "invalid_request_error");
+    return preparationFailure(error);
   }
 
   // One inbound request owns one transient send allowance, captured before any key rotation.
@@ -557,7 +585,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
-      throw new Error("native Messages transient send budget exhausted before recovery dispatch");
+      throw markProxyError(new Error("native Messages transient send budget exhausted before recovery dispatch"));
     }
     const fetchWithPolicy = requestTransientPolicy ? fetchWithTransientRetry : fetchWithResetRetry;
     const request = activeRequest;
@@ -590,7 +618,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               }
             } else {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
-                if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Messages dispatch");
+                if (attempt >= 3) throw markProxyError(new Error("Provider key selection changed repeatedly before native Messages dispatch"));
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
                   && (activeProvider.requestPacing.keys || activeProvider.requestPacing.keySelection === "round-robin")) {
@@ -598,12 +626,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
-                  throw new Error("Provider key selection is no longer available for native Messages");
+                  throw markProxyError(new Error("Provider key selection is no longer available for native Messages"));
                 }
                 rebuildFor(current);
                 if (current.requestPacing?.enabled
                   && (current.requestPacing.keys || current.requestPacing.keySelection === "round-robin")) {
-                  if (!reacquirePacing) throw new Error("Refreshed native Messages dispatch requires pacing readmission");
+                  if (!reacquirePacing) throw markProxyError(new Error("Refreshed native Messages dispatch requires pacing readmission"));
                   await reacquirePacing(current, route.modelId);
                 }
               }
@@ -837,21 +865,21 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
-      const refusal = fail(429, sendError.message, "rate_limit_error");
+      const refusal = markProxyError(fail(429, sendError.message, "rate_limit_error"), sendError.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
     if (sendError instanceof NativeMessagesSpendRefusal) {
-      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
+      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx, undefined, undefined, logCtx.spendRefusalDetail);
       finishLog(429);
       return refusal;
     }
     const localRefusal = localOAuthFailure(sendError);
     if (localRefusal) return localRefusal;
     if (sendError instanceof NativeOAuthSelectionChangedError) return fail(409, sendError.message, "api_error");
-    if (sendError instanceof NativeOAuthModelRouteError) return fail(400, sendError.message, "invalid_request_error");
+    if (sendError instanceof NativeOAuthModelRouteError) return fail(400, "Invalid Anthropic model routes", "invalid_request_error", undefined, sendError.message);
     if (sendError instanceof NativeOpaqueStateRefusal) {
       logCtx.errorCode = "unsupported_feature";
       return fail(400, sendError.message, "invalid_request_error", "unsupported_feature");
@@ -859,7 +887,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     if (isTranslatorBudgetExceededError(error)) {
       return fail(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
     }
-    return fail(502, error instanceof Error ? error.message : String(error), "api_error");
+    if (sendError instanceof Error && isProxyError(sendError)) return fail(502, sendError.message, "api_error");
+    return failEvidence(502, error instanceof Error ? error.message : String(error), "api_error", "transport_failed");
   }
   releaseRetainedRequest();
 
@@ -900,16 +929,18 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
-    const echoed = echoRequestedModel(renamed, requestedModel);
+    const frames = new MessagesSseFrameContext();
+    const echoed = echoRequestedModel(renamed, requestedModel, frames);
     let toolRefusal: string | undefined;
     const source = clientDeclaredEmptyToolCatalog
       ? guardNativeMessagesEmptyToolCatalog(echoed, translatorBudget, message => {
         toolRefusal = message;
         logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
-      }, declaredInlineTools)
+      }, declaredInlineTools, frames)
       : echoed;
     if (requestedStream) {
       transferTurnToStream();
+      const clientFilter = createMessagesSseErrorFilter(frames);
       const relayed = tapAnthropicSseForLog(source, logCtx, (status, meta) => {
         try {
           cleanupAbort();
@@ -919,12 +950,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         } finally {
           releaseStreamTurn();
         }
-      }, bodyGuard);
+      }, bodyGuard, frames, nativeInstance ? clientFilter : undefined);
       // A configured Messages provider words an oversized-input refusal its own way; Claude Code
       // compacts only on Anthropic's wording (devlog/_plan/261009_claude_1m_default/010). The
       // rewrite buffers whole frames, so it sits after the tap: stall detection keeps timing raw
       // upstream bytes. Real Anthropic pools refuse pre-stream in that wording and keep one relay.
-      const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget);
+      const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget, messagesSseFrameHooks(frames), clientFilter);
       return retainUpstreamMessagesRequestId(new Response(clientStream, {
         status: 200,
         headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", Connection: "keep-alive" },
@@ -936,8 +967,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       tapState.closeReason = meta.closeReason;
       tapState.meta = meta;
     }, bodyGuard);
+    const collectorVerdictSink: MessagesFailureVerdictSink = {};
     try {
-      const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget);
+      const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget, collectorVerdictSink);
       cleanupAbort();
       if (tapState.closeReason === "client_cancel" || req.signal.aborted) {
         return fail(499, "Client cancelled request", "api_error");
@@ -951,15 +983,41 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           finishLog(502, toolRefusal, { closeReason: "terminal", terminalStatus: "failed" });
           return fail(502, toolRefusal, "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
         }
+        const baselineOverflow = isNativeOverflowError(error, text);
         // The tap's own verdict (a reset, a stall, the byte cap) closes this row with the same meta
         // as the streaming lane's row; a plain upstream error event keeps the non_stream row.
         const tapMeta = tapState.meta;
         if (tapMeta && (tapMeta.terminalStatus || tapMeta.closeReason !== "terminal")) finishLog(502, text, tapMeta);
-        if (isNativeOverflowError(error, text)) return fail(400, claudePromptTooLongMessage(text), "invalid_request_error");
-        return fail(502, text, "api_error");
+        if (upstreamErrorIsLocal(logCtx) && (logCtx.terminalSource === "synthetic" || tapMeta?.closeReason === "body_stall" || tapMeta?.closeReason === "body_overflow")) {
+          const count = boundedMessagesDisplayCount(bodyGuard.maxBytes);
+          const seconds = boundedMessagesDisplayCount(Math.round(bodyGuard.stallMs / 1000));
+          const localMessage = new Map<string, string>([
+            ["body_overflow", count === undefined ? "anthropic passthrough body exceeded the safe limit" : `anthropic passthrough body exceeded ${count} bytes`],
+            ["body_stall", seconds === undefined ? "anthropic passthrough body stalled" : `anthropic passthrough body stalled: no upstream bytes for ${seconds}s`],
+            ["stream_error_stop", 'upstream ended the turn with stop_reason "error"'],
+            ["stream_ended_early", "anthropic passthrough upstream stream ended before message_stop"],
+            ["stream_failed", "The proxy could not reach or read the provider."],
+          ]).get(logCtx.failureDetail?.code ?? "");
+          if (localMessage !== undefined) return markProxyError(fail(502, localMessage, "api_error", undefined, text), logCtx.failureDetail?.code === "body_overflow" ? "body_overflow" : logCtx.failureDetail?.code === "body_stall" ? "body_stall" : undefined);
+        }
+        const legacy = anthropicErrorBody(baselineOverflow ? 400 : 502,
+          redactSecretString(baselineOverflow ? claudePromptTooLongMessage(text) : text),
+          baselineOverflow ? "invalid_request_error" : "api_error");
+        const overflow = messagesOverflowPresentation((legacy.error as Rec).message);
+        if (baselineOverflow) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error, legacy);
+        return failEvidence(502, text, "api_error", undefined, overflow, error, legacy);
       }
-      finishLog(200);
-      return retainUpstreamMessagesRequestId(Response.json(message), response.headers);
+      const finalStatus = collectorVerdictSink.collectedErrorEvent ? 502 : 200;
+      finishLog(finalStatus);
+      const collected = collectorVerdictSink.collected ?? message;
+      const originalError = isRec(collected.error) ? collected.error : {};
+      const clientMessage = collectorVerdictSink.collectedErrorEvent ? ownedAnthropicErrorPayload({ status: 200,
+        type: typeof originalError.type === "string" ? originalError.type : undefined,
+        code: typeof originalError.code === "string" ? originalError.code : undefined,
+        overflow: messagesRelayedOverflowPresentation(JSON.stringify(collected), collected),
+        evidence: { status: 200, message: typeof originalError.message === "string" ? originalError.message : undefined },
+      }) : message;
+      return retainUpstreamMessagesRequestId(Response.json(clientMessage, { status: finalStatus }), response.headers);
     } catch (error) {
       cleanupAbort();
       upstream.abort();
@@ -967,7 +1025,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (isTranslatorBudgetExceededError(error)) {
         return fail(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
       }
-      return fail(502, error instanceof Error ? error.message : String(error), "api_error");
+      return failEvidence(502, error instanceof Error ? error.message : String(error), "api_error", "transport_failed");
     }
   }
 
@@ -984,7 +1042,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     cleanupAbort();
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
-    return fail(502, error instanceof Error ? error.message : String(error), "api_error");
+    return failEvidence(502, error instanceof Error ? error.message : String(error), "api_error", "transport_failed");
   }
   cleanupAbort();
   if (read.oversized) {
@@ -1059,7 +1117,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   const detail = formatAnthropicErrorBody(response.status, response.headers, bodyText);
   const rawMessage = upstreamMessage
     ?? (detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`);
-  const message = enrichOpenCodeZenUpstreamMessage(rawMessage, {
+  const zenOptions = {
     status: response.status,
     providerName,
     baseUrl: provider.baseUrl,
@@ -1070,7 +1128,12 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     upstreamErrorType: upstreamType,
     upstreamErrorCode: upstreamCode,
     supportsHttpSameKeyRetry: true,
-  });
+  };
+  const message = enrichOpenCodeZenUpstreamMessage(rawMessage, zenOptions);
+  const clientZenMessage = message === rawMessage ? undefined : enrichOpenCodeZenUpstreamMessage(
+    "The provider rate limit was reached; retry later.",
+    { ...zenOptions, upstreamRetryAfter: /try again in \d/i.test(rawMessage) ? "0" : zenOptions.upstreamRetryAfter },
+  );
   const classified = classifyError(
     response.status,
     upstreamType ?? (response.status === 401 ? "authentication_error"
@@ -1097,16 +1160,24 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   // Claude Code recognizes it and compacts (010).
   // Only a 400/413 refusal: the shared classifier also files a 429 "too many tokens per minute"
   // under context_length_exceeded, and that one must stay a rate limit.
-  const overflow = !replayRefusal && (response.status === 400 || response.status === 413)
+  const legacyOverflow = !replayRefusal && (response.status === 400 || response.status === 413)
     && !isThroughputLimitText(safeMessage)
     && (classified.code === "context_length_exceeded" || upstreamCode === "context_length_exceeded"
       || isContextOverflowText(safeMessage));
-  const out = new Response(JSON.stringify(anthropicErrorBody(
-    status,
-    overflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
+  const legacy = anthropicErrorBody(status,
+    legacyOverflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
     transient ? "overloaded_error" : upstreamType,
     replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
-  )), { status, headers });
+  );
+  const overflow = messagesOverflowPresentation((legacy.error as Rec).message);
+  const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
+    status, type: transient ? "overloaded_error" : upstreamType,
+    code: replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+    evidence: { status: response.status, type: upstreamType, code: upstreamCode, message: safeMessage }, overflow,
+    ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
+    ...(clientZenMessage === undefined ? {} : { localError: markProxyError({ message: clientZenMessage }) }),
+  })), { status, headers });
+  attachComboFailureEvidence(out, JSON.stringify(legacy));
   return replayRefusal ? retainReplayRefusal(out) : out;
 }
 

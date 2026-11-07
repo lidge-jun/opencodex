@@ -12,6 +12,7 @@ import { PROTOCOLS, type Protocol } from "../../../../src/protocols/contract";
 import type { ProtocolPlanV1 } from "../../../../src/protocols/dto";
 import { FEATURE_SOURCES, PROTOCOL_FEATURES } from "../../../../src/protocols/features";
 import { useT } from "../../i18n/shared";
+import { Select } from "../../ui";
 import { fetchProtocolPlan } from "../../protocol-api";
 import { protocolHopLabel } from "./protocol-labels";
 import { PlanResult } from "./ProtocolPlanPanel";
@@ -68,13 +69,13 @@ export function ComboProtocolPlan({ apiBase, model, dirty }: {
       <div className="protocol-plan-form">
         <label className="protocol-plan-field">
           <span className="muted small">{t("api.plan.inbound")}</span>
-          <select
-            className="input"
+          <Select
+            fullWidth
+            label={t("api.plan.inbound")}
             value={inbound}
-            onChange={event => { setInbound(event.target.value as Protocol); setPlan(null); }}
-          >
-            {PROTOCOLS.map(protocol => <option key={protocol} value={protocol}>{protocolHopLabel(protocol, t)}</option>)}
-          </select>
+            onChange={next => { setInbound(next as Protocol); setPlan(null); }}
+            options={PROTOCOLS.map(protocol => ({ value: protocol, label: protocolHopLabel(protocol, t) }))}
+          />
         </label>
       </div>
       <div>
