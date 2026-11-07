@@ -31,6 +31,7 @@ function harness(outcomes: Array<"accepted" | "unsupported" | "failed">) {
     linkKey: () => "ocx_data_key",
     runtimeStartedAt: STARTED,
     readRecord: () => record,
+    readRouteRecord: () => null, readCommonReceipt: () => null, readLocalOff: () => [],
     send: async (_connection, _key, report) => { sent.push(report); return outcomes.shift() ?? "accepted"; },
     setTimer: (callback, ms) => { delays.push(ms); pending = callback; return ms; },
     clearTimer: () => { pending = null; },

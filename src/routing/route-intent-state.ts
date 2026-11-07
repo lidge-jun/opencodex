@@ -1,0 +1,110 @@
+/** Home-owned desired policy. Reads never create or repair a file. */
+import { chmodSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
+import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { getConfigDir } from "../config/paths";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { hardenSecretDir } from "../lib/windows-secret-acl";
+import { emptyRouteIntentState, isRouteClientId, parseRouteClientIntent, type RouteClientId, type RouteClientIntent, type RouteIntentState } from "../link/route-intent";
+export type { RouteIntentState } from "../link/route-intent";
+
+const MAX_STATE_BYTES = 1024 * 1024;
+export function routeIntentStatePath(): string { return join(getConfigDir(), "route-intent.json"); }
+function deviceIdAllowed(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value) && !["__proto__", "constructor", "prototype"].includes(value);
+}
+function parseIntentMap(value: unknown): Partial<Record<RouteClientId, RouteClientIntent>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid route intent map");
+  const result: Partial<Record<RouteClientId, RouteClientIntent>> = {};
+  for (const [client, raw] of Object.entries(value)) {
+    if (!isRouteClientId(client)) throw new Error("unknown route client");
+    const intent = parseRouteClientIntent(raw, client);
+    if (!intent) throw new Error("invalid route client intent");
+    result[client] = intent;
+  }
+  return result;
+}
+export function parseRouteIntentState(value: unknown): RouteIntentState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid route intent state");
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1 || Object.keys(raw).some(key => !["version", "defaults", "devices", "revisions"].includes(key)) || !Object.hasOwn(raw, "defaults") || !Object.hasOwn(raw, "devices")
+    || !raw.devices || typeof raw.devices !== "object" || Array.isArray(raw.devices)) throw new Error("invalid route intent state");
+  const state = emptyRouteIntentState();
+  state.defaults = parseIntentMap(raw.defaults);
+  for (const [id, map] of Object.entries(raw.devices)) {
+    if (!deviceIdAllowed(id)) throw new Error("invalid route device id");
+    state.devices[id] = parseIntentMap(map);
+  }
+  if (raw.revisions !== undefined) {
+    if (!raw.revisions || typeof raw.revisions !== "object" || Array.isArray(raw.revisions)) throw new Error("invalid route device revisions");
+    state.revisions = {};
+    for (const [id, map] of Object.entries(raw.revisions)) {
+      if (!deviceIdAllowed(id) || !map || typeof map !== "object" || Array.isArray(map)) throw new Error("invalid route device revisions");
+      const revisions: Partial<Record<RouteClientId, number>> = {};
+      for (const [client, revision] of Object.entries(map)) {
+        if (!isRouteClientId(client) || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) throw new Error("invalid route client revision");
+        revisions[client] = revision;
+      }
+      state.revisions[id] = revisions;
+    }
+  }
+  return state;
+}
+export function readRouteIntentState(path = routeIntentStatePath()): RouteIntentState {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > MAX_STATE_BYTES) throw new Error("invalid route intent state file");
+    return parseRouteIntentState(JSON.parse(readFileSync(path, "utf8")));
+  } catch (error) {
+    if (isMissingPathError(error)) return emptyRouteIntentState();
+    throw error;
+  }
+}
+function writeState(state: RouteIntentState, path: string): void {
+  const dir = dirname(path);
+  assertNotRealHomeUnderTest(dir);
+  const body = `${JSON.stringify(state, null, 2)}\n`;
+  if (Buffer.byteLength(body) > MAX_STATE_BYTES) throw new Error("route intent state too large");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") hardenSecretDir(dir, { required: true });
+  else chmodSync(dir, 0o700);
+  atomicWriteFile(path, body);
+}
+export function writeRouteIntentState(state: RouteIntentState, path = routeIntentStatePath()): void {
+  const parsed = parseRouteIntentState(state);
+  withConfigMutationLockSync(() => writeState(parsed, path), dirname(path));
+}
+export function updateRouteIntentState(update: (state: RouteIntentState) => RouteIntentState, path = routeIntentStatePath()): RouteIntentState {
+  return withConfigMutationLockSync(() => {
+    const next = parseRouteIntentState(update(readRouteIntentState(path)));
+    writeState(next, path);
+    return next;
+  }, dirname(path));
+}
+export function setRouteClientIntent(client: RouteClientId, intent: RouteClientIntent, deviceId?: string): RouteIntentState {
+  const parsed = parseRouteClientIntent(intent, client);
+  if (!isRouteClientId(client) || !parsed || (deviceId !== undefined && !deviceIdAllowed(deviceId))) throw new Error("invalid route intent selection");
+  return updateRouteIntentState(state => {
+    const map = deviceId === undefined ? state.defaults : (state.devices[deviceId] ??= {});
+    map[client] = { ...map[client], ...parsed };
+    if (deviceId !== undefined) advanceRevision(state, deviceId, client);
+    return state;
+  });
+}
+export function clearRouteClientIntent(client: RouteClientId, deviceId: string): RouteIntentState {
+  if (!isRouteClientId(client) || !deviceIdAllowed(deviceId)) throw new Error("invalid route intent selection");
+  return updateRouteIntentState(state => {
+    const map = state.devices[deviceId];
+    if (map) { delete map[client]; if (Object.keys(map).length === 0) delete state.devices[deviceId]; }
+    advanceRevision(state, deviceId, client);
+    return state;
+  });
+}
+
+function advanceRevision(state: RouteIntentState, deviceId: string, client: RouteClientId): void {
+  const revisions = ((state.revisions ??= {})[deviceId] ??= {});
+  const next = (revisions[client] ?? 0) + 1;
+  if (!Number.isSafeInteger(next)) throw new Error("route device revision exhausted");
+  revisions[client] = next;
+}

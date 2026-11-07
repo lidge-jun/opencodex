@@ -1,3 +1,4 @@
+import type { RouteClientId } from "./route-intent";
 import { Buffer } from "node:buffer";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
@@ -156,8 +157,8 @@ foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x))
 `);
 }
 
-export function windowsPinnedSyncArgv(linkId: string): string[] {
-  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json"] }) + OCX_CANDIDATES + String.raw`
+export function windowsPinnedSyncArgv(linkId: string, overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json", ...(overwriteConflict ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }) + OCX_CANDIDATES + String.raw`
 foreach($x in ($c|select -Unique)){
  if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')

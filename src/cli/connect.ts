@@ -26,6 +26,7 @@ import { createSshRunner, type SshRunner } from "../link/ssh-runner";
 import type { OrphanTunnelResult } from "../client/link-tunnel";
 import { inspectRemoteDesktopStore } from "../claude/desktop-remote-store";
 import type { OcxConnectedClientId } from "../types";
+import { ROUTE_CLIENT_IDS, isRouteClientId } from "../link/route-intent";
 import {
   CliUsageError,
   csv,
@@ -240,8 +241,8 @@ export function collectClientConnectionStatus(
 
 function parseClients(raw: string | undefined): OcxConnectedClientId[] {
   const values = csv(raw) ?? ["codex", "claude"];
-  if (values.length < 1 || values.some(value => value !== "codex" && value !== "claude")) {
-    throw new CliUsageError("--clients must contain codex and/or claude", CONNECT_USAGE);
+  if (values.length < 1 || values.some(value => !isRouteClientId(value))) {
+    throw new CliUsageError(`--clients must contain route client ids: ${ROUTE_CLIENT_IDS.join(", ")}`, CONNECT_USAGE);
   }
   return values as OcxConnectedClientId[];
 }
@@ -390,6 +391,9 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   if (!serverUrl || serverUrl.startsWith("--")) throw new CliUsageError("hub URL is required", CONNECT_USAGE);
   const managementUrl = takeOption(args, "--management-url");
   const clients = parseClients(takeOption(args, "--clients"));
+  if (clients.some(client => client !== "codex" && client !== "claude")) {
+    throw new CliUsageError("Hub connections support only codex and claude; use Link for other clients", CONNECT_USAGE);
+  }
   const catalogTimeoutSeconds = takeIntegerOption(args, "--catalog-timeout", { min: 1 });
   if (catalogTimeoutSeconds !== undefined && catalogTimeoutSeconds > 120) {
     throw new CliUsageError("--catalog-timeout must be an integer between 1 and 120", CONNECT_USAGE);
@@ -431,9 +435,9 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   // only the first half is what #4207 was filed for, so the catalog now on disk is checked
   // against the Codex CLI that will read it.
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
-  const report = connectCompletionReport(connection, clients, readiness);
+  const report = connectCompletionReport(connection, connection.selectedClients, readiness);
   for (const line of report.lines) console.log(line);
-  printCodexShimReadiness(clients);
+  printCodexShimReadiness(connection.selectedClients);
   if (report.failure) throw new Error(report.failure);
 }
 
@@ -446,7 +450,8 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
   const managementTransport = takeOption(args, "--management-transport");
   const pairing = takeFlag(args, "--pairing-code-stdin");
   const admin = takeFlag(args, "--admin-token-stdin");
-  const clients = parseClients(takeOption(args, "--clients"));
+  const rawClients = takeOption(args, "--clients");
+  const clients = parseClients(rawClients);
   const catalogTimeoutSeconds = takeIntegerOption(args, "--catalog-timeout", { min: 1 });
   if (catalogTimeoutSeconds !== undefined && catalogTimeoutSeconds > 120) {
     throw new CliUsageError("--catalog-timeout must be an integer between 1 and 120", CONNECT_USAGE);
@@ -468,6 +473,7 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
     managementUrl: `http://127.0.0.1:${rawPort}`,
     credential: { kind: "link", ...credential },
     selectedClients: clients,
+    selectedClientsExplicit: rawClients !== undefined,
     managementTransport: "direct",
     transport: "link",
     link: { tunnelPort: rawPort, linkId },
@@ -481,9 +487,9 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
     throw terminalSafeError(error);
   });
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
-  const report = connectCompletionReport(connection, clients, readiness);
+  const report = connectCompletionReport(connection, connection.selectedClients, readiness);
   for (const line of report.lines) console.log(line);
-  printCodexShimReadiness(clients);
+  printCodexShimReadiness(connection.selectedClients);
   if (report.failure) throw new Error(report.failure);
 }
 
@@ -538,8 +544,10 @@ export async function handleDisconnectCommand(
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
     const orphanedToken = takeFlag(args, "--orphaned-token");
+    const recoverConfig = takeFlag(args, "--recover-config");
     const yes = takeFlag(args, "--yes");
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
+    if (recoverConfig && (!yes || orphanedToken)) throw new CliUsageError("--recover-config requires --yes and cannot be combined with --orphaned-token", DISCONNECT_USAGE);
     if (orphanedToken) {
       if (!yes || keepCatalog) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog", DISCONNECT_USAGE);
       const backup = await recoverOrphanedTokens({ ...deps.orphanRecoveryDeps, lifecycleLockDeps: deps.lifecycleLockDeps });
@@ -550,7 +558,7 @@ export async function handleDisconnectCommand(
       ]);
       return;
     }
-    if (yes) throw new CliUsageError("--yes requires --orphaned-token", DISCONNECT_USAGE);
+    if (yes && !recoverConfig) throw new CliUsageError("--yes requires --orphaned-token or --recover-config", DISCONNECT_USAGE);
     const teardown = await teardownClientLink({
       readSidecar: readClientLinkState,
       connectedLinkId: () => {
@@ -564,7 +572,7 @@ export async function handleDisconnectCommand(
       knownHostsFile: deps.linkTeardownDeps?.knownHostsFile ?? linkKnownHostsPath(),
       timeoutMs: deps.linkTeardownDeps?.timeoutMs,
     });
-    const result = await disconnectClient({ keepCatalog }, deps);
+    const result = await disconnectClient({ keepCatalog, recoverConfig }, deps);
     const payload = {
       ...result,
       homeRevoke: teardown.homeRevoke,
@@ -576,6 +584,7 @@ export async function handleDisconnectCommand(
     };
     printData(payload, wantsJson, [
       "Disconnected locally; native Codex state was restored.",
+      ...(result.recoveryBackupDir ? [`Codex recovery snapshot: ${result.recoveryBackupDir}/snapshot.json (private; retained for manual inspection).`] : []),
       ...(result.desktopRestoration === "standard_fallback"
         ? ["Previous Desktop settings were not recorded; the managed profile was switched to standard mode."] : []),
       ...(result.restartRequired ? ["Fully quit and reopen Claude Desktop; local cleanup cannot revoke an in-memory credential."] : []),

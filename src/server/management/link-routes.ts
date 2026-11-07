@@ -1,3 +1,5 @@
+import { isRouteClientId, ROUTE_CLIENT_IDS } from "../../link/route-intent";
+import { seedRouteDeviceClients, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { probe, confirmHost, apply } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
@@ -73,9 +75,12 @@ async function candidates(ctx: ManagementContext): Promise<Response> {
 }
 
 async function issue(ctx: ManagementContext): Promise<Response> {
-  const body = exactBody(await readManagementJsonBodyOr(ctx.req, null), ["alias", "tunnelPort"]);
+  const raw = await readManagementJsonBodyOr(ctx.req, null);
+  const body = exactBody(raw, isRecord(raw) && Object.hasOwn(raw, "selectedClients") ? ["alias", "tunnelPort", "selectedClients"] : ["alias", "tunnelPort"]);
   if (!body || typeof body.alias !== "string" || !isLinkPort(body.tunnelPort)) return fail("invalid_body", "alias and tunnelPort are required.", 400);
   try { assertSshAlias(body.alias); } catch { return fail("invalid_alias", "alias must be a valid SSH host alias.", 400); }
+  const selection = body.selectedClients;
+  if (selection !== undefined && (!Array.isArray(selection) || selection.length === 0 || selection.length > ROUTE_CLIENT_IDS.length || !selection.every(isRouteClientId) || new Set(selection).size !== selection.length)) return fail("invalid_body", "selectedClients must contain unique supported clients", 400);
   let issued: IssuedApiKey;
   try { issued = issueKey(ctx, `link:${body.alias}`); }
   catch { return fail("key_issue_failed", "The link key could not be issued.", 503); }
@@ -103,6 +108,7 @@ async function issue(ctx: ManagementContext): Promise<Response> {
       const compensation = await compensateNewLink(ctx, state, record);
       return compensation ?? fail("link_exists", "A link for this alias already exists.", 409);
     }
+    withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, selection as import("../../link/route-intent").RouteClientId[] | undefined, readStoreFor(ctx).links.map(link => link.id)));
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") {
       failureCode = "listener_unavailable";
@@ -237,6 +243,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         const latest = readStoreFor(ctx);
         const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
         if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
+        reconcileHomeRouteDevices(filtered.links.map(link => link.id));
         return filtered;
       });
       clearCompensationFailed(id, compensationPath());

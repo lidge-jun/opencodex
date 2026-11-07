@@ -72,7 +72,7 @@ Restore filters retired bare and trusted account-qualified native rows from its 
 without a backup. The original backup, historical user-selected settings and session records remain intact.
 
 Journal restoration compares config and profile independently against their saved originals and
-recorded injected hashes. If either changed artifact lacks its injected hash, the config/profile
+recorded injected hashes. Disconnect additionally restores matching owned fields through `src/codex/journal-config-restore.ts`, preserving later model, hooks, trusted-project and Computer Use path edits. New journals capture owned-field spans; older hash-backed journals use their recorded URLs/catalog/default values and refuse ambiguous blocks or changed routing values. Owned provider/profile paths reserialized as inline or dotted TOML are detected and refused when field-level removal cannot be proved, preserving both config and recovery journal. Retry an interrupted `rotation: recovery-required` disconnect with `ocx disconnect` (retain `--keep-catalog` if initially used); credential or ownership conflicts remain refusals. If either changed artifact lacks its injected hash, the config/profile
 pair and journal remain untouched and the result is explicitly unverified; callers must not
 convert that refusal into successful fallback cleanup. Already-original bytes need no rewrite,
 and absence is distinct from an empty file. The injector checks a retained hashless journal against

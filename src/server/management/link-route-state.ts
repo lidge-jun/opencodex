@@ -6,6 +6,7 @@ import { clearCompensationFailed, compensationPath, markCompensationFailed } fro
 import { readLinkStore, writeLinkStore, type LinkStore } from "../../link/store";
 import { boundHint, createSshRunner, type SshRunner } from "../../link/ssh-runner";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
+import { reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import type { ManagementContext } from "./context";
 import { issueApiKeyInProcess, revokeApiKeyInProcess, type IssuedApiKey } from "./oauth-account-routes";
 
@@ -176,6 +177,7 @@ export async function compensateNewLink(ctx: ManagementContext, state: LinkRoute
       if (filtered.links.length !== current.links.length) {
         writeStoreFor(ctx, filtered);
       }
+      reconcileHomeRouteDevices(filtered.links.map(link => link.id));
       return filtered;
     });
     clearCompensationFailed(record.id, compensationPath());
