@@ -7,6 +7,7 @@ import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-ident
 import { providerQuotaWindows } from "../../src/quota-pool/assemble";
 import { pooledWindows } from "../../src/quota-pool/pooled";
 import { anthropicResetGrantBlocker, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
+import { normalizeAnthropicQuota } from "../../src/providers/quota/account-cache";
 import { inactiveSessionUsage, maxTeamInactiveWeeklyUsage, maxTeamInactiveSessionUsage, legacyMax20xUsage, noResetGrant, ultraUsage, weeklyReset } from "../fixtures/anthropic-usage-shapes";
 
 const originalFetch = globalThis.fetch;
@@ -30,14 +31,25 @@ test("legacy Pro/Max usage keeps its shared 5h, weekly and model windows", async
     .toEqual([["5h", 12], ["weekly", 53], ["fable", 0]]);
 });
 
-test("Ultra null 5h and inactive Fable publish only the weekly window", async () => {
+test("Ultra null 5h and inactive Fable publish only the weekly window for routing", async () => {
   const quota = await parse(ultraUsage);
   expect(quota?.fiveHourPercent).toBeUndefined();
   expect(quota?.weeklyPercent).toBe(53);
   expect(quota?.customWindows ?? []).toEqual([]);
+  expect(quota?.displayWindows).toEqual([{ label: "Fable", scope: "model", percent: 0, resetAt: Date.parse(weeklyReset) }]);
   expect(rawAnthropicUsageWindows(ultraUsage, now).map(row => row.window)).toEqual(["weekly"]);
   expect(hasAnthropicFamilyEnumeration(quota!)).toBe(true);
   expect(providerQuotaWindows(quota!, "measured", now).map(row => row.id)).toEqual(["weekly"]);
+});
+
+test("cached display-only family rows drop expired and malformed entries", () => {
+  const future = now + 3_600_000;
+  const quota = normalizeAnthropicQuota({ weeklyPercent: 40, weeklyResetAt: future, updatedAt: now, displayWindows: [
+    { label: "Fable", scope: "model", percent: 0, resetAt: future },
+    { label: "Opus", scope: "model", percent: 12, resetAt: now - 1 },
+    { label: "", scope: "model", percent: 5 },
+  ] }, now);
+  expect(quota?.displayWindows).toEqual([{ label: "Fable", scope: "model", percent: 0, resetAt: future }]);
 });
 
 test("R3 inactive session retains the zero session meter", async () => {
@@ -70,6 +82,7 @@ for (const active of [false, true]) test(`Fable is model-bound and gates only wh
   expect(anthropicModelPercents(quota, "claude-sonnet-5-5")).toEqual([10]);
   expect(anthropicModelPercents(quota, "claude-opus-5-5")).toEqual([10]);
   expect(anthropicModelPercents(quota, "claude-fable-5").some(percent => percent >= 100)).toBe(active);
+  expect(quota?.displayWindows?.map(window => [window.label, window.percent]) ?? []).toEqual(active ? [] : [["Fable", 100]]);
   const windows = providerQuotaWindows(quota!, "measured", now);
   expect(windows.some(row => row.exhausted && row.scopeModel === undefined)).toBe(false);
   expect(windows.find(row => row.id === "family:fable")?.scopeModel).toBe(active ? "family:fable" : undefined);

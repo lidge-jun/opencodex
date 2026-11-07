@@ -137,11 +137,11 @@ const dateTimestamp = (value: unknown): number | undefined => {
   return Number.isFinite(new Date(milliseconds).getTime()) ? timestamp : undefined;
 };
 
-function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQuota | null {
-  if (!quota || typeof quota !== "object" || Array.isArray(quota)) return null;
-  const q = quota as Record<string, unknown>;
-  const windows = Array.isArray(q.customWindows)
-    ? (q.customWindows as unknown[]).flatMap(w => {
+type QuotaWindowView = NonNullable<AccountQuota["customWindows"]>[number];
+
+function windowsFromUnknown(value: unknown): QuotaWindowView[] {
+  return Array.isArray(value)
+    ? (value as unknown[]).flatMap(w => {
         if (!w || typeof w !== "object") return [];
         const row = w as Record<string, unknown>;
         if (typeof row.label !== "string" || finite(row.percent) === undefined) return [];
@@ -153,6 +153,16 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
         }];
       })
     : [];
+}
+
+function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQuota | null {
+  if (!quota || typeof quota !== "object" || Array.isArray(quota)) return null;
+  const q = quota as Record<string, unknown>;
+  const windows = windowsFromUnknown(q.customWindows);
+  // Display-only rows (an inactive Anthropic model limit) share the bars. A routed row with the
+  // same label can only come from a later rate-limit header observation, so it wins.
+  const routedLabels = new Set(windows.map(w => w.label));
+  windows.push(...windowsFromUnknown(q.displayWindows).filter(w => !routedLabels.has(w.label)));
   const creditsRaw = q.creditsUsd && typeof q.creditsUsd === "object" && !Array.isArray(q.creditsUsd)
     ? q.creditsUsd as Record<string, unknown>
     : null;

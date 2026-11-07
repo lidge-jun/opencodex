@@ -20,6 +20,21 @@ test("provider quota projection preserves bounded exact Antigravity model IDs", 
   ]);
 });
 
+test("display-only family rows render beside routed rows, routed label first", () => {
+  expect(accountQuotaFromReport({
+    updatedAt: 123,
+    quota: {
+      updatedAt: 123,
+      weeklyPercent: 69,
+      customWindows: [{ label: "Opus", percent: 40 }],
+      displayWindows: [{ label: "Fable", percent: 0, resetAt: 456 }, { label: "Opus", percent: 10 }],
+    },
+  })?.customWindows).toEqual([
+    { label: "Opus", percent: 40 },
+    { label: "Fable", percent: 0, resetAt: 456 },
+  ]);
+});
+
 test("model diagnostic bars do not change provider urgency sorting", () => {
   expect(maxQuotaUtilisation({
     updatedAt: 123,
