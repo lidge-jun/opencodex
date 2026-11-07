@@ -74,3 +74,25 @@ export function getPassiveKeyLimits(config: OcxConfig, name: string, model: stri
   if (!vendor) return [];
   return passiveKeyLimits.get({ owner: identity(name, provider, provider.apiKey, key), provider: vendor, model }, Date.now());
 }
+
+/** Cached-only projection, scoped to configured account IDs and without credential material. */
+export function listPassiveKeyLimits(config: OcxConfig) {
+  const result: Array<{ provider: string; keyId: string; model: string; windows: ReturnType<typeof passiveKeyLimits.get> }> = [];
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (provider.disabled || (provider.authMode !== undefined && provider.authMode !== "key")) continue;
+    let vendor: PassiveKeyProvider | undefined;
+    try { vendor = destinations.get(new URL(provider.baseUrl).origin); } catch { continue; }
+    if (!vendor) continue;
+    const entries = provider.apiKeyPool?.length ? provider.apiKeyPool : provider.apiKey
+      ? [{ id: new Bun.CryptoHasher("sha256").update(provider.apiKey).digest("hex").slice(0, 8), key: provider.apiKey }] : [];
+    for (const entry of entries) {
+      if ("disabled" in entry && entry.disabled) continue;
+      const key = resolveProviderApiKey(entry.key);
+      if (!key || (vendor === "openai" && !key.startsWith("sk-"))) continue;
+      for (const reading of passiveKeyLimits.list(identity(name, provider, entry.key, key), vendor, Date.now())) {
+        result.push({ provider: name, keyId: entry.id, ...reading });
+      }
+    }
+  }
+  return result;
+}

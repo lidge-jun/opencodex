@@ -118,6 +118,16 @@ describe("passive key observation cache", () => {
     rows[0]!.remaining = 0;
     expect(cache.get(identity, at)[0]?.remaining).toBe(5);
   });
+  test("enumerates models only for the selected credential and provider", () => {
+    const cache = new PassiveKeyLimitCache();
+    cache.record(identity, response(5), at, 1);
+    cache.record({ ...identity, model: "model-b" }, response(2), at, 2);
+    cache.record({ ...identity, owner: "other" }, response(9), at, 3);
+    expect(cache.list(identity.owner, identity.provider, at)).toEqual([
+      { model: identity.model, windows: [{ dimension: "requests", observedAt: at, remaining: 5, resetAt: at + 10000, stale: false }] },
+      { model: "model-b", windows: [{ dimension: "requests", observedAt: at, remaining: 2, resetAt: at + 10000, stale: false }] },
+    ]);
+  });
   test("invalid bounds, sequence, timestamps and empty observations cannot replace data", () => {
     expect(() => new PassiveKeyLimitCache({ maxEntries: 513 })).toThrow();
     expect(() => new PassiveKeyLimitCache({ retentionMs: 86400001 })).toThrow();

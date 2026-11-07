@@ -158,6 +158,19 @@ export class PassiveKeyLimitCache {
     this.entries.set(key, entry);
     return rows.map(row => ({ ...row, stale: row.resetAt !== undefined && now >= row.resetAt }));
   }
+
+  list(owner: string, provider: PassiveKeyProvider, now: number): { model: string; windows: PassiveKeyLimitReading[] }[] {
+    if (typeof owner !== "string" || !owner || owner.length > 256 || !PROVIDERS.includes(provider) || !timestamp(now)) return [];
+    const ownerHash = new Bun.CryptoHasher("sha256").update(owner).digest("hex");
+    const models = Array.from(this.entries.keys()).flatMap(key => {
+      const [storedOwner, storedProvider, model] = JSON.parse(key) as [string, string, string];
+      return storedOwner === ownerHash && storedProvider === provider ? [model] : [];
+    });
+    return models.flatMap(model => {
+      const windows = this.get({ owner, provider, model }, now);
+      return windows.length ? [{ model, windows }] : [];
+    });
+  }
 }
 
 /** One process-local cache, shared by the physical response and management readers. */

@@ -180,6 +180,7 @@ import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve"
 import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
 import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -1268,7 +1269,7 @@ export async function handleResponsesCompact(
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), String(input),
+                passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), config, route.providerName, sendProvider), String(input),
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
               return fetchWithHeaderTimeout(compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
