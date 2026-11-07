@@ -52,7 +52,9 @@ test("ineligible destinations and credentials never invoke the wire model parser
     await send(target, init);
     expect(parser).toHaveBeenCalledTimes(1);
     expect(sends).toBe(12);
-    expect(getPassiveKeyLimits(config, "parser-gate", "model")).toMatchObject([{ remaining: 5 }]);
+    expect(getPassiveKeyLimits(config, "parser-gate", "model")).toMatchObject([
+      { dimension: "requests", window: "day", remaining: 5 }, { dimension: "tokens", window: "minute" },
+    ]);
   } finally { parser.mockRestore(); observations.clearPassiveKeyLimits("parser-gate"); }
 });
 
