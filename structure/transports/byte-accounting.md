@@ -75,11 +75,14 @@ only. It copies no request content and adds no bytes to the upstream wire; see t
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
-`JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
+the byte length of `JSON.stringify(parsed)`: numeric normalization can make it larger than the input
+text. `src/server/json-serialized-bytes.ts` computes that length with an iterative walk, so a valid
+body nested deeper than the call stack is measured instead of throwing during accounting. These
 observations retain the existing ownership and release lifecycle and do not consume the translator's
 hard byte cap. Per-body limits, parsing, compression, and reader error envelopes are unchanged.
 `tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
-normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
+normalization, UTF-8 counting without encoded copies, release after malformed or optional empty input,
+and serialized-length parity with `JSON.stringify` including nesting it cannot walk.
 
 The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
@@ -95,10 +98,19 @@ still measure the uncompressed body; native codec workspace is not a counted Jav
 ## Raised HTTP body admission
 
 `src/server/inbound-body-admission.ts` reserves the full resolved `maxInboundBodyBytes` allowance
-from a process-wide 512 MiB admission budget when the allowance exceeds the 256 MiB default.
+from the process-wide budget in `src/server/inbound-body-budget.ts` when it exceeds the 256 MiB default.
+`maxConcurrentInboundBodyBytes` preserves a 512 MiB default; an operator may explicitly select
+512 MiB through 2 GiB. `src/lib/inbound-body-policy.ts` resolves omission, zero or invalid numbers to
+512 MiB and clamps positive safe integers to that range. Startup captures the setting for all
+listeners; a config edit requires restart. Configuration changes the existing owner without
+discarding active leases or FIFO waiters; lowering capacity cannot erase outstanding charges.
 `src/server/index.ts` owns this lease in `runAdmittedHttpTurn`, after authentication and origin
 checks, before any request body is read. Default and smaller allowances do not consume this budget.
-Missing or small Content-Length and compressed wire bodies do not reduce the reservation.
+Missing or small Content-Length and compressed wire bodies do not reduce the upload reservation.
+After successful bounded JSON parsing, the reader reduces it to the largest observed wire/decoded
+size, including normalized JSON bytes whether or not the route uses a translator budget.
+This reduction never exceeds the original allowance. The measured charge remains live;
+parsing never frees the whole lease.
 An already-aborted request or explicitly oversized declaration keeps the existing abort/413 path.
 
 The lease covers upload, parsing, downstream awaits and response consumption. It is released on
@@ -112,16 +124,47 @@ combo/translation calls share their HTTP owner's reservation rather than reservi
 The exact POST routes are Responses, compact, Chat Completions, Messages, count_tokens, image
 generations/edits and alpha search. Image/search/count_tokens retain their configured per-body
 limits. Management, audio, context relay and WebSocket frames retain their independent contracts.
-Capacity refusal happens before protocol handlers, with HTTP 503, `Retry-After: 1`, and code
+Capacity pressure queues at most 32 unread uploads in FIFO order for at most 120 seconds.
+Returning unused allowance or settling a lease wakes eligible waiters; abort and timeout detach
+their timers/listeners without changing another owner's reservation. A disconnect after a grant
+but before its caller resumes releases it without dispatch. Full/expired queues refuse before
+protocol handlers, with HTTP 503, `Retry-After: 1`, and code
 `server_busy`; Messages/count_tokens use the Anthropic `error`/`overloaded_error` envelope.
 The HTTP owner preserves receiving-listener CORS and records the refusal without reading the body.
 
-This is an allowance budget, not a measured RSS or parsed-heap cap. All covered requests, even small
-ones, serialize when configured above 256 MiB. It does not bound retained state beyond the HTTP
-lifetime or change default-cap concurrency. `tests/server/server-request-body-size.test.ts` covers
-lifecycle, cancellation races, protocol envelopes, and the real HTTP admission boundary.
+This is an allowance budget, not a measured RSS or parsed-heap cap. Explicitly selecting 2 GiB
+permits four full 512 MiB uploads and increases potential peak memory on raised-limit deployments.
+With the default 512 MiB budget, even a one-byte charge prevents another full 512 MiB allowance;
+shrinking alone does not resolve that case. Parsed small requests with an explicitly larger
+budget can overlap beyond four while their measured charges fit. Host RAM is not auto-detected.
+It does not bound state beyond the HTTP lifetime or change default-cap concurrency.
+`tests/server/inbound-body-admission.test.ts` covers lifecycle, cancellation races, protocol
+envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` covers FIFO/accounting.
 
 ## Stream-buffer accounting
+
+Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
+its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
+removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps
+the previous charge owned until `finally` releases it, without releasing other owners' bytes.
+The turn limit and transport-read accounting remain in force. `tests/providers/command-code-buffer-budget.test.ts`
+covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
+one-byte overflow, another retained owner, consumer return and upstream cancellation.
+
+Devin Connect-RPC in `src/adapters/devin/cloud-direct/chat.ts` compacts surviving chunks in place
+and truncates the queue, or clears it when no bytes remain. No deleted-chunk
+result array is allocated. Partial head slices and later
+frames retain their order without one `shift()` per chunk. `tests/providers/devin-stream-queue.test.ts`
+bounds prefix-removal calls and discarded-array slots on fragmented frames and covers split/coalesced headers and payloads,
+Unicode, empty frames and gzip. Existing frame/inflation caps, EOS handling and teardown remain in force.
+
+Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
+allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
+only a fragment containing a newline triggers splitting of the accumulated record. Complete
+records and the remaining residual retain their independent size checks and existing reservation
+order, including CRLF and EOF handling. The fatal streaming decoder emits complete code points,
+so fragment counts remain exact across split UTF-8 reads. `tests/providers/ollama/ollama-native-scaling.test.ts`
+checks linear measurement and splitting work, framing equivalence, invalid UTF-8 and cancellation.
 
 `src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
 and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
@@ -140,7 +183,7 @@ one source chunk keeps its source view. Storage grows with received bytes rather
 length, and completed carry allocations remain owned by their yielded payloads. The four-byte
 length and twelve-byte prelude are validated before copying subsequent payload bytes, including
 the header-to-frame boundary. The 16 MiB frame and 128 KiB header limits, both CRC checks, truncated
-EOF errors and reader cancellation remain in force. Coalesced chunks may contain multiple valid
+EOF errors and reader cancellation remain in force. Teardown initiates cancellation and observes errors without awaiting transport settlement, so consumer return cannot hang on a never-settling cancel promise. Coalesced chunks may contain multiple valid
 frames whose aggregate exceeds the per-frame cap. `tests/responses/eventstream-fragmentation.test.ts`
 covers copy work, ownership, validation checkpoints and cleanup across split/coalesced input.
 
@@ -168,6 +211,17 @@ budget until downstream delivery. Cancellation and overflow release held events 
 the request translator budget. Each owner releases its own reservations on completion, error,
 cancellation or consumer closure; a buffer-limit failure terminates without another search.
 
+`src/server/messages-sse-error-filter.ts` keeps one confirmed first-field-error suffix in a single
+allocation capped at 1 MiB, including original-order protocol fields for a within-bound rename.
+Crossing the cap immediately drops that allocation and scans only finite framing state until the
+boundary. Ordinary fields have no prefix hold or new limit. Boundary parse/stringify uses transient
+O(1 MiB) objects, separate from the retained wire-byte cap. Cancellation, stream failure and failed
+enqueue release the suffix. This client presentation copy does not admit against TranslatorBudget:
+legacy tap/guard/rewrite bytes retain the original charges, so fixed frame growth cannot create 413.
+The final existing enqueue stage runs the filter synchronously with no extra stream queue or timer.
+`tests/claude-integration/messages-sse-guard-errors.test.ts` checks fixed growth near the turn limit;
+`tests/server/messages-sse-error-lifecycle.test.ts` covers teardown and ordinary events above 32 MiB.
+
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input plus a three-character delimiter prefix and counts consumed blocks rather than
 remaining suffixes. CR, LF and CRLF share partial-event, injection/drop and EOF behavior.
@@ -194,18 +248,45 @@ CR dispatches without awaiting EOF. A later LF extends that delimiter: byte deli
 framing-only continuation, excluded from event-count limits and the next event's byte cap;
 inspection consumes it without creating an event. The text rewrite relay keeps that continuation
 outside rewrite/drop callbacks and settles injected nonfinal CR delimiters as CRLF.
+The relay counts actual client enqueues, including late LF continuations suppressed by the Messages
+filter; with no emitted chunk it keeps reading through the next event or EOF.
+`tests/responses/sse-payload-rewrite-continuation.test.ts` binds that progress across rewrite, tap
+and standalone filter delivery; endpoint coverage also preserves later event bytes.
 
 `src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
-their charge/release lifecycle while it asks the pure progressive decoder in
-`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
-charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
+their charge/release lifecycle while it asks a per-call progressive reader from
+`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The reader holds only
+parse position and decoded text, and it neither charges nor releases translator budget; extracting
+it from `src/bridge/sse.ts` does not create a
 second retention owner or change terminal, failure, incomplete, or disposal release behavior.
+Both callers keep one reader per open call, in their own call state, and feed it the growing
+arguments. It resumes where the previous delta stopped, so the canonical value is decoded and
+checked for a nested executable wrapper once per call; rescanning both on every delta made
+one-character deltas quadratic in the body length.
+Canonical routed `apply_patch` progress is also tracked by that owner. If authoritative completion
+does not extend the emitted stable prefix, the owner releases every retained call and pending block
+before raising the rewrite failure; the relay emits a failed terminal and never exposes a successful
+tool completion with rewritten arguments.
 
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
+The provider-opt-in tracker in `src/server/responses-snapshot-repair.ts` caches each open item's
+UTF-8 text size and final code unit. It measures only incoming deltas, corrects split surrogate
+pairs even across empty deltas, replaces the count for authoritative text snapshots, and refunds
+the cached count on item closure. Per-item and aggregate open-text caps remain 8 MiB; crossing
+either cap releases state and disables lifecycle reconstruction. `tests/responses/responses-snapshot-scaling.test.ts`
+checks the linear measurement budget, Unicode boundaries, replacement, closure and cap refusal.
 Serialized request and buffered-response observations use byte counts without measurement arrays.
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
+
+Google SSE in `src/adapters/google.ts` measures each decoded fragment once and scans the retained
+line only when new text contains a newline. After consuming complete lines, only the remaining
+suffix is remeasured. Decoder EOF replacement bytes use the same admission-before-concatenation
+path; old/new overlap remains charged until replacement commits. Fragmented UTF-8, residual EOF
+frames, existing frame limits, terminal events and reader-release ownership retain their behavior.
+`tests/adapters/google/google-stream-fragmentation.test.ts` bounds measurement and scan work by
+input size and checks Unicode, exact EOF overlap admission, overflow and early-return cleanup.
 
 MiMo standalone bare-call recovery in `src/adapters/openai-chat/standalone-bare-tool-calls.ts`
 retains detached candidate inputs across bounded streaming prose release. Candidate records are
@@ -248,6 +329,11 @@ The [Images display contract](../data-planes/images.md#hosted-responses-image-di
 item/metadata limits and lifecycle behavior; raw continuation replay stays upstream-shaped.
 
 ## Response-log inspection
+
+`src/lib/redact-folding.ts` uses an identity fold and UTF-16 offset map for ASCII
+strings without escape introducers when decoding is enabled, and all ASCII strings
+when it is disabled. Other strings keep the general Unicode/escape fold; all
+credential masking passes still run. `tests/lib/redact.test.ts` compares both paths.
 
 `src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
 searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,
@@ -371,3 +457,16 @@ charges each replacement event while its source batch remains retained; the brid
 the signed envelope and visible commentary pair through its existing output accounting.
 
 Explicitly selected canonical Codex Lite ordinary unreferenced history notes reuse `src/adapters/openai-responses/compaction-search-history.ts` and its 65,536-byte projection cap, included in final passthrough serialization accounting; original raw history and all non-hosted input remain untouched. The budget counts only actually projected cells; same-input referenced hosted cells do not consume the ordinary notes budget. Top-level and action sources share the existing per-field/list allowlists and total bound.
+
+The Zed OpenAI relay uses private per-call budget keys so client encoders cannot close its leases.
+Each argument or full snapshot replacement reserves its complete new logical size before releasing
+the old physical bytes; two retained copies spend the turn cap without doubling a call's logical limit.
+Lexical JSON reconciliation and replay hashing reserve source, token, position and grammar-stack
+workspace; rebuilt suffixes are admitted before retention. Authoritative tokens and the bounded
+late scanner stack spend the turn budget until call release. Each late source unit is scanned once;
+UTF-8 accounting measures only the new fragment. The delivery string keeps its existing lease.
+Dedupe identities include an entry allowance, so even empty items remain bounded. Queued semantic
+events and opaque usage are charged until emitted or replaced; cancellation, read failure and
+identity/argument refusal release every relay-owned buffer. Failed terminals close outstanding calls
+incomplete and replay queued semantics before the error; diagnostic usage keeps only numeric counters,
+releasing any previously retained opaque usage. Ciphertext alone transfers with its done lease.

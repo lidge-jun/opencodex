@@ -2,6 +2,14 @@
 
 Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.2 (Vertex per-key project)
 
+## Streaming input accounting
+
+Google-family SSE parsing counts new decoded text incrementally and waits for a newly received
+newline before splitting an incomplete line. Fragmentation therefore does not cause repeated
+UTF-8 encoding or rescanning of the growing prefix. The existing per-frame limit, terminal
+requirements and heartbeat batching remain in force. Replacement strings, including decoder
+EOF output, retain the [shared byte-accounting contract](../transports/byte-accounting.md#stream-buffer-accounting).
+
 ## Vertex API-key endpoint selection
 
 `src/adapters/google-vertex-endpoint.ts` selects the Vertex endpoint once per request and the
@@ -58,6 +66,7 @@ The management helper also owns the locked provider-deletion callback, preservin
 selection, custom-model/context-cap removal, persistence and subsequent marker cleanup order.
 `src/providers/gcp-credential-cleanup.ts` cleans removed markers after config persistence, including CLI `provider add --force` overwrites, under the
   config mutation lock, retaining credentials still referenced by any persisted provider. CLI overwrite captures both live and latest durable rows under that lock. Management overwrite reuses `snapshotProviderGcpCredentialMarkers`; CLI and management deletion use `commitProviderGcpCredentialRemoval` to capture live and valid durable markers and persist removal without releasing the lock. Failed saves and refused CLI additions do not clean credentials.
+CLI provider add and removal keep synchronous post-save cleanup inside the same config-root ACL admission as publication; cleanup failures retain the existing warning that configuration removal remains committed.
 Reference retention compares OS account identities across both `gcp-sa:` and `keychain:`
 spellings. `src/providers/key-store.ts` leaves GCP markers stored during ordinary keychain
 store/restore and refuses to restore GCP JSON through a keychain alias; the shared classification
@@ -98,6 +107,8 @@ Other Google wires without the opt-in, non-Gemini models and uninitialized adapt
 explicit wire summary none win. Eligible CCA, Vertex and direct Gemini requests use
 `includeThoughts: true` only when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
+For CCA Argon summaries, the adapter also repeats the selected wire suffix tier as `thinkingLevel`;
+when summaries are disabled, Argon and the web-search sidecar retain their suffix-only request shape.
 
 The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
 or the wording of the text. An unmarked signed text part remains ordinary assistant output;

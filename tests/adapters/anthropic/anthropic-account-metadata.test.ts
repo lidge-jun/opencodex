@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bindAnthropicAccountMetadata } from "../../../src/adapters/anthropic/account-metadata";
+import { bindAnthropicAccountMetadata, deriveAnthropicAccountDeviceId } from "../../../src/adapters/anthropic/account-metadata";
 import { buildAnthropicMessagesPassthroughRequest } from "../../../src/adapters/anthropic/passthrough";
 import type { OcxProviderConfig } from "../../../src/types";
 
@@ -18,10 +18,17 @@ const source = {
 const provider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "fixture-access" } as OcxProviderConfig;
 
 describe("Anthropic serving-account metadata", () => {
-  test("rewrites only JSON-string metadata and preserves device, session, text and tool payloads", () => {
+  test("rewrites only JSON-string metadata, isolates device_id per account, and preserves session, text and tool payloads", () => {
     const before = JSON.stringify(source);
     const result = bindAnthropicAccountMetadata(source, B);
-    expect(JSON.parse((result.metadata as typeof source.metadata).user_id)).toEqual({ ...identity, account_uuid: B });
+    const parsedB = JSON.parse((result.metadata as typeof source.metadata).user_id);
+    expect(parsedB).toEqual({
+      ...identity,
+      device_id: deriveAnthropicAccountDeviceId(B),
+      account_uuid: B,
+    });
+    expect(parsedB.device_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsedB.device_id).not.toBe(deriveAnthropicAccountDeviceId(A));
     expect(result.metadata).not.toBe(source.metadata);
     expect(result.messages).toBe(source.messages);
     expect(result.tools).toBe(source.tools);
@@ -32,8 +39,13 @@ describe("Anthropic serving-account metadata", () => {
     const b = buildAnthropicMessagesPassthroughRequest({ ...provider, apiKey: "fixture-b-access" }, "m", source, undefined, { providerAccountUuid: B });
     expect(a.headers.Authorization).toBe("Bearer fixture-access");
     expect(b.headers.Authorization).toBe("Bearer fixture-b-access");
-    expect(JSON.parse((a.wireBody.metadata as typeof source.metadata).user_id).account_uuid).toBe(A);
-    expect(JSON.parse((b.wireBody.metadata as typeof source.metadata).user_id).account_uuid).toBe(B);
+    const userA = JSON.parse((a.wireBody.metadata as typeof source.metadata).user_id);
+    const userB = JSON.parse((b.wireBody.metadata as typeof source.metadata).user_id);
+    expect(userA.account_uuid).toBe(A);
+    expect(userB.account_uuid).toBe(B);
+    expect(userA.device_id).toBe(deriveAnthropicAccountDeviceId(A));
+    expect(userB.device_id).toBe(deriveAnthropicAccountDeviceId(B));
+    expect(userA.device_id).not.toBe(userB.device_id);
     expect(JSON.parse(source.metadata.user_id).account_uuid).toBe(A);
   });
   test("absent, malformed, unsupported and oversized metadata stay unchanged", () => {
@@ -48,10 +60,11 @@ describe("Anthropic serving-account metadata", () => {
     }
   });
   test("unknown provider UUID and local slot ids are never used", () => {
+    const alreadyIsolatedA = { ...source, metadata: { ...source.metadata, user_id: JSON.stringify({ ...identity, device_id: deriveAnthropicAccountDeviceId(A), account_uuid: A }) } };
     for (const uuid of [undefined, "", "anthropic:local-slot", "a".repeat(64)]) {
       expect(bindAnthropicAccountMetadata(source, uuid)).toBe(source);
     }
-    expect(bindAnthropicAccountMetadata(source, A)).toBe(source);
+    expect(bindAnthropicAccountMetadata(alreadyIsolatedA, A)).toBe(alreadyIsolatedA);
   });
   test("a credential override cannot send metadata bound to another bearer", () => {
     for (const headers of [{ Authorization: "Bearer fixture-other" }, { authorization: "Bearer fixture-other" }, { "x-api-key": "fixture-other" }]) {

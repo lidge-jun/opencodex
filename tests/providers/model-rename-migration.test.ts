@@ -172,6 +172,66 @@ describe("registry model rename migration (#1610)", () => {
     }
   });
 
+  test.each(["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1/"])("migrates Moonshot K2.5 with API metadata on %s", baseUrl => {
+    const stale = { defaultProvider: "moonshot", providers: { moonshot: {
+      adapter: "openai-chat", baseUrl, defaultModel: "kimi-k2.5",
+      models: ["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
+      modelContextWindows: { "kimi-k2.5": 262_144 },
+      noReasoningModels: ["kimi-k2.5", "kimi-k2.6"],
+      modelReasoningEfforts: { "kimi-k2.5": [] },
+      noTemperatureModels: ["kimi-k2.5"], preserveReasoningContentModels: ["kimi-k2.5"],
+    } } } as unknown as OcxConfig;
+    const first = projectModelRenames(stale);
+    const row = first.config.providers.moonshot!;
+    expect(first.changed).toBe(true);
+    expect(row.defaultModel).toBe("kimi-k3.1-pro");
+    expect(row.models).toEqual(["kimi-k3.1-pro", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"]);
+    expect(row.modelContextWindows).toEqual({ "kimi-k3.1-pro": 1_048_576 });
+    expect(row.noReasoningModels).toEqual(["kimi-k2.6"]);
+    expect(row.modelReasoningEfforts).toEqual({ "kimi-k3.1-pro": ["low", "high", "max"] });
+    expect(row.modelDefaultReasoningEfforts).toEqual({ "kimi-k3.1-pro": "max" });
+    expect(row.modelReasoningEffortMap?.["kimi-k3.1-pro"]).toEqual({ none: "__omit__", low: "low", medium: "high", high: "high", xhigh: "max", max: "max" });
+    expect(row.noTemperatureModels).toEqual(["kimi-k3.1-pro"]);
+    expect(row.preserveReasoningContentModels).toEqual(["kimi-k3.1-pro"]);
+    expect(projectModelRenames(structuredClone(first.config)).changed).toBe(false);
+  });
+
+  test("Moonshot K2.5 migration preserves explicit successor metadata and Custom destinations", () => {
+    const stale = { providers: { moonshot: {
+      adapter: "openai-chat", baseUrl: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.5",
+      models: ["kimi-k2.5", "kimi-k3.1-pro"],
+      modelContextWindows: { "kimi-k2.5": 262_144, "kimi-k3.1-pro": 131_072 },
+      modelReasoningEfforts: { "kimi-k2.5": [], "kimi-k3.1-pro": ["low"] },
+      modelDefaultReasoningEfforts: { "kimi-k3.1-pro": "low" },
+      modelReasoningEffortMap: { "kimi-k3.1-pro": { medium: "low" } },
+    } } } as unknown as OcxConfig;
+    const custom = structuredClone(stale);
+    custom.providers.moonshot!.baseUrl = "https://gateway.example.test/v1";
+    const original = structuredClone(custom);
+    expect(projectModelRenames(custom).changed).toBe(false);
+    expect(custom).toEqual(original);
+    const row = projectModelRenames(stale).config.providers.moonshot!;
+    expect(row.models).toEqual(["kimi-k3.1-pro"]);
+    expect(row.modelContextWindows).toEqual({ "kimi-k3.1-pro": 131_072 });
+    expect(row.modelReasoningEfforts).toEqual({ "kimi-k3.1-pro": ["low"] });
+    expect(row.modelDefaultReasoningEfforts).toEqual({ "kimi-k3.1-pro": "low" });
+    expect(row.modelReasoningEffortMap).toEqual({ "kimi-k3.1-pro": { medium: "low" } });
+    // An explicit successor value equal to the legacy K2.5 seed is still the user's choice.
+    const seedEqual = structuredClone(stale);
+    seedEqual.providers.moonshot!.modelContextWindows = { "kimi-k2.5": 262_144, "kimi-k3.1-pro": 262_144 };
+    seedEqual.providers.moonshot!.modelReasoningEfforts = { "kimi-k2.5": [], "kimi-k3.1-pro": [] };
+    const kept = projectModelRenames(seedEqual).config.providers.moonshot!;
+    expect(kept.modelContextWindows).toEqual({ "kimi-k3.1-pro": 262_144 });
+    expect(kept.modelReasoningEfforts).toEqual({ "kimi-k3.1-pro": [] });
+    // Explicit successor no-reasoning stays, with or without K2.5 still present.
+    const coexist = structuredClone(seedEqual);
+    coexist.providers.moonshot!.noReasoningModels = ["kimi-k2.5", "kimi-k3.1-pro"];
+    expect(projectModelRenames(coexist).config.providers.moonshot!.noReasoningModels).toEqual(["kimi-k3.1-pro"]);
+    const successorOnly = { providers: { moonshot: { adapter: "openai-chat", baseUrl: "https://api.moonshot.ai/v1",
+      models: ["kimi-k3.1-pro"], noReasoningModels: ["kimi-k3.1-pro"], modelReasoningEfforts: { "kimi-k3.1-pro": [] } } } } as unknown as OcxConfig;
+    expect(projectModelRenames(structuredClone(successorOnly)).changed).toBe(false);
+  });
+
   test("repairs a saved kimi row still defaulting to the retired k2.7 id", () => {
     // The shape a config saved under the pre-K2.8 registry carries: the picker list,
     // the context-window record and the default all name kimi-k2.7-code, and the old
@@ -385,6 +445,24 @@ describe("model rename startup persistence", () => {
     if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = originalHome;
     for (const home of homes.splice(0)) removeTreeWithRetry(home);
+  });
+
+  test("persists a saved Moonshot K2.5 default as K3.1 Pro", () => {
+    isolate("ocx-moonshot-k25-");
+    const live = { port: 10100, defaultProvider: "moonshot", providers: { moonshot: {
+      adapter: "openai-chat", baseUrl: "https://api.moonshot.ai/v1", apiKey: "fixture-key",
+      defaultModel: "kimi-k2.5", models: ["kimi-k2.5"],
+      modelContextWindows: { "kimi-k2.5": 262_144 }, modelReasoningEfforts: { "kimi-k2.5": [] },
+      noReasoningModels: ["kimi-k2.5"],
+    } } } as unknown as OcxConfig;
+    saveConfig(live);
+    runModelRenameStartupMigration(live);
+    const saved = loadConfig().providers.moonshot!;
+    expect(saved.defaultModel).toBe("kimi-k3.1-pro");
+    expect(saved.models).toEqual(["kimi-k3.1-pro"]);
+    expect(saved.modelContextWindows?.["kimi-k3.1-pro"]).toBe(1_048_576);
+    expect(saved.modelReasoningEfforts?.["kimi-k3.1-pro"]).toEqual(["low", "high", "max"]);
+    expect(saved.noReasoningModels).not.toContain("kimi-k3.1-pro");
   });
 
   test("startup no-op preserves the live config object identity", () => {

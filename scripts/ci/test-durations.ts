@@ -19,7 +19,7 @@
  * large, so read one job at a time:
  *
  *   gh run view <run-id> --job <job-id> --log > .tmp/<job>.log            (every suite shard)
- *   bun scripts/ci/test-durations.ts refresh --source "run <run-id>, ..." <test N/4 and macos N/3 logs>
+ *   bun scripts/ci/test-durations.ts refresh --source "run <run-id>, ..." <test N/4 and macos N/4 logs>
  *   bun scripts/ci/test-durations.ts refresh --table scripts/ci/test-durations.windows.tsv \
  *     --source "run <run-id>, ..." <windows N/9 logs>
  *

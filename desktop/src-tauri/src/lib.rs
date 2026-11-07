@@ -48,6 +48,9 @@ mod tray_login;
 mod popup_portable_test;
 mod process_spawn;
 mod proxy;
+mod recovery;
+mod recovery_activity;
+mod recovery_presence;
 mod resolve;
 mod runtime_stop;
 mod sidecar;
@@ -419,6 +422,7 @@ pub fn run() {
                 window::set_tray_policy(app.handle(), false);
             }
 
+            recovery::register(app.handle());
             startup::begin(app.handle());
 
             if !cfg!(debug_assertions) {

@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
 import { Agent, createServer, request } from "node:https";
 import { connect, constants, type ClientHttp2Session, type ClientHttp2Stream } from "node:http2";
-import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, ClientRequest, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { createServer as createTlsServer } from "node:tls";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
 import { startPickerListener, type PickerListenerOptions } from "../../src/claude/intercept/picker-listener";
+import { observeUploadBackpressure } from "../helpers/picker-upload-backpressure";
 
 async function fixture(handler: ((req: IncomingMessage, res: ServerResponse) => void) | "early-fin",
   options: Partial<PickerListenerOptions> = {}) {
@@ -427,5 +428,128 @@ for (const protocol of ["h1", "h2"] as const) {
       if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
     } finally { await wait(f.close()); }
+  });
+}
+
+
+for (const protocol of ["h1", "h2"] as const) {
+  bounded(`${protocol} idle upload closes without a response and releases admission`, async wait => {
+    const entered = Promise.withResolvers<void>();
+    const upstreamClosed = Promise.withResolvers<void>();
+    const f = await fixture((req, res) => {
+      req.on("error", () => res.destroy()); req.resume();
+      if (req.url === "/idle") {
+        req.once("data", () => entered.resolve());
+        req.once("close", () => upstreamClosed.resolve());
+        // No application response or forced close; the upstream keeps its runtime timeout defaults.
+      } else res.end("ordinary");
+    }, { uploadIdleMs: 120, maxActiveUpstreams: 1 });
+    try {
+      const session = f.h2();
+      const upload = protocol === "h2"
+        ? session.request({ ":method": "POST", ":path": "/idle", ":authority": "claude.ai" })
+        : f.h1("/idle", "POST", { "Content-Length": "1000" });
+      const statuses: number[] = [];
+      if (protocol === "h1") (upload as ClientRequest).once("response", res => { statuses.push(res.statusCode!); res.resume(); });
+      else (upload as ClientHttp2Stream).once("response", headers => statuses.push(Number(headers[":status"])));
+      const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
+      upload.write("x"); await wait(entered.promise);
+      expect((await wait(normalH2(session))).status).toBe(503);
+      await wait(closed); await wait(upstreamClosed.promise);
+      expect(statuses).toEqual([]);
+      if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_CANCEL);
+      expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
+      expect(f.logs.filter(line => line === "picker upload idle timeout")).toHaveLength(1);
+    } finally { await wait(f.close()); }
+  });
+
+  bounded(`${protocol} progressing upload outlives the idle interval and preserves every byte`, async wait => {
+    let received = "";
+    const entered = Promise.withResolvers<void>();
+    const f = await fixture((req, res) => {
+      req.on("error", () => res.destroy());
+      req.on("data", chunk => { received += chunk.toString(); entered.resolve(); });
+      req.once("end", () => res.end(received));
+    }, { uploadIdleMs: 160 });
+    try {
+      const upload = protocol === "h2"
+        ? f.h2().request({ ":method": "POST", ":path": "/progress", ":authority": "claude.ai" })
+        : f.h1("/progress", "POST", { "Content-Length": "13" });
+      const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
+      upload.write("x"); await wait(entered.promise);
+      for (let i = 0; i < 8; i++) { await wait(Bun.sleep(40)); upload.write("x"); }
+      upload.end("tail");
+      expect(await wait(result)).toEqual({ status: 200, text: "xxxxxxxxxtail" });
+      expect(f.logs).not.toContain("picker upload idle timeout");
+    } finally { await wait(f.close()); }
+  });
+
+  for (const completed of [true, false]) {
+    bounded(`${protocol} ${completed ? "completed upload" : "early response"} leaves long-lived responses outside the idle guard`, async wait => {
+      const answered = Promise.withResolvers<void>();
+      let response: ServerResponse | undefined;
+      const f = await fixture((req, res) => {
+        req.on("error", () => res.destroy()); req.resume();
+        const begin = () => {
+          response = res; res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.write("data: first\n\n"); answered.resolve();
+        };
+        if (completed) req.once("end", begin); else req.once("data", begin);
+      }, { uploadIdleMs: 80 });
+      try {
+        const upload = protocol === "h2"
+          ? f.h2().request({ ":method": "POST", ":path": "/events", ":authority": "claude.ai" })
+          : f.h1("/events", "POST", { "Content-Length": completed ? "1" : "1000" });
+        const result = protocol === "h2" ? h2Result(upload as ClientHttp2Stream) : h1Result(upload as ClientRequest);
+        if (completed) upload.end("x"); else upload.write("x");
+        await wait(answered.promise); await wait(Bun.sleep(240));
+        response!.end("data: last\n\n");
+        expect(await wait(result)).toEqual({ status: 200, text: "data: first\n\ndata: last\n\n" });
+        expect(f.logs).not.toContain("picker upload idle timeout");
+      } finally { await wait(f.close()); }
+    });
+  }
+
+  bounded(`${protocol} upstream backpressure suspends the idle guard until reads resume`, async wait => {
+    const idleMs = 120;
+    const proofHeader = "x-picker-backpressure-proof";
+    const proofToken = crypto.randomUUID();
+    const stallPath = `/stall-${protocol}-${proofToken}`;
+    const arrived = Promise.withResolvers<void>();
+    let upstreamReq: IncomingMessage | undefined;
+    const f = await fixture((req, res) => {
+      req.on("error", () => res.destroy());
+      if (req.url === stallPath) {
+        upstreamReq = req;
+        // Consume nothing until told to, so the relay's pipe must pause the client request.
+        req.once("readable", () => arrived.resolve());
+      } else { req.resume(); res.end("ordinary"); }
+    }, { uploadIdleMs: idleMs, maxActiveUpstreams: 1 });
+    const pressure = observeUploadBackpressure(protocol, stallPath, proofHeader, proofToken);
+    let upload: ClientRequest | ClientHttp2Stream | undefined;
+    try {
+      const session = f.h2();
+      upload = protocol === "h2"
+        ? session.request({ ":method": "POST", ":path": stallPath, ":authority": "claude.ai", [proofHeader]: proofToken })
+        : f.h1(stallPath, "POST", { "Content-Length": String(pressure.advertisedLength), [proofHeader]: proofToken });
+      // Send the head before awaiting the pipe observation; h1 holds headers until flushed.
+      if (protocol === "h1") (upload as ClientRequest).flushHeaders();
+      const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
+      await pressure.holdStable(upload, idleMs * 3, wait, () => f.logs.includes("picker upload idle timeout"));
+      await wait(arrived.promise);
+      // Bun's ClientRequest.getHeader() omits headers supplied as a raw array; check the wire peer.
+      expect(upstreamReq!.method).toBe("POST");
+      expect(upstreamReq!.url).toBe(stallPath);
+      expect(upstreamReq!.headers[proofHeader]).toBe(proofToken);
+      expect(f.logs).not.toContain("picker upload idle timeout");
+      expect(upload.destroyed).toBe(false);
+      expect((await wait(normalH2(session))).status).toBe(503);
+      // Upstream reads again: the destination drains, the source resumes, the rest arrives.
+      await pressure.resumeAndVerify(upstreamReq!, wait);
+      // Payload stopped without an end: the guard is live again and expires the upload.
+      await wait(closed);
+      expect(f.logs.filter(line => line === "picker upload idle timeout")).toHaveLength(1);
+      expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
+    } finally { await pressure.cleanup(upload, f.close); }
   });
 }

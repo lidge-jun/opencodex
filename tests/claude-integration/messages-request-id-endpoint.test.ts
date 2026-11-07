@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { MAX_ACTIVE_TURNS, tryAdmitTurn } from "../../src/server/lifecycle";
-import { MAX_CONCURRENT_INBOUND_BODY_BYTES, withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
+import { withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
+import { MAX_CONFIGURABLE_INBOUND_BODY_BYTES } from "../../src/server/request-decompress";
 import { readRecentUsageEntries } from "../../src/usage/log";
 import { admitWorkflowTurn, chargeWorkflowSends, DEFAULT_WORKFLOW_BUDGET_POLICY, resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
+import { saturateInboundBodyBudget } from "../helpers/inbound-body-budget";
 import type { OcxConfig } from "../../src/types";
 
 type Mode = "caller-forward" | "managed-native" | "translated";
@@ -123,7 +125,7 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
       launch(mode, stream ? "sse" : "json");
       const response = await send(mode, stream);
       expect(response.status).toBe(200);
-      expect(response.headers.get("x-opencodex-upstream-request-id")).toBe(mode === "translated" ? null : "req_fixture");
+      expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
       expect(response.headers.get("set-cookie")).toBeNull();
       await expectDurableId(response);
     });
@@ -131,20 +133,20 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
 }
 
 for (const [stream, wire] of [[false, "sse"], [true, "json"]] as const) {
-  test(`managed native converts ${wire} and retains its upstream id`, async () => {
+  test(`managed native converts ${wire} and omits its upstream id`, async () => {
     launch("managed-native", wire);
     const response = await send("managed-native", stream);
-    expect(response.headers.get("x-opencodex-upstream-request-id")).toBe("req_fixture");
+    expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
     await expectDurableId(response);
   });
 }
 
 for (const mode of ["caller-forward", "managed-native"] as const) {
-  test(`${mode} logged upstream refusal has both ids`, async () => {
+  test(`${mode} logged upstream refusal has proxy ids`, async () => {
     launch(mode, "json", 400);
     const response = await send(mode, false);
     expect(response.status).toBe(400);
-    expect(response.headers.get("x-opencodex-upstream-request-id")).toBe("req_fixture");
+    expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
     await expectDurableId(response);
   });
 }
@@ -230,11 +232,8 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
 }
 
 test("pre-handler body-capacity refusal receives the persisted OCX id and releases capacity", async () => {
-  launch("translated", "json", 200, { maxInboundBodyBytes: MAX_CONCURRENT_INBOUND_BODY_BYTES });
-  const held = await withRaisedInboundBodyAdmission(new Request("http://localhost/v1/messages", {
-    method: "POST", body: "{}",
-  }), "/v1/messages", MAX_CONCURRENT_INBOUND_BODY_BYTES,
-  async () => new Response(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 })));
+  launch("translated", "json", 200, { maxInboundBodyBytes: MAX_CONFIGURABLE_INBOUND_BODY_BYTES });
+  const restoreCapacity = await saturateInboundBodyBudget();
   try {
     const response = await send("translated", false);
     expect(response.status).toBe(503);
@@ -242,21 +241,21 @@ test("pre-handler body-capacity refusal receives the persisted OCX id and releas
     const row = await expectDurableId(response);
     expect(row.status).toBe(503);
     expect(row.errorCode).toBe("server_busy");
-  } finally { await held.body!.cancel("fixture released"); }
+  } finally { await restoreCapacity(); }
   const admitted = await withRaisedInboundBodyAdmission(new Request("http://localhost/v1/messages", {
     method: "POST", body: "{}",
-  }), "/v1/messages", MAX_CONCURRENT_INBOUND_BODY_BYTES, async () => new Response(null, { status: 204 }));
+  }), "/v1/messages", MAX_CONFIGURABLE_INBOUND_BODY_BYTES, async () => new Response(null, { status: 204 }));
   expect(admitted.status).toBe(204);
 });
 
 const allowedOrigin = "http://fixture.example";
-function expectCors(response: Response, hasUpstream: boolean) {
+function expectCors(response: Response) {
   expect(response.headers.get("access-control-allow-origin")).toBe(allowedOrigin);
   const names = response.headers.get("access-control-expose-headers")!.toLowerCase().split(",").map(value => value.trim());
   for (const name of ["request-id", "x-opencodex-request-id"]) {
     expect(names.filter(value => value === name)).toHaveLength(1);
   }
-  expect(names.includes("x-opencodex-upstream-request-id")).toBe(hasUpstream);
+  expect(names.includes("x-opencodex-upstream-request-id")).toBe(false);
 }
 
 for (const mode of ["caller-forward", "managed-native", "translated"] as const) {
@@ -265,7 +264,7 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
       launch(mode, stream ? "sse" : "json", 200, { corsAllowOrigins: [allowedOrigin] });
       const response = await send(mode, stream, { origin: allowedOrigin });
       expect(response.status).toBe(200);
-      expectCors(response, mode !== "translated");
+      expectCors(response);
       await expectDurableId(response);
     });
   }
@@ -276,7 +275,7 @@ for (const mode of ["caller-forward", "managed-native"] as const) {
     launch(mode, "json", 400, { corsAllowOrigins: [allowedOrigin] });
     const response = await send(mode, false, { origin: allowedOrigin });
     expect(response.status).toBe(400);
-    expectCors(response, true);
+    expectCors(response);
     await expectDurableId(response);
   });
 }
@@ -289,7 +288,7 @@ test("real-listener workflow CORS retains its existing exposed refusal header", 
   chargeWorkflowSends("fixture-root", DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends);
   const response = await send("translated", false, { origin: allowedOrigin, "x-codex-parent-thread-id": "fixture-root" });
   expect(response.status).toBe(429);
-  expectCors(response, false);
+  expectCors(response);
   expect(response.headers.get("access-control-expose-headers")).toContain("x-opencodex-local-refusal");
   await expectDurableId(response);
 });

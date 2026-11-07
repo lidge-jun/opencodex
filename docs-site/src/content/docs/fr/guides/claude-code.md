@@ -15,8 +15,9 @@ ajouter un compte). Par défaut, chaque requête utilise uniquement le compte **
 Un groupe de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
 session et la sélection des nouvelles sessions basée sur l'usage entre ces comptes OAuth. Il ne contrôle **pas** le basculement sur 429 : dès que deux comptes utilisables sont enregistrés, une requête limitée bascule vers un autre compte que l'option soit activée ou non, et cela ne peut pas être désactivé. Pour les **nouvelles**
 sessions uniquement, `anthropicAccountPool.strategy` sélectionne un compte éligible : `quota` (par défaut)
-choisit la plus faible utilisation connue dans la fenêtre configurée par `anthropicAccountPool.quotaWindow`
-(`five-hour` par défaut, `weekly` ou `max-utilization`) lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`
+conserve le compte actif jusqu'à ce que son utilisation dans la fenêtre définie par
+`anthropicAccountPool.quotaWindow` (`five-hour` par défaut, `weekly` ou `max-utilization`) atteigne
+`autoSwitchThreshold` (80 par défaut), puis passe au compte le moins utilisé, en privilégiant les comptes encore sous leur propre seuil ; `round-robin`
 répartit les sessions uniformément (`stickyLimit`, `1` par défaut) ; `fill-first` utilise le compte actif jusqu'à
 un délai de récupération, une réauthentification ou le seuil, puis passe au suivant. Cette fonction est
 **désactivée par défaut** et reste expérimentale.
@@ -34,8 +35,8 @@ consultez les conditions actuelles d'Anthropic.
 Comportement lorsque cette option est activée :
 
 - Un **429** en amont place le compte en temporisation selon `Retry-After` lorsqu'il est présent, ou selon un délai de repli,
-  efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues.
-- L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
+  et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues. Seul un refus de quota partagé efface ses affinités ; une limitation temporaire les conserve.
+- L'affinité survit au redémarrage dans le même répertoire de configuration et la même instance fournisseur (24 heures d'inactivité, 2 000 liaisons au maximum). Le fichier privé ne contient que des empreintes de session et d'identité de connexion, jamais de clé de session brute ni de jeton. Les anciens comptes sans identité persistante restent locaux au processus jusqu'à leur prochaine connexion. Le renouvellement du jeton conserve la liaison ; une nouvelle connexion, la suppression, la pause, une réauthentification requise ou une sélection manuelle pendant l'exécution l'invalident. Un détour temporaire dû à une limitation de débit conserve la liaison initiale.
 - Les erreurs de renouvellement du jeton conservent la règle `needsReauth`. Un 403 confirmé lié à un abonnement ou à la facturation du compte peut déclencher un basculement avant la sortie, avec une temporisation selon `Retry-After` ou de dix minutes. Un refus d’autorisation ordinaire reste terminal. Voir la [reprise des comptes](/guides/claude-code/).
 - Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
@@ -199,6 +200,8 @@ quittez complètement puis rouvrez Claude Desktop.
 
 Le mode picker fait partie de first-party : le [risque pour le compte du mode first-party](#first-party-sur-demande)
 s'applique donc aussi à ce mode.
+
+Avant la première réponse du serveur amont, un téléversement picker sans progression pendant 60 secondes est fermé. Une expiration interrompt le téléversement sans réponse de succès ; en HTTP/2, seul le flux concerné est réinitialisé. Ce délai d’inactivité est suspendu lorsque le serveur amont exerce une contre-pression et supprimé dès la fin du téléversement ou la première réponse amont. Ce mécanisme de surveillance de l’inactivité n’ajoute aucune limite à la durée totale du téléversement ; les limites existantes de l’environnement d’exécution et du protocole restent applicables. Ce délai d’inactivité ne s’applique pas aux flux de réponse.
 
 ### Utiliser les modèles opencodex depuis l'onglet Code de Desktop (associations first-party)
 
@@ -488,9 +491,7 @@ Trois états de configuration :
 La valeur de compactage est réglable dans **Connexion → Claude**. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
 rend ce modèle inutilisable : les tours échouent avant que le résumé puisse se déclencher.
 
-La normalisation des erreurs de dépassement de contexte utilise uniquement les 65 536 premières unités de code UTF-16 du message du fournisseur.
-Les diagnostics ou nombres de jetons situés après cette limite peuvent disparaître sans marqueur de troncature.
-Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour les limites exactes et les conditions de reprise des nombres de jetons.
+La normalisation des réponses d'erreur Messages utilise un texte fixe, sans conserver le texte du fournisseur ni les nombres de jetons. Un dépassement de contexte reconnu renvoie `prompt is too long: The request exceeds the model's context window.`. Dans un flux, un bloc dont le premier champ est l'événement error est conservé jusqu'à 1 Mio ; au-delà, une erreur fixe sans phrase de compaction est renvoyée. Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour la portée et les deux exceptions.
 
 Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Une fenêtre de compactage que vous exportez vous-même
 reste prioritaire pour le marquage des variables de lancement ; le proxy s'appuie sur votre valeur pour déterminer les modèles qui peuvent recevoir le marqueur sans risque.
@@ -661,7 +662,7 @@ Le proxy traduit chaque requête Anthropic Messages API au format Codex Response
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringifié `arguments`) |
 | Utilisateur `tool_result` | `function_call_output` (`is_error` → préfixe `[tool error]`) |
 | Relecture de `thinking` / `redacted_thinking` | Éléments `reasoning` avec enveloppes `ocxr1` bornées pour les signatures et les contenus masqués |
-| Outils fonctionnels | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Outils fonctionnels | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) La recherche hébergée avec `allowed_domains`, `blocked_domains` ou `user_location` est omise sur les routes Responses/Chat traduites ; la forcer renvoie 400. Les définitions de fonctions `defer_loading` valides restent appelables comme fonctions ordinaires. Voir les [limites de traduction](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes). |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, fonction nommée→`{type:"function",name}`, hébergée WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -692,7 +693,7 @@ Sur l’adaptateur Anthropic prévu, les blocs signés non masqués (y compris t
 **Taxonomie des erreurs :** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-autre 5xx `api_error`. `Retry-After` est conservé.
+autre 5xx `api_error`. `Retry-After` est envoyé en secondes entières (une date HTTP devient le nombre de secondes restantes), plafonné à huit jours.
 
 ## Mise en cache des prompts et utilisation des jetons
 

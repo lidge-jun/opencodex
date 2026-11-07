@@ -43,16 +43,16 @@ function hardenInitialConfig(fd: number, temp: string, target: string): void {
   }
 }
 
-function identifiesDescriptor(fd: number, path: string): boolean {
-  const opened = fstatSync(fd);
-  const entry = lstatSync(path);
+function identifiesDescriptor(fd: number, path: string, privateMode = false): boolean {
+  const opened = fstatSync(fd, { bigint: true });
+  const entry = lstatSync(path, { bigint: true });
   return opened.isFile() && entry.isFile()
-    && opened.dev === entry.dev && opened.ino === entry.ino;
+    && opened.dev === entry.dev && opened.ino === entry.ino
+    && (!privateMode || process.platform === "win32" || (opened.mode & 0o777n) === 0o600n);
 }
 
 function verifyPrivateTemp(fd: number, temp: string): void {
-  if (!identifiesDescriptor(fd, temp)
-    || (process.platform !== "win32" && (fstatSync(fd).mode & 0o777) !== 0o600)) {
+  if (!identifiesDescriptor(fd, temp, true)) {
     throw new Error("Initial config temporary file identity or permissions changed.");
   }
 }

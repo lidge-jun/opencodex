@@ -10,8 +10,10 @@
  * Lives outside cli.ts (which dispatches argv at module top level) so tests can import it.
  */
 import { loadConfig } from "../config";
-import { isWildcardHostname } from "../codex/loopback-target";
-import { readAlivePid, readRuntimePort, verifyPidIdentity } from "../config/process-state";
+import { isLoopbackHostname, isWildcardHostname } from "../codex/loopback-target";
+import { normalizeBindHostname } from "./bind-host";
+import { isOcxCommandLine, readAlivePid, readProcessCommandLine, readRuntimePort, verifyPidIdentity } from "../config/process-state";
+import { loopbackFamilyAvailability } from "../lib/loopback-family";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
@@ -52,6 +54,9 @@ export interface LivenessIo {
    * Destructive callers only ever receive pids that passed this gate.
    */
   verifyPidFn?: (candidatePid: number) => number | null;
+  /** Fresh command-line evidence: undefined/empty is unreadable, never confirmed foreign. */
+  readCommandLineFn?: typeof readProcessCommandLine;
+  loopbackAvailabilityFn?: typeof loopbackFamilyAvailability;
   readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
@@ -152,8 +157,10 @@ type LivenessFetch = (
 export interface LiveProxy {
   pid: number | null;
   port: number;
-  /** Raw bind hostname the probe succeeded against; compose URLs via `probeHostname`. */
+  /** Candidate bind scope, with the default loopback made explicit; never a probe alias. */
   hostname?: string;
+  /** Successful recovery probe address, when discovery checked both loopback families. */
+  probeHostname?: string;
   /** Whether the successful probe used runtime-port metadata or the configured listen port. */
   source: "runtime" | "config";
   /**
@@ -197,7 +204,7 @@ export type HomeOwnershipProof = "proven" | "refuted" | "indeterminate";
 export async function proveLiveProxyOwnedByHome(live: LiveProxy, io: LivenessIo = {}): Promise<HomeOwnershipProof> {
   if (live.pid === null) return "indeterminate";
   return attestFencedIdentity(
-    `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
+    `http://${probeHostname(live.probeHostname ?? live.hostname)}:${live.port}/healthz`,
     live.port,
     live.pid,
     io,
@@ -329,16 +336,16 @@ export function isConnectionRefused(error: unknown): boolean {
     if (depth >= 4) return false;
     if (current === null || (typeof current !== "object" && typeof current !== "function")) return false;
     const record = current as { code?: unknown; cause?: unknown; errors?: unknown };
-    if (record.code === "ECONNREFUSED" || record.code === "ConnectionRefused") return true;
-    if (typeof record.code === "string" && record.code.endsWith("ECONNREFUSED")) return true;
-    if (Array.isArray(record.errors) && record.errors.length > 0) {
+    if (record.errors !== undefined) {
       // One connect attempt fanned out over several addresses reports a single AggregateError.
       // Only a unanimous refusal proves the endpoint is free: a bundle that mixes ECONNREFUSED
       // with a timeout means one address answered nothing at all, and an address whose state is
       // unreadable is unknown, not absence. Collapsing it to "refused" is how a second runtime
       // gets started on a port that already has one.
-      return record.errors.every(error => visit(error, depth + 1));
+      return Array.isArray(record.errors) && record.errors.length > 0 && record.errors.every(error => visit(error, depth + 1));
     }
+    if (record.code === "ECONNREFUSED" || record.code === "ConnectionRefused") return true;
+    if (typeof record.code === "string" && record.code.endsWith("ECONNREFUSED")) return true;
     return visit(record.cause, depth + 1);
   };
   return visit(error, 0);
@@ -393,6 +400,17 @@ export async function proxyIdentityAt(
   opts: { hostname?: string; expectedPid?: number } = {},
   io: LivenessIo = {},
 ): Promise<{ pid: number | null; version?: string; role?: string; packageTreeFenced?: true } | null> {
+  return proxyIdentityAtObserved(port, opts, io);
+}
+
+/** Preserve negative evidence for recovery without changing identity-only callers. */
+async function proxyIdentityAtObserved(
+  port: number,
+  opts: { hostname?: string; expectedPid?: number },
+  io: LivenessIo,
+  observe?: (result: EndpointLiveness) => void,
+): ReturnType<typeof proxyIdentityAt> {
+  const negative = (result: "dead" | "unknown"): null => { observe?.(result); return null; };
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const sleepFn = io.sleepFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const nowFn = io.nowFn ?? Date.now;
@@ -401,10 +419,11 @@ export async function proxyIdentityAt(
   const attempts = Number.isNaN(requestedAttempts)
     ? 1
     : Math.max(1, Math.min(requestedAttempts, 5));
+  let sawUnknown = false;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const remainingMs = io.deadlineAt === undefined ? baseTimeoutMs : io.deadlineAt - nowFn();
-    if (remainingMs <= 0) return null;
+    if (remainingMs <= 0) return negative("unknown");
     const timeoutMs = Math.min(baseTimeoutMs, remainingMs);
     try {
       const url = `http://${probeHostname(opts.hostname)}:${port}/healthz`;
@@ -413,12 +432,12 @@ export async function proxyIdentityAt(
       });
       if (!res.ok && io.acceptPackageTreeFenced && res.status === 503) {
         const fenced = (await res.json().catch(() => null)) as HealthzIdentity | null;
-        if (!isPackageTreeFencedHealthz(fenced)) return null;
+        if (!isPackageTreeFencedHealthz(fenced)) return negative("unknown");
         const fencedPid = fenced!.pid as number;
-        if (opts.expectedPid !== undefined && fencedPid !== opts.expectedPid) return null;
+        if (opts.expectedPid !== undefined && fencedPid !== opts.expectedPid) return negative("unknown");
         const attestMs = io.deadlineAt === undefined ? baseTimeoutMs : Math.min(baseTimeoutMs, io.deadlineAt - nowFn());
-        if (attestMs <= 0) return null;
-        if ((await attestFencedIdentity(url, port, fencedPid, io, fetchFn, attestMs)) !== "proven") return null;
+        if (attestMs <= 0) return negative("unknown");
+        if ((await attestFencedIdentity(url, port, fencedPid, io, fetchFn, attestMs)) !== "proven") return negative("unknown");
         const fencedVersion = isHealthzVersion(fenced?.version) ? fenced!.version as string : undefined;
         return {
           pid: fencedPid,
@@ -426,11 +445,11 @@ export async function proxyIdentityAt(
           packageTreeFenced: true,
         };
       }
-      if (!res.ok) return null;
-      const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
-      if (!isOpencodexHealthz(body)) return null;
+      if (!res.ok) return negative("unknown");
+      const body = (await res.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
+      if (!isOpencodexHealthz(body ?? null)) return negative(res.status === 200 && body !== undefined ? "dead" : "unknown");
       const pid = typeof body?.pid === "number" ? body.pid : null;
-      if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return null;
+      if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return negative("unknown");
       // Whoever holds the port controls this response. Only carry bounded semver text into
       // diagnostics; dropping anything else prevents terminal controls reaching human output.
       const version = isHealthzVersion(body?.version) ? body.version : undefined;
@@ -442,15 +461,38 @@ export async function proxyIdentityAt(
         ...(version === undefined ? {} : { version }),
         ...(role === undefined ? {} : { role }),
       };
-    } catch {
+    } catch (error) {
       // Transport failure (timeout / refused) — retry while budget remains; a proxy that
       // has only just begun listening can miss a single short probe (#764).
-      if (attempt >= attempts) return null;
-      if (io.deadlineAt !== undefined && io.deadlineAt - nowFn() <= 0) return null;
+      if (!isConnectionRefused(error)) sawUnknown = true;
+      if (attempt >= attempts) return negative(sawUnknown ? "unknown" : "dead");
+      if (io.deadlineAt !== undefined && io.deadlineAt - nowFn() <= 0) return negative("unknown");
       await sleepFn(100);
     }
   }
-  return null;
+  return negative("unknown");
+}
+
+export type ProxyLivenessObservation =
+  | { kind: "live"; live: LiveProxy }
+  | { kind: "absent" | "unknown"; live: null };
+
+/** Recovery additionally covers both available loopback families and fresh PID identity. */
+export async function observeProxyLiveness(io: LivenessIo = {}): Promise<ProxyLivenessObservation> {
+  let alivePid: number | null = null, unknown = false;
+  const live = await discoverLiveProxy(io, {
+    pid: pid => { alivePid = pid; },
+    endpoint: result => { if (result === "unknown") unknown = true; },
+  });
+  if (live) return { kind: "live", live };
+  if (alivePid !== null && !unknown) {
+    // A failed verifier alone conflates foreign with unreadable. Only fresh positive
+    // evidence of a foreign command line releases a reused PID; never signal it.
+    const commandLine = (io.readCommandLineFn ?? readProcessCommandLine)(alivePid);
+    unknown = !commandLine?.trim() || isOcxCommandLine(commandLine);
+    if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) unknown = true;
+  }
+  return { kind: unknown ? "unknown" : "absent", live: null };
 }
 
 /**
@@ -459,6 +501,13 @@ export async function proxyIdentityAt(
  * found and a foreign listener on the configured port is rejected.
  */
 export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | null> {
+  return discoverLiveProxy(io);
+}
+
+async function discoverLiveProxy(io: LivenessIo, observer?: {
+  pid: (pid: number | null) => void;
+  endpoint: (result: EndpointLiveness) => void;
+}): Promise<LiveProxy | null> {
   // Prefer the cheap alive-pid check: the Windows cmdline probe (WMIC/PowerShell) is too
   // expensive for waitForProxy's 150ms poll loop, and /healthz identity is the real trust gate.
   const readPidFn = io.readPidFn ?? readAlivePid;
@@ -470,6 +519,26 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   const probeIo: LivenessIo = io;
   const budgetExhausted = (): boolean =>
     deadlineAt !== undefined && nowFn() >= deadlineAt;
+  const expired = (): null => { observer?.endpoint("unknown"); return null; };
+  const probe = async (port: number, opts: { hostname?: string; expectedPid?: number }) => {
+    // Missing/blank means an actual loopback bind, not a later config's bind scope.
+    const bindHostname = opts.hostname?.trim() || "127.0.0.1";
+    const hostname = normalizeBindHostname(opts.hostname);
+    if (!observer || (!isLoopbackHostname(hostname) && !isWildcardHostname(hostname))) {
+      const identity = await proxyIdentityAtObserved(port, opts, probeIo, observer?.endpoint);
+      return identity ? { ...identity, hostname: bindHostname,
+        ...(observer ? { probeHostname: probeHostname(opts.hostname) } : {}) } : null;
+    }
+    // Parallel families share the existing per-probe attempts/timeout and absolute
+    // deadline. A slow family cannot multiply the serial discovery budget.
+    const hosts = loopbackProbeHosts(hostname).filter(host =>
+      (io.loopbackAvailabilityFn ?? loopbackFamilyAvailability)(host) !== "unavailable");
+    const identities = await Promise.all(hosts.map(async hostname => {
+      const identity = await proxyIdentityAtObserved(port, { ...opts, hostname }, probeIo, observer.endpoint);
+      return identity ? { ...identity, hostname: bindHostname, probeHostname: hostname } : null;
+    }));
+    return identities.find(identity => identity !== null) ?? null;
+  };
 
   // The cheap pid is discovery-only. Before it can appear in a returned (killable) result
   // it must pass the full identity check AND the verifier must echo the exact candidate —
@@ -488,13 +557,14 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   };
 
   const pid = readPidFn();
+  observer?.pid(pid);
   let probedPort: number | null = null;
   if (pid) {
     const runtime = readRuntimeFn(pid);
     if (runtime?.port) {
-      if (budgetExhausted()) return null;
+      if (budgetExhausted()) return expired();
       probedPort = runtime.port;
-      const identity = await proxyIdentityAt(runtime.port, { hostname: runtime.hostname, expectedPid: pid }, probeIo);
+      const identity = await probe(runtime.port, { hostname: runtime.hostname, expectedPid: pid });
       if (identity) {
         // healthz confirmed the pid itself → trusted; a pidless legacy body did not,
         // so the cheap pid must pass full identity verification before it is returned.
@@ -502,7 +572,8 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
         return {
           pid: trusted,
           port: runtime.port,
-          hostname: runtime.hostname,
+          hostname: identity.hostname,
+          ...(identity.probeHostname === undefined ? {} : { probeHostname: identity.probeHostname }),
           source: "runtime",
           ...(identity.version === undefined ? {} : { version: identity.version }),
           ...(identity.role === undefined ? {} : { role: identity.role }),
@@ -517,9 +588,9 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   // identity-probe it so ensure/update/stop see the live proxy instead of shadowing it.
   const record = readRuntimeFn();
   if (record?.port && record.port !== probedPort) {
-    if (budgetExhausted()) return null;
+    if (budgetExhausted()) return expired();
     const expectedPid = typeof record.pid === "number" ? record.pid : undefined;
-    const identity = await proxyIdentityAt(record.port, { hostname: record.hostname, expectedPid }, probeIo);
+    const identity = await probe(record.port, { hostname: record.hostname, expectedPid });
     // Only the healthz-reported pid is authoritative here. The record's pid may be stale
     // (its process dead, the port reused by a pidless legacy proxy) — synthesizing it
     // would hand destructive callers (stopProxy → kill fallback) a reusable pid.
@@ -527,7 +598,8 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
       return {
         pid: verifiedReportedPid(identity.pid),
         port: record.port,
-        hostname: record.hostname,
+        hostname: identity.hostname,
+        ...(identity.probeHostname === undefined ? {} : { probeHostname: identity.probeHostname }),
         source: "runtime",
         ...(identity.version === undefined ? {} : { version: identity.version }),
         ...(identity.role === undefined ? {} : { role: identity.role }),
@@ -538,13 +610,16 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 
   const config = configFn();
   const port = config.port ?? 10100;
-  if (budgetExhausted()) return null;
-  const identity = await proxyIdentityAt(port, { hostname: config.hostname }, probeIo);
+  if (budgetExhausted()) return expired();
+  // Port zero requests an OS-assigned port; it cannot name an existing listener.
+  if (observer && port === 0) return null;
+  const identity = await probe(port, { hostname: config.hostname });
   if (identity) {
     return {
       pid: verifiedReportedPid(identity.pid) ?? killablePid(pid),
       port,
-      hostname: config.hostname,
+      hostname: identity.hostname,
+      ...(identity.probeHostname === undefined ? {} : { probeHostname: identity.probeHostname }),
       source: "config",
       ...(identity.version === undefined ? {} : { version: identity.version }),
       ...(identity.role === undefined ? {} : { role: identity.role }),
@@ -572,9 +647,11 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
  * different question than the caller asked.
  */
 export function loopbackProbeHosts(hostname: string | undefined): string[] {
-  const primary = probeHostname(hostname);
-  if (primary === "127.0.0.1" || /^localhost$/i.test(primary)) return ["127.0.0.1", "[::1]"];
-  if (primary === "[::1]") return ["[::1]", "127.0.0.1"];
+  const normalized = normalizeBindHostname(hostname);
+  const primary = probeHostname(normalized);
+  if (isLoopbackHostname(normalized) || isWildcardHostname(normalized)) {
+    return primary === "[::1]" ? ["[::1]", "127.0.0.1"] : ["127.0.0.1", "[::1]"];
+  }
   return [primary];
 }
 

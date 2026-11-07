@@ -1,3 +1,4 @@
+import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
@@ -18,6 +19,7 @@ import {
 import { noteAttemptRecoveryWithheld } from "../request-log";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
+import { isLocalUpstream } from "../../lib/local-upstream";
 import {
   transientRetryPolicyFor,
   rateLimitRetryDelayMs,
@@ -126,6 +128,8 @@ export function createAdapterContinuations(
     | "thinkingSignatureRecovery"
    >,
 ) {
+  // A request-local symbol survives event spreads without being serialized or forgeable by a provider.
+  const continuationBodyStall = Symbol("continuation-body-stall");
   const { options, logCtx, config } = requestContext;
   const {
     oauthDispatch,
@@ -139,8 +143,7 @@ export function createAdapterContinuations(
   } = transportState;
   const { route, translatorBudget, inboundWire, parsed } = requestState;
   const { routedCompaction } = sidecarState;
-  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs, localUpstream } = adapterExchange;
-  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
+  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
@@ -156,6 +159,8 @@ export function createAdapterContinuations(
       return { type: "error", message: "client closed request during terminal continuation", status: 499 };
     }
     const refusal = unwrapUpstreamRetryEvidenceError(error);
+    if (refusal instanceof AdmissionModelDeniedError || refusal instanceof SendBudgetExhaustedError) rememberProxyErrorMessage(logCtx, refusal.message, { status: refusal instanceof AdmissionModelDeniedError ? 403 : 429,
+      type: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : "rate_limit_error", code: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : refusal.code, presentation: refusal instanceof AdmissionModelDeniedError ? "scope" : "send" });
     if (refusal instanceof AdmissionModelDeniedError) {
       return {
         type: "error", message: refusal.message, status: 403,
@@ -249,7 +254,7 @@ export function createAdapterContinuations(
             transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
               kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
               abortSignal: upstream.signal,
-              timeoutMs: connectMs,
+              timeoutMs: route.provider.authMode === "forward" ? connectMs : 0,
               sendBudget: adapterDispatchBudget,
               onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
               onRecoveryWithheld: noteAdapterRecoveryWithheld,
@@ -284,7 +289,7 @@ export function createAdapterContinuations(
                 body: builtContinuationRequest.body,
               }, recovery),
               upstream.signal,
-              connectMs,
+              route.provider.authMode === "forward" ? connectMs : 0,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
@@ -693,16 +698,18 @@ export function createAdapterContinuations(
     }
 
     if (!response.ok) {
-      if (route.providerName === "kiro") response = await normalizeFinalKiroHttpError(response, upstream.signal);
+      if (route.providerName === "kiro") response = carryProxyError(response, await normalizeFinalKiroHttpError(response, upstream.signal));
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      const message = normalized.cyberPolicy
+        ? normalized.message ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
+        : `Provider continuation error ${response.status}: ${normalized.safeText}`;
+      if (isProxyError(response)) rememberProxyErrorMessage(logCtx, message, { status: normalized.cyberPolicy ? 400 : response.status,
+        type: normalized.cyberPolicy ? normalized.type ?? CYBER_POLICY_ERROR_CODE : undefined, code: normalized.cyberPolicy ? CYBER_POLICY_ERROR_CODE : undefined, presentation: proxyErrorPresentation(response) });
       yield {
         type: "error",
         status: normalized.cyberPolicy ? 400 : response.status,
-        message: normalized.cyberPolicy
-          ? normalized.message
-            ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
-          : `Provider continuation error ${response.status}: ${normalized.safeText}`,
+        message,
         ...(normalized.cyberPolicy
           ? {
             errorType: normalized.type ?? CYBER_POLICY_ERROR_CODE,
@@ -720,6 +727,7 @@ export function createAdapterContinuations(
       // The shared signal is not aborted on timeout: this generator must still emit
       // the error that the already-live Responses bridge turns into a terminal.
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
+        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
         if (!current.ok) {
           yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
         } else if (nextParsed.stream) {
@@ -743,7 +751,10 @@ export function createAdapterContinuations(
       // source can synchronously abort the shared signal, which would otherwise report
       // this timeout as a client cancellation.
       if (error instanceof ResponseBodyInactivityError) {
-        yield { type: "error", message: "Provider continuation response body stalled before completing", status: 504 };
+        const event: AdapterEvent = { type: "error", message: error.message, status: 504,
+          errorType: "upstream_error", code: "upstream_stall_timeout" };
+        Object.defineProperty(event, continuationBodyStall, { value: true, enumerable: true });
+        yield event;
       } else if (options.abortSignal?.aborted || upstream.signal.aborted) {
         yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
       } else {
@@ -777,6 +788,7 @@ export function createAdapterContinuations(
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
     fetchGuardedEmptyCompletionRetry,
+    isContinuationBodyStall: (event: AdapterEvent): boolean => continuationBodyStall in event,
   };
 }
 

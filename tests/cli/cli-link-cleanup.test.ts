@@ -62,7 +62,7 @@ function harness() {
       calls.push(argv);
       const alias = argv[argv.indexOf("--") + 1]!;
       // The locale-independent follow-up: only the localized Windows host answers Windows_NT.
-      if (argv.at(-1) === WINDOWS_OS_PROBE) return alias === "win-de" ? ok("Windows_NT\r\n") : failed(127, "cmd: not found");
+      if (argv.at(-1) === WINDOWS_OS_PROBE) return alias === "offline" ? answers.offline! : alias === "studio" ? failed(127, "cmd: not found") : ok("Windows_NT\r\n");
       const answer = answers[alias];
       if (!answer) throw new Error(`unexpected ssh to ${alias}`);
       return answer;
@@ -97,7 +97,7 @@ describe("classifyRemotePlatform", () => {
 });
 
 describe("ocx link cleanup", () => {
-  test("explains every Windows Child with the forced-revoke recovery order and changes nothing", async () => {
+  test("a Windows Child report recommends ordinary disconnect without requiring force or Hub mode", async () => {
     const before = readFileSync(linkStorePath(), "utf8");
     const h = harness(); try {
       expect(await runLinkCommand(["cleanup", "--json"], h.deps)).toBe(0);
@@ -110,15 +110,14 @@ describe("ocx link cleanup", () => {
       const mini = report.links[0];
       expect(mini.recovery).toEqual([
         "On mini, run 'ocx disconnect' and then 'ocx restart' so it stops using this link.",
-        `On this Home, run 'ocx link revoke --link-id ${ids.mingw} --force --yes'. A plain revoke cannot disconnect a Windows Child remotely.`,
-        "Then connect mini in Hub mode: run 'ocx hub invite' on a Hub and the printed 'ocx connect' command on mini.",
+        `On this Home, run 'ocx link revoke --link-id ${ids.mingw} --yes' to disconnect it through the recorded SSH trust.`,
+        "Retry Remote Link enrollment after updating Home if the remote shell or old installation cannot run the disconnect command.",
       ]);
       expect(report.links[3].recovery).toEqual([]);
-      expect(report.links[4].reason).toContain("Connection refused");
-      // Only Home-initiated records are asked over the link's own trust: one uname each, plus the
-      // %OS% follow-up for the one localized refusal (never for ssh's 255 or a Linux answer).
+      expect(report.links[4].reason).toContain("ssh could not run");
+      // Discovery reads only pinned trust; it never changes links.
       expect(h.calls).toHaveLength(7);
-      expect(h.calls.filter(argv => argv.at(-1) === WINDOWS_OS_PROBE).map(argv => argv[argv.indexOf("--") + 1])).toEqual(["win-de"]);
+      expect(h.calls.filter(argv => argv.at(-1) === WINDOWS_OS_PROBE).map(argv => argv[argv.indexOf("--") + 1])).toEqual(["mini", "win-cmd", "win-ps", "studio", "offline", "win-de"]);
       for (const argv of h.calls) {
         expect(argv).toContain(`UserKnownHostsFile=${linkKnownHostsPath()}`);
         expect(argv).toContain("StrictHostKeyChecking=yes");
@@ -132,7 +131,7 @@ describe("ocx link cleanup", () => {
     const h = harness(); try {
       expect(await runLinkCommand(["cleanup", "--link-id", ids.mingw], h.deps)).toBe(0);
       expect(h.calls).toHaveLength(1);
-      expect(h.out[0]).toBe(`${ids.mingw} (mini): Windows Child. Remote Link does not support Windows Children; this link predates that refusal.`);
+      expect(h.out[0]).toBe(`${ids.mingw} (mini): Windows Child. Current Home releases support Remote Link over PowerShell; this report changes nothing.`);
       expect(h.out.slice(1, 4).every(line => /^  [123]\. /.test(line))).toBe(true);
       expect(h.out.at(-1)).toBe("Nothing was revoked or changed.");
     } finally { h.restore(); }

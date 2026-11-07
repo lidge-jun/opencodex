@@ -119,7 +119,7 @@ describe("anthropic adapter through the web-search bridge", () => {
     );
   });
 
-  test("the formatted message flows into the persisted request log upstreamError", async () => {
+  test("the formatted failure reaches the request log as a closed condition without provider text", async () => {
     const envelope = JSON.stringify({
       type: "error",
       error: { type: "invalid_request_error", message: "prompt shape rejected" },
@@ -141,7 +141,9 @@ describe("anthropic adapter through the web-search bridge", () => {
     );
     await logged.text();
     expect(entries).toHaveLength(1);
-    expect(entries[0].upstreamError).toBe("Provider error 400: invalid_request_error: prompt shape rejected");
+    expect(entries[0].upstreamError).toBeUndefined();
+    expect(entries[0].upstreamCondition).toBe("request_rejected");
+    expect(JSON.stringify(entries[0])).not.toContain("prompt shape rejected");
     expect(entries[0].status).toBe(400);
   });
 

@@ -492,7 +492,17 @@ describe("optional native compatibility runtime", () => {
         try { await new Promise<void>((resolve, reject) => { probe.once("error", reject); probe.listen(original[occupied === "connectPort" ? "pacPort" : "connectPort"], "127.0.0.1", resolve); }); }
         finally { await new Promise<void>(resolve => probe.close(() => resolve())); }
       } finally { await new Promise<void>(resolve => blocker.close(() => resolve())); }
-      await io.runtime.start(); expect(io.runtime.getPacUrl()).toBe(originalUrl); await io.runtime.stop();
+      // Both fixture listeners are closed; allow their ports to become reusable by Bun.serve.
+      const deadline = performance.now() + 1000;
+      for (;;) {
+        try { await io.runtime.start(); break; }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== "desktop_compatibility_connection_unavailable"
+            || performance.now() >= deadline) throw error;
+          await Bun.sleep(10);
+        }
+      }
+      expect(io.runtime.getPacUrl()).toBe(originalUrl); expect(stored).toEqual(original); await io.runtime.stop();
     }
   });
 });

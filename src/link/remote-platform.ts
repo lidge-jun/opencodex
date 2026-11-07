@@ -1,19 +1,5 @@
-/**
- * Windows recognition for Remote Link Children.
- *
- * Remote Link drives its Child through a POSIX `sh` prelude, so a Windows Child is refused
- * before any link key is issued or tunnel started. A Windows OpenSSH server shows up in one of
- * three ways, depending on its default shell:
- * - Git Bash, MSYS2 or Cygwin: `uname -s` reports MINGW*, MSYS*, CYGWIN* (or Windows*), and the
- *   ocx prelude exits with REMOTE_PLATFORM_UNSUPPORTED.
- * - cmd.exe: a POSIX command such as `true` or `sh` is "not recognized as an internal or
- *   external command".
- * - PowerShell: the same command "is not recognized as the name of a cmdlet".
- *
- * Hub mode (`ocx hub invite` on a Hub, `ocx connect` on the client) supports Windows clients, so
- * every refusal points there.
- */
-import { buildWindowsProbeArgv, REMOTE_COMMAND_NOT_FOUND, REMOTE_PLATFORM_UNSUPPORTED } from "./ssh-argv";
+/** Remote platform is discovered only through the link's pinned SSH host key. */
+import { buildExecArgv, buildWindowsProbeArgv, REMOTE_COMMAND_NOT_FOUND, REMOTE_PLATFORM_UNSUPPORTED } from "./ssh-argv";
 import type { SshRunner, SshRunResult } from "./ssh-runner";
 
 export type RemotePlatform = "windows" | "posix" | "unknown";
@@ -28,9 +14,7 @@ const SSH_TRANSPORT_FAILURE = 255;
 
 /** Remote argv that prints the kernel name; under cmd or PowerShell, `sh` itself is refused. */
 export const REMOTE_UNAME_ARGV: readonly string[] = ["sh", "-c", "uname -s 2>/dev/null", "ocx-platform"];
-
-/** Server-side refusal text, shared by the dashboard and the CLI's JSON consumers. */
-export const WINDOWS_CHILD_REFUSAL = "Remote Link Children require macOS or Linux; Windows is unsupported. Connect a Windows computer in Hub mode: run ocx hub invite on a Hub, then the printed ocx connect command on the Windows computer.";
+const REMOTE_FRAMED_UNAME_ARGV: readonly string[] = ["sh", "-c", "printf 'ocx-platform:%s\\n' \"$(uname -s 2>/dev/null)\"", "ocx-platform"];
 
 /** Does this output come from cmd.exe or PowerShell refusing a POSIX command? */
 export function isWindowsShellRefusal(output: string): boolean {
@@ -71,8 +55,26 @@ export async function detectRemotePlatform(runner: SshRunner, alias: string, kno
   return await confirmWindowsShell(runner, alias, knownHostsFile) ? "windows" : "unknown";
 }
 
-/** The CLI sentence for a refused Windows Child. */
-export function windowsChildRefusal(alias: string): string {
-  return `${alias} is a Windows computer. Remote Link Children require macOS or Linux, so no link key was issued and no tunnel was started. `
-    + `Connect it in Hub mode instead: run 'ocx hub invite' on a Hub, then run the printed 'ocx connect' command on ${alias}.`;
+/** Windows when the fixed %OS% probe answers Windows_NT, otherwise POSIX from uname; never a guess. */
+export async function requireRemotePlatform(runner: Pick<SshRunner, "run">, alias: string, knownHostsFile: string): Promise<"posix" | "windows"> {
+  const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile }), { timeoutMs: 10_000 });
+  if (windows.code === 255) throw new Error("SSH platform discovery failed");
+  if (windows.code === 0 && windows.stdout.trim() === "Windows_NT") return "windows";
+  const result = await runner.run(buildExecArgv({ alias, knownHostsFile, argv: REMOTE_UNAME_ARGV }), { timeoutMs: 10_000 });
+  const platform = classifyRemotePlatform(result);
+  if (platform === "unknown") throw new Error("Remote platform could not be determined");
+  return platform;
+}
+
+/** Fan-out ignores login-shell output and trusts only one framed uname line. */
+export async function requireRemotePlatformFramed(runner: Pick<SshRunner, "run">, alias: string, knownHostsFile: string): Promise<"posix" | "windows"> {
+  const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile }), { timeoutMs: 10_000 });
+  if (windows.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
+  if (windows.code === 0 && windows.stdout.split(/\r?\n/).some(line => line.trim() === "Windows_NT")) return "windows";
+  const result = await runner.run(buildExecArgv({ alias, knownHostsFile, argv: REMOTE_FRAMED_UNAME_ARGV }), { timeoutMs: 10_000 });
+  if (result.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
+  const frames = result.stdout.split(/\r?\n/).filter(line => line.startsWith("ocx-platform:"));
+  const name = frames.length === 1 ? frames[0]!.slice("ocx-platform:".length) : "";
+  if (result.code !== 0 || !POSIX_UNAME.test(name)) throw new Error("Remote platform could not be determined");
+  return WINDOWS_UNAME.test(name) ? "windows" : "posix";
 }

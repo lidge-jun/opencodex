@@ -10,10 +10,10 @@ description: 通过 SSH 将 OpenCodex 主机与子机连接起来。
 - 主机可以使用 OpenSSH 密钥登录子机。
 - 对于由子机发起的链接，子机必须能使用 OpenSSH 密钥登录主机（不支持密码登录）。
 - 子机已安装 OpenCodex 2.66.0 或更高版本（由子机发起的链接还要求主机也满足）。
-- 两台电脑运行 macOS 或 Linux。
+- 两台计算机均可运行 macOS、Linux 或 Windows x64。Windows 需要 OpenSSH Server 和 Windows PowerShell，无需 Git Bash 或 curl。
 - 从主机添加子机的控制台需在主机上打开，或使用已配对的 Hub 会话。将当前电脑转换为子机需要操作员配对的控制台会话；无凭据签发的本地会话不能提交这项路由更改。
 
-密码 SSH 和 Windows 不在当前流程中。链接可以从任意一侧发起：按下文从主机发起，或按“将这台电脑连接为子机”一节从子机发起。
+不支持密码 SSH。可从 Home 或 Child 发起链接。Windows 通过同一固定主机密钥的 OpenSSH 连接执行 PowerShell。
 
 ## 从 `#remote` 添加子机
 

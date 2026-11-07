@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
@@ -10,7 +11,7 @@ import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 export interface Config {
   port: number;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; liveModels?: boolean; upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2"; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
+  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; liveModels?: boolean; anthropicOAuthInstance?: "anthropic2"; upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2"; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool" }>;
 }
 
 export interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
@@ -251,11 +252,21 @@ export function useProviderAccountPools(deps: {
                 accounts: mergeQuotaRows(enriched, current[provider]?.accounts ?? [], true),
               },
             });
-            return !enriched.some(row => row.quotaUnavailable === true);
+            // Paused accounts are intentionally skipped; keep their row state without
+            // failing refreshes that successfully probed another quota-capable account.
+            const refreshable = enriched.filter(row => row.paused !== true && supportsQuotaRead(row));
+            return !refreshable.some(row => row.quotaUnavailable === true);
           } catch {
             if (!currentQuota()) return false;
             setAccountSets(current => currentQuota() && current[provider] ? {
-              ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts, rows) },
+              ...current,
+              [provider]: {
+                ...current[provider],
+                accounts: unavailableQuotaRows(
+                  current[provider].accounts,
+                  rows.filter(row => row.paused !== true),
+                ),
+              },
             } : current);
             return false;
           }
@@ -311,11 +322,12 @@ export function useProviderAccountPools(deps: {
             setKeyPools(current => currentQuota() ? { ...current, [name]: currentRoster()
               ? mergeQuotaRows(enriched, current[name] ?? [], true)
               : mergeLateQuotaRows(current[name] ?? [], enriched) } : current);
-            return !enriched.some(row => row.quotaUnavailable === true);
+            const refreshable = enriched.filter(row => row.disabled !== true && supportsQuotaRead(row));
+            return !refreshable.some(row => row.quotaUnavailable === true);
           } catch {
             if (currentQuota()) setKeyPools(current => currentQuota()
-              ? { ...current, [name]: unavailableQuotaRows(current[name] ?? [], rows) } : current);
-            return false;
+              ? { ...current, [name]: unavailableQuotaRows(current[name] ?? [], rows.filter(row => row.disabled !== true && supportsQuotaRead(row))) } : current);
+            return currentQuota() && !rows.some(row => row.disabled !== true && supportsQuotaRead(row));
           }
         };
         if (refresh) return await enrich();
@@ -403,7 +415,7 @@ export function useProviderAccountPools(deps: {
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
-    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    const label = accountLabel(provider, account);
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
       if (!currentMutation()) return;
@@ -443,7 +455,7 @@ export function useProviderAccountPools(deps: {
     selectionMutationsRef.current.set(mutationKey, mutation);
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
       && selectionMutationsRef.current.get(mutationKey) === mutation;
-    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    const label = accountLabel(provider, account);
     try {
       const bounded = createBoundedFetch(20_000);
       requestsRef.current.add(bounded.controller);
@@ -495,7 +507,7 @@ export function useProviderAccountPools(deps: {
     selectionMutationsRef.current.set(key, mutation);
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
       && selectionMutationsRef.current.get(key) === mutation;
-    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    const label = accountLabel(provider, account);
     let result: { activeAccountId?: string | null; activeAccountChanged?: boolean };
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/pause`, {
@@ -655,8 +667,13 @@ export function useProviderAccountPools(deps: {
     notify(t("prov.aliasSaved"), true);
   };
 
+  const accountLabel = (provider: string, account: OAuthAccount) => oauthAccountDisplayLabel(
+    accountSets[provider]?.accounts ?? [account], account, t,
+    isAnthropicInstanceId(provider) && anthropicInstanceRowShapeMatches(provider, config?.providers[provider]),
+  );
+
   const removeAccount = async (provider: string, account: OAuthAccount) => {
-    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    const label = accountLabel(provider, account);
     const consented = await confirmAction({
       message: t("prov.accountRemoveConfirm", { email: label }),
       confirmLabel: t("common.remove"),

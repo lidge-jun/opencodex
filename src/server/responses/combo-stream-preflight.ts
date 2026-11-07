@@ -2,13 +2,18 @@ import { codexAccountModelRefusal, codexAccountModelRefusalPayload, hasConflicti
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
+import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
+// Required-tool reasoning may delay delivery, but never for an unbounded/trickling prelude.
+const COMBO_REQUIRED_TOOL_REASONING_HOLD_MS = 1_000;
 // Keep retained object count proportional to the same byte budget used by the
 // shared SSE framer. Tiny or empty upstream reads must not bypass the byte cap.
 const COMBO_STREAM_PREFLIGHT_MAX_CHUNKS = Math.max(
@@ -123,7 +128,9 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   };
   if (bareErrorIsRetryable(event)) return true;
   if (event.type === "response.failed") {
-    const code = (event.response as { error?: { code?: unknown } } | undefined)?.error?.code;
+    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error;
+    const code = error?.code;
+    if (code === REQUIRED_TOOL_CONTRACT_CODE && error?.retryable === false) return false;
     return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
   }
   if (event.type !== "response.incomplete") return false;
@@ -188,6 +195,7 @@ function replayBufferedResponse(
   response: Response,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   buffered: Uint8Array[],
+  pendingRead?: ReturnType<typeof reader.read>,
 ): Response {
   let index = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -197,7 +205,8 @@ function replayBufferedResponse(
         return;
       }
       try {
-        const next = await reader.read();
+        const next = await (pendingRead ?? reader.read());
+        pendingRead = undefined;
         if (next.done) controller.close();
         else controller.enqueue(next.value);
       } catch (error) {
@@ -285,22 +294,27 @@ export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
   retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
-  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean },
+  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal },
 ): Promise<ComboStreamPreflightResult> {
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const isEventStream = contentType.includes("text/event-stream")
+  const contentType = response.headers.get("content-type");
+  const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
   if (!response.ok || !response.body || !isEventStream) {
     return { kind: "accepted", response };
   }
 
   const reader = response.body.getReader();
+  const cancelRead = () => { reader.cancel(options?.signal?.reason).catch(() => undefined); };
+  if (options?.signal?.aborted) cancelRead();
+  else options?.signal?.addEventListener("abort", cancelRead, { once: true });
   const buffered: Uint8Array[] = [];
   let bufferedBytes = 0;
   let outputCommitted = false;
   let responseCreated = false;
   let terminalStatus: ResponsesTerminalStatus | undefined;
   let retryableTerminalPayload: Record<string, unknown> | undefined;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holdDeadline: Promise<"hold-expired"> | undefined;
   const inspector = createSseInspector({
     logCtx,
     // A payload the inspector could not parse still reached this proxy, and it may be output.
@@ -315,7 +329,22 @@ export async function preflightComboStreamResponse(
         && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
       // A zero-output bare error is terminal evidence. Explicit client errors stay
       // committed; unknown and retryable upstream failures may advance the combo.
-      if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError) outputCommitted = true;
+      const heldReasoning = options?.requiredToolPrelude && requiredToolReasoningPrelude(payload);
+      if (heldReasoning) holdDeadline ??= new Promise(resolve => {
+        holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_REQUIRED_TOOL_REASONING_HOLD_MS);
+      });
+      if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
+      if (options?.requiredToolPrelude && payload && typeof payload === "object") {
+        const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
+        const output = event.response?.output;
+        const contractFailure = event.type === "response.failed" && event.response?.error?.code === REQUIRED_TOOL_CONTRACT_CODE
+          && event.response.error.retryable !== false && Array.isArray(output) && output.every(item =>
+            item !== null && typeof item === "object" && !Array.isArray(item)
+            && ["message", "reasoning"].includes((item as { type: string }).type));
+        // Other lifecycle/terminal snapshots can hide effects too. Only our checked contract
+        // failure may discard a terminal-only text snapshot that was held in its entirety.
+        if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure) outputCommitted = true;
+      }
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
       if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
     },
@@ -324,9 +353,18 @@ export async function preflightComboStreamResponse(
 
   try {
     for (;;) {
+      options?.signal?.throwIfAborted();
       let next: Awaited<ReturnType<typeof reader.read>>;
       try {
-        next = await reader.read();
+        const pendingRead = reader.read();
+        const observed = await (holdDeadline ? Promise.race([pendingRead, holdDeadline]) : pendingRead);
+        options?.signal?.throwIfAborted();
+        if (observed === "hold-expired") {
+          // Expiry commits this child. Hand the in-flight read to the relay so its
+          // eventual chunk/error is delivered exactly once, never lost to the race.
+          return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered, pendingRead) };
+        }
+        next = observed;
       } catch (error) {
         if (!options?.replayReadErrors) throw error;
         // The native relay still owns post-header transport failures. Preserve
@@ -372,6 +410,8 @@ export async function preflightComboStreamResponse(
       }
     }
   } finally {
+    if (holdTimer !== undefined) clearTimeout(holdTimer);
+    options?.signal?.removeEventListener("abort", cancelRead);
     inspector.dispose();
   }
 }

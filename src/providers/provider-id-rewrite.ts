@@ -95,6 +95,9 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
 
   routeRecordValues(config.claudeCode?.tierModels as Record<string, string> | undefined);
   routeRecordValues(config.claudeCode?.modelMap as Record<string, string> | undefined);
+  if (config.claudeCode?.appendOnlyToolLoadingModels) {
+    config.claudeCode.appendOnlyToolLoadingModels = config.claudeCode.appendOnlyToolLoadingModels.map(id => route(id) ?? id);
+  }
   // First-party picker bindings hold routes too; their keys are Anthropic picker ids.
   routeRecordValues(config.claudeCode?.intercept?.modelMap);
 

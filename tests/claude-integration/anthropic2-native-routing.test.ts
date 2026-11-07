@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { deriveAnthropicAccountDeviceId } from "../../src/adapters/anthropic/account-metadata";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 import type { OcxConfig } from "../../src/types";
 import type { RouteResult } from "../../src/router";
@@ -773,7 +774,11 @@ describe("A/B native wire features", () => {
         const metadata = normalized.metadata as { user_id?: string } | undefined;
         if (metadata?.user_id) {
           const user = JSON.parse(metadata.user_id) as Rec;
-          if (user.account_uuid) user.account_uuid = "normalized-provider-uuid";
+          if (user.account_uuid) {
+            expect(user.device_id).toBe(deriveAnthropicAccountDeviceId(String(user.account_uuid)));
+            user.account_uuid = "normalized-provider-uuid";
+            user.device_id = "normalized-account-device-id";
+          }
           if (user.session_id) user.session_id = "normalized-conversation-id";
           metadata.user_id = JSON.stringify(user);
         }

@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 /**
  * Management API for Anthropic OAuth usage-limit reset grants.
  *
@@ -182,7 +183,7 @@ async function handleRead(ctx: ManagementContext, deps: AnthropicResetGrantRoute
 }
 
 async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGrantRouteDeps): Promise<Response> {
-  if (ctx.principal !== "gui-session") return fail(ctx, 403, "session_required");
+  if (!hasHumanDashboardSession(ctx)) return fail(ctx, 403, "session_required");
   let body: Record<string, unknown>;
   try {
     const parsed = await ctx.req.json() as unknown;

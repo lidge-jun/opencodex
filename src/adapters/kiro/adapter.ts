@@ -22,6 +22,7 @@ import { fetchKiroWithRetry } from "../kiro-retry";
 import { fingerprint, invocationId, osTag } from "../kiro-wire";
 import { hasTrailingDeliveredFinalAnswer } from "./conversation";
 import { buildKiroPayload } from "./payload";
+import type { KiroStructuredOutputSpec } from "./structured-output";
 import {
   jsonStringSerializedUtf8Bytes,
   parseKiroStream,
@@ -60,10 +61,12 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let toolNameMap: Map<string, string> | undefined;
   let conversationId: string | undefined;
   let completionMode: KiroCompletionMode = "disabled";
+  let structuredOutput: KiroStructuredOutputSpec | undefined;
   let requestSnapshot: OcxParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
   let requestExecutor: typeof globalThis.fetch | undefined;
+  let requestTimeoutMs: number | undefined;
   // Captured the same way as the abort signal, because the text-fallback rebuild below runs
   // outside the fetchResponse frame and used to construct a context without either (#4546).
   let requestSendBudget: RequestExecutionBudget | undefined;
@@ -87,6 +90,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     requestOnPhysicalSend?.({ ordinal, ...(recovery ? { recovery } : {}) });
   };
 
+  /**
+   * Build the Kiro request for a parsed turn, optionally forcing the completion mode (the bounded
+   * retry passes `text_fallback`), and capture the state the stream parser needs.
+   */
   const build = async (
     parsed: OcxParsedRequest,
     forcedCompletionMode?: KiroCompletionMode,
@@ -95,6 +102,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     nameMap: Map<string, string>;
     conversationId: string;
     completionMode: KiroCompletionMode;
+    structuredOutput?: KiroStructuredOutputSpec;
     inputTokens: number;
     contextInputEstimate: number;
   }> => {
@@ -153,6 +161,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         region,
         requestedModel: parsed.modelId,
         completionMode: built.completionMode,
+        structuredOutput: built.structuredOutput !== undefined,
         bodyBytes: new TextEncoder().encode(body).length,
         messageCount: kiroPayloadMessages(parsed).length,
         toolCount: parsed.context.tools?.length ?? 0,
@@ -172,6 +181,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       nameMap: built.nameMap,
       conversationId: built.conversationId,
       completionMode: built.completionMode,
+      ...(built.structuredOutput ? { structuredOutput: built.structuredOutput } : {}),
       inputTokens: estimateKiroInputTokens(parsed),
       contextInputEstimate,
     };
@@ -237,6 +247,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       const fallbackOrdinalBase = physicalSendsObserved;
       const response = await fetchKiroWithRetry(retry.request, {
         abortSignal: requestAbortSignal,
+        timeoutMs: requestTimeoutMs,
         ...(requestExecutor ? { executor: requestExecutor } : {}),
         allowGatewayRotation: !_sawReasoning && !assistantText.trim(),
         returnRawErrors: true,
@@ -295,12 +306,17 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       toolNameMap = built.nameMap;
       conversationId = built.conversationId;
       completionMode = built.completionMode;
-      requestSnapshot = structuredClone(parsed);
+      structuredOutput = built.structuredOutput;
+      // Runtime callbacks belong to the original request, not the retry payload.
+      requestSnapshot = structuredClone(Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value !== "function"),
+      )) as OcxParsedRequest;
       firstRequestBodyBytes = Buffer.byteLength(built.request.body);
       requestAbortSignal = incoming?.abortSignal;
       return built.request;
     },
 
+    /** Parse a streaming Kiro response, with the bounded retry wired to this request. */
     parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       return parseKiroStream(
         response,
@@ -313,6 +329,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         completionMode,
         completionMode === "required" ? fallbackFactory : undefined,
         contextInputEstimate,
+        structuredOutput,
       );
     },
 
@@ -322,6 +339,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       // both the first Kiro request and its one allowed completion retry.
       if (ctx?.abortSignal) requestAbortSignal = ctx.abortSignal;
       requestExecutor = ctx?.executor;
+      requestTimeoutMs = ctx?.timeoutMs;
       if (ctx?.sendBudget) requestSendBudget = ctx.sendBudget;
       if (ctx?.onPhysicalSend) requestOnPhysicalSend = ctx.onPhysicalSend;
       // Reset per fetch call, because `ordinal` is defined within one call and the caller records
@@ -339,9 +357,11 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       return safeKiroHttpErrorMessage(status, headers, payloadText);
     },
 
-    // Kiro always returns an event stream, including for non-streaming Responses requests. Drain
-    // the decoder into a budget-owned batch so an upstream stream cannot grow this array without
-    // bound while the caller waits for the complete JSON response.
+    /**
+     * Kiro always returns an event stream, including for non-streaming Responses requests. Drain
+     * the decoder into a budget-owned batch so an upstream stream cannot grow this array without
+     * bound while the caller waits for the complete JSON response.
+     */
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const events: AdapterEvent[] = [];
       try {
@@ -356,6 +376,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
           completionMode,
           completionMode === "required" ? fallbackFactory : undefined,
           contextInputEstimate,
+          structuredOutput,
         )) {
           retainTranslatedEvent(e, budget, events.at(-1));
           events.push(e);

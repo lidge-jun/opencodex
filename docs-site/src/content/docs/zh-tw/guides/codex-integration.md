@@ -121,6 +121,13 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 設定。loopback 模式下，其中包含自動注入被移除時可手動合併的根級鍵；non-loopback 模式下，其中包含
 專用 provider 形式。外部 provider 模式不會修改此 profile。
 
+重新產生此檔案時，會保留 OpenCodex 不管理的一般根級鍵，因此你新增的 `stream_idle_timeout_ms` 或
+`stream_max_retries` 等設定在下一次注入後仍會存在。保留的賦值會照原樣複製，包括跨多行的值與 64 位元
+整數，並放在第一個表之前。表內的鍵以及 `a.b = 1` 這類點分根級鍵不會保留。發生衝突時一律以 OpenCodex
+為準：它擁有的根級鍵（`model_provider`、`model_catalog_json`、`openai_base_url`）會依目前的路由模式
+重寫；與 profile 寫入的表同名的根級鍵（例如 profile 寫入 `[features]` 時的內嵌 `features = { ... }`）
+會被捨棄。若注入等待寫入鎖期間檔案有變動，注入會以可重試的錯誤停止，並保留你的修改。
+
 :::caution
 `openai_base_url`、`model_provider`、`model_catalog_json` 等根級鍵**必須**位於第一個 `[table]`
 標頭之前。注入器會保證此位置、移除自己留下的舊值或重複項，而且絕不覆寫使用者自有的根級
@@ -140,6 +147,13 @@ $CODEX_HOME/models_cache.json
 ```
 
 在 macOS 上，opencodex 在明確選擇、shim、PATH、既有安裝路徑和可執行的裸 `codex` 後備命令之後，依序檢查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 應用程式內建 CLI，要求其 XML `Info.plist` 識別碼為 `com.openai.codex`，且不會用應用程式候選項自動取代仍可執行的已儲存選擇。
+
+執行檢查也會辨識任意位置的 `Codex.app` 和 `ChatGPT.app`，包括移動後的應用程式套件、明確的
+`CODEX_CLI_PATH` 或設定的執行階段命令，以及符號連結別名。名稱只觸發驗證，不代表可信。
+每次執行前，正規化的套件和確切二進位檔都必須通過嚴格簽章驗證、OpenAI Team ID 及擁有權、
+權限和祖先目錄政策。二進位檔必須位於套件的 `Contents/` 內（包含 Codex.app 的
+`Contents/Resources/codex-aarch64-apple-darwin`）；無法正規化套件或二進位檔時拒絕執行。
+一般非應用程式 CLI 和第三方套件保留原有執行政策。
 
 在 WSL 中，如果未設定 `CODEX_HOME`，且 Linux 的 `~/.codex` 目錄不存在或不含任何 Codex 狀態（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 也會檢查
 `/mnt/c/Users/*/.codex/config.toml` 下是否只有一個 Windows Codex Desktop home。候選項恰好只有一個時，

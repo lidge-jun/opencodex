@@ -46,6 +46,7 @@ export function anthropicSearchAssistantContent(events: readonly AdapterEvent[])
         argumentsText += event.arguments;
         break;
       case "tool_call_end": {
+        if (event.incomplete) throw new Error("unfinished tool call cannot enter search continuation history");
         if (!call) throw new Error("search history has an unpaired tool call");
         const args: unknown = JSON.parse(argumentsText || "{}");
         if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("search history tool input is not an object");

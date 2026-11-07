@@ -18,9 +18,9 @@ fazla Claude hesabına giriş yapabilirsiniz. Varsayılan olarak her istek yaln�
 (`anthropicAccountPool.enabled`), bu OAuth hesapları arasında yapışkan oturum
 bağlılığı ve kullanıma dayalı yeni oturum seçimi ekler. 429 yük devretmesini **kontrol etmez**: iki veya daha fazla kullanılabilir hesap saklandığında, hız sınırına takılan istek bu anahtar açık da kapalı da olsa başka bir hesaba geçer ve bu kapatılamaz. Yalnızca
 **yeni** oturumlar için `anthropicAccountPool.strategy` uygun hesaplar arasından
-seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
-`anthropicAccountPool.quotaWindow` ile yapılandırılan penceredeki bilinen en düşük kullanımı
-seçer (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir); `round-robin` eşit olarak dağıtır
+seçim yapar: `quota` (varsayılan), etkin hesabı `anthropicAccountPool.quotaWindow` ile belirlenen penceredeki
+kullanımı (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir)
+`autoSwitchThreshold` değerine (varsayılan 80) ulaşana kadar korur, sonra kendi eşiğinin altındaki hesapları tercih ederek en az kullanılan hesaba geçer; `round-robin` eşit olarak dağıtır
 (`stickyLimit`, varsayılan `1`); `fill-first`, bekleme süresi, yeniden kimlik
 doğrulama veya eşiğe kadar aktif hesabı tüketir, ardından ilerler. **Varsayılan
 olarak kapalıdır** ve deneyseldir.
@@ -37,10 +37,9 @@ tavsiye değildir; Anthropic'in güncel koşullarını kontrol edin.
 Etkinleştirildiğinde operasyonel sözleşme:
 
 - Yukarı akıştan gelen **429**, varsa `Retry-After` (yoksa varsayılan bir geri
-  çekilme) kullanarak o hesabı soğutur, bağlılıklarını temizler ve aynı istek
-  içinde uygun başka bir hesaba dönebilir (sınırlı).
-- Bağlılık **işleme özeldir (process-local)** (proxy yeniden başlatıldığında
-  kaybolur).
+  çekilme) kullanarak o hesabı soğutur ve aynı istek içinde uygun başka bir hesaba
+  dönebilir (sınırlı). Yalnızca ortak kota reddi bağlılıkları temizler; geçici hız sınırlaması bunları korur.
+- Bağlılık aynı yapılandırma dizini ve sağlayıcı örneğinde yeniden başlatma sonrasında korunur (24 saat boşta kalma, en yeni 2.000 bağ). Özel dosya yalnızca oturum ve giriş kimliği özetlerini saklar; ham oturum anahtarı veya token içermez. Kalıcı giriş kimliği olmayan eski hesaplar yeniden girişe kadar işleme özeldir. Token yenileme bağı korur; yeniden giriş, kaldırma, duraklatma, yeniden kimlik doğrulama gereksinimi veya çalışma sırasında elle hesap seçimi bağı geçersiz kılar. Geçici hız sınırlaması nedeniyle başka hesaba yönelme özgün bağı değiştirmez.
 - Token yenileme hataları mevcut `needsReauth` kuralını korur. Doğrulanmış abonelik veya hesap ödeme 403 hatası çıktı başlamadan hesap değiştirebilir; soğuma `Retry-After` veya varsayılan on dakikadır. Genel izin reddi terminal kalır. Bkz. [hesap kurtarma](/guides/claude-code/).
 - Uygun tüm hesaplar soğutuluyorsa, proxy bilindiğinde `Retry-After` ile
   birlikte **429** (401 değil) döndürür.
@@ -218,6 +217,8 @@ seçildikten sonra Claude Desktop'ı tamamen kapatıp yeniden açın.
 
 Picker modu first-party'nin parçasıdır; bu nedenle [first-party hesap riski](#first-party-isteğe-bağlı)
 aynı şekilde geçerlidir.
+
+Üst sunucunun ilk yanıtından önce, 60 saniye boyunca ilerlemeyen picker yüklemesi kapatılır. Süre dolduğunda yükleme başarı yanıtı olmadan kesilir; HTTP/2’de yalnızca ilgili akış sıfırlanır. Üst sunucunun geri basıncı nedeniyle aktarım duraklatıldığında bu boşta kalma sayacı da duraklatılır; yükleme tamamlandığında veya ilk yanıt geldiğinde kaldırılır. Bu boşta kalma koruması toplam yükleme süresine ek bir sınır getirmez; mevcut çalışma zamanı ve protokol sınırları geçerliliğini korur. Yanıt akışları bu sayacın kapsamı dışındadır.
 
 ## Claude Desktop profili
 
@@ -548,9 +549,7 @@ Sıkıştırma değeri Claude sayfasında ayarlanabilir. **Uyarı:** bir modelin
 penceresinin üzerine çıkarmak o modeli bozar — sohbet özetleme tetiklenmeden
 önce hata verir.
 
-Bağlam taşması hataları normalleştirilirken sağlayıcının hata mesajının yalnızca ilk 65.536 UTF-16 kod birimi kullanılır.
-Bu sınırdan sonraki tanılama ayrıntıları veya token sayıları, kesilme işareti eklenmeden kaybolabilir.
-Kesin sınırlar ve token sayılarının aktarılma koşulları için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
+Messages hata yanıtı normalleştirmesi sabit metin kullanır; sağlayıcının metnini veya token sayılarını korumaz. Tanınan bağlam taşması `prompt is too long: The request exceeds the model's context window.` olarak döndürülür. Akışta ilk alanı error olayı olan bir blok en fazla 1 MiB tutulur; aşılırsa sıkıştırma ifadesi içermeyen sabit bir hata döndürülür. Kapsam ve iki istisna için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
 
 1M altı yerel Anthropic modelleri hiçbir zaman otomatik olarak işaretlenmez.
 Kendi dışa aktardığınız sıkıştırma penceresi, başlatma yuvası işaretlemesinde her zaman kazanır (proxy hangi modellerin
@@ -735,7 +734,7 @@ dönüştürür:
 | Asistan `tool_use` | `function_call` (`input` → JSON dizgeleştirilmiş `arguments`) |
 | Kullanıcı `tool_result` | `function_call_output` (`is_error` → `[tool error]` öneki) |
 | `thinking` / `redacted_thinking` tekrarı | İmzaları ve gizli yükleri sınırlı `ocxr1` zarflarında taşıyan `reasoning` öğeleri |
-| Fonksiyon araçları | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Fonksiyon araçları | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) `allowed_domains`, `blocked_domains` veya `user_location` içeren barındırılan arama, çevrilmiş Responses/Chat rotalarından çıkarılır; çıkarılan aramayı zorlamak 400 döndürür. Geçerli `defer_loading` işlev tanımları normal işlevler olarak çağrılabilir. [Çeviri sınırlarına](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes) bakın. |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, adlandırılmış fonksiyon→`{type:"function",name}`, barındırılan WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -769,7 +768,7 @@ kimlik/ad içermeyen `tool_use`; ad içermeyen adlandırılmış `tool_choice`.
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409
 `conflict_error`, 413 `request_too_large`, 429 `rate_limit_error`, 504
 `timeout_error`, 529 `overloaded_error`, diğer 5xx `api_error`. `Retry-After`
-korunur.
+tam saniye olarak gönderilir (HTTP tarihi kalan saniyeye çevrilir) ve en fazla sekiz gündür.
 
 ## İstem önbellekleme ve token kullanımı
 

@@ -28,7 +28,7 @@ import {
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
 import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
-import { bindAnthropicAccountMetadata } from "./account-metadata";
+import { bindAnthropicAccountMetadata, extractAnthropicCallerSessionId } from "./account-metadata";
 import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 import { pairAnthropicBetaBody } from "./beta-body-pairs";
@@ -91,6 +91,8 @@ export interface AnthropicMessagesPassthroughOptions {
   providerAccountUuid?: string;
   /** Internal request-local handle; never part of the serialized Messages body. */
   clientIdentity?: AnthropicClientIdentity;
+  /** Optional conversation/session key for deterministic per-conversation X-Claude-Code-Session-Id. */
+  sessionKey?: string | null;
 }
 
 /** The allowlisted copy of `body` with `model` set to the wire model. Shallow: nothing is cloned. */
@@ -299,7 +301,8 @@ export function buildAnthropicMessagesPassthroughRequest(
     native.wireBody, resolveAnthropicCacheRetention(config?.cacheRetention, provider));
   const wireBody = oauth ? bindAnthropicAccountMetadata(ttlBody, options.providerAccountUuid) : ttlBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
-  if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+  const resolvedSessionKey = options.sessionKey?.trim() || extractAnthropicCallerSessionId(body);
+  if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolvedSessionKey);
   else applyAnthropicKeyAuth(headers, provider);
   // Operator-configured provider headers apply exactly as the adapter applies them.
   if (provider.headers) {

@@ -1,5 +1,6 @@
 import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeAntigravityHttpErrorMessage } from "../../adapters/google-errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { hasAntigravityModelNotFoundProvenance } from "../../adapters/antigravity-refusal";
 
 /** Match only the normalized Antigravity validation-refusal marker. */
 export function hasAntigravityValidationRefusalMarker(text: string): boolean {
@@ -31,4 +32,9 @@ async function inspectValidationRefusal(response: Response, signal: AbortSignal 
   } catch {
     return false;
   }
+}
+
+/** Only original-body, model-specific Google adapter evidence qualifies for account rotation. */
+export async function isAntigravityModelNotFoundRefusal(response: Response, signal?: AbortSignal): Promise<boolean> {
+  return response.status === 404 && !signal?.aborted && hasAntigravityModelNotFoundProvenance(response);
 }

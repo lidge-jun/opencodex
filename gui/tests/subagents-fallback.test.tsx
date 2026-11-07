@@ -154,8 +154,10 @@ function rows(): HTMLElement[] {
 function expectOrder(models: string[]) {
   expect(rows()).toHaveLength(models.length);
   models.forEach((model, index) => {
-    // The model span can also contain the unavailable-model warning.
-    expect(rows()[index]?.querySelector("span")?.textContent?.trim().startsWith(`${index + 1}. ${model}`)).toBe(true);
+    // Position and name are separate cells (numbered square, then the id); the model cell can
+    // also carry the unavailable-model warning under the name.
+    expect(rows()[index]?.querySelector(".swi-fallback-pos")?.textContent?.trim()).toBe(String(index + 1));
+    expect(rows()[index]?.querySelector(".swi-fallback-name")?.textContent?.trim()).toBe(model);
     expect(rowButton(index, "sub.removeAria", model)).toBeTruthy();
   });
 }
@@ -744,4 +746,21 @@ test.each(compatibilityCases)("V2 compatibility guidance: $name", async ({ model
     expect(container.textContent).not.toContain(en["sub.v2Compatibility.recoveryUnknown"]);
   }
   expect(requests.filter(request => request.method !== "GET")).toEqual([]);
+});
+
+test("order hint explains visible featured model fill and the custom model picker order exception", async () => {
+  await mount();
+  const trigger = container.querySelector<HTMLButtonElement>(".swi-featured-head .ocx-tooltip");
+  if (!trigger) throw new Error("Expected the order-hint tooltip trigger to be rendered");
+  await act(async () => {
+    trigger.focus();
+    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 250));
+  });
+  expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
+  const tooltip = container.querySelector<HTMLElement>('[role="tooltip"]');
+  expect(tooltip?.textContent).toContain("spawn_agent");
+  expect(tooltip?.textContent).toContain("The order shown here sets positions 1–5 at the top of the Codex model picker and the default model candidates for spawn_agent.");
+  expect(tooltip?.textContent).toContain("fewer than 5 featured models are visible in the picker");
+  expect(tooltip?.textContent).toContain("remaining slots are advertised by catalog priority");
+  expect(tooltip?.textContent).toContain("5 visible featured models fill the list unless a custom model picker order changes catalog priority");
 });

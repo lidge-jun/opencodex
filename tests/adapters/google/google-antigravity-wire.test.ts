@@ -921,6 +921,48 @@ describe("isLikelyRealThoughtSignature", () => {
     expect(isLikelyRealThoughtSignature("short")).toBe(false);
     expect(isLikelyRealThoughtSignature("has spaces in it here")).toBe(false);
     expect(isLikelyRealThoughtSignature(undefined)).toBe(false);
+    expect(isLikelyRealThoughtSignature("skip_thought_signature_validator")).toBe(false);
+    expect(isLikelyRealThoughtSignature("context_engineering_is_the_way_to_go")).toBe(false);
+  });
+  test("antigravitySessionId isolates session ids per accountScope or _reasoningReplayScope credential identity while preserving single-arg fallback", () => {
+    const p = parsed("hello world");
+    const base = antigravitySessionId(p);
+    const projA = antigravitySessionId(p, "proj-alpha");
+    const projB = antigravitySessionId(p, "proj-beta");
+    expect(projA).toBe(antigravitySessionId(p, "  proj-alpha  "));
+    expect(projA).not.toBe(projB);
+    expect(projA).not.toBe(base);
+    expect(antigravitySessionId(p, "")).toBe(base);
+    const scopedA = {
+      ...p,
+      _reasoningReplayScope: {
+        clientThreadId: "t1",
+        current: {
+          providerName: "google-antigravity",
+          providerDestinationIdentity: "dest",
+          adapterName: "google",
+          modelId: "gemini-3-pro",
+          credentialIdentity: "cred-a",
+          credentialDurableIdentity: "durable-cred-a",
+        },
+      },
+    } as unknown as OcxParsedRequest;
+    const scopedB = {
+      ...p,
+      _reasoningReplayScope: {
+        clientThreadId: "t1",
+        current: {
+          providerName: "google-antigravity",
+          providerDestinationIdentity: "dest",
+          adapterName: "google",
+          modelId: "gemini-3-pro",
+          credentialIdentity: "cred-b",
+          credentialDurableIdentity: "durable-cred-b",
+        },
+      },
+    } as unknown as OcxParsedRequest;
+    expect(antigravitySessionId(scopedA)).not.toBe(antigravitySessionId(scopedB));
+    expect(antigravitySessionId(scopedA)).not.toBe(base);
   });
   test("accepts an opaque base64/base64url signature blob", () => {
     expect(isLikelyRealThoughtSignature("CisBVKhc7+abcDEF0123456789/xyz==")).toBe(true);

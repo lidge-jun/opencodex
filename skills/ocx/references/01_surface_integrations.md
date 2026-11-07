@@ -196,7 +196,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx integration client`
 
-Usage: `ocx integration client status [--client <id>] [--profile <id>] [--json]; ocx integration client history [--client <id>] [--profile <id>] [--json]; ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--json]; ocx integration client disable --client <id> [--profile <id>] [--json]; ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]`
+Usage: `ocx integration client status [--client <id>] [--profile <id>] [--json]; ocx integration client history [--client <id>] [--profile <id>] [--json]; ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--model-names <alias|routed>] [--json]; ocx integration client disable --client <id> [--profile <id>] [--json]; ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]`
 
 Inspect and toggle file integrations and Aside profiles, read journals, and restore selected operations.
 
@@ -219,6 +219,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--model-names` | string | Hermes/Command Code apply or overwrite only: alias or routed; omission preserves managed policy. |
 | `--client` | string | File integration ID, including gentle-shell; aside selects profiles. |
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--json` | boolean | Emit the result as JSON. |
@@ -393,7 +394,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx integration client enable`
 
-Usage: `ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--plan-fingerprint <token>] [--reasoning-default <model=effort> ... | --clear-reasoning-defaults] [--json]`
+Usage: `ocx integration client enable --client <id> [--profile <id>] [--overwrite-conflict] [--plan-fingerprint <token>] [--model-names <alias|routed>] [--reasoning-default <model=effort> ... | --clear-reasoning-defaults] [--json]`
 
 Apply the selected managed file integration.
 
@@ -407,6 +408,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--model-names` | string | Hermes/Command Code apply or overwrite only: alias or routed; omission preserves managed policy. |
 | `--client` | string | Explicit file integration ID. |
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--overwrite-conflict` | boolean | Explicitly permit replacing a conflicting block. |
@@ -653,7 +655,7 @@ State-changing: yes. JSON mode: `none`.
 
 ### `ocx integration client preview`
 
-Usage: `ocx integration client preview --client <id> --operation <apply|overwrite|disable> [--profile <id>] [--reasoning-default <model=effort> ... | --clear-reasoning-defaults] [--json]`
+Usage: `ocx integration client preview --client <id> --operation <apply|overwrite|disable> [--profile <id>] [--model-names <alias|routed>] [--reasoning-default <model=effort> ... | --clear-reasoning-defaults] [--json]`
 
 Inspect a managed client change before choosing whether to apply it.
 
@@ -666,6 +668,7 @@ State-changing: no. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--model-names` | string | Hermes/Command Code apply or overwrite only: alias or routed; omission preserves managed policy. |
 | `--client` | string | Explicit client; profile selectors require aside. |
 | `--profile` | number | One Aside nonnegative integer profile ID. |
 | `--operation` | string | Required apply, overwrite or disable; Aside requires one profile. |

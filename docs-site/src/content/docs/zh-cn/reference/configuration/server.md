@@ -16,7 +16,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `emptyCompletionRetry?` | `boolean` | `false` | 显式启用：当 Responses turn 既无文本也无工具调用时，使用相同请求重试一次，包括流在终止事件之前结束的情况。重试可能产生费用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不修改配置的情况下禁用；combo 与 routed-compaction turn 不参与。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | 从 Codex Responses 透传响应中移除 Codex safety-buffering 提示：`x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头、类型为 `safety_buffering` 的 `response.metadata` SSE 事件，以及其他 SSE 事件中的 `safety_buffering` 字段。Codex TUI 会将这些提示显示为“使用更快模型重试”的提示框，其默认操作会把会话切换到较弱的模型。其他 `x-codex-*` 响应头和其他所有 SSE 事件内容均保持不变，但会移除该字段。默认关闭。 |
 | `stallTimeoutSec?` | `number` | `300`（public）/ 禁用（local） | 上游无有效进展（Responses 和原生 Chat）多少秒后切断流。未设置时**本地**上游（loopback、private、`.local`/`.lan` 名称）默认禁用，公网上游默认 300 秒；正值对两者生效（最小 1 秒）；`0` 全面禁用静默 watchdog。对于把 canonical ChatGPT SSE 折叠为非流式 JSON 的 Responses 请求，即使 watchdog 已禁用，仍保留独立的 15 分钟整轮上限。`/v1/responses/compact` 的挂起响应体读取共享此预算，但即使本地上游也默认 300 秒；显式值（含 `0`）优先。 |
-| `connectTimeoutMs?` | `number` | `200000` | 每次尝试的 DNS/TCP/TLS/最终响应头截止时间；它在正文生成之前结束。 |
+| `connectTimeoutMs?` | `number` | `200000`（public）/ 禁用（local） | 从发出请求到上游返回首个响应头的每次尝试截止时间（DNS/TCP/TLS 及等待响应头）；它在正文生成之前结束，与管理正文流的 `stallTimeoutSec` 无关。未设置时**本地**上游（loopback、private、`.local`/`.lan` 名称）默认禁用，公网上游默认 200 秒；正值对两者生效；`0`（或任意非正值）全面禁用该响应头截止时间。禁用后，本地模型在大提示上可花费数分钟进行 prompt prefill，而首个响应头时钟不会切断健康的请求。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 优雅停机截止时间，超过后会中止仍在进行中的请求。 |
 | `websockets?` | `boolean` | `false` | 声明并允许面向客户端的 Responses WebSocket 路径。设为 false 时客户端使用 HTTP/SSE；它不会禁用符合条件的 canonical ChatGPT 上游 WS 优化。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS 额外允许的精确 origin。loopback origin 始终允许；支持 `chrome-extension://<扩展 ID>` 等基于 authority 的浏览器扩展 origin，`*` 不是通配符。Firefox 和 Safari 会（每次安装/启动浏览器时）重新生成扩展 UUID，origin 变化后请更新该条目。 |
@@ -27,6 +27,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `serviceHealthRecovery.enabled?` | `boolean` | `false` | 后台服务的可选恢复：一个小型守护进程探测 `/healthz`，当代理进程仍存活但在连续探测中约一分钟毫无响应时将其终止，由服务管理器（任务计划程序、launchd、systemd、WinSW）重新启动。仅受管服务子进程会启动它；卡住进程持有的请求不会重放。每小时最多 3 次。需要重启。自动恢复需要数字绑定地址（或默认的 localhost/通配符映射）；不监控 DNS 绑定名称。记录的地址或端口发生更改时会停止监控。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
+| `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | 选择由谁刷新 `CODEX_HOME` 中的原生主 ChatGPT 登录。密钥环应答只对本次查询有效：缺失或被扣留的令牌使本次凭据准备失败；后续查询即使返回相同令牌也可以使用。不保留永久拒绝状态，已取得令牌的请求可继续完成。文件凭据行为保持不变。包括自动选择在内的完整行为见[英文 Server fields](/reference/configuration/server/#server-fields)。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
 | `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 将识别出的 Codex 辅助/影子调用重定向到选定模型，并保留为请求配置的推理强度。默认源前缀为 `gpt-6-luna`, `gpt-5.6-luna`；0.144.x 及更早客户端使用 `gpt-5.4-mini`，可通过 `sourceModels` 恢复。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 在可用时启用 | Web 搜索侧车选项。 |
@@ -257,3 +258,11 @@ CLI 内部重试和工具轮次不单独计入请求级发送次数上限，但�
 完整但无效的记录（包括末行 `null`）会拒绝有额度限制的请求。压缩仍可保留有效余额，
 当前进程的拒绝状态持续到重启并读取干净日志。写入中断的最后一行 JSON 沿用原有恢复规则。
 详细边界及错误码见[英文原文](/reference/configuration/server/#historical-pool-continuity)。
+
+## 本地上游超时分类
+
+该分类只决定超时策略，不授予网络访问权限。HTTP(S) 目标按名称或字面地址分类，不查询 DNS：精确的 `localhost`（不区分大小写，允许末尾句点）、`0.0.0.0`、IPv4 loopback（127/8）、RFC 1918 私有地址及 link-local（169.254/16）、IPv6 loopback、link-local（fe80::/10）、unique-local（fc00::/7）、IPv4-mapped 等价地址，以及 `.local`/`.lan` 名称属于本地。其他 DNS 名称即使解析到 loopback，也保留公开上游超时。无效目标、不支持的协议和 `localhost.example` 同样保留公开默认值。
+
+关闭响应头时限仍保留客户端取消和外层整体时限。显式正值 `stallTimeoutSec` 仍限制本地响应体静默；本地 header/stall 都未设置时，响应头到达前没有自动时限。原生 Chat/Messages 本地 JSON 读取使用 stall 预算，公开 JSON 读取保留原有 `max(connectTimeoutMs ?? 200000, 5000)`。Compact 响应体即使本地也默认 300 秒。图像/搜索 sidecar 预算不变。
+
+可选的 `opencodeClientExport` 包含 `headerTimeoutMs`、`chunkTimeoutMs`、`timeoutMs`，取正毫秒数或表示关闭的 `false`。省略时保留 OpenCode 默认值，无效字段不导出。设置在 V1 options 和 V2 settings 中对整个 provider 生效。参见[慢速本地模型](/guides/opencode/#slow-local-models-prefill-timeouts)。

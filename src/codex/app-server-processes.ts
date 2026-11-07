@@ -395,7 +395,6 @@ function listUnixProcSnapshots(uid: number | undefined, requireComplete = true):
 }
 
 function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
-  const out: ProcessSnapshot[] = [];
   const commandOutput = uid !== undefined
     ? execFileSync("/bin/ps", ["-u", String(uid), "-o", "pid=,command="], {
       encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
@@ -410,6 +409,28 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
     : execFileSync("/bin/ps", ["-axo", "pid=,comm="], {
       encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
     });
+  return parseDarwinSnapshotOutputs(commandOutput, executableOutput, uid);
+}
+
+/**
+ * Request-path twin of {@link listDarwinSnapshots}: the two `ps` children run off the
+ * event loop, so a stalled process-table read cannot park the proxy. Failure still
+ * propagates as a rejected read, matching the synchronous contract.
+ */
+async function listDarwinSnapshotsAsync(uid: number | undefined): Promise<ProcessSnapshot[]> {
+  const [commandOutput, executableOutput] = await Promise.all([
+    uid !== undefined
+      ? execFileTextAsync("/bin/ps", ["-u", String(uid), "-o", "pid=,command="], 5_000)
+      : execFileTextAsync("/bin/ps", ["-axo", "pid=,uid=,command="], 5_000),
+    uid !== undefined
+      ? execFileTextAsync("/bin/ps", ["-u", String(uid), "-o", "pid=,comm="], 5_000)
+      : execFileTextAsync("/bin/ps", ["-axo", "pid=,comm="], 5_000),
+  ]);
+  return parseDarwinSnapshotOutputs(commandOutput, executableOutput, uid);
+}
+
+function parseDarwinSnapshotOutputs(commandOutput: string, executableOutput: string, uid: number | undefined): ProcessSnapshot[] {
+  const out: ProcessSnapshot[] = [];
   const executableByPid = new Map<number, string>();
   for (const raw of executableOutput.split(/\r?\n/)) {
     const match = /^\s*(\d+)\s+(.+)$/.exec(raw);
@@ -552,6 +573,22 @@ function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | 
   return listUnixProcSnapshots(getuid(), requireComplete);
 }
 
+/**
+ * Request-path twin of {@link defaultListSnapshots}: the child-process enumerations
+ * (Windows PowerShell, darwin ps) wait off the event loop. Linux /proc reads are
+ * bounded filesystem I/O rather than a subprocess deadline, so they stay synchronous
+ * underneath without reintroducing a multi-second park.
+ */
+async function defaultListSnapshotsAsync(
+  platform: NodeJS.Platform,
+  getuid: () => number | undefined,
+  requireComplete = true,
+): Promise<ProcessSnapshot[]> {
+  if (platform === "win32") return listWindowsSnapshotsAsync();
+  if (platform === "darwin") return listDarwinSnapshotsAsync(getuid());
+  return listUnixProcSnapshots(getuid(), requireComplete);
+}
+
 export interface ListProcessSnapshotsOptions {
   platform?: NodeJS.Platform;
   getuid?: () => number | undefined;
@@ -639,6 +676,43 @@ function scanProcessSnapshots(
   } catch {
     return Object.freeze({ kind: "unavailable" as const });
   }
+  return matchProcessSnapshots(snapshots, matches);
+}
+
+/**
+ * Request-path twin of {@link scanProcessSnapshots}: an injected async source, or the
+ * real enumeration's child processes, resolve off the event loop. The fail-closed
+ * contract is unchanged — an unreadable process table is still `unavailable`.
+ */
+async function scanProcessSnapshotsAsync(
+  io: CodexAppServerProcessIo,
+  matches: (commandLine: string, executable?: string) => boolean,
+): Promise<CodexAppServerProcessScan> {
+  const platform = io.platform ?? process.platform;
+  const getuid = io.getuid ?? (() => {
+    try {
+      return typeof process.getuid === "function" ? process.getuid() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  let snapshots: ProcessSnapshot[];
+  try {
+    snapshots = io.listSnapshotsAsync
+      ? await io.listSnapshotsAsync()
+      : io.listSnapshots
+        ? io.listSnapshots()
+        : await defaultListSnapshotsAsync(platform, getuid);
+  } catch {
+    return Object.freeze({ kind: "unavailable" as const });
+  }
+  return matchProcessSnapshots(snapshots, matches);
+}
+
+function matchProcessSnapshots(
+  snapshots: readonly ProcessSnapshot[],
+  matches: (commandLine: string, executable?: string) => boolean,
+): CodexAppServerProcessScan {
   const seen = new Set<number>();
   const matched: CodexAppServerProcess[] = [];
   for (const snapshot of snapshots) {
@@ -669,6 +743,15 @@ export function scanCodexSessionProcesses(io: CodexAppServerProcessIo = {}): Cod
   // Shared installs may be held open by another readable user's session. This
   // read-only scan is broader than the unchanged same-user restart/kill path.
   return scanProcessSnapshots({ ...io, getuid: io.getuid ?? (() => undefined) }, isCodexSessionCommandLine);
+}
+
+/**
+ * Async twin of {@link scanCodexSessionProcesses} for request paths: planning and the
+ * apply re-scan must not park the proxy event loop on a process-table child wait.
+ * Same broader read-only scope, same fail-closed contract.
+ */
+export function scanCodexSessionProcessesAsync(io: CodexAppServerProcessIo = {}): Promise<CodexAppServerProcessScan> {
+  return scanProcessSnapshotsAsync({ ...io, getuid: io.getuid ?? (() => undefined) }, isCodexSessionCommandLine);
 }
 
 export function formatStaleCodexAppServerWarning(

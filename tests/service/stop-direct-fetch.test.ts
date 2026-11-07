@@ -122,8 +122,8 @@ describe("local stop transport", () => {
       const calls = [...source.slice(start, end).matchAll(/await stopProxy\(([\s\S]*?)\);/g)];
       expect(calls).toHaveLength(count);
       for (const call of calls) {
-        // A type assertion is not a value override; the connected-client direct
-        // transport is permitted while every other call uses the shared default.
+        // Connected stops also retain the shared default's refusal-status handling.
+        expect(call[1]!).not.toMatch(/\bfetchFn\s*:/);
         expect(call[1]!.replace(/as typeof fetch\b/g, "")).not.toMatch(/\bfetch\b/);
       }
     });

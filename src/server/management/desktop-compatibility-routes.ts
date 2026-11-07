@@ -1,6 +1,7 @@
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
+import { isAuthorizedDesktopCompatibilityMutation } from "./desktop-compatibility-authorization";
 import type { DesktopCertificateService } from "../../codex/desktop-compatibility/certificate-service";
 
 const PATH = "/api/codex/desktop-compatibility/certificate";
@@ -11,7 +12,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
   // A local dashboard confirmation precedes any persisted key or CurrentUser Root mutation.
   // This is caller provenance, not protection against an arbitrary same-user process.
-  if (ctx.req.method === "POST" && (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress)) {
+  if (ctx.req.method === "POST" && !isAuthorizedDesktopCompatibilityMutation(ctx)) {
     return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   }
   let action: "prepare" | "trust" | "remove-trust" | "renew" | undefined, fingerprint: string | undefined;
@@ -36,7 +37,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
       : action === "trust" ? await controller.trust(fingerprint!)
       : action === "renew" ? await controller.renew(fingerprint!)
       : action === "remove-trust" ? await controller.removeTrust(fingerprint!) : await controller.status();
-    return jsonResponse({ ok: true, certificate: status });
+    return jsonResponse({ ok: true, certificate: { ...status, mutationAuthorized: isAuthorizedDesktopCompatibilityMutation(ctx) } });
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "operation_failed";
     const allowed = new Set(["unsupported", "busy", "not_prepared", "fingerprint_changed", "app_running", "runtime_running", "app_state_unknown", "trust_unknown", "trust_not_applied",

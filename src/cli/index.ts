@@ -13,7 +13,7 @@ import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
 import { HEALTH_SENTINEL_STANDALONE_ARG, startServiceHealthSentinel } from "../service/health-sentinel-launch";
 import { UpdateRestartRequired } from "./update-restart-candidate";
-import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
+import { reportUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 // Best-effort recovery for runtime execution and spawned children if launched
@@ -49,7 +49,7 @@ import {
   resolveCodexHistoryJobTarget,
   runCodexHistoryJob,
 } from "../codex/history-job";
-import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling, reconcileStartupJournal } from "./cross-home-owner";
+import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
@@ -69,9 +69,9 @@ import {
   writePid,
   writeRuntimePort,
 } from "../config/process-state";
+import { describeTrackedRuntimeTarget } from "../config/tracked-runtime-inspection";
 import {
   claimPendingTeardown,
-  clearPendingTeardown,
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
@@ -93,7 +93,7 @@ import {
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
 import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
-import { reportRestartFailure } from "./restart-failure";
+import { deferSupervisedRestart, reportRestartFailure, type RestartSupervisor } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -128,7 +128,6 @@ import { inspectGuardedManagerTarget, observeGuardedManagerStopped } from "../se
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
-import { directLocalHttpFetch } from "../server/direct-local-http";
 import { startupDataPlaneToken } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
@@ -161,12 +160,14 @@ import { productionDesktopColdStartDeps, runDesktopColdStart } from "./ensure-de
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
+import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, connectedClientStopSkipLine, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreSharedClientStateAfterStop } from "./stop-restore";
+import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary } from "./stop-restore";
+import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
-import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
+import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS, RESTART_REOBSERVE_RESERVE_MS } from "../lib/system-restart-contract";
@@ -210,6 +211,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
@@ -372,7 +374,7 @@ async function findProxyOwnerBeforeJournalRecovery(
   const hasRuntimeOwner = readRuntimePort() !== null;
   const shouldProbe = pidSnapshot !== null || hasRuntimeOwner || options.probeConfiguredPort === true;
   // A negative answer lets the caller walk past a proxy it was supposed to find and
-  // deletes this home's stale pid record. Supervised starts defer that write to the
+  // deletes this home's stale pid record. Start and ensure defer that write to the
   // lease-held owner recheck; journal recovery follows cross-home discovery.
   // One 750ms probe is not enough evidence for that (#5004) — a transport
   // failure is indistinguishable from an empty port, and the reported Windows duplicate
@@ -440,7 +442,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;
   // A restart replacement waits out its draining parent instead of refusing it, and bounds its handoff log (restart-handoff.ts).
   const restartParent = { restartParentPid: takeRestartHandoffMarkers(process.env), requestedPort, ocxService: process.env.OCX_SERVICE };
-  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: supervisedServiceChild }), restartParent);
+  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: true }), restartParent);
+  if (!owner.live) siblingStart = await recoverStartStateUnderOwnershipLease({
+    supervised: supervisedServiceChild,
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
+    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
+    recover: () => recoverStartJournalAfterOwnerRecheck(owner, siblingStart),
+  });
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
     const decision = decideStartWithLiveOwner({
@@ -469,18 +478,6 @@ async function handleStart(options: { block?: boolean } = {}) {
       + `Startup continues only for an independent OPENCODEX_HOME; one state directory has one spend-ledger writer.`,
     );
   }
-  siblingStart = await recoverStartStateUnderOwnershipLease({
-    supervised: supervisedServiceChild,
-    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
-    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
-    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
-    recover: async () => {
-      if (!owner.live && supervisedServiceChild) removePidIfValueIs(owner.pidSnapshot);
-      if (!owner.live && !siblingStart) siblingStart = await markCrossHomeSibling();
-      if (!siblingStart) reconcileStartupJournal();
-      return siblingStart;
-    },
-  });
 
   updateRestartChild?.check();
   const clientState = readClientConnectionState();
@@ -532,7 +529,7 @@ async function handleStart(options: { block?: boolean } = {}) {
           console.error("❌ " + leasedChildOwnership.refusal);
           throw new StartCommandExit(serviceStayOutExitCode());
         }
-        // The earlier probe owned journal cleanup. This one owns the bind decision: an
+        // Recovery rechecked liveness under its lease. This fence owns the bind decision: an
         // updater may have stopped the old runtime and acquired this lease for replacement.
         const fencedLive = await findLiveProxy(START_OWNERSHIP_LIVENESS);
         if (fencedLive) {
@@ -609,8 +606,9 @@ async function handleStart(options: { block?: boolean } = {}) {
       writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
-        hostname: bound.config.hostname,
+        hostname: bound.server.hostname,
         attestationSecret: bound.localAttestationSecret,
+        command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
@@ -658,6 +656,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
     // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
     const teardown = preserveConnectedClientRoutingOnExit(decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE }));
+    const restoreGuard = stopRestoreWriteGuard();
     if (teardown.revertSystemEnv) {
       try { revertSystemEnv(); } catch { /* best-effort */ }
     }
@@ -666,15 +665,17 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (teardown.restoreNativeCodex) {
       try {
         if (!codexHomeIsAbsent(getCodexHome())) {
-          const restored = restoreNativeCodex();
+          const restored = restoreNativeCodex({ withWriteGuard: restoreGuard.run });
           if (!restored.success) {
             cleanupSucceeded = false;
             console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
           }
         }
       } catch (error) {
-        cleanupSucceeded = false;
-        console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        if (restoreGuard.boundary() !== "hub-owned") {
+          cleanupSucceeded = false;
+          console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
     // Same ownership rule as `ocx stop`: if the installed service belongs to another home, the
@@ -682,7 +683,8 @@ async function handleStart(options: { block?: boolean } = {}) {
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
     if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {
-      try { stripGrokConfig(); } catch { /* best-effort restore */ }
+      try { restoreGuard.run(() => stripGrokConfig()); }
+      catch { if (restoreGuard.boundary() !== "hub-owned") cleanupSucceeded = false; }
     }
     return cleanupSucceeded;
   };
@@ -709,7 +711,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     void (async () => {
       let shutdownSucceeded = false;
       try {
-        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
+        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000, () => { syncCleanup(); return undefined; });
       } finally {
         const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
         process.exit(restored && shutdownSucceeded ? handledSignalExitCode(signal) : 1);
@@ -782,7 +784,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   // one restart, because the toggle removed the fence and start wrote it back.
   if (shouldSyncGrokOnStart(config)) try {
     const { syncGrokConfig } = await import("../grok/sync");
-    const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    const r = await syncGrokConfig(port, config, {
+      ...(config.hostname ? { hostname: config.hostname } : {}),
+      admit: () => !shuttingDown && !cleaned && shouldSyncGrokOnStart(loadConfig()),
+    });
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!r.ok) console.error(`⚠️  ${r.message}`);
   } catch (err) {
@@ -814,8 +819,14 @@ function detachedStartEnvironment(): NodeJS.ProcessEnv {
 }
 
 async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?: boolean; onSpawn?: (child: ReturnType<typeof spawn>) => void } = {}): Promise<boolean> {
-  const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
-  if (!owner.live && !(await markCrossHomeSibling())) reconcileStartupJournal();
+  const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: true });
+  if (!owner.live) await recoverStartStateUnderOwnershipLease({
+    supervised: false,
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => ({ kind: "proceed" }),
+    stayOut: () => { throw new Error("ordinary ensure has no service stay-out decision"); },
+    recover: () => recoverStartJournalAfterOwnerRecheck(owner),
+  });
   // A later ensure can find this home's sibling alive; the other port still owns shared clients.
   if (owner.live) await markLiveHomeSibling(owner.live);
   const config = loadConfig();
@@ -850,13 +861,13 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
       const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
       if (siblingOfLivePort() === null) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
       if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
-      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
-      // hostname the running proxy actually bound — config.hostname may have drifted.
-      // The reconciler re-reads immediately before each client-file mutation; only
-      // the live proxy's observed bind host is safe to carry across this boundary.
+      // Refresh the Grok Build fence too (same contract as start). Keep the observed
+      // bind scope for admission and its responding address for the destination.
+      // The reconciler re-reads immediately before each client-file mutation;
+      // config.hostname may have drifted from the running proxy's bind scope.
       if (siblingOfLivePort() === null) await reconcileEnsureDesiredIntegrations(
         live.port,
-        { kind: "live", hostname: live.hostname },
+        { kind: "live", hostname: live.hostname, probeHostname: live.probeHostname },
       );
       console.log(`✅ Proxy running on port ${live.port}`);
       return true;
@@ -944,10 +955,9 @@ async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> 
 }
 
 const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
-
 /** Reserve confirmation time within the shared restart deadline. */
 async function handleProxyRestart(
-  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
+  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
   const result = await runDesktopAwareProxyRestart({
@@ -973,10 +983,11 @@ async function handleProxyRestart(
     console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
     const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
     if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
-    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
+    else reportUpdateRestartFailure(update);
     process.exitCode = update.ok ? 0 : 1;
     return update.ok;
   }
+  if (onSupervised && deferSupervisedRestart(result, onSupervised)) return false;
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;
@@ -1016,13 +1027,7 @@ async function handleStop(approval?: StopApproval) {
         try { return JSON.parse(lines[0]!) as ResolveJson; }
         catch { return null; }
       },
-      () => {
-        const pid = readPid();
-        const runtime = pid === null ? null : readRuntimePort(pid);
-        return pid && runtime?.port ? {
-          pid, port: runtime.port, hostname: runtime.hostname ?? "",
-        } : null;
-      },
+      describeTrackedRuntimeTarget,
       () => inspectGuardedManagerTarget(approval.pid, approval.port),
       snapshot => handleStopUnlocked(snapshot),
     );
@@ -1135,7 +1140,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
-  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig())) && !stoppingSibling && !connectedClientSkip;
+  // Client start never discharges a standalone update-handover receipt or reapplies routing.
+  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig()))
+    && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
@@ -1159,8 +1166,12 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (connectedClientSkip) await assertConnectedClientStopSupported(exact ? { ...exact, pid } : null);
     claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
     const graceful = await stopProxy(pid, {
-      fetchFn: connectedClientSkip ? directLocalHttpFetch as typeof fetch : undefined,
       deferSharedTeardownNonce: teardownNonce,
+      // "not-owned" is refused only for a positively identified Link connection, read at the
+      // POST: an old build answers it while preserving the loopback route this stop must
+      // restore. A connect committed mid-stop can make this a hub client whose answer is
+      // truthful, so the entry-time skip snapshot cannot stand in for this check.
+      acceptNotOwnedTeardown: notOwnedTeardownIsAcceptable(readClientConnectionState(), stoppingSibling),
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
@@ -1438,44 +1449,30 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;
   const handedOver = stopHandsTeardownOver({ requested: handoverRequested, restoreBlocked, nonce: teardownNonce,
     stopFailed, recoveredCount: recoveredNonces.length, proxy: record.proxy, service: record.service, deferralHonored: deferralHonoredByProxy });
+  // Ownership can change while the stop awaits; only the state at the restore boundary decides (#7736).
+  const boundary = restoreBlocked || handedOver ? "restore" : restoreBoundaryOwnership();
+  if (boundary !== "restore") stopFailed = settleUnrestoredStopBoundary(boundary, record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
   if (handedOver) announceStopHandover();
-  else if (!restoreBlocked) {
+  else if (!restoreBlocked && boundary === "restore") {
     if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is
       // not answering. That is the whole point of leaving the receipt behind.
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
     }
     const restore = await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable);
-    record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
-    if (restore.other) stopFailed = true;
-    else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
-    else if (restore.historyOnly) historyOnlyFailure = true;
-    // The obligation is discharged whether or not history metadata finalized: config and
-    // catalog are what a client reads, and `restore.other` already fails the stop.
-    //
-    // Each nonce names its own file, so a clear can only ever remove the obligation it
-    // names — never one a concurrent stop wrote. Both this run's claim and every inherited
-    // receipt it proved discharged are released together.
-    //
-    // A history-preflight refusal is the exception: it restored nothing, so there is
-    // nothing to discharge. Clearing here would drop a real obligation on the floor and
-    // leave the client config pointing at a proxy that is gone, with nothing on disk
-    // saying so — which is the whole failure the receipt exists to prevent (#4718).
-    if (restore.historyDeferred) {
-      console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
-      console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
-    }
-    if (!restore.other && !restore.historyDeferred) {
-      const discharged = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
-      for (const nonce of discharged) {
-        // A receipt that survives its discharge re-triggers recovery forever, so a failed
-        // removal is surfaced rather than swallowed.
-        if (!clearPendingTeardown(nonce)) {
-          stopFailed = true;
-          record.receiptClearFailed = true;
-          console.error(`❌ The shared teardown finished, but its receipt could not be removed: ${pendingTeardownPathFor(nonce)}`);
-          console.error("   Remove it manually; otherwise every later stop and update will try to recover it again.");
-        }
+    if (restore.boundary) stopFailed = settleUnrestoredStopBoundary(restore.boundary, record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
+    else {
+      record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
+      if (restore.other) stopFailed = true;
+      else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
+      else if (restore.historyOnly) historyOnlyFailure = true;
+      // A history preflight refusal restored nothing, so the obligation survives (#4718).
+      if (restore.historyDeferred) {
+        console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
+        console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
+      }
+      if (!restore.other && !restore.historyDeferred) {
+        stopFailed = clearRestoredStopReceipts(record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
       }
     }
   }
@@ -1533,6 +1530,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 }
 
 async function handleUninstall() {
+  // Before every teardown step: an elevated run must not act on a home another account can change.
+  const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());
+  if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }
   /** Definitive "nothing is answering" on the endpoint this home would serve. */
   const proxyEndpointProvenDown = async (): Promise<boolean> => {
     try {
@@ -1685,9 +1685,10 @@ async function handleUninstall() {
   });
 
   try {
-    const { uninstallCodexShim } = await import("../codex/shim");
-    const r = uninstallCodexShim();
-    console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
+    const { uninstallCodexShimAsync } = await import("../codex/shim");
+    const r = await uninstallCodexShimAsync();
+    if (r.refused) { failures.push("Codex autostart shim removed"); console.error(`⚠️  Codex autostart shim removed failed: ${r.message}`); }
+    else console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
   } catch (err) {
     failures.push("Codex autostart shim removed");
     console.error(`⚠️  Codex autostart shim removed failed: ${err instanceof Error ? err.message : String(err)}`);

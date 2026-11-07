@@ -10,7 +10,7 @@ describe("WinSW lifecycle stop hardening", () => {
     const end = source.indexOf("export function uninstallWinswService", start);
     const stop = source.slice(start, end);
 
-    expect(stop).toContain('runWinsw(["stopwait"])');
+    expect(stop).toContain('runWinsw(["stopwait"], gate)');
     expect(stop).toContain("const status = statusWinswRaw();");
     expect(stop).toContain('status === "stopped" || status === "nonexistent"');
     expect(stop).toContain('status === "unknown"');

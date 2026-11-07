@@ -1,3 +1,4 @@
+import { EXPORT_CLIENT_IDS } from "../clients/client-ids";
 import { resolveHelpPath } from "./help-catalog";
 import type { Capability } from "./capabilities";
 import { MODELS_CONTEXT_DETAILS, MODELS_CONTEXT_USAGE } from "./help-models-context";
@@ -48,7 +49,7 @@ Usage:
   ocx connect <url>           Connect this machine to a remote OpenCodex hub (credential via stdin)
   ocx remote-workspace <sub>  Pair/run an OCX-only remote execution computer
   ocx disconnect              Restore local state and clear the hub connection
-  ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
+  ocx sync [--local-only] [--json] [--restart-codex]  Sync models and linked Children
                               --expect-link <id> | --expect-hub-key <id>: only from that Home/hub key (exit 5 otherwise)
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
@@ -71,7 +72,7 @@ Usage:
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
-  ocx capabilities [--json]    List declared capabilities and the API routes they drive
+  ocx capabilities [--json] [--contracts]  List capabilities and contracts
   ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
   ocx resolve [--json]        Config home, effective port, and liveness (JSON for shells)
   ocx provider <sub>          Providers, connectivity, quota, and selected models
@@ -94,7 +95,7 @@ Usage:
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
   ocx api <sub>               Protocol paths: vocabulary, request-path preview, and policy
-  ocx export --client <id>    Print a client config wired to the running proxy (23 clients)
+  ocx export --client <id>    Print a client config wired to the running proxy (${EXPORT_CLIENT_IDS.length} clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
@@ -106,6 +107,7 @@ Usage:
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
+  ocx codex [args...]         Launch Codex through the proxy's routing (pass-through when disabled)
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)
   ocx mcode [args...]         Launch MiniMax Code through its managed provider
   ocx mmx text <sub> [args]   Launch MiniMax CLI text through the proxy

@@ -12,6 +12,33 @@
  */
 export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-6-luna", "gpt-5.6-luna"] as const;
 
+/** How the dashboard explains a selectable shadow source. */
+export type ShadowCallSourceRole = "helper" | "memory" | "legacy" | "custom";
+
+export interface ShadowCallSourceOption {
+  id: string;
+  role: ShadowCallSourceRole;
+  defaultIntercepted: boolean;
+}
+
+/**
+ * Every source the dashboard offers as an individual toggle. The runtime owns
+ * this list so the GUI cannot drift from the prefixes the request path matches.
+ * Terra is the memory-consolidation model and stays opt-in: Codex also selects
+ * it for ordinary foreground work, and routing it by default would move a
+ * user-chosen model. Codex currently asks for `gpt-5.6-terra`; newer clients
+ * can move to `gpt-6.1-terra`, so both generations stay selectable and off by
+ * default. The retired gpt-5.4-mini helper stays available for clients through
+ * 0.144.x.
+ */
+export const SHADOW_SOURCE_MODEL_OPTIONS: readonly ShadowCallSourceOption[] = [
+  { id: "gpt-6-luna", role: "helper", defaultIntercepted: true },
+  { id: "gpt-5.6-luna", role: "helper", defaultIntercepted: true },
+  { id: "gpt-6.1-terra", role: "memory", defaultIntercepted: false },
+  { id: "gpt-5.6-terra", role: "memory", defaultIntercepted: false },
+  { id: "gpt-5.4-mini", role: "legacy", defaultIntercepted: false },
+];
+
 /**
  * Optional blocked model redirects at the shared routing layer.
  * When `blockedModelRedirects` is configured (e.g. `{ "gpt-5.6-terra": "gpt-5.6-luna" }`),
@@ -39,7 +66,34 @@ export function shadowSourceModels(configured?: unknown): string[] {
       .filter((v): v is string => typeof v === "string" && v.trim() !== "")
       .map(v => v.trim())
     : [];
-  return configuredStrings.length > 0 ? configuredStrings : [...DEFAULT_SHADOW_SOURCE_MODELS];
+  return configuredStrings.length > 0
+    ? [...new Set(configuredStrings)]
+    : [...DEFAULT_SHADOW_SOURCE_MODELS];
+}
+
+/** True when an override names exactly the built-in prefixes, in any order. */
+export function isDefaultShadowSourceModels(models: readonly string[]): boolean {
+  const selected = new Set(models);
+  return selected.size === DEFAULT_SHADOW_SOURCE_MODELS.length
+    && DEFAULT_SHADOW_SOURCE_MODELS.every(id => selected.has(id));
+}
+
+/**
+ * The dashboard's source inventory: the known runtime prefixes plus any custom
+ * prefix the operator persisted. Keeping the known list here avoids a second,
+ * drifting model list in the GUI; custom prefixes stay visible so an existing
+ * override is never silently dropped by a save.
+ */
+export function shadowSourceModelOptions(configured?: unknown): ShadowCallSourceOption[] {
+  const selected = shadowSourceModels(configured);
+  const known = new Set(SHADOW_SOURCE_MODEL_OPTIONS.map(option => option.id));
+  const custom = selected
+    .filter(id => !known.has(id) && !id.includes("/"))
+    .map(id => ({ id, role: "custom" as const, defaultIntercepted: false }));
+  return [
+    ...SHADOW_SOURCE_MODEL_OPTIONS.map(option => ({ ...option })),
+    ...custom,
+  ];
 }
 
 /**

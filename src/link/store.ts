@@ -27,6 +27,7 @@ export interface LinkRecord {
   /** Id of the data key issued for this link. */
   apiKeyId: string;
   createdAt: string;
+  remotePlatform?: "posix" | "windows";
 }
 
 export interface LinkStore {
@@ -51,7 +52,7 @@ export function newLinkId(): string {
   return `lnk_${randomBytes(8).toString("hex")}`;
 }
 
-const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt"]);
+const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt", "remotePlatform"]);
 const STORE_KEYS = new Set(["version", "listenerPort", "links"]);
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
 const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
@@ -75,6 +76,7 @@ function parseRecord(value: unknown, index: number): LinkRecord {
   if (typeof raw.alias !== "string") fail("alias");
   try { assertSshAlias(raw.alias as string); } catch { fail("alias"); }
   if (raw.direction !== "hub-initiated" && raw.direction !== "client-initiated") fail("direction");
+  if (raw.remotePlatform !== undefined && raw.remotePlatform !== "posix" && raw.remotePlatform !== "windows") fail("remotePlatform");
   const fingerprint = raw.hostKeyFingerprint;
   if (fingerprint === null ? raw.direction !== "client-initiated"
     : typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint)) fail("hostKeyFingerprint");
@@ -89,6 +91,7 @@ function parseRecord(value: unknown, index: number): LinkRecord {
     tunnelPort: raw.tunnelPort as number,
     apiKeyId: raw.apiKeyId as string,
     createdAt: raw.createdAt as string,
+    ...(raw.remotePlatform === undefined ? {} : { remotePlatform: raw.remotePlatform as "posix" | "windows" }),
   };
 }
 

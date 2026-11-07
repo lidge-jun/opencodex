@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   recordOwnedConfigPath,
   removeOwnedConfigState,
 } from "../../src/lib/config-ownership";
+import { setUninstallElevationProbeForTests } from "../../src/lib/config-ownership-removal";
 import { writePristineCatalogBackup } from "../../src/codex/catalog/parsing";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -17,6 +18,97 @@ function manifestPaths(dir: string): string[] {
 }
 
 describe("owned config uninstall", () => {
+  // These removal fixtures exercise the owning user's unelevated path. Elevated Windows
+  // junction refusal is covered separately in config-ownership-removal.test.ts.
+  beforeEach(() => { if (process.platform === "win32") setUninstallElevationProbeForTests(() => false); });
+  afterEach(() => { if (process.platform === "win32") setUninstallElevationProbeForTests(null); });
+
+  (process.platform === "win32" ? test.skip : test)("refuses elevated removal when the root permits shared writes (POSIX modes required)", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-config-mode-"));
+    const dir = join(parent, "config");
+    try {
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      writeFileSync(join(dir, "config.json"), "owned");
+      chmodSync(dir, 0o777);
+      const manifestBefore = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+      const elevation = spyOn(process, "geteuid").mockReturnValue(0);
+      try {
+        expect(removeOwnedConfigState(dir).status).toBe("refused");
+        expect(existsSync(join(dir, "config.json"))).toBe(true);
+        // Refused before the tombstone: the manifest is byte-for-byte what it was.
+        expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(manifestBefore);
+      } finally { elevation.mockRestore(); }
+    } finally { chmodSync(dir, 0o700); removeTreeWithRetry(parent); }
+  });
+  function checkNestedParent(kind: "dir" | "junction"): void {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-config-nested-"));
+    const dir = join(parent, "config");
+    const other = join(parent, "other");
+    const nested = join(dir, "nested");
+    const recorded = join(nested, "owned.txt");
+    mkdirSync(dir);
+    mkdirSync(other);
+    try {
+      expect(recordOwnedConfigPath(dir, recorded)).toBe(true);
+      writeFileSync(join(other, "owned.txt"), "keep");
+      symlinkSync(other, nested, kind);
+      const result = removeOwnedConfigState(dir);
+      expect(result.status).toBe("partial");
+      expect(result.residualPaths).toContain(recorded);
+      expect(readFileSync(join(other, "owned.txt"), "utf8")).toBe("keep");
+      expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(true);
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  }
+
+  (process.platform === "win32" ? test.skip : test)("reports an unresolved nested owned path (directory links require POSIX)", () => {
+    checkNestedParent("dir");
+  });
+
+  (process.platform === "win32" ? test : test.skip)("reports an unresolved nested owned path (junctions require Windows)", () => {
+    checkNestedParent("junction");
+  });
+
+  (process.platform === "win32" ? test.skip : test)("removes owned state through an aliased ancestor of the root (directory links require POSIX)", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-config-root-alias-"));
+    const real = join(parent, "real");
+    const dir = join(real, "config");
+    const alias = join(parent, "alias");
+    mkdirSync(real);
+    try {
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      expect(recordOwnedConfigPath(dir, join(dir, "nested", "owned.txt"))).toBe(true);
+      writeFileSync(join(dir, "config.json"), "owned");
+      mkdirSync(join(dir, "nested"));
+      writeFileSync(join(dir, "nested", "owned.txt"), "owned");
+      symlinkSync(real, alias, "dir");
+      const result = removeOwnedConfigState(join(alias, "config"));
+      // The unrecorded nested directory stays; both recorded files go.
+      expect(result.status).toBe("partial");
+      expect(result.residualPaths).toEqual([join(alias, "config", "nested")]);
+      expect(existsSync(join(dir, "config.json"))).toBe(false);
+      expect(existsSync(join(dir, "nested", "owned.txt"))).toBe(false);
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  test("removes a recorded nested file", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-config-nested-file-"));
+    const dir = join(parent, "config");
+    const path = join(dir, "nested", "owned.txt");
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      mkdirSync(join(dir, "nested"));
+      writeFileSync(path, "owned");
+      expect(removeOwnedConfigState(dir).status).toBe("partial");
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
   test("first owned write creates a missing config root and its metadata", () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-config-first-owned-path-"));
     const dir = join(parent, "config");

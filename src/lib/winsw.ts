@@ -16,9 +16,9 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
+import { resolveCodexHomeDir } from "../codex/home";
 import { recordOwnedConfigPath } from "./config-ownership";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "./bun-runtime";
 import type { BunRuntimeSource } from "./bun-runtime";
@@ -59,9 +59,9 @@ function xmlEscape(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function currentCodexHomeAbsolute(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
+function currentCodexHomeAbsolute(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.CODEX_HOME?.trim();
+  return raw ? windowsServicePathAbsolute(raw) : resolveCodexHomeDir({ env });
 }
 
 function windowsServicePathAbsolute(raw: string): string {
@@ -109,7 +109,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
     `  <env name="${BUN_RUNTIME_PATH_ENV}" value="${xmlEscape(entry.bun)}"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
     `  <env name="PATH" value="${xmlEscape(filterTransientServicePath(env.PATH ?? "", ";", "win32"))}"/>`,
-    env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
+    `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute(env))}"/>`,
     env.CODEX_SQLITE_HOME?.trim() ? `  <env name="CODEX_SQLITE_HOME" value="${xmlEscape(windowsServicePathAbsolute(env.CODEX_SQLITE_HOME.trim()))}"/>` : null,
     `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
     aclTimeout ? `  <env name="OPENCODEX_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,
@@ -184,9 +184,11 @@ const SERVICE_COMMAND_TIMEOUT_MS = 15_000;
 /** `stopwait` outlasts the SCM `<stoptimeout>` (20s in the generated service definition) plus overhead; still bounded so a wedged SCM cannot hang the CLI. */
 const SERVICE_STOPWAIT_TIMEOUT_MS = 40_000;
 
-function runWinsw(args: string[]): string {
+function runWinsw(args: string[], beforeMutation?: () => void): string {
   const timeoutMs = args[0] === "stopwait" ? SERVICE_STOPWAIT_TIMEOUT_MS : SERVICE_COMMAND_TIMEOUT_MS;
-  return execFileSync(winswExePath(), args, {
+  const file = winswExePath();
+  beforeMutation?.();
+  return execFileSync(file, args, {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: timeoutMs,
   }).trim();
 }
@@ -352,8 +354,10 @@ export function startWinswService(): void { runWinsw(["start"]); }
  * catch cannot decide whether it is safe for lifecycle callers to continue. Re-read
  * SCM state and only accept the two states that cannot still own the proxy listener.
  */
-export function stopWinswService(): void {
-  try { runWinsw(["stopwait"]); } catch { /* classify by verified state below */ }
+export function stopWinswService(beforeMutation?: () => void): void {
+  let refused = false;
+  const gate = beforeMutation && (() => { try { beforeMutation(); } catch (error) { refused = true; throw error; } });
+  try { runWinsw(["stopwait"], gate); } catch (error) { if (refused) throw error; /* classify by verified state below */ }
   const status = statusWinswRaw();
   if (status === "stopped" || status === "nonexistent") return;
   if (status === "unknown") {

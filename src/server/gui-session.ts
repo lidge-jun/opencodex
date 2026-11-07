@@ -12,10 +12,13 @@ import {
 
 export type GuiSessionIssuance =
   | "loopback"
+  | "remembered-admin"
   | "tailscale-identity"
   | "pairing";
 
 export interface GuiSessionRecord {
+  persistentDigest?: string;
+  persistentExpiresAt?: number;
   serverOrigin: string;
   browserOrigin: string;
   csrfToken: string;
@@ -129,7 +132,7 @@ function evictOldestSession(state: GuiSessionState): void {
   }
 }
 
-function mintSession(
+export function mintSession(
   serverOrigin: string,
   browserOrigin: string,
   issuance: GuiSessionIssuance,
@@ -458,6 +461,6 @@ export function authorizeGuiSessionRequest(
     const csrf = req.headers.get("x-opencodex-csrf-token")?.trim();
     if (!csrf || !equalSecret(csrf, session.csrfToken)) return { ok: false, reason: "csrf" };
   }
-  if (session.issuance !== "loopback" && !session.localPairing) session.expiresAt = now + REMOTE_GUI_SESSION_TTL_MS;
+  if (session.issuance !== "loopback" && !session.localPairing) session.expiresAt = Math.min(now + REMOTE_GUI_SESSION_TTL_MS, session.persistentExpiresAt ?? Infinity);
   return { ok: true, principal: "gui-session", session };
 }

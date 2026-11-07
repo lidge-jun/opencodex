@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { probeSpawnSync } from "./mutation-guard.mjs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,7 +194,7 @@ export function resolveNpmCachePath(options = {}) {
   // able to choose the cache that install is pinned to.
   const invocation = (options.invocationFn ?? npmInvocation)(["config", "get", "cache", "--global"], platform, env);
   if (!invocation) return { ok: false, reason: "npm_unavailable" };
-  const npm = (options.spawnSyncFn ?? spawnSync)(invocation.file, invocation.args, {
+  const npm = (options.spawnSyncFn ?? probeSpawnSync)(invocation.file, invocation.args, {
     encoding: "utf8",
     timeout: options.timeoutMs ?? NPM_CONFIG_TIMEOUT_MS,
     windowsHide: true,
@@ -273,8 +273,8 @@ function runPreflightWorker(options) {
   const workerArgs = [fileURLToPath(import.meta.url), WORKER_ARG];
   if ((options.platform ?? process.platform) === "win32") workerArgs.push(ROOT_ONLY_ARG);
   if (options.cachePath !== undefined) workerArgs.push(options.cachePath);
-  const spawn = options.spawnSyncFn ?? spawnSync;
-  const result = spawn(
+  const probeSpawn = options.spawnSyncFn ?? probeSpawnSync;
+  const result = probeSpawn(
     options.execPath ?? process.execPath,
     workerArgs,
     {

@@ -3,6 +3,7 @@ import { consultAdvisor, ADVISOR_INTERNAL_HEADER, advisorDestinationOrigin } fro
 import { internalCallCapability } from "../../src/lib/local-internal-call-capability";
 import type { OcxParsedRequest } from "../../src/types";
 import { parseRequest } from "../../src/responses/parser";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope } from "../../src/server/advisor-admission-scope";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -37,7 +38,8 @@ describe("consultAdvisor", () => {
       }), { headers: { "Content-Type": "application/json" } });
     }) as typeof fetch;
 
-    const result = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test");
+    const scope = { providers: ["deepseek"], models: ["deepseek/deepseek-v4"] };
+    const result = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test", scope);
 
     expect(result.ok).toBe(true);
     expect(result.advice).toContain("token refresh window");
@@ -47,6 +49,7 @@ describe("consultAdvisor", () => {
     // The fence header carries this process's server-owned capability, never a literal.
     expect(seenHeaders[ADVISOR_INTERNAL_HEADER]).toBe(internalCallCapability());
     expect(seenHeaders[ADVISOR_INTERNAL_HEADER]).not.toBe("1");
+    expect(decodeAdvisorAdmissionScope(seenHeaders[ADVISOR_ADMISSION_SCOPE_HEADER] ?? null)).toEqual(scope);
     expect(seenBody.model).toBe("gpt-6-astra");
     expect(seenBody.stream).toBe(false);
     expect(seenBody.reasoning_effort).toBe("max");
@@ -89,5 +92,19 @@ describe("consultAdvisor", () => {
     const empty = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test");
     expect(empty.ok).toBe(false);
     expect(empty.error).toContain("no text");
+  });
+
+  test("an over-bound admission scope fails before any fetch, with nothing sent", async () => {
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    const oversized = { providers: ["deepseek"], models: ["deepseek/" + "m".repeat(20_000)] };
+    const result = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test", oversized);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("exceeds encoded bound");
+    // The undeliverable header was caught before dispatch: no consult was ever sent.
+    expect(fetchCount).toBe(0);
   });
 });

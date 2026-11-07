@@ -12,6 +12,8 @@ import { createClineIO } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
 import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, droidDefaultsFromOwnedRows, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { qoderLegacyCatalogCollision } from "../clients/config-export/qoder";
+import { resolveModelNames, type ExportModelNames } from "../clients/config-export/model-names";
+import { namedExportContext } from "../clients/config-export/alias-selectors";
 import type { ConfigFormat } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -496,6 +498,7 @@ export function classifyIntegration(input: {
 }
 
 export interface IntegrationStateInput {
+  modelNames?: ExportModelNames;
   clientId: IntegrationClientId;
   models: readonly ExportModel[];
   config: OcxConfig;
@@ -547,6 +550,9 @@ export function buildIntegrationContribution(
   // between two document roots (Command Code) must see the bytes on disk, and
   // routing it through this one builder keeps classify, plan and write agreeing.
   const context = exportContextOf({ ...input, document: parsed });
+  const mode = resolveModelNames(input.clientId, input.modelNames,
+    record?.configPath === effective.configPath ? record.modelNames : undefined);
+  context.models = namedExportContext(input.clientId, { ...context, modelNames: mode }).models;
   if (input.clientId === "droid" && input.droidReasoningDefaults === undefined && record?.configPath === effective.configPath) {
     const inherited = recordedDroidContributionMatches(parsed, record)
       ? droidDefaultsFromOwnedRows(context, parsed, record.fragmentPaths)

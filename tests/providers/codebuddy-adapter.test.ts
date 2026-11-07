@@ -680,9 +680,14 @@ describe("codebuddy runTurn streams a headless turn", () => {
 
   test("an in-flight abort kills the child process gracefully with SIGTERM", async () => {
     const controller = new AbortController();
+    let fed = false;
     const stdoutStream = new Readable({
       read() {
-        // Feed one partial delta then abort before result
+        // Feed one partial delta then abort before result. Feed it once: a read() that pushes on
+        // every call floods the stream and the timer queue until the abort lands, which took
+        // seconds under a full single-job suite and timed this case out.
+        if (fed) return;
+        fed = true;
         this.push(enc.encode('{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"start"}}}\n'));
         setTimeout(() => controller.abort(), 5);
       },

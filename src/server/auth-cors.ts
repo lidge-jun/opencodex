@@ -48,11 +48,13 @@ import { vercelGatewayRoutingConfigError } from "../providers/vercel-gateway-rou
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 import { authorizationCredential } from "../lib/authorization-scheme";
+import { noteTurnStateCaller } from "./turn-state-handles";
 
 let _corsOrigin = "http://localhost:10100";
 // Listener identity is process-local. Never infer this trust from forwarded headers: the
 // request handler marks a Request only after resolving the actual Bun Server instance.
 const trustedHubManagementRequests = new WeakSet<Request>();
+export function isTrustedHubManagementRequest(req: Request): boolean { return trustedHubManagementRequests.has(req); }
 
 export function markTrustedHubManagementRequest(req: Request): void {
   trustedHubManagementRequests.add(req);
@@ -432,10 +434,11 @@ function mintContextPrincipal(kind: string, keyId: string, credential: string): 
     .digest("hex");
 }
 
-export type DataPlaneAdmission =
+export type DataPlaneAdmission = (
   | { kind: "configured"; keyId: string; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
   | { kind: "environment"; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
-  | { kind: "loopback"; source: "loopback" };
+  | { kind: "loopback"; source: "loopback" }
+) & { readonly callerPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy };
 
 /**
  * Which admission secret `token` is, or null when it is none of them.
@@ -513,6 +516,28 @@ export function resolveContextPrincipal(req: Request, config: OcxConfig, admissi
   return undefined;
 }
 
+/** Stable structural replay identity. This does not replace process-local opaque-state ownership. */
+export function resolveDurableReplayPrincipal(
+  req: Request,
+  config: Pick<OcxConfig, "apiKeys">,
+  admission: DataPlaneAdmission | undefined,
+  signingKey: Uint8Array,
+): string | undefined {
+  if (!admission || signingKey.length !== 32) return undefined;
+  // The managed client sends this dedicated local credential; a thread id, User-Agent,
+  // loopback address or upstream bearer never establishes structural replay ownership.
+  const token = req.headers.get("x-opencodex-api-key")?.trim();
+  if (!token) return undefined;
+  const resolved = resolveDataPlaneAdmissionSecret(token, config, "dedicated");
+  if (!resolved) return undefined;
+  if (admission.kind !== "loopback" && (admission.kind !== resolved.kind
+    || (admission.kind === "configured" && (resolved.kind !== "configured" || admission.keyId !== resolved.keyId)))) return undefined;
+  return createHmac("sha256", signingKey)
+    .update("opencodex.structural-replay-principal.v1\0")
+    .update(JSON.stringify([resolved.kind, resolved.kind === "configured" ? resolved.keyId : "", token]))
+    .digest("hex");
+}
+
 /** Whether `token` is a data-plane admission secret. */
 export function isDataPlaneAdmissionSecret(token: string, config: OcxConfig): boolean {
   return resolveDataPlaneAdmissionSecret(token, config) !== null;
@@ -525,11 +550,15 @@ export function isDataPlaneAdmissionSecret(token: string, config: OcxConfig): bo
  * configured entry to name, and folding them into the id as sentinel strings
  * would collide with a hand-edited entry that happens to be called `loopback` —
  * ids are only validated as non-empty strings.
+ *
+ * Every admitted data-plane path builds its log context here, so this is also where the request's
+ * caller is recorded for turn-state handle binding (src/server/turn-state-handles.ts).
  */
 export function admissionFields(admission: DataPlaneAdmission): {
   admissionKind: DataPlaneAdmission["kind"];
   apiKeyId?: string;
 } {
+  noteTurnStateCaller(admission);
   return admission.kind === "configured"
     ? { admissionKind: "configured", apiKeyId: admission.keyId }
     : { admissionKind: admission.kind };
@@ -1065,6 +1094,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   annotateEmptyToolOutputs: "editor",
   supportsServiceTier: "editor",
   modelSupportsServiceTier: "editor",
+  promoteAdditionalTools: "editor",
   preserveResponsesReasoningContent: "editor",
   preserveResponsesInputItemIds: "editor",
   preserveResponsesMessageMetadata: "editor",
@@ -1170,6 +1200,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   terminalContinuationGuard: "editor",
   openaiChatEofTolerance: "editor",
   foldDeveloperRoleToSystem: "editor",
+  singleLeadingSystemMessage: "editor",
   promptCacheKey: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",

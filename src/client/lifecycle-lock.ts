@@ -42,7 +42,7 @@ function preparePath(lockPath: string): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertPath(directory, true);
   if (process.platform !== "win32") chmodSync(directory, 0o700);
-  hardenSecretDir(directory, { required: true });
+  hardenSecretDir(directory, { required: true, verifyExistingRuntimeDirectory: true });
   // Create privately before SQLite opens it; refuse an existing symlink or hardlink
   // before chmod/ACL operations or the database constructor can follow it.
   try { closeSync(openSync(lockPath, "wx", 0o600)); }

@@ -13,6 +13,7 @@
  *   and NO argument; `req.end(Buffer.alloc(0))` triggers `NGHTTP2_FRAME_SIZE_ERROR` on Bun, and a
  *   5-byte gRPC/Connect frame makes the server mis-parse it ("illegal tag: field no 0").
  */
+import { createHash } from "node:crypto";
 import http2 from "node:http2";
 import { cursorH2Pool } from "./h2-pool";
 import { fromBinary } from "@bufbuild/protobuf";
@@ -27,7 +28,7 @@ import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-li
 import { GetUsableModelsResponseSchema } from "./gen/agent_pb";
 
 const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
-const CURSOR_DISCOVERY_CLIENT_VERSION = "cli-2026.02.13-41ac335";
+const CURSOR_DISCOVERY_CLIENT_VERSION = "cli-2026.07.08-0c04a8a";
 const CURSOR_MODEL_DISCOVERY_MAX_BYTES = 4 * 1024 * 1024;
 type CursorUsableModelsFetcher = (opts: CursorUsableModelsOptions) => Promise<CursorUsableModelsResult>;
 let cursorUsableModelsFetcherForTests: CursorUsableModelsFetcher | null = null;
@@ -226,11 +227,12 @@ async function fetchCursorUsableModelsHttp2Once(opts: CursorUsableModelsOptions)
 
    let req: http2.ClientHttp2Stream;
    try {
+     const credentialScope = createHash("sha256").update(opts.apiKey).digest("hex").slice(0, 16);
       req = cursorH2Pool.request(baseUrl, {
        ":method": "POST",
        ":path": CURSOR_GET_USABLE_MODELS_PATH,
        ...cursorDiscoveryHeaders(opts),
-     });
+    }, credentialScope);
    } catch {
      return close({ ok: false, error: "transport", detail: "HTTP/2 request setup failed" });
    }

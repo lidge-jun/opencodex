@@ -1027,4 +1027,72 @@ describe("reclaimListenPort", () => {
     })).resolves.toBe(true);
     expect(killed).toEqual([4242, 4242]);
   });
+
+  test("denied authority during the availability await blocks kill and TCP-row drop", async () => {
+    let authorized = true;
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimListenPort(10100, "127.0.0.1", {
+      timeoutMs: 80,
+      intervalMs: 20,
+      scanIntervalMs: 20,
+      dropTcpRows: true,
+      killOcxHolders: true,
+      onlyKillPids: [4242],
+      // The gate flips while isAvailableFn is in flight — the interleaving a
+      // service-home change has against the update job's real reclaimer.
+      isAvailableFn: async () => {
+        authorized = false;
+        return false;
+      },
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => true,
+      verifyOcxFn: pid => pid,
+      killFn: pid => {
+        killed.push(pid);
+      },
+      dropTcpFn: port => {
+        dropped.push(port);
+        return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
+      },
+      mayMutateFn: () => authorized,
+      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  test("a mid-wait authority denial vetoes the TCP-row drop after an authorized kill", async () => {
+    let authorized = true;
+    let alive = true;
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimListenPort(10100, "127.0.0.1", {
+      timeoutMs: 80,
+      intervalMs: 20,
+      scanIntervalMs: 20,
+      dropTcpRows: true,
+      killOcxHolders: true,
+      onlyKillPids: [4242],
+      isAvailableFn: async () => false,
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => alive,
+      verifyOcxFn: pid => pid,
+      // Authority flips while the authorized kill is in flight — the very next
+      // destructive step (the TCP-row drop) must already be denied.
+      killFn: pid => {
+        killed.push(pid);
+        alive = false;
+        authorized = false;
+      },
+      dropTcpFn: port => {
+        dropped.push(port);
+        return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
+      },
+      mayMutateFn: () => authorized,
+      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([4242]);
+    expect(dropped).toEqual([]);
+  });
 });

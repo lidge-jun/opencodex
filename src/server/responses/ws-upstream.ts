@@ -21,6 +21,7 @@ import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, CODEX_WS_FRAME_HEADERS, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
 import { codexWsExchange } from "./codex-ws-exchange";
+import { TURN_STATE_BINDING_INIT } from "../turn-state-handles";
 import { CodexWsSession } from "./codex-ws-session";
 import { codexWsPool, codexWsReuseIdentity } from "./codex-ws-pool";
 import { codexWsCreateFrameExceedsLimit, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
@@ -252,5 +253,13 @@ export async function codexWsUpstreamFetch(
     beforeContinuation, onPhysicalDispatch,
     preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
+    metadataContext: codexWsMetadataContext(init, prepared.model),
   });
+}
+
+/** The binding the provider fetch attached to this send, and the requested model, for relayed metadata. */
+function codexWsMetadataContext(init: RequestInit, model: string | undefined): { turnStateBinding?: string; knownModels: string[]; provider: string } {
+  const binding = (init as Record<symbol, unknown>)[TURN_STATE_BINDING_INIT];
+  // This upstream is the ChatGPT Codex backend, so its bundled model catalog also counts as known.
+  return { ...(typeof binding === "string" ? { turnStateBinding: binding } : {}), knownModels: model ? [model] : [], provider: "openai-codex" };
 }

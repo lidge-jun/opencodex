@@ -1,20 +1,24 @@
-import { spawn, spawnSync } from "node:child_process";
+import { guardedRun, guardedSpawn, guardedSpawnSync } from "./mutation-guard.mjs";
+import { probeSpawn, probeSpawnSync } from "./mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 import { manualUpdateFailureGuidance } from "./update-failure-guidance.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { proxyIdentityAt } from "../server/proxy-liveness";
 import { probeProxyLiveness } from "./proxy-liveness-probe.mjs";
+import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { getConfigDir, loadConfig } from "../config";
+import { getConfigDir, getConfigPath, loadConfig } from "../config";
+import { runConfigPreflight } from "./config-preflight";
 import { readPid, readRuntimePort, getRuntimePortPath } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import type { ServiceOwnership } from "../service/state";
 import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from "./runtime-ownership.mjs";
 import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
+import { createUpdateServiceHomePolicy, parseUpdateWorkerHome, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "./install-detection.mjs";
@@ -41,6 +45,11 @@ import { withoutSiblingMarker } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";
+import { runWindowsInstallerSync } from "./npm-install.mjs";
+import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
+import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 import {
   freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
@@ -106,17 +115,18 @@ function runPnpmCandidate(
   commandPath: string,
   args: readonly string[],
   capture = false,
-  spawn: typeof spawnSync = spawnSync,
+  probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  probeEnv: NodeJS.ProcessEnv = process.env,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
   const invocation = pnpmInvocationForPath(commandPath, args);
   if (!invocation) return { status: 1 };
-  return spawn(invocation.file, invocation.args, {
+  return probeSpawn(invocation.file, invocation.args, {
     stdio: capture ? "pipe" : "ignore",
     encoding: "utf8",
     timeout: 20_000,
     windowsHide: true,
     cwd: PNPM_READ_CWD,
-    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)),
+    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)),
     ...invocation.options,
   });
 }
@@ -124,15 +134,15 @@ function runPnpmCandidate(
 /** Resolve the exact pnpm executable/group/bin that own this package. */
 export function resolveCurrentPnpmGlobalOwner(
   invoked = process.argv[1],
-  deps: { commandPaths?: readonly string[]; spawn?: typeof spawnSync } = {},
+  deps: { commandPaths?: readonly string[]; spawn?: typeof probeSpawnSync; env?: NodeJS.ProcessEnv } = {},
 ): PnpmGlobalOwnerResult {
-  const spawn = deps.spawn ?? spawnSync;
+  const probeSpawn = deps.spawn ?? probeSpawnSync;
   return resolvePnpmGlobalOwner({
     packageName: PKG,
     packagePath: packageRoot(),
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
-    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, spawn),
+    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env),
   });
 }
 
@@ -155,11 +165,32 @@ export function runOwnedPnpm(
   args: readonly string[],
   capture: boolean,
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
-  spawn: typeof spawnSync = spawnSync,
-): { status: number | null; stdout?: string | null; stderr?: string | null } {
+  probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
+  session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
+  markerPath = join(getConfigDir(), "update-orchestrated.json"),
+): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {
   const target = ownerPnpmTarget(owner, args);
   if (!target) return { status: 1 };
-  return withPnpmCommandCwd(args, cwd => spawn(target.bin, target.args, {
+  const mutating = ["add", "install", "update", "remove", "uninstall"].includes(args[0] ?? "");
+  try { return withPnpmCommandCwd(args, cwd => {
+    if (mutating && !capture && session && authorizeMutation("package")) {
+      const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env));
+      if (process.platform === "win32") {
+        session.noteUntrackedInstaller();
+        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation });
+        if (result.processTreeExited && Number.isInteger(result.status)) session.confirmInstallerExit();
+        else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
+        return result;
+      }
+      const result = runPosixInstallerSync({ file: target.bin, args: target.args, markerPath, cwd, env, authorizeMutation });
+      if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false || result.processTreeExited === false) {
+        session.retainInstallerFence();
+        return { ...result, processTreeExited: false };
+      }
+      return { ...result, processTreeExited: true };
+    }
+    const result = authorizeMutation("package") ? guardedSpawnSync(authorizeMutation, "package", target.bin, target.args, {
     stdio,
     encoding: "utf8",
     timeout: 180_000,
@@ -169,7 +200,10 @@ export function runOwnedPnpm(
     cwd,
     env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env)),
     ...target.options,
-  }));
+    }, probeSpawn) : { status: 1, signal: null };
+    if (mutating && (!Number.isInteger(result.status) || result.signal)) session?.retainInstallerFence();
+    return result;
+  }); } catch (error) { if (mutating) session?.retainInstallerFence(); throw error; }
 }
 
 /** Re-read the owning group's active package and return its verified launcher. */
@@ -218,9 +252,9 @@ function npmSpawnTarget(args: readonly string[]): SpawnTarget | null {
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
 }
 
-function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner): SpawnTarget | null {
+function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner, env?: NodeJS.ProcessEnv): SpawnTarget | null {
   if (owner) {
-    const invocation = pnpmOwnerInvocation(owner, args);
+    const invocation = pnpmOwnerInvocation(owner, args, process.platform, env);
     if (!invocation) return null;
     return {
       bin: invocation.file,
@@ -238,19 +272,20 @@ export function registrySpawnTarget(
   installer: Installer,
   args: readonly string[],
   owner?: PnpmGlobalOwner,
+  env?: NodeJS.ProcessEnv,
 ): SpawnTarget | null {
   if (installer === "standalone") return null;
   // A pnpm command without an owner would silently fall back to the first PATH
   // candidate. That is unsafe when multiple PNPM_HOME installations expose the
   // same version, so registry queries use the same hard binding as mutation.
   return installer === "pnpm"
-    ? owner ? pnpmSpawnTarget(args, owner) : null
+    ? owner ? pnpmSpawnTarget(args, owner, env) : null
     : npmSpawnTarget(args);
 }
 
-function selectedPnpmOwner(owner?: PnpmGlobalOwner): PnpmGlobalOwner | undefined {
+function selectedPnpmOwner(owner?: PnpmGlobalOwner, probeSpawn?: typeof probeSpawnSync, env?: NodeJS.ProcessEnv): PnpmGlobalOwner | undefined {
   if (owner) return owner;
-  const result = resolveCurrentPnpmGlobalOwner();
+  const result = resolveCurrentPnpmGlobalOwner(undefined, { spawn: probeSpawn, env });
   return result.ok ? result.owner : undefined;
 }
 
@@ -295,20 +330,21 @@ export function latestVersion(
   tag: string,
   installer: Installer = detectInstall(),
   owner?: PnpmGlobalOwner,
-  spawn: typeof spawnSync = spawnSync,
+  probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  probeEnv?: NodeJS.ProcessEnv,
 ): string | null {
-  const resolvedOwner = installer === "pnpm" ? selectedPnpmOwner(owner) : undefined;
+  const resolvedOwner = installer === "pnpm" ? selectedPnpmOwner(owner, probeSpawn, probeEnv) : undefined;
   if (installer === "pnpm" && !resolvedOwner) return null;
-  const manager = registrySpawnTarget(installer, ["view", `${PKG}@${tag}`, "version"], resolvedOwner);
+  const manager = registrySpawnTarget(installer, ["view", `${PKG}@${tag}`, "version"], resolvedOwner, probeEnv);
   if (!manager) return null;
-  const r = spawn(manager.bin, manager.args, {
+  const r = probeSpawn(manager.bin, manager.args, {
     encoding: "utf8",
     timeout: 12000,
     windowsHide: true,
     cwd: installer === "pnpm" ? PNPM_READ_CWD : undefined,
     env: installer === "pnpm"
-      ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? process.env))
-      : unprivilegedOwnershipMutationEnvironment(manager.env ?? process.env),
+      ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env))
+      : unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env),
     ...manager.options,
   });
   return r.status === 0 && typeof r.stdout === "string" ? (r.stdout.trim() || null) : null;
@@ -349,7 +385,7 @@ export function updateCommandStr(installer: Installer, tag: Channel, resolvedVer
  */
 export function checkUpdatePackageIntegrity(
   version: string | null,
-  spawn: typeof spawnSync = spawnSync,
+  probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   installer: Installer = detectInstall(),
   owner?: PnpmGlobalOwner,
 ): { ok: true; integrity: string } | { ok: false; reason: string } | { ok: "skipped"; reason: string } {
@@ -362,7 +398,7 @@ export function checkUpdatePackageIntegrity(
   const result = checkRegistryPackageIntegrity(PKG, version, args => {
     const target = registrySpawnTarget(installer, args, resolvedOwner);
     if (!target) return { status: 1 };
-    return spawn(target.bin, target.args, {
+    return probeSpawn(target.bin, target.args, {
       encoding: "utf8",
       timeout: 12000,
       windowsHide: true,
@@ -414,9 +450,35 @@ async function resolvedRuntimeOwnership(): Promise<RuntimeOwnershipObservation> 
  * are updated in the Node bin launcher before Bun starts, so Windows does not replace the running
  * Bun binary.
  */
-export async function runUpdate(): Promise<void> {
+export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: true }>): Promise<void> {
+  let session: ReturnType<typeof createOrchestratedChildSession> | undefined;
+  if (child) {
+    try {
+      const expect = decodeOrchestratedExpect(child.expect);
+      session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter,
+        verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) });
+      if (!session.start().ok) { process.exitCode = 10; return; }
+      protectOrchestratedWorkerSignals();
+    } catch (error) {
+      console.error(`Orchestrated update preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    session = createLegacyUpdateSession({ home: getConfigDir() });
+    const started = session.start();
+    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exitCode = 1; return; }
+    process.once("exit", () => session?.finishPreflight());
+  }
+  try { await runUpdateWithSession(child, session); }
+  finally { session?.finishPreflight(); }
+}
+
+async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: true }> | undefined,
+  session: ReturnType<typeof createOrchestratedChildSession> | undefined): Promise<void> {
   const ownership = detectInstallOwnership();
   const installer = ownership.installer;
+  if (child && installer !== "bun") { process.exitCode = 1; return; }
   const current = currentVersion();
   const tag = updateTag(current);
   console.log(`opencodex v${current} (installed via ${installer}, tag ${tag})`);
@@ -451,17 +513,19 @@ export async function runUpdate(): Promise<void> {
     process.exit(1);
   }
   const owner = ownerResult?.ok ? ownerResult.owner : undefined;
-  const latest = latestVersion(tag, installer, owner);
+  const latest = child?.version ?? latestVersion(tag, installer, owner);
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
+    if (child) process.exitCode = 1;
     return;
   }
 
   // Pre-flight integrity metadata check — runs BEFORE the proxy is stopped so an
   // anomalous registry entry aborts without unloading the running service.
-  const integrity = checkUpdatePackageIntegrity(latest, spawnSync, installer, owner);
+  const integrity = checkUpdatePackageIntegrity(latest, probeSpawnSync, installer, owner);
   if (integrity.ok === false) {
     console.error(`⚠️  ${integrity.reason} — aborting the update before stopping the proxy.`);
+    if (child) { process.exitCode = 1; return; }
     process.exit(1);
   }
   if (integrity.ok === "skipped") {
@@ -484,17 +548,39 @@ export async function runUpdate(): Promise<void> {
     : updateSpawnTarget(bin, cmdArgs);
   if (!target) {
     console.error(`⚠️  Could not resolve ${bin} from a trusted absolute PATH entry; aborting before stopping the proxy.`);
+    if (child) { process.exitCode = 1; return; }
     process.exit(1);
   }
 
   const { serviceStatePaths } = await import("../service");
-  const updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
+  let mutationStarted = false, completed = false, installerUncertain = false, installedRoot: string | undefined;
+  let updateExitCode: number | undefined;
+  try {
+  updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
+  // Ownership inspection imports the service CLI, which reaches this update entry again.
+  // Load it only after entering the lease; the policy itself stays a dependency-free import.
+  const { inspectUpdateServiceHome } = await import("./service-home-authority");
+  const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
+  if (!homePolicy.authorizeMutation("package")) return 1;
+  const configPath = getConfigPath(), configPreflight = runConfigPreflight(configPath);
+  if (!configPreflight.ok) {
+    console.error(`⚠️  Configuration preflight failed for ${configPath}; aborting update before stopping services.`);
+    if (configPreflight.error) console.error(`    ${configPreflight.error}`);
+    if (configPreflight.reason === "read_error") {
+      console.error("    Inspect the config path, permissions, and any symlink target; correct them or restore a readable regular config from a trusted backup, then retry.");
+      console.error("    'ocx config validate' may report defaults if a symlink target is missing; it does not change the file.");
+    } else {
+      console.error("    Run 'ocx config validate' to diagnose the configuration; it does not change the file. Back up and correct the file, then retry.");
+    }
+    return 1;
+  }
+
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
   try {
     const { isServiceInstalled } = await import("../service");
-    serviceWasInstalled = isServiceInstalled();
+    serviceWasInstalled = homePolicy.serviceAllowed && isServiceInstalled();
   } catch { /* best-effort */ }
   // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
   // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
@@ -511,18 +597,27 @@ export async function runUpdate(): Promise<void> {
     console.error("⚠️  Update stopped before tray handoff, runtime stop, or package replacement because runtime authority does not permit it.");
     return 1;
   }
+  if (session) {
+    const admission = await session.enterMutation();
+    if (!admission.ok) return 10;
+    mutationStarted = true;
+  }
   let trayWasInstalled = false;
   let trayWasRunning = false;
-  if (process.platform === "win32") {
+  if (!homePolicy.packageOnly && process.platform === "win32") {
     try {
-      const { getWindowsTrayStatus, startWindowsTray, stopWindowsTray } = await import("../tray/windows");
+      const { getWindowsTrayStatus, guardedStartWindowsTray, guardedStopWindowsTray } = await import("./guarded-tray-ops");
       const tray = getWindowsTrayStatus();
+      if (!homePolicy.authorizeMutation("tray")) return 1;
+      let trayStopAttempted = false;
       const trayPlan = handoffWindowsTrayForUpdate(tray, {
         stop: () => {
-          const stopped = stopWindowsTray();
+          if (!homePolicy.authorizeMutation("tray")) throw new Error("Automatic update tray handoff refused; check 'ocx service status'.");
+          trayStopAttempted = true;
+          const stopped = guardedStopWindowsTray(homePolicy.authorizeMutation);
           return { exitStatus: 0, running: stopped.running };
         },
-        start: () => startWindowsTray(),
+        start: () => { if (trayStopAttempted && homePolicy.authorizeMutation("own-tray")) guardedStartWindowsTray(homePolicy.authorizeMutation); },
       });
       trayWasInstalled = trayPlan.refreshAfterReplacement;
       trayWasRunning = trayPlan.restoreOnFailure;
@@ -565,22 +660,31 @@ export async function runUpdate(): Promise<void> {
       && before?.consentGeneration === after?.consentGeneration;
   };
   /** `"vetoed"`: another owner holds the runtime, so not starting is the correct outcome. */
-  const startProxyDirectly = async (): Promise<boolean | "vetoed"> => {
+  const startProxyDirectly = async (): Promise<boolean | "vetoed" | "refused"> => {
+    // Every caller, including error recovery, owns the lock and fresh home proof here.
+    try { mutation.reacquire(); } catch {
+      console.warn("⚠️  Recovery could not acquire runtime ownership; run 'ocx service repair' or 'ocx start' manually after the other operation finishes.");
+      return false;
+    }
+    if (!homePolicy.authorizeMutation("runtime")) return "refused";
     const ownership = await resolvedRuntimeOwnership();
     const supervision = observeSupervision();
     const plan = planUpdateRuntimeHandling({ ...ownership, serviceInstalled: false, supervision });
-    if (!plan.mayStopRuntime) {
+    if (!homePolicy.authorizeMutation("runtime")) return "refused";
+    if (!sameOwner(ownership) || !plan.mayStopRuntime) {
       console.warn(supervision
         ? "OpenCodex Desktop supervises the proxy; no CLI runtime was restored."
         : plan.notice);
-      return "vetoed";
+      return homePolicy.authorizeMutation("publish") ? "vetoed" : "refused";
     }
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) return false;
     // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
     const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));
     delete env.OCX_SERVICE;
-    const child = spawn(process.execPath, [postUpdateLauncher, "start", "--port", String(capturedListen.port)], {
-      detached: true, stdio: "ignore", windowsHide: true, env: withProcessRuntimeProvenance(env),
+    const runtimeEnv = withProcessRuntimeProvenance(env);
+    if (!homePolicy.authorizeMutation("runtime")) return "refused";
+    const child = guardedSpawn(homePolicy.authorizeMutation, "runtime", process.execPath, [postUpdateLauncher, "start", "--port", String(capturedListen.port)], {
+      detached: true, stdio: "ignore", windowsHide: true, env: runtimeEnv,
     });
     let failed = false;
     child.once("error", () => { failed = true; });
@@ -590,7 +694,7 @@ export async function runUpdate(): Promise<void> {
       const current = readUpdateRuntimeTarget(getRuntimePortPath(), capturedListen.hostname);
       if (current.kind === "target" && current.target.port === capturedListen.port
         && await proxyIdentityAt(current.target.port, { hostname: current.target.hostname, expectedPid: current.target.pid },
-          { timeoutMs: 1500, deadlineAt: deadline, attempts: 1 })) return true;
+          { timeoutMs: 1500, deadlineAt: deadline, attempts: 1 })) return homePolicy.authorizeMutation("publish") ? true : "refused";
       await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
     }
     console.warn("⚠️  Recovery did not report a healthy proxy before its deadline; run 'ocx service repair' or 'ocx start'.");
@@ -600,12 +704,20 @@ export async function runUpdate(): Promise<void> {
   // and count it only when the serving proxy is that job. Runs unleased: the manager's child
   // cannot join this lease (#5760). `"unsettled"` means the manager may still finish the restart,
   // so no competing proxy may be started.
-  const restartThroughServiceManager = async (): Promise<"supervised" | "failed" | "unsettled"> => {
+  const restartThroughServiceManager = async (): Promise<"supervised" | "failed" | "unsettled" | "refused" | "vetoed"> => {
     if (!hasRestartableServiceManager()) return "failed";
+    mutation.release();
+    const owner = await resolvedRuntimeOwnership();
+    if (!homePolicy.authorizeMutation("runtime")) return "refused";
+    if (!homePolicy.serviceAllowed) return "failed";
+    if (!sameOwner(owner) || !planUpdateRuntimeHandling({ ...owner, serviceInstalled: true,
+      supervision: observeSupervision() }).mayRestoreService) return homePolicy.authorizeMutation("publish") ? "vetoed" : "refused";
     console.log("🔁 Asking the service manager to restart the background service...");
     const before = readUpdateRuntimeTarget(getRuntimePortPath(), capturedListen.hostname);
     const staleRecordPid = before.kind === "target" ? before.target.pid : null;
-    const restarted = restartServiceManagerJob();
+    if (!homePolicy.authorizeMutation("service")) return homePolicy.authorizeMutation("runtime") ? "failed" : "refused";
+    const restarted = restartServiceManagerJob({}, homePolicy.authorizeMutation);
+    if (!restarted.ok && restarted.refused) return "refused";
     const unsettled = !restarted.ok && restarted.unsettled === true;
     let verdict: ReturnType<typeof supervisionVerdict> | { kind: "failed"; reason: string };
     if (!restarted.ok && !unsettled) {
@@ -624,7 +736,8 @@ export async function runUpdate(): Promise<void> {
       verdict = supervisionVerdict({ servingPid, managerPid: readServiceManagerPid(), parentPid: pid => readParentPid(pid) });
     }
     if (verdict.kind === "supervised") {
-      console.log(`✅ Proxy is healthy on port ${capturedListen.port} under the service manager (pid ${verdict.managerPid}).`);
+      if (!homePolicy.authorizeMutation("publish")) return "refused";
+      guardedRun(homePolicy.authorizeMutation, "publish", console.log, [`✅ Proxy is healthy on port ${capturedListen.port} under the service manager (pid ${verdict.managerPid}).`]);
       return "supervised";
     }
     if (unsettled) {
@@ -635,9 +748,9 @@ export async function runUpdate(): Promise<void> {
     return "failed";
   };
   /** Direct start as the last resort for a managed install: never reported as full recovery. */
-  const startUnsupervisedFallback = async (): Promise<"vetoed" | "started" | "failed"> => {
+  const startUnsupervisedFallback = async (): Promise<"vetoed" | "refused" | "started" | "failed"> => {
     const started = await startProxyDirectly();
-    if (started === "vetoed") return "vetoed";
+    if (started === "vetoed" || started === "refused") return started;
     if (started) console.warn(unsupervisedRuntimeWarning(capturedListen.port));
     return started ? "started" : "failed";
   };
@@ -652,12 +765,14 @@ export async function runUpdate(): Promise<void> {
         });
       };
       let recovery = await planRecovery();
+      if (!homePolicy.authorizeMutation("runtime")) return;
       if (recovery.action === "service") {
         // The service manager starts the proxy outside this process tree, so it
         // cannot join this lease, and holding it through the repair's health wait
         // keeps that proxy from starting (#5760). Release it, then decide again —
         // a claim could have landed while the repair ran unleased.
         mutation.release();
+        if (!homePolicy.authorizeMutation("runtime")) return;
         recovery = await planRecovery();
       }
       if (recovery.reason === "desktop-supervised") {
@@ -666,19 +781,27 @@ export async function runUpdate(): Promise<void> {
         console.warn(`⚠️  ${reason}; runtime recovery requires manual review (${recovery.reason}).`);
       } else if (recovery.action === "service") {
         const { serviceReinstallArgs, isServiceViable } = await import("../service");
+        if (!homePolicy.authorizeMutation("runtime")) return;
+        if (!homePolicy.serviceAllowed) { await startProxyDirectly(); return; }
         recovery = await planRecovery();
         if (recovery.action !== "service") {
           console.warn("Runtime authority changed before service recovery; no CLI runtime was restored.");
           return;
         }
-        const service = spawnSync(process.execPath, [postUpdateLauncher, ...serviceReinstallArgs()], {
+        if (!homePolicy.authorizeMutation("runtime")) return;
+        if (!homePolicy.serviceAllowed) { await startProxyDirectly(); return; }
+        if (!homePolicy.authorizeMutation("service")) { if (homePolicy.authorizeMutation("runtime")) await startProxyDirectly(); return; }
+        const service = guardedSpawnSync(homePolicy.authorizeMutation, "service", process.execPath, [postUpdateLauncher, ...serviceReinstallArgs()], {
           stdio: updateChildStdio(), windowsHide: true,
           env: mutation.controlEnvironment({ ...process.env, OCX_BAKE_PORT: String(capturedListen.port) }),
         });
+        if (!homePolicy.authorizeMutation("runtime")) return;
+        if (!homePolicy.serviceAllowed) { await startProxyDirectly(); return; }
         if (service.status !== 0 || !isServiceViable()) {
           // Ownership may have moved while the refresh ran unleased; only a recovery plan that
           // still names the service may restart the manager's job.
           if ((await planRecovery()).action === "service") {
+            if (!homePolicy.authorizeMutation("runtime")) return;
             const managed = await restartThroughServiceManager();
             if (managed !== "failed") return;
           }
@@ -716,7 +839,12 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
 
-  if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
+  if (homePolicy.packageOnly && pendingTeardownOutstanding()) {
+    console.error("Pending teardown requires manual recovery before package replacement; run 'ocx stop' from the owning installation.");
+    return 1;
+  }
+  if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
+    if (!homePolicy.authorizeMutation("runtime")) return 1;
     const preStopPlan = planUpdateRuntimeHandling({
       ...(await resolvedRuntimeOwnership()),
       serviceInstalled: serviceWasInstalled,
@@ -729,7 +857,13 @@ export async function runUpdate(): Promise<void> {
     stopAttempted = true;
     console.log("⏹  Stopping the running proxy before updating...");
     const stopStdio = updateChildStdio();
-    const stop = spawnSync(process.execPath, selfLaunchArgv(["stop"]), {
+    if (!homePolicy.authorizeMutation("runtime")) return 1;
+    if (serviceWasInstalled && !homePolicy.serviceAllowed) {
+      console.warn("Service authority changed before proxy stop; check 'ocx service status' before retrying the update.");
+      return 1;
+    }
+    if (!homePolicy.authorizeMutation(serviceWasInstalled ? "service" : "runtime")) return 1;
+    const stop = guardedSpawnSync(homePolicy.authorizeMutation, serviceWasInstalled ? "service" : "runtime", process.execPath, selfLaunchArgv(["stop"]), {
       env: mutation.controlEnvironment(),
       stdio: stopStdio,
       encoding: stopStdio === "pipe" ? "utf8" : undefined,
@@ -754,8 +888,8 @@ export async function runUpdate(): Promise<void> {
     if (!decision.proceed) {
       if (trayWasRunning) {
         try {
-          const { startWindowsTray } = await import("../tray/windows");
-          startWindowsTray();
+          const { guardedStartWindowsTray } = await import("./guarded-tray-ops");
+          if (homePolicy.authorizeMutation("own-tray")) guardedStartWindowsTray(homePolicy.authorizeMutation);
         } catch { /* preserve the proxy stop failure */ }
       }
       if (decision.reason === "teardown-outstanding") {
@@ -805,7 +939,7 @@ export async function runUpdate(): Promise<void> {
     supervision: observeSupervision(),
   });
   const replacementLiveness = currentPackageRuntimeLiveness();
-  if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+  if (!homePolicy.authorizeMutation("package") || replacementOwnership.subjectToken !== initialOwnership.subjectToken
     || !replacementPlan.mayReplacePackage
     || replacementLiveness !== "dead") {
     replacementRefusal = replacementPlan.notice
@@ -818,7 +952,9 @@ export async function runUpdate(): Promise<void> {
   // Every post-update action below receives the verified active launcher.
   if (installer === "pnpm") {
     let update: ReturnType<typeof runPnpmGlobalUpdate>;
+    installerUncertain = true;
     try {
+      if (!homePolicy.authorizeMutation("package")) return 1;
       update = runPnpmGlobalUpdate({
         packageName: PKG,
         currentVersion: current,
@@ -826,12 +962,13 @@ export async function runUpdate(): Promise<void> {
         tag,
         owner: owner!,
         runningPackagePath: packageRoot(),
-        runPnpm: (args, capture = false) => runOwnedPnpm(
+        runPnpm: (args, capture = false) => homePolicy.authorizeMutation("package") ? runOwnedPnpm(
           owner!,
           args,
           capture,
           capture ? "pipe" : installStdio,
-        ),
+          probeSpawnSync, homePolicy.authorizeMutation, session,
+        ) : { status: 1, stdout: "", stderr: "" },
         log: line => console.log(line),
       });
     } catch {
@@ -841,9 +978,12 @@ export async function runUpdate(): Promise<void> {
         ok: false,
         phase: "rollback",
         rolledBack: false,
+        processTreeExited: false,
         error: "pnpm update failed unexpectedly; active package could not be verified",
       };
+      session?.retainInstallerFence();
     }
+    installerUncertain = !update.ok && update.processTreeExited === false;
     if (update.ok) {
       postUpdateLauncher = join(update.path, "bin", "ocx.mjs");
       postUpdateLauncherUsable = true;
@@ -855,14 +995,36 @@ export async function runUpdate(): Promise<void> {
       r = { status: 1, signal: null, stdout: "", stderr: "" };
     }
   } else {
-    r = spawnSync(target.bin, target.args, {
+    if (!homePolicy.authorizeMutation("package")) return 1;
+    installerUncertain = true;
+    if (session && process.platform === "win32") {
+      session.noteUntrackedInstaller();
+      const supervised = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, {
+        env: mutation.unprivilegedEnvironment(), authorizeMutation: homePolicy.authorizeMutation,
+      });
+      if (supervised.processTreeExited === true && Number.isInteger(supervised.status)) session.confirmInstallerExit();
+      else session.retainInstallerFence();
+      r = supervised;
+      installerUncertain = supervised.processTreeExited !== true || !Number.isInteger(supervised.status);
+    } else if (session) {
+      try {
+        const supervised = runPosixInstallerSync({ file: target.bin, args: target.args,
+          markerPath: join(getConfigDir(), "update-orchestrated.json"),
+          authorizeMutation: homePolicy.authorizeMutation, env: mutation.unprivilegedEnvironment() });
+        installerUncertain = !Number.isInteger(supervised.status) || Boolean(supervised.signal) || !supervised.groupExited || supervised.groupKilled !== false || supervised.processTreeExited === false;
+        if (installerUncertain) session.retainInstallerFence();
+        r = supervised;
+      } catch (error) { session.retainInstallerFence(); throw error; }
+    } else r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
       stdio: installStdio,
       encoding: installStdio === "pipe" ? "utf8" : undefined,
-      timeout: 180000,
+      // The parent watchdog reports overrun without killing an active transaction.
+      timeout: child ? undefined : 180000,
       windowsHide: true,
       ...target.options,
       env: mutation.unprivilegedEnvironment(),
     });
+    if (!session) installerUncertain = r.status === null;
   }
   if (r && installStdio === "pipe") logSpawnOutput("", r);
   }
@@ -870,29 +1032,73 @@ export async function runUpdate(): Promise<void> {
     await recoverStoppedRuntime("package replacement was refused");
     if (trayWasRunning) {
       try {
-        const { startWindowsTray } = await import("../tray/windows");
-        startWindowsTray();
+        const { guardedStartWindowsTray } = await import("./guarded-tray-ops");
+        if (homePolicy.authorizeMutation("own-tray")) guardedStartWindowsTray(homePolicy.authorizeMutation);
       } catch { /* preserve the ownership refusal */ }
     }
     console.error(replacementRefusal);
     return 1;
   }
   if (!r) throw new Error("update replacement returned no result");
+  if (installerUncertain) { console.error("Installer termination was not confirmed; update recovery is deferred."); return 1; }
+  if (session && r.status === 0 && latest) {
+    const root = realpathSync.native(packageRoot());
+    if (verifyOrchestratedInstall(root, latest, "bun")) installedRoot = root;
+  }
   const postInstallPlan = planUpdateRuntimeHandling({
     ...(await resolvedRuntimeOwnership()),
     serviceInstalled: serviceWasInstalled,
     supervision: observeSupervision(),
   });
   if (r.status === 0) {
-    console.log(`\n✅ Updated${latest ? ` to v${latest}` : ""}.`);
+    if (homePolicy.packageOnly) {
+      if (!homePolicy.authorizeMutation("package-publish")) return 1;
+      guardedRun(homePolicy.authorizeMutation, "package-publish", console.log, [`\n✅ Updated${latest ? ` to v${latest}` : ""}.`]);
+      homePolicy.check(homePolicy.initial);
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
+      if (!homePolicy.authorizeMutation("package-publish")) return 1;
+      return process.argv.includes("--update-worker-result") ? UPDATE_PACKAGE_ONLY_EXIT_CODE : undefined;
+    }
+    // Authority gates every post-replacement control action (shim, tray, service), like
+    // the Node launcher; refusal may only restore the own tray stopped before replacement.
+    const restoreOwnStoppedTray = () => {
+      if (trayWasRunning && postUpdateLauncherUsable && existsSync(postUpdateLauncher)) {
+        try {
+          if (!homePolicy.authorizeMutation("own-tray")) return;
+          guardedSpawnSync(homePolicy.authorizeMutation, "own-tray", process.execPath, [postUpdateLauncher, "tray", "start"], {
+            stdio: "ignore", windowsHide: true, timeout: 15_000, env: mutation.unprivilegedEnvironment(),
+          });
+        } catch { /* preserve the authority refusal */ }
+      }
+    };
+    if (!homePolicy.authorizeMutation("publish")) {
+      restoreOwnStoppedTray();
+      return 1;
+    }
+    guardedRun(homePolicy.authorizeMutation, "publish", console.log, [`\n✅ Updated${latest ? ` to v${latest}` : ""}.`]);
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     // Re-enter through the verified active package launcher. This keeps the Codex
     // shim, tray, service and proxy recovery paths on the same package/group that
     // pnpm selected, including when the update changed the global link target.
+    let isCodexShimInstalled: (() => boolean) | undefined;
     try {
-      const { isCodexShimInstalled } = await import("../codex/shim");
-      if (isCodexShimInstalled()) {
-        const shim = spawnSync(process.execPath, [postUpdateLauncher, "codex-shim", "install"], {
+      ({ isCodexShimInstalled } = await import("../codex/shim"));
+    } catch {
+      console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
+    }
+    // The module load above is the last await before the control actions below; a home
+    // change landing while it was in flight must veto the shim rewrite and the tray
+    // refresh, not only the later service checks.
+    if (!homePolicy.authorizeMutation("runtime")) {
+      restoreOwnStoppedTray();
+      return 1;
+    }
+    // The filesystem probe is part of the guarded recovery: a throw after package
+    // replacement degrades to the warning below instead of escaping the update.
+    try {
+      if (isCodexShimInstalled?.()) {
+        if (!homePolicy.authorizeMutation("shim")) { restoreOwnStoppedTray(); return 1; }
+        const shim = guardedSpawnSync(homePolicy.authorizeMutation, "shim", process.execPath, [postUpdateLauncher, "codex-shim", "install"], {
           stdio: "inherit",
           windowsHide: true,
           env: mutation.unprivilegedEnvironment(),
@@ -904,38 +1110,63 @@ export async function runUpdate(): Promise<void> {
     }
     if (trayWasInstalled) {
       const trayArgs = planWindowsTrayUpdate({ installed: trayWasInstalled, running: trayWasRunning }).installArgs;
-      const tray = spawnSync(process.execPath, [postUpdateLauncher, ...trayArgs], { stdio: "inherit", windowsHide: true, env: mutation.unprivilegedEnvironment() });
+      if (!homePolicy.authorizeMutation("tray")) { restoreOwnStoppedTray(); return 1; }
+      const tray = guardedSpawnSync(homePolicy.authorizeMutation, "tray", process.execPath, [postUpdateLauncher, ...trayArgs], { stdio: "inherit", windowsHide: true, env: mutation.unprivilegedEnvironment() });
       if (tray.status === 0) {
         console.log("🔧 Refreshed Windows tray startup paths.");
       } else {
         console.warn("⚠️  Windows tray refresh failed. Run 'ocx tray install'.");
-        if (trayWasRunning) spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true, env: mutation.unprivilegedEnvironment() });
+        if (trayWasRunning && homePolicy.authorizeMutation("own-tray")) guardedSpawnSync(homePolicy.authorizeMutation, "own-tray", process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true, env: mutation.unprivilegedEnvironment() });
       }
     }
+    if (!homePolicy.authorizeMutation("publish")) { restoreOwnStoppedTray(); return 1; }
     // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
+    if (!homePolicy.serviceAllowed && postInstallPlan.mayStopRuntime) {
+      if (stopAttempted) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
+      return homePolicy.authorizeMutation("publish") ? undefined : 1;
+    }
     if (postInstallPlan.mayRestoreService) {
+      let homeRefused = false;
       const mayRefresh = async () => {
+        if (!homePolicy.authorizeMutation("runtime")) { homeRefused = true; return false; }
         const ownership = await resolvedRuntimeOwnership();
         const supervision = observeSupervision();
         const plan = planUpdateRuntimeHandling({ ...ownership, serviceInstalled: true, supervision });
+        if (!homePolicy.authorizeMutation("runtime")) { homeRefused = true; return false; }
         if (!plan.mayRestoreService) console.warn(supervision
           ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
           : plan.notice);
-        return plan.mayRestoreService;
+        return plan.mayRestoreService && homePolicy.serviceAllowed;
       };
-      if (!await mayRefresh()) return;
+      if (!await mayRefresh()) {
+        if (homeRefused) return 1;
+        if (!homePolicy.serviceAllowed) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
+        return homePolicy.authorizeMutation("publish") ? undefined : 1;
+      }
       console.log("🔁 Refreshing the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
-      const { reclaimListenPort } = await import("../server/port-reclaim");
+      const { guardedReclaimListenPort: reclaimListenPort } = await import("./guarded-port-reclaim");
+      if (!homePolicy.authorizeMutation("runtime")) return 1;
+      // Latched reclaim authority: once a mid-wait probe denies, the latch stays
+      // closed — a transient re-match must not reopen kill/drop or the busy-port path.
+      let reclaimDenied = false;
+      const reclaimGate = () => {
+        try { reclaimDenied ||= !homePolicy.authorizeMutation("runtime"); } catch { reclaimDenied = true; }
+        return !reclaimDenied;
+      };
       const freed = await reclaimListenPort(capturedListen.port, capturedListen.hostname, {
         timeoutMs: 30_000,
         intervalMs: 100,
         scanIntervalMs: 500,
         killOcxHolders: capturedListen.oldPid != null,
         onlyKillPids: capturedListen.oldPid != null ? [capturedListen.oldPid] : [],
+        // The wait's internal awaits can span a home change; gate each kill/drop.
+        mayMutateFn: reclaimGate,
       });
+      if (!freed && !reclaimGate()) return 1; // a latched denial already refused
       if (!freed) {
         console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; repairing service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
       }
@@ -944,17 +1175,28 @@ export async function runUpdate(): Promise<void> {
       // wait, the lease makes that child die at the acquire deadline (#5760).
       // The kill-authorizing reclaim above already ran under the lease.
       mutation.release();
+      if (!homePolicy.authorizeMutation("runtime")) return 1;
+      if (!homePolicy.serviceAllowed) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(capturedListen.port);
       try {
-        if (!await mayRefresh()) return;
+        if (!await mayRefresh()) {
+          if (homeRefused) return 1;
+          if (!homePolicy.serviceAllowed) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
+          return homePolicy.authorizeMutation("publish") ? undefined : 1;
+        }
         const svcStdio = updateChildStdio();
-        const svc = spawnSync(process.execPath, [postUpdateLauncher, ...serviceReinstallArgs()], {
+        if (!homePolicy.authorizeMutation("runtime")) return 1;
+        if (!homePolicy.serviceAllowed) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
+        if (!homePolicy.authorizeMutation("service")) return homePolicy.authorizeMutation("runtime") && [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
+        const svc = guardedSpawnSync(homePolicy.authorizeMutation, "service", process.execPath, [postUpdateLauncher, ...serviceReinstallArgs()], {
           env: mutation.controlEnvironment(),
           stdio: svcStdio,
           encoding: svcStdio === "pipe" ? "utf8" : undefined,
           windowsHide: true,
         });
+        if (!homePolicy.authorizeMutation("runtime")) return 1;
+        if (!homePolicy.serviceAllowed) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
         if (svcStdio === "pipe") logSpawnOutput("", svc);
         const serviceRefreshed = svc.status === 0;
         let serviceViable = serviceRefreshed;
@@ -969,10 +1211,16 @@ export async function runUpdate(): Promise<void> {
         if (!serviceRefreshed || !serviceViable) {
           // #7043: the manager first. Only a proxy it owns counts as recovered; everything
           // below this line leaves an unsupervised runtime and exits non-zero.
-          if (!await mayRefresh()) return;
+          if (!await mayRefresh()) {
+            if (homeRefused) return 1;
+            if (!homePolicy.serviceAllowed) return [true, "vetoed"].includes(await startProxyDirectly()) && homePolicy.authorizeMutation("publish") ? undefined : 1;
+            return homePolicy.authorizeMutation("publish") ? undefined : 1;
+          }
+          if (!homePolicy.authorizeMutation("runtime")) return 1;
           const managed = await restartThroughServiceManager();
-          if (managed === "supervised") return;
+          if (managed === "supervised" || managed === "vetoed") return homePolicy.authorizeMutation("publish") ? undefined : 1;
           if (managed === "unsettled") return 1;
+          if (managed === "refused") return 1;
           // Repair normally avoids elevation for a healthy scheduler task, but a stale
           // definition may require guarded create/elevation. It can also fail — or exit 0
           // while leaving stale/missing assets that never start
@@ -1010,11 +1258,12 @@ export async function runUpdate(): Promise<void> {
               serviceInstalled: true,
               supervision,
             });
+            if (!homePolicy.authorizeMutation("runtime")) return 1;
             if (!nowOwned.mayStopRuntime) {
               console.warn(supervision
                 ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
                 : nowOwned.notice ?? "⚠️  The background runtime is owned elsewhere; not starting a second proxy.");
-              return;
+              return homePolicy.authorizeMutation("publish") ? undefined : 1;
             }
             console.warn(
               serviceRefreshed
@@ -1028,7 +1277,7 @@ export async function runUpdate(): Promise<void> {
               ? "   Run 'ocx service repair' to refresh the background service."
               : "   Run 'ocx service repair' to refresh the background service and see why it failed.");
             // An ownership veto is the correct outcome, not a degraded one.
-            if (await startUnsupervisedFallback() === "vetoed") return;
+            if (await startUnsupervisedFallback() === "vetoed") return homePolicy.authorizeMutation("publish") ? undefined : 1;
             return 1;
           }
         }
@@ -1039,21 +1288,32 @@ export async function runUpdate(): Promise<void> {
     } else if (postInstallPlan.mayStopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
     }
+    if (!homePolicy.authorizeMutation("publish")) return 1;
   } else {
     if (stopAttempted && trayWasRunning && postUpdateLauncherUsable) {
-      spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true, env: mutation.unprivilegedEnvironment() });
+      if (homePolicy.authorizeMutation("own-tray"))
+      guardedSpawnSync(homePolicy.authorizeMutation, "own-tray", process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true, env: mutation.unprivilegedEnvironment() });
     }
     await recoverStoppedRuntime("package update failed");
     console.error(`\n⚠️  Update failed (${bin} exit ${r.status ?? "?"}). ${manualUpdateFailureGuidance({ bin, args: cmdArgs, owner }).join("\n")}`);
     return 1;
   }
   } catch (error) {
-    await recoverStoppedRuntime("update failed unexpectedly");
-    if (trayWasRunning) {
-      try { const { startWindowsTray } = await import("../tray/windows"); startWindowsTray(); } catch { /* retain original failure */ }
+    if (!installerUncertain) await recoverStoppedRuntime("update failed unexpectedly");
+    if (trayWasRunning && !installerUncertain) {
+      try { const { guardedStartWindowsTray } = await import("./guarded-tray-ops"); if (homePolicy.authorizeMutation("own-tray")) guardedStartWindowsTray(homePolicy.authorizeMutation); } catch { /* retain original failure */ }
     }
     throw error;
   }
   });
-  if (updateExitCode) process.exit(updateExitCode);
+  completed = true;
+  } finally {
+    if (session && mutationStarted) session.finish(installedRoot
+      ? { phase: "installed", activeRoot: installedRoot, ...(!completed || updateExitCode ? { recoveryFailed: true, error: "runtime-unhealthy" } : {}) }
+      : { phase: "failed", error: installerUncertain ? "installer-timeout" : "update-failed", ...(installerUncertain ? { terminationConfirmed: false } : {}) });
+  }
+  if (updateExitCode) {
+    if (child) process.exitCode = updateExitCode;
+    else process.exit(updateExitCode);
+  } else if (child && !mutationStarted) process.exitCode = 1;
 }

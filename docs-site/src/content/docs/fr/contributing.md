@@ -15,7 +15,7 @@ bun install
 bun run setup:hooks  # retirer les anciens hooks gérés pre-push et post-merge
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # suite complète (par défaut)
 ```
 
@@ -163,7 +163,7 @@ du dépôt et des chemins sensibles du point de vue de la sécurité est déclar
 
 ## Conventions
 
-- **Modules ES uniquement** (`import`/`export`), TypeScript, mode `strict`. Gardez `bun x tsc --noEmit` propre.
+- **Modules ES uniquement** (`import`/`export`), TypeScript, mode `strict`. Gardez `bun run typecheck` propre.
 - **Environ 500 lignes au maximum par fichier** — répartissez le code par responsabilité. Les services auxiliaires `web-search/` et `vision/` sont
   bons exemples de petits modules ciblés derrière un seul `index.ts`).
 - **Gérer les erreurs asynchrones aux frontières** — les services auxiliaires ne propagent jamais d’exception dans le

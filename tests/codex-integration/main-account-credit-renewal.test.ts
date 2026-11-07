@@ -1,20 +1,22 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CodexMainAccountCreditsOffError, resolveCodexAuthContext } from "../../src/codex/auth-context";
 import { fetchMainAccountInfoAttempt } from "../../src/codex/auth-api/main-account-probe";
-import { registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery } from "../../src/codex/auth-api/pool-mode-gate";
+import { clearCodexQuotaPrimeState, primeCodexPoolQuotas, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery } from "../../src/codex/auth-api/pool-mode-gate";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
-import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountInfoCache, isMainAccountIdentityGenerationLive, observeMainQuotaCredential, setMainAccountInfoCache } from "../../src/codex/main-account-cache";
+import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountCredentialPresence, getMainAccountInfoCache, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, observeMainQuotaCredential, setMainAccountCredentialPresence, setMainAccountInfoCache } from "../../src/codex/main-account-cache";
+import { getObservedMainCodexCollisionIdentity } from "../../src/codex/collision-identity";
 import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { hasSpendableCodexCredits, type CodexSpendableCredits } from "../../src/codex/quota-types";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import * as mainAccount from "../../src/codex/main-account";
+import * as nativeRefresh from "../../src/codex/native-main-refresh-mode";
 import * as sweeper from "../../src/lib/state-store-sweeper";
 import * as quotaQueries from "../../src/codex/quota-query-backoff";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
@@ -130,6 +132,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   mock.restore();
+  nativeRefresh.setNativeMainRefreshResolutionForTests(null);
+  clearCodexQuotaPrimeState();
   globalThis.fetch = previousFetch;
   clearAccountQuota();
   clearAccountNeedsReauth(MAIN);
@@ -147,6 +151,142 @@ afterEach(async () => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   removeTreeWithRetry(home);
+});
+
+function keyringLogin(id = accountId) {
+  rmSync(join(home, "auth.json"));
+  nativeRefresh.setNativeMainRefreshResolutionForTests({
+    mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fixture/codex", version: "0.162.1",
+  });
+  return spyOn(nativeRefresh, "requestCodexAuthStatus").mockImplementation(async () => ({
+    authMethod: "chatgpt", authToken: bearer(id), requiresOpenaiAuth: true,
+  }));
+}
+
+test("keyring-only metadata probing discovers the owned credential and publishes quota", async () => {
+  clearAccountQuota(MAIN);
+  const auth = keyringLogin("fixture-keyring");
+  fetchWith(async (_url, init) => {
+    const headers = new Headers(init?.headers);
+    expect(headers.get("chatgpt-account-id")).toBe("fixture-keyring");
+    expect(headers.get("authorization")).toBe(`Bearer ${bearer("fixture-keyring")}`);
+    return usage();
+  });
+  const result = await fetchMainAccountInfoAttempt(true, 1, undefined, false, true, false, cfg);
+  expect(result).toMatchObject({ credentialChecked: true, hasCredential: true, quotaRefresh: { status: "ok" } });
+  expect(result.info.plan).toBe("plus");
+  expect(getMainPolicyQuota()?.weeklyPercent).toBe(100);
+  expect(getObservedMainCodexCollisionIdentity()?.accountId).toBe("fixture-keyring");
+  expect(auth).toHaveBeenCalledTimes(1);
+  expect(calls).toEqual([whamUrl]);
+  expect(existsSync(join(home, "auth.json"))).toBe(false);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test("keyring-only credit renewal reuses its prepared credential for WHAM", async () => {
+  const auth = keyringLogin();
+  await runMainAccountHardLockRecovery(cfg);
+  expect(calls).toEqual([whamUrl]);
+  expect(auth).toHaveBeenCalledTimes(1);
+  expect(getMainPolicyQuota()?.credits?.observedAt).toBe(now);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test("keyring-only Pool priming observes quota before any traffic", async () => {
+  clearAccountQuota(MAIN);
+  const auth = keyringLogin();
+  await primeCodexPoolQuotas(cfg, "startup");
+  expect(calls).toEqual([whamUrl]);
+  expect(auth).toHaveBeenCalledTimes(1);
+  expect(getMainPolicyQuota()?.credits?.observedAt).toBe(now);
+  expect(getObservedMainCodexCollisionIdentity()?.accountId).toBe(accountId);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test("keyring-only passive metadata preserves traffic quarantine and manual pause", async () => {
+  keyringLogin();
+  markAccountNeedsReauth(MAIN);
+  cfg.pausedCodexAccountIds = [MAIN];
+  const result = await fetchMainAccountInfoAttempt(true, 1, undefined, false, true, false, cfg, { passive: true });
+  expect(result).toMatchObject({ credentialChecked: true, hasCredential: true, quotaRefresh: { status: "ok" } });
+  expect(isAccountNeedsReauth(MAIN)).toBe(true);
+  expect(cfg.pausedCodexAccountIds).toEqual([MAIN]);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test.each(["copy", "credential-aba", "home"])("keyring-only stale handoff cannot overwrite credential presence (%s)", async change => {
+  const auth = keyringLogin();
+  const prepared = (await mainAccount.getValidMainAccountToken({ preserveReauth: true }))!;
+  expect(mainAccount.mainAccountTokenIsCurrent(prepared)).toBe(true);
+  setMainAccountCredentialPresence(true);
+  let candidate = prepared;
+  if (change === "copy") candidate = { ...prepared };
+  if (change === "credential-aba") {
+    observeMainQuotaCredential(bearer(accountId, true), accountId);
+    observeMainQuotaCredential(prepared.accessToken, prepared.chatgptAccountId);
+  }
+  if (change === "home") {
+    process.env.CODEX_HOME = join(home, "replacement-home");
+    mkdirSync(process.env.CODEX_HOME);
+  }
+  expect(mainAccount.mainAccountTokenIsCurrent(candidate)).toBe(false);
+  const before = getMainPolicyQuota();
+  const result = await fetchMainAccountInfoAttempt(true, 0, undefined, false, true, false, cfg, { preparedToken: candidate });
+  expect(result).toMatchObject({ credentialChecked: false, hasCredential: false });
+  expect(getMainAccountCredentialPresence()).toBe(true);
+  expect(getMainPolicyQuota()).toEqual(before);
+  expect(calls).toEqual([]);
+  expect(auth).toHaveBeenCalledTimes(1);
+});
+
+test("keyring-only late usage cannot publish or clear a replacement login's quarantine", async () => {
+  keyringLogin();
+  const entered = deferred<void>(), response = deferred<Response>();
+  fetchWith(async () => { entered.resolve(); return response.promise; });
+  const pending = fetchMainAccountInfoAttempt(true, 0, undefined, false, true, false, cfg);
+  await entered.promise;
+  const oldWriter = captureMainQuotaWriter(accountId)!;
+  writeMain("fixture-replacement");
+  setAccountQuotaFromParsed(MAIN, { weeklyPercent: 7 }, undefined, captureMainQuotaWriter("fixture-replacement"));
+  markAccountNeedsReauth(MAIN);
+  const before = getMainPolicyQuota();
+  response.resolve(usage());
+  const result = await pending;
+  expect(isMainQuotaWriterLive(oldWriter)).toBe(false);
+  expect(result.freshQuota).toBeUndefined();
+  expect(result.resetRecoveryProof).toBeUndefined();
+  expect(getMainPolicyQuota()).toEqual(before);
+  expect(isAccountNeedsReauth(MAIN)).toBe(true);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
+test("keyring-only live bearer treats an unclassified WHAM 401 as transient", async () => {
+  keyringLogin();
+  fetchWith(async () => Response.json({}, { status: 401 }));
+  const result = await fetchMainAccountInfoAttempt(true, 0, undefined, false, false, false, cfg);
+  expect(result.quotaRefresh).toMatchObject({ status: "http_error", httpStatus: 401 });
+  expect(result.terminalAuthFailure).toBeUndefined();
+  expect(isAccountNeedsReauth(MAIN)).toBe(false);
+});
+
+test.each(["unavailable", "refused", "logged-out"])("keyring-only credential observation distinguishes absence from failure (%s)", async outcome => {
+  const auth = keyringLogin();
+  await mainAccount.getValidMainAccountToken({ preserveReauth: true });
+  setMainAccountCredentialPresence(true);
+  markAccountNeedsReauth(MAIN);
+  const before = getMainPolicyQuota();
+  auth.mockImplementation(async () => {
+    if (outcome === "unavailable") throw new Error("fixture RPC unavailable");
+    return { authMethod: outcome === "refused" ? "chatgpt" : null, authToken: null, requiresOpenaiAuth: true };
+  });
+  const result = await fetchMainAccountInfoAttempt(true, 0, undefined, false, false, false, cfg, { passive: true });
+  expect(result.credentialChecked).toBe(outcome !== "unavailable");
+  expect(result.hasCredential).toBe(false);
+  expect(getMainAccountCredentialPresence()).toBe(outcome === "unavailable");
+  expect(getMainPolicyQuota()).toEqual(before);
+  expect(isAccountNeedsReauth(MAIN)).toBe(true);
+  expect(calls).toEqual([]);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
 });
 
 test("without renewal, five-minute credit expiry produces a local 429", async () => {

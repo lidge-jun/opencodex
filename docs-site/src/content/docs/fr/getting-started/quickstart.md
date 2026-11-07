@@ -1,9 +1,9 @@
 ---
 title: Démarrage rapide
-description: Configurez votre premier fournisseur et acheminez OpenAI Codex via opencodex en trois commandes.
+description: "Installez opencodex, ajoutez votre premier fournisseur et connectez votre outil de programmation : Codex, Claude Code, Claude Desktop, Grok Build ou un autre outil pris en charge."
 ---
 
-Ce guide part d’une installation neuve et vous conduit jusqu’à l’exécution de Codex sur un modèle autre qu’OpenAI.
+Ce guide vous mène d’une nouvelle installation à la première requête de votre outil de programmation. Les étapes 1 et 2 sont communes ; l’étape 3 propose une branche par outil. La [page des clients pris en charge](/fr/reference/client-support/) présente les outils et leurs connexions.
 
 ## 1. Exécutez l'assistant de configuration
 
@@ -58,9 +58,13 @@ ocx status
 ocx gui       # ouvre le tableau de bord sur le port actif
 ```
 
-## 3. Utiliser Codex
+## 3. Connectez votre outil
 
-Codex parle maintenant à opencodex de manière transparente :
+Choisissez la branche correspondant à votre outil. Vous pouvez en connecter plusieurs : ils partagent les mêmes fournisseurs et modèles.
+
+### Codex
+
+Si vous avez accepté l’invite Codex à l’étape 1, Codex communique maintenant avec opencodex de manière transparente. Si vous avez refusé cette invite ou si la configuration s’est arrêtée parce qu’une configuration existait déjà, activez le commutateur Codex sur la page **Connect** du tableau de bord avant de lancer Codex ; [Intégration Codex](/fr/guides/codex-integration/) explique les modifications et leur restauration.
 
 ```bash
 codex "Refactor this function for readability"
@@ -72,6 +76,42 @@ Pour cibler un modèle routé précis, utilisez dans le sélecteur de Codex la f
 codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
+
+### Claude Code
+
+Avec le CLI `claude` installé :
+
+```bash
+ocx claude
+```
+
+`ocx claude` démarre le proxy s’il ne fonctionne pas et lance Claude Code avec un environnement dirigé vers opencodex. Les arguments supplémentaires sont transmis. Consultez [Claude Code](/fr/guides/claude-code/) pour les valeurs par défaut des niveaux, les autres lanceurs et la désactivation.
+
+### Claude Desktop
+
+```bash
+ocx claude desktop
+```
+
+Lors d’une nouvelle installation, cette commande configure le profil de passerelle pour toute l’application. Une installation utilisant déjà le mode first-party le conserve ; exécutez `ocx claude desktop apply --gateway` pour changer explicitement. Le mode first-party conserve claude.ai pour Desktop et ne route que son onglet Code ; consultez la section sur les modes Claude Desktop dans [Claude Code](/fr/guides/claude-code/).
+
+Quittez complètement puis rouvrez Claude Desktop après un changement de mode.
+
+### Grok Build
+
+Sur une écoute locale, si `~/.grok` existe, `ocx start` enregistre les modèles visibles dans `~/.grok/config.toml`. Choisissez un modèle `ocx-*` dans Grok Build. Les configurations distantes et le bloc géré sont décrits dans [Grok Build](/fr/guides/grok-build/).
+
+Après avoir ajouté des fournisseurs ou des modèles, lancez `ocx ensure` ou redémarrez le proxy pour que Grok Build les voie.
+
+### Autres outils
+
+Les outils avec intégration gérée (OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code et d’autres) se connectent depuis la page **Connect** du tableau de bord ou avec :
+
+```bash
+ocx integration client enable --client <id>
+```
+
+Les fichiers de configuration et les délais de prise d’effet sont décrits dans [Intégrations](/fr/guides/integrations/). Tout autre outil acceptant un point de terminaison personnalisé peut utiliser l’URL de base compatible OpenAI `http://localhost:10100/v1` ou l’URL de base Anthropic `http://localhost:10100`.
 
 ## Choisissez des modèles de sous-agents (facultatif)
 

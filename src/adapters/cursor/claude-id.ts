@@ -42,26 +42,37 @@ function parseClaudeBase(raw: string): { canonicalBaseId: string; sourceBaseId: 
 
 export function normalizeCursorClaudeId(raw: string): NormalizedCursorClaudeId | undefined {
   const id = raw.trim().toLowerCase();
-  const patterns: ReadonlyArray<readonly [RegExp, (m: RegExpExecArray) => { base: string; thinking: boolean; fast: boolean; level?: string }]> = [
-    [/^(.*)-thinking-([a-z-]+)-fast$/, m => ({ base: m[1]!, thinking: true, fast: true, level: m[2]! })],
-    [/^(.*)-([a-z-]+)-thinking-fast$/, m => ({ base: m[1]!, thinking: true, fast: true, level: m[2]! })],
-    [/^(.*)-thinking-([a-z-]+)$/, m => ({ base: m[1]!, thinking: true, fast: false, level: m[2]! })],
-    [/^(.*)-([a-z-]+)-thinking$/, m => ({ base: m[1]!, thinking: true, fast: false, level: m[2]! })],
-    [/^(.*)-([a-z-]+)-fast$/, m => ({ base: m[1]!, thinking: false, fast: true, level: m[2]! })],
-    [/^(.*)-thinking-fast$/, m => ({ base: m[1]!, thinking: true, fast: true })],
-    [/^(.*)-thinking$/, m => ({ base: m[1]!, thinking: true, fast: false })],
-    [/^(.*)-fast$/, m => ({ base: m[1]!, thinking: false, fast: true })],
-  ];
-  for (const [pattern, dims] of patterns) {
-    const match = pattern.exec(id);
-    if (!match) continue;
-    const parsed = dims(match);
-    if (parsed.level && !CLAUDE_LEVELS.has(parsed.level)) continue;
-    const base = parseClaudeBase(parsed.base);
-    if (base) return { ...base, ...parsed, sourceBaseId: base.sourceBaseId };
+  // Recognize the numeric base first; suffix parsing never searches backwards
+  // through arbitrary repetitions of model-name delimiters.
+  const match = /^(claude-(?:fable|haiku|opus|sonnet)-\d+(?:[.-]\d+)*|claude-\d+(?:\.\d+)*-(?:fable|haiku|opus|sonnet))(?=-|$)/.exec(id);
+  if (!match) return undefined;
+  const base = parseClaudeBase(match[1]!);
+  if (!base) return undefined;
+  let suffix = id.slice(match[1]!.length);
+  if (!suffix) return { ...base, thinking: false, fast: false };
+  const fast = suffix.endsWith("-fast");
+  if (fast) suffix = suffix.slice(0, -"-fast".length);
+  let thinking = false;
+  let level: string | undefined;
+  if (suffix === "-thinking") {
+    thinking = true;
+  } else if (suffix.startsWith("-thinking-")) {
+    thinking = true;
+    level = suffix.slice("-thinking-".length);
+  } else if (suffix.endsWith("-thinking")) {
+    thinking = true;
+    level = suffix.slice(1, -"-thinking".length);
+    // The legacy greedy prefix leaves only the final hyphen-delimited token.
+    if (level.includes("-")) return undefined;
+  } else if (fast && suffix) {
+    level = suffix.slice(1);
+    if (level.includes("-")) return undefined;
+  } else if (suffix) {
+    return undefined;
   }
-  const base = parseClaudeBase(id);
-  return base ? { ...base, thinking: false, fast: false } : undefined;
+  if (level !== undefined && !CLAUDE_LEVELS.has(level)) return undefined;
+  const parsed = { base: base.sourceBaseId, thinking, fast, ...(level !== undefined ? { level } : {}) };
+  return { ...base, ...parsed };
 }
 
 export function composeCursorClaudeWireId(

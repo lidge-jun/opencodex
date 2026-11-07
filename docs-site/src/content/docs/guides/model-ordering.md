@@ -30,8 +30,18 @@ Without complete-picker ordering, the relevant no-selector priorities are:
 | `subagentModels[i]` | `i` (`0` through `4`) | The featured rank map in `src/codex/catalog/sync.ts` |
 | Other routed models | `5` | Routed entry creation in `src/codex/catalog/sync.ts` |
 | Non-featured routed models listed in `modelPickerOrder` | `1000 + i` | Display-only picker rank in `src/codex/catalog/sync.ts` |
-| Native GPT slugs by default | `9` | Native entry creation in `src/codex/catalog/sync.ts` |
-| Unselected native models while a featured list exists | At least `featured.length + 100` | Native catalog merge in `src/codex/catalog/sync.ts` |
+| Native GPT slugs without a featured list | `sourcePriority` (fallback `9`) | Shared native source-priority resolver |
+| Unselected native models while a featured list exists | `featured.length + 100 + sourcePriority` | Shared native source-priority resolver |
+
+Native source priority comes from the current discovered descriptor, then the pristine catalog
+backup, then the same model's retained source value, then the upstream snapshot. Each candidate
+must be an integer from `0` through `1000`; invalid values are skipped and the final fallback is
+`9`. Published display priorities are never reused as source priorities. With four featured
+models, native source priorities `3`, `8` and missing become `107`, `112` and `113` respectively.
+This preserves native source order behind featured and ordinary routed rows, including after
+repeated sync or featuring and later unfeaturing a native. The live Codex model list, published
+catalog and models cache use the same priorities for the same inputs. Account-selector groups
+retain their separate stride policy; complete-picker ordering remains the final override.
 
 The management API limits `subagentModels` to five entries with `slice(0, 5)` in
 `src/server/management/agent-settings-routes.ts`. This matches the Codex `spawn_agent` surface, which
@@ -73,7 +83,7 @@ With no eligible account selectors and a non-empty featured list, the resulting 
 3. Unselected native models, pushed below the featured block during catalog merge.
 
 Without `subagentModels`, routed models remain at priority `5`, native GPT entries use their normal
-priority (normally `9` for entries built by opencodex), and the routed group remains provider/id
+source priority (fallback `9`), and the routed group remains provider/id
 alphabetical.
 
 ## Example
@@ -101,7 +111,7 @@ The picker begins as follows:
 | 5 | `gpt-5.6-terra` | `4` | Fifth selection |
 | 6 | `anthropic/claude-fable-5` | `5` | First remaining routed id in provider/id alphabetical order |
 | 7 onward | Remaining routed models | `5` | Provider alphabetically, then model id alphabetically |
-| After routed models | Remaining native models | `featured.length + 100` or higher | Unselected natives are moved below the featured block |
+| After routed models | Remaining native models | `featured.length + 100 + sourcePriority` | Source order is preserved within the native band |
 
 The first five entries are the overrides advertised to `spawn_agent`; the rest continue in the
 normal picker order. With account selectors, the five-entry limit applies after bare native choices

@@ -43,6 +43,7 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `providers` | `Record<string, OcxProviderConfig>` | — |プロバイダー名からプロバイダー設定へのマップ。 |
 | `openaiProviderTierVersion?` | `2` |移行によって設定される |単一のオプション対応 OpenAI プロジェクションを完了としてマークします。 |
 | `disabledModels?` | `string[]` | — | Codex catalog と `/v1/models` から非表示にする model。直接の proxy 呼び出しはブロックしません。routed id は一覧から削除されます。account-qualified native id は該当する selector row だけを非表示にし、bare native GPT id は bare row とその model の全 account-selector row を非表示にします。Models ページに表示されるのは bare native 行と routed 行だけです。selector-qualified 行を 1 つだけ非表示にするには、この設定フィールドを直接編集してください。 |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 既定値は `false` です。`config.json` に `"omitDisabledNativeModels": true` を設定して `ocx sync` を実行すると、無効な native 行を catalog、cache、Codex 形式の HTTP モデル一覧から除外します。除外前に検証した継承テンプレートを保持するため routed 行のメタデータは変わりません。直接リクエストのルーティングも変わりません。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | プロバイダーごとの有効なコンテキスト上限。通常のウィンドウは縮小されます。長いウィンドウに対応したネイティブモデルは、そのモデルが対応する上限まで拡張できます。 |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | プロバイダーごとに最後に選択した上限。無効にしても保持され、この値だけで上限が有効になることはありません。有効な値が保存済みの値より優先されます。 |
 | `contextCapValue?` | `number` | `350000` | 初回の有効化で使う既定値。再び有効にすると、そのプロバイダーの選択値を復元します。`setAll: true` とともにグローバル値を変更すると、有効な上限だけを更新します。値を指定せずに `setAll: true` を送ると、設定済みの全プロバイダーの上限を現在のグローバル値で有効にします。 |
@@ -52,9 +53,9 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexAccountPickerEnabled?` | `boolean` | map が空なら off | 有効な `codexAccountNamespaces` mapping から account-qualified Codex picker row を生成するかを制御します。`true` は mapping された行の表示を許可します。空でない map で省略した場合は後方互換性のため有効として扱われ、map が空なら off です。`false` は mapping を削除せず、明示的な `<selector>/<native-openai-model>` routing も無効にせずに、生成行を非表示にして picker の bare native 行を復元します。 |
 | `activeCodexAccountId?` | `string` | — |次のリクエスト用に手動で選択されたプール アカウント。選択するとスレッドのアフィニティがクリアされます。実行中のリクエストでは、取得された資格情報が保持されます。 |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool のアカウント別選択順。アカウント ID → `-100` から `100` の整数で、**大きいほど先に使われ**、未設定は `0` です。これは eligibility ではなく順序の境界です。選択は適格なアカウントを、まだ quota に余裕がある最上位 tier に絞り込み、その tier の中を `accountPoolStrategy` が選びます。tier が飛ばされるのは、そのメンバー全員が自身の 0 以外の実効しきい値（アカウント別上書き、未設定ならグローバル値）以上、cooldown 中、soft-avoid、一時停止、または再認証待ちのときだけで、usage 不明が tier を drain させることはありません。順序付けが不適格なアカウントを選択可能にすることはなく、すでにアカウントが結び付いた thread を再 bind することもありません。メインの `__main__` も同じ条件で参加するため、Codex Desktop ログインを最後に使わせられます。エントリが 1 つもなければ挙動は従来どおりです。map が不正な場合は警告を出して順序付けを無効にします（config の修復処理は走りません）。`ocx account priority` と Codex Auth ページで管理します。 |
-| `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は未紐付けタスクの次のリクエストを再評価できます。紐付け済みタスクは既定（`pool.cacheAffinity`）ではしきい値を超えても同じアカウントを維持し、アカウントが使い切られるか処理できなくなったときだけ離れ、その場合も実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`pool.cacheAffinity: false` にするとしきい値で紐付け済みタスクも再評価します。`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
+| `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は未紐付けタスクの次のリクエストを再評価できます。紐付け済みタスクは既定（`pool.cacheAffinity`）ではしきい値を超えても同じアカウントを維持し、アカウントが使い切られるか処理できなくなったときだけ離れ、その場合も実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`pool.cacheAffinity: false` にするとしきい値で紐付け済みタスクも再評価します。`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、`round-robin` は新規/未紐付けの割り当て時にのみ使用し、しきい値未満の適格アカウントがある間は実効しきい値以上のアカウントを除外し、この理由で紐付け済みタスクを移動しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
 | `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | `autoSwitchThreshold` のアカウント別上書き（アカウント ID → `0`〜`100` の整数）。未設定はグローバル値を継承し、`0` はそのアカウントからの使用量ベース切り替えだけを無効にします。メインの `__main__` も指定できます。Codex Auth の各アカウントカードで管理します。 上書きを有効にすると、現在のグローバルしきい値が固定のアカウント別値としてコピーされます。`0` を含む上書き値は、その後グローバル値が変更されても優先されます。無効にすると `threshold: null` を送信してエントリを削除し、現在のグローバルしきい値と今後の変更を継承する状態に戻ります。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は未紐付けリクエストを移せます。紐付け済みタスクは既定ではアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持され、離れるときは実際に quota 余裕があり usage がより低いアカウントへだけ移ります。フラグをオフにすると、しきい値で紐付け済みタスクの次のリクエストも実際に quota 余裕があり usage がより低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。  `reset-first`: 使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。 月次リセットはこの順序に使用しません。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けです。セッションIDを持つリクエスト（通常の Codex CLI・App のターンやサブエージェントを含む）と、直近の親に紐付くセッションなしリクエストの紐付けは、シャットダウン時の最終的な affinity 保存が成功した場合、プロキシの正常な再起動後も最大24時間の非活動期間まで保持されることがあります。より深いセッションなしの連鎖と Codex App のメインログインへの紐付けはメモリ内にのみ残り、再起動後に再割り当てされます。eviction、アカウント削除、再ログイン、クラッシュ、affinity リセットではタスクが未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は未紐付けリクエストを移せます。紐付け済みタスクは既定ではアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持され、離れるときは実際に quota 余裕があり usage がより低いアカウントへだけ移ります。フラグをオフにすると、しきい値で紐付け済みタスクの次のリクエストも実際に quota 余裕があり usage がより低い適格アカウントへ移せます。`round-robin` は実効 `autoSwitchThreshold` 未満の適格アカウントに未紐付けリクエストを均等分散し、全員がしきい値以上なら全適格アカウントに分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。  `reset-first`: 使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。 月次リセットはこの順序に使用しません。 |
 | `pool.cacheAffinity?` | `boolean` | `true` | 紐付け済み Codex スレッド向けの cache-affinity 順序。`pool.kernel` とは独立で、既定はオンです。不正な値はオンとして読みます。live な紐付けが quota 余裕より優先され、`quota` は使用量が `autoSwitchThreshold` を超えたという理由だけではスレッドを移しません。一時停止、使用不可、または実際に使い切られたアカウント（既知 usage 100%）では離れますが、実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`false` にするとしきい値での再紐付けに戻ります。affinity は固定ではなく並べ替えです。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。通常のResponses送信とネイティブcompact送信では、実証済みの接続前DNS/TCP到達不能障害はprovider-host単位で記録され、アカウントの健全性、アカウントのクールダウン、スレッド/セッションの親和性、アクティブアカウントの選択、Poolルーティングには影響せず、この閾値にもカウントされません。 |
@@ -62,6 +63,8 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動ピンが劣化したとき、`hold` は警告を出して使い続け、`detour-new-threads` は新しいスレッドだけを別アカウントへ置きます。送信済みのターンは再送しません。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
+| `maxInboundBodyBytes?` | `number` | `0` | 受信する JSON 本文 1 件のデコード後のサイズを制限するバイト単位の設定です。省略または `0` でデフォルトの 256 MiB を維持し、設定値は 1〜512 MiB に制限されます。変更後は再起動が必要です。超過時はコード `inbound_body_too_large` のローカル HTTP 413 を返します。適用される上限が 256 MiB を超えると `maxConcurrentInboundBodyBytes` の共有ゲートも有効になり、リクエスト単位の上限だけを上げても共有予算は増えません。対象ルートと詳細は[受信リクエスト本文の受け入れ](/ja/reference/inbound-body-admission/)を参照してください。 |
+| `maxConcurrentInboundBodyBytes?` | `number` | `536870912` (512 MiB) | バイト単位の任意のトップレベル共有受け入れ予算です。適用される `maxInboundBodyBytes` が 256 MiB を超える場合にのみ有効です。省略、`0`、無効な値は従来のデフォルト 512 MiB を使います。有効な正の整数は使用時に 512 MiB〜2 GiB (`536870912`〜`2147483648`) に制限されます。再起動が必要で、同一プロセス内のすべてのリスナーが 1 つの予算を共有します。受け入れの計上用であり、メモリの事前割り当て、RSS 上限、RAM に応じた自動調整ではありません。2 GiB には運用者の明示的な選択が必要です。設定例、キューとレスポンスのライフサイクルに伴う制約、デフォルトで解析前の完全な 512 MiB アップロードが 1 件だけになる理由は[受信リクエスト本文の受け入れ](/ja/reference/inbound-body-admission/)を参照してください。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic ファーストパーティ: `"long"`、その他の Anthropic 互換エンドポイント: `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。未設定の場合、`api.anthropic.com`（API キーまたは OAuth アカウント プール）へのリクエストは 1 時間の TTL を使い、互換ゲートウェイやベンダーのエンドポイントは 5 分の TTL のままです。明示した値が常に優先されます。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
@@ -115,7 +118,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `models?` | `string[]` | 初期／フォールバックモデル一覧。`liveModels: false` で `models` が空でなければ、その後に `retainModels` を追加します。`models` が空または省略されている場合は、設定済みの `defaultModel`、`retainModels` の順に初期一覧を作り、重複 ID は最初の出現だけを残します。 |
 | `liveModels?` | `boolean` |開始/同期時にライブ カタログをフェッチします (デフォルトは `true`)。カスタムプロバイダーは `${baseUrl}/models` を使用します。組み込みはレジストリ URL とフィルターを使用する場合があります。 |
 | `selectedModels?` | `string[]` |検出後のカタログ許可リスト。空でない場合は、それらの ID のみが公開されます。空または省略すると、検出されたすべてのモデルが公開されます。 |
-| `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。マップは検出上限と同じ 2,000 件までです。 |
+| `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。例外として、直接の `provider/model` セレクターが既知の ID、エイリアス、`retainModels` のいずれにも一致しない場合（ライブ一覧がまだ取得されていない間など）、エンコード形が一致するキーをネイティブ ID として送信します。マップは検出上限と同じ 2,000 件までです。 |
 | `contextWindow?` | `number` | アップストリームのメタデータが無い場合に使うプロバイダー全体のコンテキスト値。メタデータがある場合は上限として働き、より小さいライブ値をそのまま残します。Models ダッシュボードでは `providerContextCaps` とは別に設定します。 |
 | `modelContextWindows?` | `Record<string, number>` | モデルごとのコンテキスト値および上限。`contextWindow` より優先され、ウィンドウが不明なら設定値を使い、より小さいライブメタデータがあればそちらが優先されます。 |
 | `inferContextWindow?` | `boolean` | カスタムプロバイダーのみ、既定は無効。`true` で欠けたウィンドウを同梱モデルメタデータから補完します。推定値であり、中継の容量を検証したものではありません。 |
@@ -151,7 +154,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 組み込みの`xai`プリセットは、xAIがこれらを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。非推論モデルは呼び出し元のペナルティをそのまま受け取ります。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` プリセットが DeepSeek 経路に既定で載せます。 |
-| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。いずれの場合もメッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
+| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。`singleLeadingSystemMessage` が有効でない場合、メッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
 | `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
@@ -177,23 +180,26 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
 
+LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
+
+
 プロバイダーの登録・置換（`POST /api/providers`）では、メモリやファイルの設定を変更する前に `responsesPath` と `chatCompletionsPath` を検証します。`PATCH /api/providers?name=<provider>` はリクエスト本文を保存済みのプロバイダーにマージします。`disabled` 以外のフィールドを変更する更新（`requestPacing` のみの更新を除く）では、保存前にマージ後のプロバイダーのパスを同じ方法で検証し、保持されているパスが無効な場合は `400` を返して設定を変更しません。設定ファイルの読み込みにも同じ経路の規則が適用されます。
 
 API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/ja/reference/configuration/server/#claude-code-claudecode) で構成されます。
 
 ### プロバイダーの保存で保持されるもの
 
-既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 8 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
+既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 11 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
 
-| 保存 | 8 つの設定 | 保存済みの `apiKeyPool` |
+| 保存 | 11 つの設定 | 保存済みの `apiKeyPool` |
 | --- | --- | --- |
 | 同じ宛先、フィールド省略 | 保存済みの値を保持（明示的な `[]` や `false` を含む） | 保持 |
 | 新しい宛先、フィールド省略 | 保持しない。新しい宛先のレジストリ既定値が適用されることがあります | 保持しない |
 | リクエストでフィールドを送信 | リクエストの値 | リクエストの値 |
 
-宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 8 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
+宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 10 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
 
-`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。8 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
+`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。10 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 
@@ -214,8 +220,7 @@ pool アカウントの追加と quota 更新はダッシュボードの **Codex
 使い切られるか処理できなくなるまで再紐付けを延期し、離れるときは実際に quota 余裕があり usage が
 より低いアカウントへだけ移ります。フラグをオフにすると、`quota` はしきい値超過後の次のリクエストで
 再紐付けできます。
-pause、cooldown、再認証、障害処理も独立して routing を消去または変更できます。未紐付けリクエストには
-プロキシ再起動や affinity リセット後の既存タスクも含まれます。出力前の **429/402** は使用量ベースの
+pause、cooldown、再認証、障害処理も独立して routing を消去または変更できます。未紐付けリクエストには有効なアカウントの紐付けがありません。セッションIDを持つリクエスト（通常の Codex CLI・App のターンやサブエージェントを含む）と、直近の親に紐付くセッションなしリクエストの紐付けは、シャットダウン時の最終的な affinity 保存が成功した場合、プロキシの正常な再起動後も最大24時間の非活動期間まで保持されることがあります。より深いセッションなしの連鎖と Codex App のメインログインへの紐付けはメモリ内にのみ残り、再起動後に再割り当てされます。eviction、アカウント削除、再ログイン、クラッシュ、affinity リセットではタスクが未紐付けになり得ます。出力前の **429/402** は使用量ベースの
 切り替えがオフでも同じリクエストで適格な代替アカウントへ 1 回再試行できます。アカウント変更後も会話
 コンテキストは保持・再生されますが、アカウント間の provider prompt cache 再利用は保証されません。
 一時停止したアカウントと quota metadata は表示されたままですが、自動切り替え、再試行/failover 選択、cooldown 復旧プローブ、手動有効化の対象外です。
@@ -227,8 +232,7 @@ pause、cooldown、再認証、障害処理も独立して routing を消去ま�
 別の適格な Pool アカウントへリクエストを切り替えることがあります。これらの障害回復は
 `autoSwitchThreshold: 0` でも有効であり、`0` が無効にするのは使用量に基づく予防的な切り替えだけです。
 
-**割り当てとプロアクティブ切り替え戦略：** `quota`（既定）はアクティブアカウントがない場合に最小 usage の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。`autoSwitchThreshold` 超過後は未紐付けリクエストを移せます。既定では cache affinity が quota 余裕より優先され、紐付け済みタスクはアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持され、離れるときは実際に quota 余裕があり usage がより低いアカウントへだけ移ります。usage が不明なアカウントは紐付け済みタスクの移動先にはならず、すべてのアカウントがしきい値を超えていればそのまま残ります。フラグをオフにすると紐付け済みタスクの次のリクエストもしきい値で再紐付けできますが、その場合も実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`round-robin` は
-未紐付けリクエストを均等分散し、しきい値は通常の rotation を変えません。`accountPoolStickyLimit`
+**割り当てとプロアクティブ切り替え戦略：** `quota`（既定）はアクティブアカウントがない場合に最小 usage の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。`autoSwitchThreshold` 超過後は未紐付けリクエストを移せます。既定では cache affinity が quota 余裕より優先され、紐付け済みタスクはアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持され、離れるときは実際に quota 余裕があり usage がより低いアカウントへだけ移ります。usage が不明なアカウントは紐付け済みタスクの移動先にはならず、すべてのアカウントがしきい値を超えていればそのまま残ります。フラグをオフにすると紐付け済みタスクの次のリクエストもしきい値で再紐付けできますが、その場合も実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`round-robin`：rotationはカウンター方式です。新規割り当てでは実効 `autoSwitchThreshold`（アカウント別上書きまたはグローバル既定値、`quota` と同じスコア）未満の適格アカウントがある間、しきい値以上のアカウントを除外します。使用量不明またはしきい値 `0` は未満として扱い、全適格アカウントがしきい値以上なら全員で順番に回します。紐付け済みタスクはしきい値を超えても維持し、処理不能（cooldown、quota 拒否、failover、pause）の場合のみ移動します。live な会話の子は親が使用中のアカウントから始まります。共通の優先度階層フィルターも同じ方法で余裕を評価します。オペレーターの手動選択は、使用量にかかわらず各 quota スコープの次の配置を取ります。そのスコープでそのアカウントへのリクエストが成功すると選択は消費され、以後の配置では再びしきい値が適用されます。`accountPoolStickyLimit`
 （既定 `1`、1–100）は成功応答ではなく割り当て/紐付け数を数えます。`fill-first` は未紐付けリクエストを
 cooldown、再認証、またはそのアカウントの実効 drain threshold（アカウント別上書き、未設定ならグローバル値）までアクティブアカウントへ割り当て、正常な紐付け済みタスクは
 affinity を維持します。これらの戦略は provider enforcement を回避しません。
@@ -240,9 +244,9 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 |キー |タイプ |デフォルト |説明 |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | スティッキー セッション アフィニティと使用量に基づく新規セッション選択を有効にします。**429 フェイルオーバーはここでは制御しません**: 使用可能なアカウントが 2 つ以上あれば他の複数資格情報プロバイダーと同様に有効になり、無効にはできません。 |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` |新しいセッションでは、アクティブなアカウントがこのしきい値に達すると、設定した期間で既知のキャッシュ使用量が最も低いアカウントを選択します。 `0` はクォータ選択を無効にします。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。`quota` は `quotaWindow` で指定した期間（既定は 5 時間足）でアカウントを順位付けし、`fill-first` も同じ期間で使い切りのしきい値を判定します。 |
-| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` |使用量ベースのアカウント選択で使う、プロバイダー報告のキャッシュ済み使用率です。`five-hour` は従来の動作を維持します。`weekly` は週次使用量を使い、他に対象アカウントが残る間だけ 5 時間使用量が上限に達したアカウントを除外し、残らない場合はそれらへフォールバックします。`max-utilization` は判明している値のうち最も高いものを使うため、週次使用量が未取得でも 5 時間使用量を利用できます。どちらも不明なら unknown の順位付けに従います。既知の使用量は unknown より先ですが、対象がすべて unknown でも対象順の先頭を選択します。記載した 5 時間使用量による同点判定後も完全に同点なら、対象順を維持します。正常な affinity セッションを先回りして再配置することはありません。新規セッションの割り当てと、対象となる 429 代替後のルーティング復旧では、`quota` はこの期間で対象候補を直接順位付けし、`fill-first` はこの期間のしきい値と上限到達ルールを使って安定順に進み、`round-robin` はこの設定を無視します。クールダウン、フェイルオーバー上限、再認証の適格性は別のローカル状態です。アカウント別の週次使用量は、ダッシュボードのプロバイダーページで取得した後にのみ利用できます。 |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 新規セッションでは、アクティブアカウントがこのしきい値に達すると、設定した期間の既知のキャッシュ済み使用量が最小のアカウントを選びます（自身のしきい値未満のアカウントを優先します）。選択先自体がしきい値以上である必要はありません。`0` は使用量ベースの先行切り替えのみを無効にし、新規セッションの選択と対象となる 429 後の復旧では引き続き `quotaWindow` を参照します。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新規セッション戦略。`quota` は `quotaWindow` の使用量が実効 `autoSwitchThreshold`（既定 80）に達するか処理不能になるまでアクティブアカウントを維持し、その後は自身のしきい値未満のアカウントを優先して最小使用量へ移ります。使用量不明なら維持します。`round-robin` は使用量のしきい値を参照せず新規セッションをローテーションします。`fill-first` は `quotaWindow` で使い切りしきい値を判定します。 |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` |使用量ベースのアカウント選択で使う、プロバイダー報告のキャッシュ済み使用率です。`five-hour` は従来の動作を維持します。`weekly` は週次使用量を使い、他に対象アカウントが残る間だけ 5 時間使用量が上限に達したアカウントを除外し、残らない場合はそれらへフォールバックします。`max-utilization` は判明している値のうち最も高いものを使うため、週次使用量が未取得でも 5 時間使用量を利用できます。どちらも不明なら unknown の順位付けに従います。既知の使用量は unknown より先ですが、対象がすべて unknown でも対象順の先頭を選択します。記載した 5 時間使用量による同点判定後も完全に同点なら、対象順を維持します。正常な affinity セッションを先回りして再配置することはありません。`quota` が代替を選ぶとき（アクティブアカウントがしきい値に達したか処理不能な新規セッション、または対象となる 429 後の復旧）、自身のしきい値未満の候補を優先し、この期間で順位付けし、`fill-first` はこの期間のしきい値と上限到達ルールを使って安定順に進み、`round-robin` はこの設定を無視します。クールダウン、フェイルオーバー上限、再認証の適格性は別のローカル状態です。アカウント別の週次使用量は、使用量プローブまたは観測したレスポンスヘッダーから取得します。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` |成功した新しいセッションのバインドは 1 つのラウンドロビン選択で保持されます。範囲は 1 ～ 100。 |
 
 共有の5時間・週次クォータが拒否された429だけがアカウントのクールダウンと切り替えを行います。一時的な速度制限はアフィニティを維持して送信受付だけを停止し、リクエストごとに短い同一アカウント再試行1回と別の対象アカウントへの切り替え1回までです。根拠ヘッダーのない429は同一アカウントで1回だけ再試行し、アカウントを冷却せず、Retry-Afterも生成しません。既定の単一アカウント動作は変わりません。Fable専用の拒否はSonnetを制限しません。手動選択とアフィニティもリクエストモデルの共有・ファミリークォータを確認します。パッシブなファミリー情報は30分または既知のリセットで期限切れとなり、1つの送信リクエストで再確認します。使用量しきい値はソフトな優先設定で、全候補消耗時のフォールバックを維持します。使用量・課金のハード上限ではありません。アフィニティはプロセスローカルであり、サイズ制限があります。トークン更新の失敗は既存の再認証ルールに従います。確認済みの契約・アカウント請求の 403 は出力前に別アカウントへ切り替え、`Retry-After` または既定の10分間のクールダウンを記録します。一般的な権限拒否では切り替えません。すべての対象となるアカウントが冷却されている場合、クライアントは、既知の場合、認証エラーではなく、`Retry-After` を含む 429 を受け取ります。

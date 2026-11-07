@@ -1,3 +1,6 @@
+import type { FailureDetail } from "../lib/failure-detail";
+import { boundedModelIdentity, knownModelIdentity } from "../lib/model-identity";
+import { boundedServiceTier } from "../lib/response-service-tier";
 import { createHash, type Hash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -5,8 +8,9 @@ import { getConfigDir } from "../config";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { normalizeRecordedClient, type UsageClient } from "./client";
 import {
   normalizePersistedJevDecision,
   type PersistedJevDecisionV1,
@@ -23,6 +27,8 @@ import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routi
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
+import type { UpstreamCondition } from "../lib/upstream-condition";
+import { errorDetailFor, normalizeLogErrorCode } from "./error-detail";
 import type { CodexWsStageRecord, CodexWsTerminalEvent } from "../server/responses/codex-ws-wire";
 import {
   ATTEMPT_RECOVERY_KIND_ROSTER,
@@ -299,6 +305,8 @@ export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | u
 export interface PersistedUsageEntry {
   requestedAlias?: string;
   requestId: string;
+  /** Best-effort classified client; absent only for records predating attribution. */
+  client?: UsageClient;
   /**
    * Identity of the ONE logical request this row belongs to (#4546), minted by
    * `createRequestExecutionBudget` at ingress. `requestId` identifies a log row; a retry layer,
@@ -354,6 +362,8 @@ export interface PersistedUsageEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** A persisted attempt roster lost at least one malformed entry during normalization. */
+  attemptNormalizationDropped?: boolean;
   /** Aggregated upstream spend for this logical request; additive, older rows omit it. */
   spend?: PersistedRequestSpend;
   /** Provenance of this row's cache detail; absent rows are reconstructed, never assumed observed. */
@@ -368,8 +378,17 @@ export interface PersistedUsageEntry {
    */
   terminalStatus?: RequestTerminalStatus;
   closeReason?: RequestCloseReason;
-  /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
+  /**
+   * Legacy input only: older rows carried upstream error text here. It is read once on load to
+   * derive upstreamCondition / rateLimitResetAt and is never written or returned.
+   */
   upstreamError?: string;
+  /** Proxy-classified upstream condition (src/lib/upstream-condition.ts); a closed enum. */
+  upstreamCondition?: UpstreamCondition;
+  /** Provider quota window end in epoch ms, derived server-side and bounded (src/usage/error-detail.ts). */
+  rateLimitResetAt?: number;
+  /** Proxy-authored failure text (src/server/request-log-failure-detail.ts), never upstream text. */
+  failureDetail?: FailureDetail;
   /** Where the terminal/failure was observed; absent on historic rows. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   /** Whether the terminal came from upstream or a proxy-generated tail. */
@@ -505,10 +524,10 @@ export function isKnownTerminalSource(value: unknown): value is NonNullable<Pers
  * call site and it never reached disk for exactly that reason.
  */
 const KNOWN_AFFINITY_MOVES = new Set<NonNullable<PersistedUsageEntry["affinity"]>>([
-  "reused", "held", "detour", "rebound", "new_bind", "cleared",
+  "reused", "held", "detour", "rebound", "new_bind", "cleared", "unbound",
 ]);
 const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinityReason"]>>([
-  "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
+  "healthy", "no_conversation", "request_owned", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
   "unusable", "paused", "plan_excluded", "credits_off", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
 ]);
@@ -536,6 +555,10 @@ export function usageTotalTokens(usage: OcxUsage | undefined): number | undefine
  * Providers whose adapters can only estimate usage (no authoritative per-turn frame).
  * Callers should pass the route ADAPTER when available; the name-prefix match is a
  * fallback for paths that only know the configured provider name (e.g. "cursor-mykey").
+ *
+ * Kiro is on the list because most of what reaches the log is a guess: a figure taken off the
+ * bridged Responses wire derives its input from the context checkpoint. The adapter opts a
+ * measured figure out with `upstreamReported`, set where it reads Kiro's own tokenUsage frame.
  */
 function isEstimatedUsageProvider(providerOrAdapter: string): boolean {
   return providerOrAdapter === "kiro" || providerOrAdapter.startsWith("kiro-")
@@ -556,7 +579,9 @@ export function usageForFinalLog(
 ): OcxUsage | undefined {
   if (!usage) return undefined;
   if (locallyAnswered) return usage;
-  if (usage.estimated || isEstimatedUsageProvider(provider)) return { ...usage, estimated: true };
+  if (usage.estimated || (isEstimatedUsageProvider(provider) && !usage.upstreamReported)) {
+    return { ...usage, estimated: true };
+  }
   return usage;
 }
 
@@ -664,7 +689,7 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
   if ("responseServiceTier" in outcome && typeof outcome.responseServiceTier !== "string") return null;
   if ("responseTierAuthoritative" in outcome && typeof outcome.responseTierAuthoritative !== "boolean") return null;
   const wireValue = sanitizeLogMetadataString(outcome.wireValue);
-  const responseServiceTier = sanitizeLogMetadataString(outcome.responseServiceTier);
+  const responseServiceTier = boundedServiceTier(outcome.responseServiceTier);
   return {
     ...(outcome.canonical === "priority" ? { canonical: "priority" as const } : {}),
     ...(outcome.wireKind === null
@@ -742,6 +767,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         && ATTEMPT_RECOVERY_WITHHELD.has(value as AttemptRecoveryWithheld),
     ))]
     : [];
+  const attemptErrorCode = normalizeLogErrorCode(attempt.errorCode, attempt.status as number);
   return {
     ordinal: attempt.ordinal as number,
     provider: attempt.provider,
@@ -773,7 +799,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(isNonNegativeFiniteNumber(attempt.totalTokens)
       ? { totalTokens: attempt.totalTokens }
       : {}),
-    ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(attemptErrorCode ? { errorCode: attemptErrorCode } : {}),
     ...(isKnownCacheTelemetryProvenance(attempt.cacheProvenance)
       ? { cacheProvenance: attempt.cacheProvenance }
       : {}),
@@ -877,7 +903,7 @@ export function isValidReasoningWireValue(
     || (wireField === "reasoning.enabled" && typeof wireValue === "boolean");
 }
 
-function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
+export function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(normalizeUsageAttempt)
     .filter((attempt): attempt is PersistedUsageAttempt => attempt !== null);
@@ -888,19 +914,9 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
-const MAX_SERVED_MODEL_LENGTH = 200;
-/**
- * An upstream model is an identifier, never free-form text to truncate into one. A value the
- * secret redactor would change is dropped rather than logged, because credential-shaped text can
- * fit the identifier alphabet.
- */
+/** Served and resolved models on a row use the shared model-identity bound (src/lib/model-identity.ts). */
 export function sanitizeServedModel(value: unknown): string | undefined {
-  return typeof value === "string"
-    && value.length <= MAX_SERVED_MODEL_LENGTH
-    && /^[A-Za-z0-9._:/@+-]+$/.test(value)
-    && redactSecretString(value) === value
-    ? value
-    : undefined;
+  return boundedModelIdentity(value);
 }
 
 /** The identity fields that decide whether a response model is ocx's own echo. */
@@ -933,28 +949,56 @@ export function isClientSelectorEcho(source: ServedModelEchoSource, served: stri
 
 /** Record a response-body model as the served model when it is a real upstream observation. */
 export function recordObservedServedModel(
-  target: ServedModelEchoSource & { servedModel?: string; resolvedModel?: string; preserveResolvedModelFromRoute?: boolean },
+  target: ServedModelEchoSource & { servedModel?: string; resolvedModel?: string; preserveResolvedModelFromRoute?: boolean; attempts?: unknown },
   value: unknown,
 ): void {
-  const servedModel = sanitizeServedModel(value);
+  const servedModel = knownModelIdentity(value, routeKnownModels(target), target.provider);
   if (!servedModel || isClientSelectorEcho(target, servedModel)) return;
   target.servedModel = servedModel;
   if (!target.preserveResolvedModelFromRoute) target.resolvedModel = servedModel;
 }
 
 /**
+ * Model ids a row's own route already names, which an upstream-reported served or resolved model
+ * must equal to be recorded: the routed model (also without its provider prefix), the wire model,
+ * the requested model and alias, and each attempt's target. The bundled Codex catalog is checked
+ * by {@link knownModelIdentity} itself.
+ */
+export function routeKnownModels(source: ServedModelEchoSource & { attempts?: unknown }): string[] {
+  const known: string[] = [];
+  const add = (value: unknown) => { if (typeof value === "string" && value) known.push(value); };
+  add(source.model);
+  if (typeof source.model === "string" && source.model.includes("/")) add(source.model.slice(source.model.indexOf("/") + 1));
+  add(source.wireModel);
+  add(source.requestedModel);
+  add(source.requestedAlias);
+  if (Array.isArray(source.attempts)) {
+    for (const attempt of source.attempts as unknown[]) {
+      if (attempt && typeof attempt === "object") {
+        add((attempt as { model?: unknown }).model);
+        add((attempt as { wireModel?: unknown }).wireModel);
+      }
+    }
+  }
+  return known;
+}
+
+/**
  * Model identity fields for a log row. The served model is sanitized, and a resolvedModel that
  * only echoed a dropped served model is dropped with it, so the rejected value cannot survive
  * under the other name. A client-selector echo is dropped the same way, which also repairs
- * rows persisted before the echo was filtered at capture.
+ * rows persisted before the echo was filtered at capture. Both are kept only when they equal a
+ * model id the row's route already names (or the bundled catalog pins); see {@link knownModelIdentity}.
  */
-export function modelIdentityLogFields(source: ServedModelEchoSource & { resolvedModel?: string; servedModel?: unknown }): {
+export function modelIdentityLogFields(source: ServedModelEchoSource & { resolvedModel?: string; servedModel?: unknown; attempts?: unknown }): {
   resolvedModel?: string; servedModel?: string; wireModel?: string;
 } {
-  const sanitized = sanitizeServedModel(source.servedModel);
+  const known = routeKnownModels(source);
+  const sanitized = knownModelIdentity(source.servedModel, known, source.provider);
   const servedModel = isClientSelectorEcho(source, sanitized) ? undefined : sanitized;
+  // The resolved model passes the same validator on its own; it also leaves with a dropped served echo.
   const resolvedModel = source.servedModel !== undefined && source.resolvedModel === source.servedModel && !servedModel
-    ? undefined : source.resolvedModel;
+    ? undefined : knownModelIdentity(source.resolvedModel, known, source.provider);
   return {
     ...(resolvedModel ? { resolvedModel } : {}),
     ...(servedModel ? { servedModel } : {}),
@@ -971,7 +1015,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   const tierOutcome = entry.tierOutcome ? normalizeAttemptTierOutcome(entry.tierOutcome) : undefined;
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
-  const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
+  const responseServiceTier = boundedServiceTier(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
   const { servedModel, resolvedModel } = modelIdentityLogFields(entry);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
@@ -992,8 +1036,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const spend = normalizeRequestSpend(entry.spend);
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
-  return {
+  const normalized: PersistedUsageEntry = {
     requestId: entry.requestId,
+    ...(Object.hasOwn(entry, "client") ? { client: normalizeRecordedClient(entry.client) ?? "unknown" } : {}),
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
     provider: entry.provider,
@@ -1066,6 +1111,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      && Object.prototype.propertyIsEnumerable.call(entry, "attemptNormalizationDropped")
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }
@@ -1075,19 +1123,25 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(affinity ? { affinity } : {}),
     ...(affinityReason ? { affinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
-    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+    // Closed code, classified condition and numeric reset only; upstream text is never kept.
+    ...errorDetailFor(entry),
     // Validated rather than copied on truthiness, like the inbound protocol and transport phase
     // above. Harmless while these were only rendered; not harmless once the terminal status is
     // a grouping-key slot, because the string is assembled from an upstream frame.
     ...(isRequestTerminalStatus(entry.terminalStatus) ? { terminalStatus: entry.terminalStatus } : {}),
     ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
-    ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),
     ...normalizeRequestFailureAttribution(entry),
   };
+  if (normalized.attemptNormalizationDropped !== true && (entry.attemptNormalizationDropped === true
+    || (Array.isArray(entry.attempts) && attempts.length < entry.attempts.length))) {
+    // Preserve the read-time loss signal without changing legacy ledger serialization.
+    Object.defineProperty(normalized, "attemptNormalizationDropped", { value: true, enumerable: false });
+  }
+  return normalized;
 }
 
 // Bound hot-path filesystem hardening to once per second while ensuring an external mode
@@ -1136,7 +1190,11 @@ export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
-  const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
+  const normalized = normalizeUsageEntry(entry);
+  // Once invalid attempts are removed, persist their loss so future reads can still report it.
+  const line = `${JSON.stringify(normalized.attemptNormalizationDropped === true
+    ? { ...normalized, attemptNormalizationDropped: true }
+    : normalized)}\n`;
   const path = usageLogPath();
   const now = Date.now();
   const doAppend = (): void => {

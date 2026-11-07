@@ -119,6 +119,7 @@ export async function rotateAnthropicAccountOnResponseForInstance(
   const { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal,
     hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } = routing;
   if (wasAccountAutoPaused(response)) {
+    routing.clearAnthropicSessionAffinityForAccount(sent.accountId);
     if (!options.canRetry || options.signal?.aborted) return null;
     return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(),
       options.currentDecision ? options.currentDecision() : options.decision ?? null, options.model, options.excludedAccountIds);

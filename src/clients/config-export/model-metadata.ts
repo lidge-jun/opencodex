@@ -31,6 +31,25 @@ export function outputBudgetFor(context: number, model: OpencodeCatalogModel): n
   return Math.min(limit, context);
 }
 
+/**
+* Known model output limit without the schema stand-in, clamped to context.
+*
+* `outputBudgetFor` always returns a number because the clients that require the field
+* cannot express "unknown". A client that instead treats an absent `maxTokens` as a real
+* default must not be handed the 32000 stand-in: that would claim a limit no model declared
+* (#5828). Use this variant where "no claim" is representable.
+* @param context - the context window this model already exports.
+* @param model - the catalog row, which may carry an authoritative output limit.
+* @returns the known limit clamped to `context`, or undefined when nothing is known.
+*/
+export function knownOutputBudget(context: number, model: OpencodeCatalogModel): number | undefined {
+  const provider = model.provider ?? "";
+  const metadata = getModelMetadata(resolveMetadataProvider(provider) ?? provider, model.id ?? model.namespaced);
+  const limit = authoritativeContextWindow(model.maxTokens)
+    ?? authoritativeContextWindow(metadata?.maxTokens);
+  return limit === undefined ? undefined : Math.min(limit, context);
+}
+
 /** Input limits are optional: unlike output, a missing limit needs no schema fallback. */
 export function inputBudgetFor(context: number, model: OpencodeCatalogModel): number | undefined {
   const limit = authoritativeContextWindow(model.maxInputTokens);

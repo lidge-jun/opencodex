@@ -72,6 +72,7 @@ export function preferConfiguredHostedTools(
   provider: OcxProviderConfig,
   modelId: string,
   selectedModelId?: string,
+  substitutions?: Array<{ name: string; namespace?: string; callType: string }>,
 ): unknown {
   // A virtual model's advertised id takes precedence over its resolved wire-model id.
   // Read own properties only: a routed model id of `constructor`/`toString` would
@@ -87,7 +88,20 @@ export function preferConfiguredHostedTools(
   if (!preferredTools?.includes(HOSTED_IMAGE_GENERATION_TOOL) || !isPlainObject(body)) return body;
 
   const stripGroup = (tools: unknown[]): unknown[] => {
-    const filtered = tools.filter(tool => !declaresImageGenClientTool(tool));
+    const filtered = tools.filter(tool => {
+      if (!declaresImageGenClientTool(tool)) return true;
+      const declaration = tool as Record<string, unknown>;
+      if (declaration.type === "namespace" && Array.isArray(declaration.tools)) {
+        for (const inner of declaration.tools) {
+          if (isPlainObject(inner) && typeof inner.name === "string") {
+            substitutions?.push({ name: inner.name, namespace: IMAGE_GEN_NAMESPACE, callType: "image_generation_call" });
+          }
+        }
+      } else if (typeof declaration.name === "string") {
+        substitutions?.push({ name: declaration.name, callType: "image_generation_call" });
+      }
+      return false;
+    });
     return filtered.length === tools.length ? tools : filtered;
   };
 

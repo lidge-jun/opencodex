@@ -55,3 +55,11 @@ export async function withFetchDeadline<T>(ms: number, caller: AbortSignal | und
     bounded.signal.removeEventListener("abort", onAbort);
   }
 }
+
+/**
+ * Release a response body without letting cleanup delay or replace the caller's
+ * status classification: a rejected, stalled, or throwing cancel is ignored.
+ */
+export function discardResponseBody(response: Response): void {
+  try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
+}

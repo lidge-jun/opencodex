@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../../src/types";
+import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import { runGuiCommand } from "../../src/cli/gui";
 import { createGuiPairingGrant, consumeGuiPairingGrant, issueGuiSession, authorizeGuiSessionRequest } from "../../src/server/gui-session";
 import { createManagementSessionControl, managementPrincipal, managementSessionIssuance, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
@@ -24,6 +25,69 @@ const secret = "A".repeat(43);
 const nonce = "B".repeat(43);
 const browserOrigin = "https://dashboard.example.test";
 const target: LiveProxy = { pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime" };
+
+test.each([
+  ["default bind", undefined, false, "http://127.0.0.1:10100"],
+  ["IPv4 bind", "127.0.0.1", false, "http://127.0.0.1:10100"],
+  ["IPv6 bind", "::1", false, "http://[::1]:10100"],
+  ["auto-started default bind", undefined, true, "http://127.0.0.1:10100"],
+] as const)("GUI dispatch opens a pairable origin for the %s", async (_label, hostname, start, expectedOrigin) => {
+  const { dispatchCommand } = await import("../../src/cli/dispatch");
+  const { probeHostname } = await import("../../src/server/proxy-liveness");
+  const launcher = await import("../../src/lib/open-url");
+  const pairingClient = await import("../../src/cli/gui-pair-client");
+  const config: OcxConfig = { port: 10100, hostname, providers: {}, defaultProvider: "openai" };
+  const live: LiveProxy = { ...target, hostname };
+  const opened: string[] = [];
+  const grants: string[] = [];
+  let spawns = 0;
+  let waits = 0;
+  let running = !start;
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const open = spyOn(launcher, "openUrl").mockImplementation(async url => {
+    opened.push(url);
+    return { status: "started" };
+  });
+  const pair = spyOn(pairingClient, "requestBoundGuiPairingGrant").mockImplementation(async (actual, origin, options) => {
+    expect(actual).toEqual(live);
+    expect(options?.requireLocalIntent).toBe(true);
+    grants.push(origin);
+    return {
+      kind: "created", grant: `ocx_pair_${"C".repeat(43)}`,
+      browserOrigin: origin, serverOrigin: origin, expiresAt: Date.now() + 60_000,
+    };
+  });
+  const dispatch = (args: string[]) => dispatchCommand(
+    { kind: "command", command: "gui", args },
+    {
+      args, loadConfig: () => config, probeHostname,
+      findLiveProxy: async () => running ? live : null,
+      startArgv: port => ["ocx", "start", String(port)],
+      spawnDetached: () => { spawns += 1; },
+      waitForProxy: async () => { waits += 1; running = true; return live; },
+    } as CliDispatchDeps,
+  );
+  try {
+    expect(await dispatch(["gui"])).toBe(0);
+    expect(opened).toHaveLength(1);
+    const openedOrigin = new URL(opened[0]!).origin;
+    // Use exactly the origin the shared pairing form reads from window.location.
+    expect(await dispatch(["gui", "pair", "--origin", openedOrigin, "--json"])).toBe(0);
+    expect(openedOrigin).toBe(expectedOrigin);
+    expect(grants).toEqual([expectedOrigin]);
+    expect(spawns).toBe(start ? 1 : 0);
+    expect(waits).toBe(start ? 1 : 0);
+    // Opening a usable default must not make an alias a valid pairing origin.
+    expect(await dispatch(["gui", "pair", "--origin", "http://localhost:10100"])).toBe(1);
+    expect(grants).toEqual([expectedOrigin]);
+  } finally {
+    pair.mockRestore();
+    open.mockRestore();
+    error.mockRestore();
+    log.mockRestore();
+  }
+});
 
 function proofResponse(init?: RequestInit, capabilityVersion: unknown = GUI_PAIR_CAPABILITY_VERSION): Response {
   const challenge = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;

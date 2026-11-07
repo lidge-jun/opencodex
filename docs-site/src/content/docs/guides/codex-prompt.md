@@ -36,6 +36,12 @@ unavailable, which is not the case.
 Click a layer name to see the text it sends. The dialog reads it from
 `codex debug prompt-input`, so it is the real thing rather than a description.
 
+The read has one fixed 15-second caller budget, including time spent
+reading metadata and waiting on a shared probe. Synchronous metadata reads finish
+before expiry can be checked; an exhausted budget then prevents a new probe.
+If it expires, the dialog reports that the prompt
+could not be read; locally available base instructions are still returned.
+
 Sometimes there is nothing to show, and the dialog says which reason applies:
 
 - **The file exists but is empty.** Your `~/.codex/AGENTS.md` is zero bytes, so

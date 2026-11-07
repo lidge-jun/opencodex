@@ -63,14 +63,17 @@ export function windowsWrapperKillScript(paths: readonly string[]): string {
 export function killWindowsSchedulerWrappers(paths: {
   scriptPath: string;
   launcherPath: string;
-}): void {
+}, beforeMutation?: () => void): void {
   if (process.platform !== "win32") return;
+  let file: string, args: string[];
   try {
-    spawnSync(resolveTrustedWindowsPowerShellExe(), [
-      // No `-WindowStyle Hidden` here: Bun 1.3.14 can fail that direct CLI pair
-      // before the command runs (#1589). `windowsHide` below is sufficient.
-      "-NoProfile", "-NoLogo", "-NonInteractive",
-      "-Command", windowsWrapperKillScript([paths.scriptPath, paths.launcherPath]),
-    ], { stdio: "ignore", timeout: 5000, windowsHide: true });
+    file = resolveTrustedWindowsPowerShellExe();
+    args = ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command",
+      windowsWrapperKillScript([paths.scriptPath, paths.launcherPath])];
+  } catch { return; }
+  beforeMutation?.();
+  try {
+    // windowsHide avoids Bun's direct -WindowStyle argv failure (#1589).
+    spawnSync(file, args, { stdio: "ignore", timeout: 5000, windowsHide: true });
   } catch { /* best-effort */ }
 }

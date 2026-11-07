@@ -15,11 +15,13 @@ import { getClaudePickerRuntime, startClaudeIntercept, type ClaudeInterceptHandl
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 // End to end over the management routes: a real picker runtime and controller behind the
 // dedicated egress proxy, with the keychain, the claude.ai listener and discovery faked.
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let handle: ClaudeInterceptHandle | null = null;
 const previous: Record<string, string | undefined> = {};
 const ENV_KEYS = ["OPENCODEX_HOME", "OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR", "CLAUDE_CONFIG_DIR"] as const;
@@ -124,6 +126,7 @@ test("picker egress uses HTTPS Desktop entrypoint after a UA-less CONNECT", asyn
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-picker-routes-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   for (const key of ENV_KEYS) previous[key] = process.env[key];
   process.env.OPENCODEX_HOME = root;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(root, "desktop-library");
@@ -135,6 +138,7 @@ beforeEach(() => {
 afterEach(async () => {
   await handle?.stop();
   handle = null;
+  lifecycleLock.restore();
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
     else process.env[key] = previous[key];

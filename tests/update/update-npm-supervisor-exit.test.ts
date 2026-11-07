@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +25,7 @@ async function runner(root: string, transform: (source: string) => string): Prom
   const source = readFileSync(repoPath("src/update/npm-install.mjs"), "utf8");
   const anchor = 'const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");';
   expect(source.split(anchor)).toHaveLength(2);
-  return (await import("data:text/javascript;base64," + Buffer.from(source.replace(anchor, `const helper = ${JSON.stringify(helper)};`)).toString("base64"))).runNpmInstall;
+  return (await import("data:text/javascript;base64," + Buffer.from(source.replace(anchor, `const helper = ${JSON.stringify(helper)};`).replaceAll('"./mutation-guard.mjs"', JSON.stringify(pathToFileURL(repoPath("src/update/mutation-guard.mjs")).href))).toString("base64"))).runNpmInstall;
 }
 
 test.skipIf(process.platform !== "win32").each(["created", "tree"])("abrupt supervisor exit at %s kills installer and retains unproven stage", async point => {
@@ -52,7 +53,7 @@ test.skipIf(process.platform !== "win32").each(["created", "tree"])("abrupt supe
     pending = transactionalNpmUpdateAsync({ packageDir, pkgName: "@fixture/opencodex", tag: "latest",
       runNpm: (args: string[]) => {
         stage = args[args.indexOf("--prefix") + 1]!;
-        return install({ file: Bun.which("node")!, args: [fixturePath("npm-timeout-tree.mjs"), "tree", stage, leafReceipt], options: {} });
+        return install({ file: Bun.which("node")!, args: [fixturePath("npm-timeout-tree.mjs"), "tree", stage, leafReceipt], options: {} }, { authorizeMutation: () => true });
       }, deps: { rm: () => { removals++; } },
     });
     expect(await until(() => existsSync(receipt), 10000), "CreateProcess handshake").toBe(true);
@@ -115,7 +116,7 @@ test.skipIf(process.platform !== "win32").each(["0x0002000D", "0x00020002"])("un
       return source.replace(anchor, "new IntPtr(0x0002FFFF)");
     });
     const result = await install({ file: Bun.which("node")!,
-      args: ["-e", `require('fs').writeFileSync(${JSON.stringify(launched)}, 'ran')`], options: {} });
+      args: ["-e", `require('fs').writeFileSync(${JSON.stringify(launched)}, 'ran')`], options: {} }, { authorizeMutation: () => true });
     expect(result.status).toBeNull();
     expect(result.processTreeExited).toBe(true);
     expect(result.error?.code).toBe("EINSTALLJOIN");

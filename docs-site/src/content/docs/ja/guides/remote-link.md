@@ -10,10 +10,10 @@ description: SSH で OpenCodex の Home コンピューターと Child コンピ
 - Home から Child に OpenSSH キーでログインできること。
 - Child から開始するリンクでは、Child から Home に OpenSSH キーでログインできる必要があります（パスワードログインには対応していません）。
 - Child に OpenCodex 2.66.0 以降がインストールされていること（Child から開始するリンクでは Home にも）。
-- 両方のコンピューターが macOS または Linux であること。
+- 両方のコンピューターで macOS、Linux、Windows x64 を使用できます。Windows には OpenSSH Server と Windows PowerShell が必要です。Git Bash と curl は不要です。
 - Home から Child を追加するダッシュボードは Home 上で開くか、ペアリング済みの Hub セッションを使用します。現在のコンピューターを Child にするには、オペレーターがペアリングしたダッシュボードセッションが必要です。認証情報なしのローカルセッションでは、このルーティング変更を確定できません。
 
-パスワード SSH と Windows は現在のフローに含まれません。リンクはどちら側からでも開始できます。次の手順のように Home から開始するか、後述の「このコンピューターを Child として接続する」のように Child から開始します。
+パスワード SSH はサポートされません。リンクは Home または Child から開始できます。Windows では検証済みの OpenSSH 接続経由で PowerShell を実行します。
 
 ## `#remote` から Child を追加する
 

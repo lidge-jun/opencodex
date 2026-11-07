@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 /**
  * Read-path for provider key material: env references, keychain references, or the literal
  * value.
@@ -87,7 +88,19 @@ export function keychainReferenceBelongsToProvider(reference: string, name: stri
 
 /** Entry for `account` under the provider-key service; read and write paths share the factory. */
 export function providerKeychainEntry(account: string): ProviderKeychainEntry {
-  return entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
+  const entry = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
+  // A failed or unverifiable write keeps its account counted as a local credential.
+  const absent = (): readonly string[] => {
+    try { return entry.getPassword() === null ? [account] : []; } catch { return []; }
+  };
+  return {
+    getPassword: () => entry.getPassword(),
+    setPassword: password => publishCredentialSync(() => entry.setPassword(password), {
+      accounts: [account], absent: completed => completed ? [] : absent(),
+    }),
+    // Registered before the attempt, so a deletion that fails keeps the secret counted.
+    deletePassword: () => publishCredentialSync(() => entry.deletePassword(), { accounts: [account], absent }),
+  };
 }
 
 function readKeychain(account: string, quiet = false): string | undefined {
@@ -141,11 +154,11 @@ export function providerKeyStoreKind(provider: Pick<OcxProviderConfig, "apiKey">
   return "file";
 }
 
-/** Probe the OS keychain with a throwaway account: write, read back, delete. */
+/** Probe the OS keychain with a throwaway account: write, read back, delete. It stores no credential. */
 export function probeProviderKeychain(): { available: true } | { available: false; reason: string } {
   const account = `probe-${process.pid}-${Date.now()}`;
   try {
-    const entry = providerKeychainEntry(account);
+    const entry = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
     entry.setPassword("ok");
     const back = entry.getPassword();
     try { entry.deletePassword(); } catch { /* best effort */ }

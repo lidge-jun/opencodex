@@ -16,11 +16,13 @@ import { readPath } from "./merge";
 import type { OwnershipRecord } from "./ownership";
 import type { IntegrationIO } from "./config-io";
 import { dirname, join } from "node:path";
+import { ClientPathError } from "../clients/client-path";
 import {
-  ClientPathError,
   buildDroidContribution,
   qoderConfigPath,
   qoderHomeDir,
+  t3codeConfigPath,
+  t3codeHomeDir,
   clineConfigPath,
   clineSettingsDir,
   droidConfigPath,
@@ -517,6 +519,13 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     detectDir: (env, home, io) => gentleShellPaths(env, home, io).detectDir,
     resolvePaths: (env, home, _context, io) => gentleShellPaths(env, home, io),
     unresolvedPathHint: (_env, home = homedir()) => join(home, ".gentle-shell", "agent", "models.json"),
+  },
+  t3code: {
+    id: "t3code",
+    configPath: (env = process.env, home = homedir()) => t3codeConfigPath(env, home),
+    // The state directory, not `~/.t3`: the server creates `userdata` on its first start,
+    // while `~/.t3` alone can be left behind by the installer's `bin`.
+    detectDir: (env = process.env, home = homedir()) => join(t3codeHomeDir(env, home), "userdata"),
   },
 };
 

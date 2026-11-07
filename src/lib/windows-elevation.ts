@@ -371,10 +371,18 @@ function isOwnedSchedulerCreate(args: string[]): boolean {
     && normalized.includes("/f");
 }
 
-function isWindowsSchtasksAccessDeniedError(error: unknown, args: string[]): boolean {
-  if (!isOwnedSchedulerCreate(args)) return false;
+function isWindowsSchtasksAccessDeniedError(error: unknown, args: string[], taskPresent = false): boolean {
+  if (isOwnedSchedulerCreate(args)) {
+    return isWindowsAccessDeniedError(error)
+      || (schedulerExitStatus(error) === 1 && isCurrentWindowsProcessElevated() === false);
+  }
+  const operation = schtasksOperationFromArgs(args);
+  if (operation !== "delete" && operation !== "run" && operation !== "end") return false;
+  const normalized = args.map(arg => arg.toLowerCase());
+  const taskIndex = normalized.indexOf("/tn");
   return isWindowsAccessDeniedError(error)
-    || (schedulerExitStatus(error) === 1 && isCurrentWindowsProcessElevated() === false);
+    || (operation === "delete" && taskPresent && schedulerExitStatus(error) === 1
+      && taskIndex > 0 && normalized[taskIndex + 1] === "opencodex-proxy");
 }
 
 /** Structured Task Scheduler failure that survives formatting and process boundaries. */
@@ -410,32 +418,47 @@ export class WindowsElevationError extends Error {
 }
 
 /** Replace raw schtasks access-denied output with dashboard-friendly guidance. */
-export function formatWindowsSchtasksError(error: unknown, args: string[]): string {
+export function formatWindowsSchtasksError(error: unknown, args: string[], taskPresent = false): string {
   const operation = schtasksOperationFromArgs(args);
-  const ownedCreateAccessDenied = isWindowsSchtasksAccessDeniedError(error, args);
-  const accessDenied = ownedCreateAccessDenied || isWindowsAccessDeniedError(error);
+  const classifiedAccessDenied = isWindowsSchtasksAccessDeniedError(error, args, taskPresent);
+  const accessDenied = classifiedAccessDenied || isWindowsAccessDeniedError(error);
+  const argsText = args.map(arg => (/\s/.test(arg) ? `"${arg}"` : arg)).join(" ");
   if (!accessDenied) {
+    // Keep the already-stopped contract, but never echo execFileSync's message: it
+    // appends OEM stderr decoded as UTF-8, even when encoding: "buffer" was used.
+    if (operation === "end" && error instanceof Error
+      && /no running instance|not currently running|0x41330/i.test(error.message)) {
+      return "Task Scheduler has no running instance (0x41330).";
+    }
+    if (error && typeof error === "object"
+      && ("status" in error || "stderr" in error || "stdout" in error)) {
+      const status = schedulerExitStatus(error);
+      return `Task Scheduler command failed${status === null ? "" : ` (exit code ${status})`}: schtasks ${argsText}`;
+    }
     return error instanceof Error ? error.message : String(error);
   }
-  const argsText = args.map(arg => (/\s/.test(arg) ? `"${arg}"` : arg)).join(" ");
+  if (operation === "delete" || operation === "run" || operation === "end") {
+    return "Windows access denied while running Task Scheduler. "
+      + `Run this command from an elevated terminal (Run as administrator): schtasks ${argsText}`;
+  }
   const guidance = [
     "Windows access denied while running Task Scheduler.",
     `Command: schtasks ${argsText}`,
     "The OpenCodex task definition is scoped to the installing account and normally registers without elevation, so this denial is not fixed by approving a UAC prompt. Check `ocx service status`: if an existing `opencodex-proxy` task belongs to a different account, remove it from that account and retry `ocx service install`.",
   ].join(" ");
-  if (operation === "create" && ownedCreateAccessDenied) {
+  if (operation === "create" && classifiedAccessDenied) {
     return `${guidance}\n${WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER}`;
   }
   return guidance;
 }
 
-export function toWindowsSchtasksError(error: unknown, args: string[]): WindowsSchtasksError {
+export function toWindowsSchtasksError(error: unknown, args: string[], taskPresent = false): WindowsSchtasksError {
   if (error instanceof WindowsSchtasksError) return error;
   const operation = schtasksOperationFromArgs(args);
-  const reason: WindowsSchtasksFailureReason = isWindowsSchtasksAccessDeniedError(error, args)
+  const reason: WindowsSchtasksFailureReason = isWindowsSchtasksAccessDeniedError(error, args, taskPresent)
     ? "access-denied"
     : "other";
-  return new WindowsSchtasksError(operation, reason, formatWindowsSchtasksError(error, args));
+  return new WindowsSchtasksError(operation, reason, formatWindowsSchtasksError(error, args, taskPresent));
 }
 
 /**

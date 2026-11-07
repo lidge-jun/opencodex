@@ -39,12 +39,14 @@ type NpmUpdateOptions = {
   runNpm: (args: string[]) => NpmInstallResult;
   /** npm cache root the pre-flight resolved and checked; pinned with `--cache` for staging. */
   cachePath?: string;
+  /** Synchronous authorization after staging/verification, immediately before the live swap. */
+  mayReplacePackage?: () => boolean;
   log?: (line: string) => void;
   deps?: UpdateFsDeps;
 };
 type NpmUpdateResult = {
   ok: boolean;
-  phase: "stage" | "verify" | "swap-backup" | "swap-live" | "post-verify" | "double-fault" | "done";
+  phase: "stage" | "verify" | "authorize" | "swap-backup" | "swap-live" | "post-verify" | "double-fault" | "done";
   error?: string;
   rolledBack?: boolean;
   backup?: string;

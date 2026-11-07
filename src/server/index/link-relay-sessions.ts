@@ -1,7 +1,8 @@
 import type { Server } from "bun";
 import {
-  LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION,
-  LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkRelayProof, linkRelayProofMatches,
+  LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
+  LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkConnectionProof,
+  linkRelayProof, linkRelayProofMatches,
 } from "../../link/relay-auth";
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
 
@@ -21,6 +22,8 @@ export interface LinkRelaySessionOptions {
   reservationMs?: number;
   /** Where a verified challenge records the Child's report, and a known link's version mismatch. */
   peers?: LinkPeerObservations;
+  /** The current tunnel connection of a Home-initiated link, announced with each proof. */
+  connectionGeneration?: (linkId: string) => string | undefined;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -81,9 +84,13 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           linkRelayProofMatches(q.get("proof"), linkRelayProof(candidate, "caller", keyId, linkId, nonce)));
         if (!fingerprint) return refuse();
         options.peers?.observe(linkId, LINK_RELAY_AUTH_VERSION, parseLinkPeerReport(req.headers));
+        let generation: string | undefined;
+        try { generation = options.connectionGeneration?.(linkId); } catch { generation = undefined; }
+        const connectionProof = generation === undefined ? null : linkConnectionProof(fingerprint, keyId, linkId, nonce, generation);
         const answer = () => new Response(null, { status: 204, headers: {
           "x-opencodex-link-proof": linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)!,
           "cache-control": "no-store",
+          ...(connectionProof ? { [LINK_RELAY_CONNECTION_HEADER]: generation!, [LINK_RELAY_CONNECTION_PROOF_HEADER]: connectionProof } : {}),
         } });
         // A readiness probe closes after this answer and sends no data request, so it reserves
         // nothing: no session to consume, no capacity and no drain lease held until expiry.

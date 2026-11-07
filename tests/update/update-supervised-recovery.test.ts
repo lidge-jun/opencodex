@@ -32,6 +32,11 @@ function recorder(reply: { ok: boolean; stdout?: string; stderr?: string }) {
 }
 
 describe("service manager commands", () => {
+  test("a final authority refusal is returned without a manager dispatch", () => {
+    const { calls, run } = recorder({ ok: true });
+    expect(restartServiceManagerJob({ platform: "linux", run }, () => false)).toMatchObject({ ok: false, refused: true });
+    expect(calls).toEqual([]);
+  });
   test("the shared names match the service layer's label and unit", () => {
     expect(LAUNCHD_SERVICE_LABEL).toBe(LABEL);
     expect(SYSTEMD_SERVICE_UNIT).toBe(TASK);
@@ -39,20 +44,20 @@ describe("service manager commands", () => {
 
   test("macOS restarts the loaded job in place with kickstart -k", () => {
     const { calls, run } = recorder({ ok: true });
-    expect(restartServiceManagerJob({ platform: "darwin", uid: 501, run })).toEqual({ ok: true });
+    expect(restartServiceManagerJob({ platform: "darwin", uid: 501, run }, () => true)).toEqual({ ok: true });
     expect(calls).toEqual([{ file: "/bin/launchctl", args: ["kickstart", "-k", `gui/501/${LABEL}`] }]);
   });
 
   test("Linux restarts the user unit through systemctl", () => {
     const { calls, run } = recorder({ ok: true });
-    expect(restartServiceManagerJob({ platform: "linux", uid: 1000, run })).toEqual({ ok: true });
+    expect(restartServiceManagerJob({ platform: "linux", uid: 1000, run }, () => true)).toEqual({ ok: true });
     expect(calls).toEqual([{ file: "systemctl", args: ["--user", "restart", TASK] }]);
   });
 
   test("a refused restart and an unsupported platform are failures, never thrown", () => {
     const { run } = recorder({ ok: false, stderr: "Could not find service\nmore" });
-    expect(restartServiceManagerJob({ platform: "darwin", uid: 501, run })).toEqual({ ok: false, reason: "Could not find service" });
-    expect(restartServiceManagerJob({ platform: "win32", run }).ok).toBe(false);
+    expect(restartServiceManagerJob({ platform: "darwin", uid: 501, run }, () => true)).toEqual({ ok: false, reason: "Could not find service" });
+    expect(restartServiceManagerJob({ platform: "win32", run }, () => true).ok).toBe(false);
   });
 
   test("manager PIDs are parsed from launchctl print and systemctl show", () => {
@@ -72,7 +77,7 @@ describe("service manager commands", () => {
 describe("a restart the manager may still finish", () => {
   test("a client timeout is unsettled, never a plain failure", () => {
     const run = () => ({ ok: false, stdout: "", stderr: "spawnSync systemctl ETIMEDOUT", timedOut: true });
-    const result = restartServiceManagerJob({ platform: "linux", run });
+    const result = restartServiceManagerJob({ platform: "linux", run }, () => true);
     expect(result).toMatchObject({ ok: false, unsettled: true });
     expect(unsettledManagerWarning(10100)).toContain("no second proxy was started");
   });
@@ -120,7 +125,7 @@ describe("armed test processes never reach the live manager", () => {
   test("the default runner refuses launchctl and systemctl", () => {
     process.env.OCX_TEST_HOME_GUARD = "1";
     for (const platform of ["darwin", "linux"] as const) {
-      const result = restartServiceManagerJob({ platform, uid: 501 });
+      const result = restartServiceManagerJob({ platform, uid: 501 }, () => true);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toContain("armed test process");
     }
@@ -135,7 +140,7 @@ describe("the Bun updater tries the manager before any detached start", () => {
     expect(managerAt).toBeGreaterThan(-1);
     expect(fallbackAt).toBeGreaterThan(managerAt);
     const tail = source.slice(fallbackAt, source.indexOf("} finally {", fallbackAt));
-    expect(tail).toContain('if (await startUnsupervisedFallback() === "vetoed") return;');
+    expect(tail).toContain('if (await startUnsupervisedFallback() === "vetoed") return homePolicy.authorizeMutation("publish") ? undefined : 1;');
     expect(tail).toContain("return 1;");
     expect(tail).not.toContain("startProxyDirectly()");
   });

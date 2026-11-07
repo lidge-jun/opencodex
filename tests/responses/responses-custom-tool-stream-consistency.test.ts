@@ -1,5 +1,12 @@
-import { describe, expect, test } from "bun:test";
-import { createRoutedCustomToolRestoreBlockRewrite } from "../../src/server/responses-custom-tool-repair";
+import { describe, expect, spyOn, test } from "bun:test";
+import { bridgeToResponsesSSE } from "../../src/bridge";
+import * as patchEnvelope from "../../src/responses/apply-patch-envelope";
+import type { AdapterEvent } from "../../src/types";
+import {
+  createRoutedCustomToolRestoreBlockRewrite,
+  RoutedCustomToolProgressError,
+} from "../../src/server/responses-custom-tool-repair";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 function dataPayload(block: string): Record<string, unknown> {
   const line = block.split(/\r?\n/).find(entry => entry.startsWith("data:"));
@@ -13,6 +20,7 @@ function frame(event: string, payload: Record<string, unknown>): string {
 
 type StreamResult = {
   preview: string;
+  previews: string[];
   doneInput: string;
   itemInput: string;
   terminalInput: string;
@@ -35,6 +43,7 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[], 
     }));
     const addedItem = dataPayload(added[0]!).item as Record<string, unknown>;
     let preview = "";
+    const previews: string[] = [];
     for (const delta of fragments) {
       const blocks = rewrite(frame("response.function_call_arguments.delta", {
         output_index: 0,
@@ -47,6 +56,7 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[], 
           preview += String(payload.delta ?? "");
         }
       }
+      previews.push(preview);
     }
 
     const done = rewrite(frame("response.function_call_arguments.done", {
@@ -85,6 +95,7 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[], 
     const terminalItem = terminalResponse.output[0] ?? {};
     return {
       preview,
+      previews,
       doneInput: String(donePayload.input),
       itemInput: String(doneItem.input),
       terminalInput: String(terminalItem.input),
@@ -100,6 +111,216 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[], 
 }
 
 describe("routed Responses custom-tool stream consistency", () => {
+  test.each(["exec", "apply_patch"])("object-leading %s body streams progressively on both transports", async tool => {
+    const input = '{ const o = { a: 1, b: "two" };\ntext(o.b); }';
+    const args = JSON.stringify({ input });
+    const fragments = Array.from(args);
+    const routed = restoreExecStream(args, fragments, tool);
+    expect(routed.preview).toBe(input);
+    expect(routed.previews.filter(preview => preview.length > 0 && preview.length < input.length).length)
+      .toBeGreaterThan(input.length / 2);
+    expect([routed.doneInput, routed.itemInput, routed.terminalInput]).toEqual([input, input, input]);
+
+    async function* events(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_object", name: tool };
+      for (const argumentsPart of fragments) yield { type: "tool_call_delta", arguments: argumentsPart };
+      yield { type: "tool_call_end", id: "call_object" };
+      yield { type: "done" };
+    }
+    const wire = await new Response(bridgeToResponsesSSE(events(), "routed/model", undefined, new Set([tool]))).text();
+    const frames = wire.split("\n\n")
+      .filter(block => block.includes("data:") && !block.includes("data: [DONE]"))
+      .map(dataPayload);
+    const deltas = frames
+      .filter(frame => frame.type === "response.custom_tool_call_input.delta")
+      .map(frame => String(frame.delta));
+    expect(deltas.length).toBeGreaterThan(input.length / 2);
+    expect(deltas.join("")).toBe(input);
+    expect(frames.find(frame => frame.type === "response.custom_tool_call_input.done")?.input).toBe(input);
+  });
+
+  test.each([
+    ["exec", 'text("nested");'],
+    ["apply_patch", "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch"],
+  ])("double-wrapped %s agrees across direct and routed completion", async (tool, input) => {
+    const args = JSON.stringify({ input: JSON.stringify({ input }) });
+    for (let split = 0; split <= args.length; split++) {
+      const fragments = [args.slice(0, split), args.slice(split)];
+      const routed = restoreExecStream(args, fragments, tool);
+      expect(routed.preview, "routed split " + split).toBe("");
+      expect([routed.doneInput, routed.itemInput, routed.terminalInput]).toEqual([input, input, input]);
+
+      async function* events(): AsyncGenerator<AdapterEvent> {
+        yield { type: "tool_call_start", id: "call_nested", name: tool };
+        for (const argumentsPart of fragments) yield { type: "tool_call_delta", arguments: argumentsPart };
+        yield { type: "tool_call_end", id: "call_nested" };
+        yield { type: "done" };
+      }
+      const wire = await new Response(bridgeToResponsesSSE(
+        events(), "routed/model", undefined, new Set([tool]),
+      )).text();
+      const frames = wire.split("\n\n")
+        .filter(block => block.includes("data:") && !block.includes("data: [DONE]"))
+        .map(dataPayload);
+      const deltas = frames.filter(frame => frame.type === "response.custom_tool_call_input.delta");
+      // Both transports hold the ambiguous preview; completed input is authoritative.
+      expect(deltas, "direct split " + split).toEqual([]);
+      const done = frames.find(frame => frame.type === "response.custom_tool_call_input.done");
+      const item = frames.find(frame => frame.type === "response.output_item.done")?.item as { input: string };
+      const terminal = frames.find(frame => frame.type === "response.completed")?.response as { output: Array<{ input: string }> };
+      expect([done?.input, item.input, terminal.output[0]?.input]).toEqual([input, input, input]);
+    }
+  });
+
+  test.each([
+    ["late-invalid wrapper", ['{"input":"*** Begin Patch\\n*** Add File: a\\n+x\\n*** End Patch', '\\q"}']],
+    ["duplicate input key", ['{"input":"*** Begin Patch\\n*** Add File: a\\n+x\\n*** End Patch",', '"input":"replacement"}']],
+  ])("fails closed when canonical patch progress diverges at %s completion", (_label, fragments) => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(new Set(["apply_patch"]), budget);
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_patch", call_id: "call_patch", name: "apply_patch", arguments: "", status: "in_progress" },
+    }));
+    const emitted = fragments.flatMap(delta => rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: "fc_patch",
+      delta,
+    })));
+    expect(emitted.some(block => dataPayload(block).type === "response.custom_tool_call_input.delta")).toBe(true);
+    const authoritative = fragments.join("");
+    expect(() => rewrite(frame("response.function_call_arguments.done", {
+      output_index: 0,
+      item_id: "fc_patch",
+      arguments: authoritative,
+    }))).toThrow(RoutedCustomToolProgressError);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each(["item.done", "response.completed"])("fails before malformed patch %s without input.done", boundary => {
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(new Set(["apply_patch"]));
+    const first = '{"input":"*** Begin Patch\\n*** Add File: a\\n+x\\n*** End Patch",';
+    const second = '"input":"replacement"}';
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_patch", call_id: "call_patch", name: "apply_patch", arguments: "", status: "in_progress" },
+    }));
+    rewrite(frame("response.function_call_arguments.delta", { output_index: 0, item_id: "fc_patch", delta: first }));
+    rewrite(frame("response.function_call_arguments.delta", { output_index: 0, item_id: "fc_patch", delta: second }));
+    const item = { type: "function_call", id: "fc_patch", call_id: "call_patch", name: "apply_patch", arguments: first + second, status: "completed" };
+    const terminal = boundary === "item.done"
+      ? frame("response.output_item.done", { output_index: 0, item })
+      : frame("response.completed", { response: { status: "completed", output: [item] } });
+    expect(() => rewrite(terminal)).toThrow(RoutedCustomToolProgressError);
+  });
+
+  test("publishes canonical operation bytes before the closing marker arrives", () => {
+    const opening = "*** Begin Patch\n*** Update File: a.txt\n";
+    const operation = "+one\n";
+    const closing = "*** End Patch";
+    const result = restoreExecStream(opening + operation + closing, [opening, operation, closing], "apply_patch");
+    expect(result.previews).toEqual([opening, opening + operation, opening + operation + closing]);
+    expect(result.previews[1]).not.toContain(closing);
+  });
+
+  test.each([
+    ["LF", "\n", ""], ["LF decorated", "\n", " ***"],
+    ["CRLF", "\r\n", ""], ["CRLF decorated", "\r\n", " ***"],
+  ])("preserves a fragmented long patch through the routed tail: %s", (_label, newline, decoration) => {
+    const opening = `*** Begin Patch${newline}*** Add File: long.txt${newline}`;
+    const body = `+${"x".repeat(65_536)}${newline}+last line${newline}`;
+    const closing = `*** End Patch${decoration}${newline}`;
+    const fragments = [...Array.from(opening), ...body.match(/[\s\S]{1,37}/g)!, ...Array.from(closing)];
+    const raw = opening + body + closing;
+    const normalized = `${opening}${body}*** End Patch${newline}`;
+    const result = restoreExecStream(raw, fragments, "apply_patch");
+    // Every marker byte is a separate delta after the rolling tail has wrapped repeatedly.
+    const closingStart = fragments.length - closing.length;
+    expect(result.previews[closingStart - 1]).toBe(opening + body);
+    for (const preview of result.previews.slice(closingStart)) {
+      expect(normalized.startsWith(preview)).toBe(true);
+    }
+    expect(result.preview).toBe(decoration ? normalized.slice(0, -newline.length) : normalized);
+    expect(result.doneInput).toBe(normalized);
+    expect(result.itemInput).toBe(normalized);
+    expect(result.terminalInput).toBe(normalized);
+    expect(result.identity).toEqual([
+      "ctc_apply_patch", "ctc_apply_patch", "ctc_apply_patch", "call_apply_patch", "apply_patch",
+      "ctc_apply_patch", "call_apply_patch", "apply_patch",
+    ]);
+  });
+
+  test("preserves a fragmented long wrapped patch through the decoded tail", () => {
+    const opening = "*** Begin Patch\n*** Add File: long.txt\n";
+    const body = `+${"x".repeat(65_536)}\n+last line\n`;
+    const wrapped = JSON.stringify({ input: `${opening}${body}*** End Patch ***\n` });
+    const normalized = `${opening}${body}*** End Patch\n`;
+    const original = patchEnvelope.stableCanonicalPatchPrefix;
+    let longChecks = 0;
+    const spy = spyOn(patchEnvelope, "stableCanonicalPatchPrefix").mockImplementation((...args) => {
+      expect(args[1]).toBe(args[0].slice(-64));
+      if (args[0].length > 64) longChecks++;
+      return original(...args);
+    });
+    let result: ReturnType<typeof restoreExecStream>;
+    try { result = restoreExecStream(wrapped, wrapped.match(/[\s\S]{1,37}/g)!, "apply_patch"); }
+    finally { spy.mockRestore(); }
+    expect(longChecks).toBeGreaterThan(0);
+    for (const preview of result.previews) expect(normalized.startsWith(preview)).toBe(true);
+    expect(result.preview).toBe(normalized.slice(0, -1));
+    expect(result.doneInput).toBe(normalized);
+    expect(result.itemInput).toBe(normalized);
+    expect(result.terminalInput).toBe(normalized);
+  });
+
+  test.each([
+    ["LF operation", "*** Begin Patch\n*** Update File: a.txt\n+one\n*** End Patch"],
+    ["CRLF operation", "*** Begin Patch\r\n*** Add File: a.txt\r\n+one\r\n*** End Patch\r\n"],
+    ["no operation", "*** Begin Patch\ncontext only\n*** End Patch"],
+  ])("streams canonical apply_patch at every split: %s", (_label, argumentsText) => {
+    for (let split = 0; split <= argumentsText.length; split++) {
+      const result = restoreExecStream(
+        argumentsText,
+        [argumentsText.slice(0, split), argumentsText.slice(split)],
+        "apply_patch",
+      );
+      expect(result.preview, `split ${split}`).toBe(argumentsText);
+      expect(result.doneInput, `split ${split}`).toBe(argumentsText);
+      expect(result.itemInput, `split ${split}`).toBe(argumentsText);
+      expect(result.terminalInput, `split ${split}`).toBe(argumentsText);
+    }
+  });
+
+  test.each([
+    ["LF", "*** Begin Patch\n*** Update File: a.txt\n+one\n*** End Patch ***\n", "*** Begin Patch\n*** Update File: a.txt\n+one\n*** End Patch\n"],
+    ["CRLF", "*** Begin Patch\r\n*** Update File: a.txt\r\n+one\r\n*** End Patch ***\r\n", "*** Begin Patch\r\n*** Update File: a.txt\r\n+one\r\n*** End Patch\r\n"],
+  ])("withholds only a rewritable terminal decoration at every split: %s", (_label, raw, normalized) => {
+    for (let split = 0; split <= raw.length; split++) {
+      const result = restoreExecStream(raw, [raw.slice(0, split), raw.slice(split)], "apply_patch");
+      expect(result.preview, `split ${split}`).toBe(normalized.replace(/\r?\n$/, ""));
+      expect(result.doneInput, `split ${split}`).toBe(normalized);
+      expect(result.itemInput, `split ${split}`).toBe(normalized);
+      expect(result.terminalInput, `split ${split}`).toBe(normalized);
+    }
+  });
+
+  test.each([
+    ["fenced", "```diff\n*** Begin Patch\n*** Add File: a\n+x\n*** End Patch\n```"],
+    ["decorated opening", "*** Begin Patch ***\n*** Add File: a\n+x\n*** End Patch"],
+  ])("keeps ambiguous %s input buffered", (_label, argumentsText) => {
+    for (let split = 0; split <= argumentsText.length; split++) {
+      const result = restoreExecStream(argumentsText, [argumentsText.slice(0, split), argumentsText.slice(split)], "apply_patch");
+      expect(result.preview, `split ${split}`).toBe("");
+    }
+  });
+
+  test("releases an interior decorated marker once following text proves it stable", () => {
+    const input = "*** Begin Patch\n*** Add File: a\n+x\n*** End Patch ***\ninterior";
+    const result = restoreExecStream(input, Array.from(input));
+    expect(result.preview).toBe(input);
+    expect(result.doneInput).toBe(input);
+  });
+
   test("holds a raw decorated apply_patch envelope at every split boundary", () => {
     // Completion rewrites a decorated envelope through `normalizeApplyPatchDelimiters`, so any
     // decorated marker published as a delta is a byte the authoritative item does not contain.

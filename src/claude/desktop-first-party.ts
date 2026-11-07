@@ -243,6 +243,19 @@ export async function withFirstPartySecretsSettled<T>(configDir: string, prepare
 }
 
 /**
+ * Run a captured first-party rollback once overlapping ACL work settles. A settle timeout
+ * leaves the rollback unrun and reports it as incomplete, so callers keep their existing
+ * "rollback did not complete" response instead of escaping into a generic error path.
+ */
+export async function rollbackDesktopFirstPartySettled(configDir: string, rollback: () => boolean): Promise<boolean> {
+  try { return await withConfigDirHardeningSettled(configDir, rollback); }
+  catch (error) {
+    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return false;
+  }
+}
+
+/**
  * Write the first-party env into Claude Code's settings. Creates the local CA first so the
  * path we point `NODE_EXTRA_CA_CERTS` at exists before Claude Code ever reads it.
  */
@@ -284,7 +297,8 @@ export function removeDesktopFirstParty(
  * Remove Desktop's first-party env once ACL work overlapping the Claude settings home settles.
  * A `CLAUDE_CONFIG_DIR` nested in the opencodex home shares the config-root hardening flight, so
  * the credential-bearing settings rewrite gets the same admission as other intercept secrets.
- * The config is read inside the same synchronous turn. A settle timeout refuses without writing.
+ * The config is read inside the same synchronous turn. Admission, authority-read and removal
+ * exceptions return the existing unreadable refusal so a committed gateway remains explicit.
  */
 export async function removeDesktopFirstPartySettled(
   readConfig: () => Pick<OcxConfig, "claudeCode" | "runtimeRole">,
@@ -293,8 +307,5 @@ export async function removeDesktopFirstPartySettled(
 ): Promise<ReturnType<typeof removeDesktopFirstParty>> {
   const dir = options.claudeConfigDir ?? claudeConfigDir();
   try { return await withConfigDirHardeningSettled(dir, () => remove(readConfig(), options)); }
-  catch (error) {
-    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
-    return { ok: false, reason: "unreadable", path: join(dir, "settings.json") };
-  }
+  catch { return { ok: false, reason: "unreadable", path: join(dir, "settings.json") }; }
 }

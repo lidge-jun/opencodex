@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 33.
+Declared capabilities: 34.
 
 ### `ocx link probe`
 
@@ -154,7 +154,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 Usage: `ocx link cleanup [--link-id <id>] [--json]`
 
-Find Windows Remote Link Children and explain how to move them to Hub mode.
+Inspect Remote Link Child platforms and show disconnect guidance.
 
 State-changing: no. JSON mode: `payload`.
 
@@ -165,8 +165,8 @@ Drives no management route.
 | `--link-id` | string | Check only this link. |
 | `--json` | boolean | Emit {links, changed:false} as JSON. |
 
-- Runs on the Home from its local link store. Asks each Home-initiated Child for uname -s over the link's pinned SSH trust; a Windows answer (Git Bash, MSYS, Cygwin, cmd or PowerShell) is reported with recovery steps.
-- Never revokes, disconnects or edits a link. A Windows Child needs ocx disconnect on itself, then ocx link revoke --force --yes on the Home, then ocx hub invite and ocx connect.
+- Runs on the Home from its local link store. Asks each Home-initiated Child for its platform over the link's pinned SSH trust (the fixed %OS% probe, then uname -s) and reports Windows Children with disconnect guidance.
+- Never revokes, disconnects or edits a link. An ordinary ocx link revoke --yes disconnects a Windows Child through PowerShell over the recorded SSH trust.
 
 ### `ocx remote-workspace pair`
 
@@ -325,6 +325,26 @@ State-changing: yes. JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 - A setting flag changes the operator's config; run it only when the operator asks for that change.
+
+### `ocx disconnect`
+
+Usage: `ocx disconnect [--keep-catalog] [--json] | ocx disconnect --orphaned-token --yes [--json]`
+
+Disconnect a client or preserve orphaned token files for recovery.
+
+State-changing: yes. JSON mode: `payload`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
+| `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
+| `--yes` | boolean | Explicitly confirm orphan-token recovery; requires --orphaned-token. |
+| `--json` | boolean | Emit the local result and backup location as JSON. |
+
+- Orphan recovery requires a disconnected durable state, no pending connect or disconnect, no Hub or admission-secret use, no installed or unverified service, and verified absence of a client runtime. It preserves rather than deletes token files and does not establish their ownership.
+- If refused, inspect the bind, API keys, token environment and service status; manage a Hub secret through its service. Stop OpenCodex and move saved files back only when their original names are absent. Never print their contents.
 
 ### `ocx hub disable`
 

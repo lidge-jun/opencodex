@@ -35,7 +35,10 @@ const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved 
  */
 export const CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC = "opencodex: proxy autostart failed; launching Codex anyway. Run 'ocx doctor' for details, or 'ocx restore' to hand Codex back to its own account.";
 
-const CODEX_INTERNAL_COMMANDS = [
+// Shared with launchers that speak the same argv vocabulary (`ocx codex`): the
+// generated shell templates inline this grammar, so the sets are the single
+// source and the shell text is the consumer, not the definition.
+export const CODEX_INTERNAL_COMMANDS = [
   "app-server",
   "archive",
   "apply",
@@ -60,7 +63,7 @@ const CODEX_INTERNAL_COMMANDS = [
 // Codex accepts global options before a subcommand. The shim must skip the value belonging to
 // these options before it decides which first positional token is the real subcommand. Keep this
 // list aligned with `codex --help`; `--option=value` and attached short forms stay one token.
-const CODEX_GLOBAL_OPTIONS_WITH_VALUE = [
+export const CODEX_GLOBAL_OPTIONS_WITH_VALUE = [
   "-c", "--config",
   "--enable", "--disable",
   "--remote", "--remote-auth-token-env",

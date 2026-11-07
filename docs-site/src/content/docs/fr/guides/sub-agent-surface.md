@@ -70,7 +70,7 @@ Par exemple, sans sélecteurs de compte et avec cette liste :
 | 3 | `deepseek/deepseek-v4-flash` | `5` | Première ligne routée restante dans l'ordre alphabétique |
 | 4 | `google/gemini-3-pro` | `5` | Ligne routée suivante |
 | 5 | `moonshot/kimi-k3` | `5` | Ligne routée suivante |
-| 6+ | `zai/glm-5.2`, puis les lignes GPT natives | `5`, puis `102` | Hors des cinq |
+| 6+ | `zai/glm-5.2`, puis les lignes GPT natives | `5`, puis `102 + sourcePriority` | Hors des cinq |
 
 Avec une liste vide, opencodex ne fixe aucune priorité et les cinq suivent les priorités normales du catalogue.
 

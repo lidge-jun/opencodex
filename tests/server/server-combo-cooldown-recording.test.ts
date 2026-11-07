@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,27 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
-import { chatSuccess } from "../helpers/combo-failover-upstream";
+import { chatSuccess, responsesSuccess } from "../helpers/combo-failover-upstream";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { clearCodexUpstreamHealth, clearCodexUpstreamHealthForAccount, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
+import { clearAccountQuota, flushQuotaObservationsForTests, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import {
+  CodexAccountCooldownError, CodexMainAccountHardLockError, CodexMainAccountCreditsOffError,
+  CodexPoolAccountCreditsOffError, CodexReserveUnavailableError, CodexReserveHelperUnsupportedError,
+  CodexRecoveryWithheldError, cooldownErrorResponse,
+} from "../../src/codex/auth-context";
+import { isCodexAccountCooldownResponse } from "../../src/codex/account-cooldown-response";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
+import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
+
+/** The Responses mapping every combo child's local auth refusal goes through. */
+function localRefusal(error: CodexAccountCooldownError, now: number): Response {
+  const response = mapCodexAuthContextErrorToResponse(error, { now });
+  if (!response) throw new Error("cooldown errors always map to a response");
+  return response;
+}
 
 type HandleOptions = NonNullable<Parameters<typeof handleResponses>[3]>;
 const pendingTurns: Response[] = [];
@@ -114,6 +134,154 @@ test("an in-flight cooldown retry cannot initiate an opt-in reprobe", async () =
   expect(hits).toBe(1);
   expect(isComboTargetInCooldown("free", target)).toBe(true);
 });
+
+test("a local Codex pool cooldown uses capped target backoff and permits account recovery", async () => {
+  let now = 1_800_000_000_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const nativeFetch = spyOn(globalThis, "fetch").mockImplementation(async () =>
+    Response.json(responsesSuccess("recovered", "gpt-5.6-terra")));
+  setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+  setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+  const accountId = "combo-local-cooldown";
+  const codexTarget = { provider: "openai", model: "gpt-5.6-terra" };
+  const cfg = comboConfig({ openai: {
+    adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward", codexAccountMode: "pool",
+  } }, [codexTarget], { cooldownMs: 3_600_000, waitForCooldownMs: 0 });
+  cfg.codexAccounts = [{ id: accountId, email: "cooldown@example.test", isMain: false }];
+  cfg.activeCodexAccountId = accountId;
+  cfg.autoSwitchThreshold = 0;
+  clearCodexUpstreamHealth();
+  try {
+    saveCodexAccountCredential(accountId, {
+      accessToken: "synthetic-cooldown-access", refreshToken: "synthetic-cooldown-refresh",
+      expiresAt: now + 86_400_000, chatgptAccountId: "synthetic-cooldown-account",
+    });
+    setAccountQuotaFromParsed(accountId, { weeklyPercent: 10 });
+    recordCodexUpstreamOutcome(cfg, accountId, 429, { now, retryAfter: "84692", modelId: codexTarget.model });
+    const health = getCodexQuotaHealthSnapshot(accountId, "shared");
+    const refused = await post(cfg);
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("84692");
+    await refused.text();
+    expect(nativeFetch).not.toHaveBeenCalled();
+    expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toEqual(health);
+    expect(isComboTargetInCooldown("free", codexTarget, now + 599_999)).toBe(true);
+    expect(isComboTargetInCooldown("free", codexTarget, now + 600_000)).toBe(false);
+    // Model the operator's existing account recovery action, without clearing combo state.
+    clearCodexUpstreamHealthForAccount(accountId);
+    now += 600_001;
+    const recovered = await post(cfg);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.text()).toContain("recovered");
+    expect(nativeFetch).toHaveBeenCalledTimes(1);
+  } finally {
+    nativeFetch.mockRestore();
+    clock.mockRestore();
+    clearAccountQuota(accountId);
+    await flushQuotaObservationsForTests();
+    clearCodexUpstreamHealth();
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
+  }
+});
+
+for (const [seconds, recordedMs] of [[84692, 84_692_000], [172800, 86_400_000]] as const) {
+test(`an upstream 429 with the local refusal's wire shape honors Retry-After ${seconds} up to 24h`, async () => {
+  const now = 1_800_000_000_000;
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  let hits = 0;
+  const server = serve(() => {
+    hits++;
+    // Even a response minted in this process loses provenance across HTTP. A header cannot
+    // recover it: this mimics both the ordinary refusal body and a claimed local marker.
+    const response = cooldownErrorResponse(new CodexAccountCooldownError("synthetic-upstream", now + seconds * 1000), now);
+    response.headers.set("x-opencodex-local-codex-cooldown", "true");
+    return response;
+  });
+  try {
+    const cfg = comboConfig({ a: provider("openai-responses", baseUrl(server), "synthetic-key") }, [target], {
+      cooldownMs: 1000, waitForCooldownMs: 0,
+    });
+    const response = await post(cfg);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe(String(seconds));
+    await response.text();
+    expect(hits).toBe(1);
+    expect(isComboTargetInCooldown("free", target, now + recordedMs - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, now + recordedMs)).toBe(false);
+  } finally {
+    clock.mockRestore();
+  }
+});
+}
+
+test("local cooldown provenance survives reconstruction but cannot be copied from wire metadata", async () => {
+  const now = 1_800_000_000_000;
+  const local = localRefusal(new CodexAccountCooldownError("synthetic-local", now + 84_692_000), now);
+  local.headers.set("x-codex-primary-reset-at", String((now + 84_692_000) / 1000));
+  expect(isCodexAccountCooldownResponse(local)).toBe(true);
+  const copy = new Response(await local.clone().text(), { status: local.status, headers: local.headers });
+  expect(isCodexAccountCooldownResponse(copy)).toBe(false);
+  const copied = await consumeComboFailure(copy, undefined, now);
+  expect(isCodexAccountCooldownResponse(copied.response)).toBe(false);
+  expect(copied.retryAfter).toBe("84692");
+  const consumed = await consumeComboFailure(local, undefined, now);
+  expect(isCodexAccountCooldownResponse(consumed.response)).toBe(true);
+  expect(consumed.retryAfter).toBe("84692");
+  expect(consumed.resetAt).toEqual([String((now + 84_692_000) / 1000)]);
+  expect(consumed.response.headers.get("retry-after")).toBe("84692");
+  const reconstructed = await consumeComboFailure(consumed.response, undefined, now);
+  expect(isCodexAccountCooldownResponse(reconstructed.response)).toBe(true);
+  await copied.response.text();
+  await reconstructed.response.text();
+});
+
+test("a late local refusal keeps its provenance through the retained-compaction lease wrapper", async () => {
+  // Retained compaction v2 delivers every child response through finalizeAccountLease. A refusal
+  // minted after admission (for example during pacing) must still reach combo recording as local.
+  const now = 1_800_000_000_000;
+  let released = 0;
+  const local = localRefusal(new CodexAccountCooldownError("synthetic-late", now + 84_692_000), now);
+  const delivered = finalizeAccountLease(local, () => { released++; });
+  expect(delivered).not.toBe(local);
+  expect(isCodexAccountCooldownResponse(delivered)).toBe(true);
+  const consumed = await consumeComboFailure(delivered, undefined, now);
+  expect(isCodexAccountCooldownResponse(consumed.response)).toBe(true);
+  expect(consumed.retryAfter).toBe("84692");
+  await consumed.response.text();
+  expect(released).toBe(1);
+});
+
+for (const policy of [
+  () => new CodexMainAccountHardLockError(1_800_084_692_000),
+  () => new CodexMainAccountCreditsOffError(1_800_084_692_000),
+  () => new CodexPoolAccountCreditsOffError("synthetic-policy", 1_800_084_692_000),
+  () => new CodexReserveUnavailableError(),
+  () => new CodexReserveHelperUnsupportedError(),
+  () => new CodexRecoveryWithheldError("synthetic-policy", 1_800_084_692_000),
+  () => new (class FuturePolicyError extends CodexAccountCooldownError {})("synthetic-policy", 1_800_084_692_000),
+]) {
+  test(`${policy().constructor.name} keeps its refusal behavior without ordinary cooldown provenance`, async () => {
+    const now = 1_800_000_000_000;
+    const error = policy();
+    const response = localRefusal(error, now);
+    expect(response.status).toBe(429);
+    expect(isCodexAccountCooldownResponse(response)).toBe(false);
+    const reserve = error instanceof CodexReserveUnavailableError;
+    expect(response.headers.get("retry-after")).toBe(reserve ? null : "84692");
+    if (error instanceof CodexMainAccountHardLockError) {
+      expect(await response.clone().json()).toMatchObject({ error: {
+        type: "usage_limit_reached", code: "usage_limit_reached", resets_at: 1_800_084_692,
+      } });
+    }
+    const consumed = await consumeComboFailure(response, undefined, now);
+    expect(isCodexAccountCooldownResponse(consumed.response)).toBe(false);
+    expect(consumed.retryAfter).toBe(reserve ? undefined : "84692");
+    if (error instanceof CodexMainAccountHardLockError) expect(consumed.upstreamCode).toBe("usage_limit_reached");
+    await consumed.response.text();
+  });
+}
 
 test("cooldown recording distinguishes a successful write from a stale removed writer", () => {
   expect(coolComboTarget("free", target, { cooldownMs: 1000 })).toBe(true);

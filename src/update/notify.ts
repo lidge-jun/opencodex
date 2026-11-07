@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { probeSpawn } from "./mutation-guard.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isatty } from "node:tty";
@@ -189,7 +189,7 @@ export function triggerBackgroundRefreshIfStale(channel: Channel, cache: Version
     const commandArgs = ["__refresh-version", channel];
     const args = selfLaunchArgv(commandArgs);
     if (args.length > commandArgs.length && (!args[0] || !existsSync(args[0]))) return;
-    const child = spawn(process.execPath, args, {
+    const child = probeSpawn(process.execPath, args, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,

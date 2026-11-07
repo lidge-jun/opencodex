@@ -3,6 +3,8 @@ title: Sélecteur de modèles de Codex App
 description: Comment les modèles opencodex apparaissent dans Codex App, Codex CLI et Codex TUI par l'intermédiaire du catalogue Codex partagé.
 ---
 
+Par défaut : `false`. Avec `"omitDisabledNativeModels": true` dans `config.json`, puis `ocx sync`, les lignes natives désactivées sont omises du catalogue, du cache et de la découverte HTTP au format Codex. Le modèle d’héritage natif validé avant omission conserve les métadonnées des lignes routées. Les requêtes directes gardent leur routage habituel. Les descriptions de masquage ci-dessous concernent le comportement par défaut.
+
 opencodex ne modifie pas Codex App. Il écrit la même configuration et le même catalogue de modèles Codex
 que ceux utilisés par Codex CLI et TUI. Le serveur d'application lit cet état partagé, mais certaines versions
 de Codex Desktop appliquent dans le moteur de rendu une seconde liste d'autorisation distante et peuvent

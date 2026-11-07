@@ -17,6 +17,13 @@ export type PersistedConfigMutationOutcome<T> =
 const CONFIG_MUTATION_MAX_REBASE_ATTEMPTS = 3;
 let persistedConfigMutationBeforeCommitForTests: (() => void) | null = null;
 
+/** Re-read authority inside ACL admission without starting another optional hardening flight. */
+export function readConfigForAdmittedMutation(): OcxConfig {
+  const { diagnostics } = readConfigFileSnapshot();
+  if (diagnostics.source !== "file") throw new Error("config_unavailable");
+  return diagnostics.config;
+}
+
 /** Test-only one-shot seam: inject a competing mutation after the first decision, before freshness revalidation. */
 export function setPersistedConfigMutationBeforeCommitForTests(hook: (() => void) | null): void {
   persistedConfigMutationBeforeCommitForTests = hook;

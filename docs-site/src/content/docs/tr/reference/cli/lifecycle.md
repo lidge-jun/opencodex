@@ -50,9 +50,15 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+Gözetimsiz Link Child kapanma sinyalinde her yazmadan önce bağlantıyı doğrular ve dinleyiciyi bırakmadan önce yerel Codex ile yönetilen Grok ayarlarını geri yükler. Servis/Desktop, sibling, yeniden başlatma devri ve üst stop makbuzu ayarları korur. Kapanma sırasında yeniden başlatma `409 runtime_stopping` döndürür. Zorla sonlandırma sinyali atlayabilir; üst `ocx stop` geri yüklemesi yine gereklidir.
+
 Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
-yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
+yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin kenar çubuğundaki proxy kolunu sonuna kadar çekmek aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
+
+Bağlı bir hub istemcisinde `ocx stop`, API üzerinden başarılı durdurma dahil, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur; `ocx start` bunları yeniden sunar. Remote Link Child açıkça durdurulduğunda ise paylaşılan geri yükleme başarılıysa yerel Codex yönlendirmesi, katalog ve yedeklenmiş oturum sürdürme geçmişi meta verileri geri yüklenir, yönetilen Grok yapılandırması kaldırılır. Kayıtlı Home bağlantısı korunur; `ocx disconnect` ile kaldırılır.
+
+Geri yüklemeden sonra Codex'ten Home'u yeniden kullanmak için `ocx start` (servis kuruluysa `ocx service start`), ardından `ocx sync --restart-codex` çalıştırın. Yalnızca başlatmak yönlendirmeyi yeniden uygulamaz; sync Grok bloğunu yeniden oluşturmaz. Servis durdurulmadan önce bağlantı sahipliği doğrulanamıyorsa durdurma API'si HTTP 409 ve `sharedTeardown: "refused"` döndürür; proxy ve servis yöneticisi çalışmaya devam eder. Devam eden bağlanma veya bağlantıyı kesme işlemi bitince yeniden deneyin.
 
 ### `ocx restart`
 
@@ -114,6 +120,20 @@ geri yükleyin, ardından yalnızca tüm geri yükleme adımları başarılı ol
 opencodex yerel yapılandırmasını kaldırın. `remove`, `uninstall`'ın bir takma
 adıdır. Yapılandırma temizliği yeni bir yükleme tarafından oluşturulan sahiplik
 meta verilerini gerektirir; eski veya paylaşılan dizinler yerinde bırakılır.
+
+`ocx uninstall` root olarak veya yükseltilmiş (yönetici) bir Windows isteminden çalıştığında,
+önce başka hiçbir hesabın yapılandırma dizinini, üstündeki dizinleri veya içindeki herhangi bir dizini
+değiştiremediğini ve yapılandırma dizinindeki hiçbir bağlantının dizinin dışına çıkmadığını (Windows'ta hiç bağlantı bulunmadığını) denetler.
+Denetimlerden biri başarısız olursa kaldırma işlemi hiçbir şeyi değiştirmeden durur ve nedenini bildirir.
+`ocx uninstall` komutunu yapılandırma dizininin sahibi olan hesapla, `sudo` veya yönetici hakları
+olmadan çalıştırın ya da bu dizinleri yalnızca o hesapla sınırlayıp bu tür bağlantıları kaldırdıktan
+sonra yeniden çalıştırın. İstemin yükseltilmiş olup olmadığının anlaşılamadığı Windows ARM64'te de aynı
+denetim uygulanır; denetim tamamlanamazsa opencodex'i durdurup yapılandırma dizinini kendiniz kaldırın.
+
+Yapılandırma dizini içindeki üst dizini bir bağlantı (sembolik bağlantı veya junction) olan kayıtlı
+bir girdi yerinde bırakılır ve kalan yol olarak listelenir; çalıştırma kısmi kaldırma olarak biter.
+O bağlantıyı gerçek dizinle değiştirin veya kaldırın, ardından tamamlamak için `ocx uninstall`
+komutunu yeniden çalıştırın.
 
 ## Durum ve sağlık
 
@@ -236,7 +256,11 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 
 ## Katalog senkronizasyonu
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+Remote Link Home üzerinde güncel katalog başarıyla kaydedildikten sonra `ocx sync`, uygun bağlı Child makineleri de eşitler. `--local-only` bu dağıtımı kapatır. `--json`, Home sonucunu ve her Child durumunu içeren tek bir `ocx.sync.fanout/1` belgesi yazdırır; atlanan Child için neden de belirtilir. Home'un kendi sıfırdan farklı çıkış kodu değiştirilmeden döndürülür. Home başarılı olduğunda dağıtım sırasında bağlı bir Child atlanırsa, hata verir veya zaman aşımına uğrarsa ya da bağlantı deposu okunamazsa çıkış kodu 6 üretilir. İstemci tarafından başlatılan bağlantılar ve `--local-only` gibi kasıtlı atlamalar önceki davranışı korur; atlanan bağlı Child için `hint` alanında bir öneri verilir. Metin kipindeki okunamayan depo hatası dosya yolu içermez. Kod 7, sürmekte olan bir güncelleme için ayrılmıştır. JSON kipinde Home eşitlemesi hata fırlatırsa stdout yine tek sonuç belgesi içerir ve stderr güvenli biçimde gösterilen bir tanı verir.
+
+Dağıtım, bir Child üzerinde Codex uygulamasının veya app-server'ın yeniden başlatılmasını asla istemez. Bunun için GOAT kullanın veya Child üzerinde `ocx sync --restart-codex` çalıştırın. Bununla birlikte Child'ın sabitlenmiş eşitlemesi, değişen Home ayarlarını uyguladıktan sonra kendi OpenCodex istemci çalışma zamanını yeniden başlatabilir. Home zaman aşımında yerel SSH işlemini durdursa bile başlamış bir uzak eşitleme Child üzerinde devam edebilir.
 
 > **Remote Link Child:** `ocx sync` Home'un Codex ayarlarını da uygular ve istemci çalışma zamanı bu uygulamadan önce başlamışsa, yeniden başlatma bayrağı olmadan da onu yeniden başlatır. Yeniden başlatma başarısız olursa önceki çalışma zamanı hizmet vermeye devam eder ve komut sıfırdan farklı bir kodla çıkar. `ocx status --json` ve `ocx link status --json` içindeki ilgili alanlar için [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (İngilizce) bölümüne bakın.
 
@@ -515,7 +539,7 @@ Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimd�
 
 ### `ocx gui`
 
-Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
+Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://127.0.0.1:<port>`
 adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme

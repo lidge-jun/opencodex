@@ -127,7 +127,13 @@ describe("startup star prompt", () => {
     // And that evidence must be the authenticating CREDENTIAL, never a request
     // header: the admin token is readable by anything running as the user, so a
     // header-shaped check is forgeable by the exact caller this guard refuses.
-    expect(routes).toMatch(/principal === "gui-session"/);
+    // A remembered device session is minted from that same admin token, so the shared
+    // consent predicate also excludes it.
+    expect(routes).toMatch(/return hasHumanDashboardSession\(ctx\)/);
+    const consent = await readText("src/server/management/consent-session.ts");
+    expect(consent).toMatch(/ctx\.principal === "gui-session"/);
+    expect(consent).toMatch(/ctx\.guiSessionIssuance !== "remembered-admin"/);
+    expect(consent).not.toMatch(/headers\.get\(/);
     expect(routes).not.toMatch(/hasBrowserSessionEvidence[\s\S]*?headers\.get\("x-opencodex-csrf-token"\)/);
   });
 

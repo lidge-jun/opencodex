@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 import { isAnthropicOAuthInstance, configuredAnthropicInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "../../oauth/anthropic-pool-config";
 import { persistAnthropicPoolPatch, writeAnthropicPoolSettings } from "./anthropic-pool-settings";
@@ -36,7 +37,8 @@ import {
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
-import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
+import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
+import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { emailMaskingEnabled } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -214,12 +216,12 @@ export function revokeApiKeyInProcess(config: OcxConfig, id: string): boolean {
   return true;
 }
 
-function canStartManagementOAuth(provider: string, principal: ManagementContext["principal"]): boolean {
-  return provider !== "meta-muse" || principal === "gui-session";
+function canStartManagementOAuth(provider: string, ctx: ManagementContext): boolean {
+  return provider !== "meta-muse" || hasHumanDashboardSession(ctx);
 }
 
-function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
-  if (canStartManagementOAuth(provider, principal)) return null;
+function metaMuseConsentRequired(provider: string, ctx: ManagementContext): Response | null {
+  if (canStartManagementOAuth(provider, ctx)) return null;
   return jsonResponse({
     error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
     code: "oauth_consent_required",
@@ -246,7 +248,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
     // Discovery reflects this principal's admission; hiding a button is not the
     // consent boundary, which remains independently enforced on both POST routes.
-    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, principal)) });
+    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, ctx)) });
   }
 
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.
@@ -258,7 +260,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     // Omitted mode is the localhost-callback flow this route has always run.
@@ -273,7 +275,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // and reauth skip the import. All management login paths require the dashboard
     // principal before credential acquisition. A raw token proves administration,
     // not acknowledgement; caller-supplied headers are not consent evidence.
-    const consentRequired = metaMuseConsentRequired(provider, principal);
+    const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
@@ -281,13 +283,28 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const reauth = body.reauth === true || Boolean(accountId);
     if (provider === "kiro") {
       if (reauth && !accountId) return jsonResponse({ error: "Kiro reauth requires an accountId" }, 400);
+      if (body.flowId !== undefined) {
+        if (reauth || body.method !== undefined || typeof body.flowId !== "string" || body.flowId.length > 128
+          || typeof body.profileArn !== "string" || body.profileArn.length > 256) return jsonResponse({ error: "invalid Kiro profile selection" }, 400);
+        const owner = principal ?? "admin-token";
+        const baseline = kiroDeviceConfigBaseline(body.flowId, owner);
+        const status = await selectKiroDeviceProfile(body.flowId, owner, body.profileArn);
+        if (!status) return jsonResponse({ error: "unknown Kiro profile selection" }, 404);
+        if (status.state === "done") {
+          reconcileLiveConfigFromDisk(config, baseline ?? structuredClone(config));
+          reconcileLiveStateStores();
+        }
+        return jsonResponse(status);
+      }
       if (body.method !== undefined) {
-        if (body.method !== "builder-id" && body.method !== "google" && body.method !== "github") {
+        if (body.method !== "builder-id" && body.method !== "google" && body.method !== "github" && body.method !== "iam-identity-center") {
           return jsonResponse({ error: "invalid Kiro device method" }, 400);
         }
         if (reauth) return jsonResponse({ error: "native_login_is_add_only" }, 400);
+        const iam = body.method === "iam-identity-center" ? parseKiroIamOptions(body) : undefined;
+        if (body.method === "iam-identity-center" && !iam) return jsonResponse({ error: "invalid Kiro IAM portal or region" }, 400);
         try {
-          return jsonResponse(await startKiroDeviceLogin(body.method as KiroDeviceMethod, principal ?? "admin-token", readConfigDiagnostics().config));
+          return jsonResponse(await startKiroDeviceLogin(body.method as KiroDeviceMethod, principal ?? "admin-token", readConfigDiagnostics().config, iam));
         } catch {
           return jsonResponse({ error: "Kiro device login could not start" }, 409);
         }
@@ -390,7 +407,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string; flowId?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    const consentRequired = metaMuseConsentRequired(provider, principal);
+    const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);

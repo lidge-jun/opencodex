@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
+import { decodeCursorJwtPayload } from "../oauth/cursor";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
 import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
@@ -182,9 +183,11 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           try {
             const token = resolveCursorToken(provider, incoming.headers);
             liveRosterScope = cursorLiveRosterScope(provider.baseUrl, token);
+            const jwtSub = decodeCursorJwtPayload(token)?.sub;
+            const identitySeed = typeof jwtSub === "string" && jwtSub.trim() ? `sub:${jwtSub.trim()}` : token;
             _parsed._cursorIdentityScope = createHash("sha256")
               .update("ocx:cursor:acct:")
-              .update(token)
+              .update(identitySeed)
               .digest("hex")
               .slice(0, 16);
           } catch {

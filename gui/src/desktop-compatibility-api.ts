@@ -1,6 +1,10 @@
+import { fetchApiSessionValidation } from "./api";
+import { discardResponseBody, withFetchDeadline } from "./bounded-fetch";
+import { PairingError } from "./connect-pairing-transport";
+
 export type CertificateState = "missing" | "invalid" | "expired" | "renewal-required" | "prepared" | "trusted" | "unknown";
 export interface CompatibilityCertificate {
-  supported: boolean; state: CertificateState; fingerprint?: string; expiresAt?: number; renewalDue: boolean; busy: string | null;
+  supported: boolean; state: CertificateState; fingerprint?: string; expiresAt?: number; renewalDue: boolean; busy: string | null; mutationAuthorized?: boolean;
 }
 export interface CompatibilityRuntime {
   supported: boolean; phase: "off" | "starting" | "running" | "stopping" | "cleanup-required"; running: boolean;
@@ -49,6 +53,7 @@ export function parseCompatibilityCertificate(value: unknown): CompatibilityCert
   if (value.fingerprint !== undefined && (typeof value.fingerprint !== "string" || !/^[A-F0-9]{64}$/.test(value.fingerprint))) throw new CompatibilityApiError("invalid_certificate_status");
   if (value.expiresAt !== undefined && (typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt) || Math.abs(value.expiresAt) > 8.64e15)) throw new CompatibilityApiError("invalid_certificate_status");
   return { supported: value.supported, state: value.state as CertificateState, busy: value.busy,
+    ...(typeof value.mutationAuthorized === "boolean" ? { mutationAuthorized: value.mutationAuthorized } : {}),
     ...(value.fingerprint === undefined ? {} : { fingerprint: value.fingerprint as string }),
     ...(value.expiresAt === undefined ? {} : { expiresAt: value.expiresAt as number }), renewalDue: value.renewalDue === true };
 }
@@ -98,6 +103,22 @@ export async function readCompatibilityRuntime(apiBase: string, signal: AbortSig
 }
 export async function readCompatibilityCertificate(apiBase: string, signal: AbortSignal): Promise<CompatibilityCertificate> {
   return parseCompatibilityCertificate((await reply(await fetch(apiBase + ROOT + "certificate", { signal }))).certificate);
+}
+/** Read the candidate session's authority without automatic renewal or a mutation. */
+export async function validateCompatibilityPairing(apiBase: string, signal: AbortSignal): Promise<void> {
+  try {
+    await withFetchDeadline(10000, signal, async deadline => {
+      const response = await fetchApiSessionValidation("machine", apiBase + ROOT + "certificate", { signal: deadline });
+      if (response.status === 401 || response.status === 403) { discardResponseBody(response); throw new PairingError("refused"); }
+      const certificate = parseCompatibilityCertificate((await reply(response)).certificate);
+      deadline.throwIfAborted();
+      if (certificate.mutationAuthorized !== true) throw new PairingError("refused");
+    });
+  } catch (error) {
+    signal.throwIfAborted();
+    if (error instanceof PairingError) throw error;
+    throw new PairingError(error instanceof CompatibilityApiError ? "invalid-response" : "unreachable");
+  }
 }
 export async function readCompatibilitySnapshot(apiBase: string, signal: AbortSignal): Promise<CompatibilitySnapshot> {
   const [certificate, runtime] = await Promise.all([

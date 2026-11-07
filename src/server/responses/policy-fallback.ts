@@ -15,6 +15,8 @@ import { parseSyntheticRowId } from "../fast-row";
 import { routeConcreteModel } from "../../router";
 import { isPolicyCandidateRefusal, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { upstreamCodeForComboFailure } from "../../bridge/errors";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -132,7 +134,7 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
     const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
     return comboFailureDecision(response.status, text, {
-      code: errorCodeFromText(text),
+      code: upstreamCodeForComboFailure(response, errorCodeFromText(text)),
       // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
       verifiedPlanRefusal: isVerifiedModelNotInPlanResponse(response),
     }) === "hop";
@@ -182,6 +184,7 @@ export async function handleResponsesWithPolicyFallback(
   let rawBody: Record<string, unknown> | null = null;
   const coreOptions: CoreOptions = {
     ...options,
+    advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
     policyRequestScope: policyScope,
     openAiSidecarAuth: options.openAiSidecarAuth === undefined
       ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,

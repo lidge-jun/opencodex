@@ -4,8 +4,11 @@ import type { ManagementContext } from "../../src/server/management/context";
 import type { DesktopCertificateService } from "../../src/codex/desktop-compatibility/certificate-service";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
+import { createManagementSessionControl, type ManagementAuthState } from "../../src/server/management-auth";
+import { consumeGuiPairingGrant, createGuiPairingGrant, issueGuiSession, type GuiSessionBootstrap } from "../../src/server/gui-session";
 
 const url = new URL("http://127.0.0.1:10100/api/codex/desktop-compatibility/certificate");
+const pairedSession = { isPaired: () => true } as NonNullable<ManagementContext["sessionControl"]>;
 function fixture(method: string, body?: object, principal: ManagementContext["principal"] = "gui-session", loopback = true) {
   const calls: string[] = [];
   const status = { supported: true, state: "prepared" as const, busy: null };
@@ -13,7 +16,7 @@ function fixture(method: string, body?: object, principal: ManagementContext["pr
     prepare: async () => { calls.push("prepare"); return status; }, trust: async fp => { calls.push("trust:" + fp); return status; },
     removeTrust: async fp => { calls.push("remove:" + fp); return status; }, renew: async fp => { calls.push("renew:" + fp); return status; } };
   const ctx = { req: new Request(url, { method, headers: { host: url.host, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) }),
-    url, principal, trustedLoopbackIngress: loopback, deps: { desktopCertificateService: service } } as ManagementContext;
+    url, principal, sessionControl: pairedSession, trustedLoopbackIngress: loopback, deps: { desktopCertificateService: service } } as ManagementContext;
   return { calls, ctx };
 }
 test("status reads do not invoke setup or OS trust", async () => {
@@ -25,6 +28,35 @@ test("only authenticated local dashboard mutations reach the service", async () 
     const io = fixture("POST", { action: "prepare", confirmed: true }, principal, loopback);
     if (principal === undefined) io.ctx.principal = undefined;
     expect((await handleDesktopCompatibilityRoutes(io.ctx))?.status).toBe(403); expect(io.calls).toEqual([]);
+  }
+  const unpaired = fixture("POST", { action: "prepare", confirmed: true });
+  unpaired.ctx.sessionControl = { ...pairedSession, isPaired: () => false };
+  expect((await handleDesktopCompatibilityRoutes(unpaired.ctx))?.status).toBe(403); expect(unpaired.calls).toEqual([]);
+});
+test("real loopback bootstrap stays read-only until a local pairing grant establishes mutation authority", async () => {
+  const config = { hostname: "127.0.0.1", port: 10100, runtimeRole: "standalone", providers: {} } as OcxConfig;
+  const state: ManagementAuthState = { available: true, token: "fixture-admin", source: "file", sessions: new Map(), pairingGrants: new Map() };
+  const bootstrap = new Request(url.origin + "/opencodex-session", { headers: { host: url.host, origin: url.origin } });
+  const automatic = issueGuiSession(bootstrap, config, state)!;
+  expect(automatic.issuance).toBe("loopback");
+  const grant = createGuiPairingGrant(url.origin, config, state);
+  const paired = consumeGuiPairingGrant(new Request(bootstrap, { method: "POST" }), { grant: grant.grant }, config, state, Date.now(),
+    { ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: url.origin });
+  expect(paired && "token" in paired).toBe(true);
+  const sessionControl = createManagementSessionControl(state);
+  for (const [session, authorized] of [[automatic, false], [paired as GuiSessionBootstrap, true]] as const) {
+    for (const method of ["GET", "POST"]) {
+      const io = fixture(method, method === "POST" ? { action: "prepare", confirmed: true } : undefined);
+      io.ctx.config = config; io.ctx.sessionControl = sessionControl;
+      const headers = new Headers(io.ctx.req.headers);
+      headers.set("origin", url.origin); headers.set("x-opencodex-api-key", session.token);
+      headers.set("x-opencodex-gui-origin", session.browserOrigin); headers.set("x-opencodex-csrf-token", session.csrfToken);
+      io.ctx.req = new Request(io.ctx.req, { headers });
+      const response = (await handleDesktopCompatibilityRoutes(io.ctx))!;
+      expect(response.status).toBe(method === "POST" && !authorized ? 403 : 200);
+      if (method === "GET") expect((await response.json()).certificate.mutationAuthorized).toBe(authorized);
+      expect(io.calls).toEqual(method === "GET" ? ["status"] : authorized ? ["prepare"] : []);
+    }
   }
 });
 test("explicit confirmation and exact fingerprint are validated before any side effect", async () => {
@@ -51,6 +83,6 @@ test("renewal requires fresh fingerprint and explicit local dashboard confirmati
 test("the real management dispatcher reaches setup with principal and ingress intact", async () => {
   const io = fixture("POST", { action: "prepare", confirmed: true });
   const response = await handleManagementAPI(io.ctx.req, url, { providers: {} } as OcxConfig,
-    io.ctx.deps, "gui-session", undefined, { trustedLoopback: true });
+    io.ctx.deps, "gui-session", pairedSession, { trustedLoopback: true });
   expect(response?.status).toBe(200); expect(io.calls).toEqual(["prepare"]);
 });

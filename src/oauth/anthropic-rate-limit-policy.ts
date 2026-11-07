@@ -6,6 +6,12 @@ export type AnthropicRateLimitKind = "shared-quota" | "family-quota" | "transien
 export type RateLimitHeaders = Pick<Headers, "get">;
 export const ANTHROPIC_SHORT_RETRY_MS = 100;
 export const ANTHROPIC_MAX_INLINE_THROTTLE_MS = 1_000;
+/**
+ * How long a transient pause keeps marking its account as only detoured from (#7813). A detour
+ * awaits the alternate's credential and selection commit after the pause is set; a pause that
+ * expires during those awaits must not turn the detour into a permanent rebinding.
+ */
+export const ANTHROPIC_DETOUR_GRACE_MS = 5 * 60_000;
 
 export function anthropicRetryAfterMs(value: string | null | undefined, now: number): number | undefined {
   const text = value?.trim();
@@ -27,6 +33,9 @@ export function classifyAnthropic429(headers: RateLimitHeaders, now = Date.now()
 
 function createAnthropicRatePolicy(instance: AnthropicInstanceId) {
   let pauses: Map<string, { until: number; generation: string }> | undefined;
+  // Accounts paused within the detour grace window, by credential generation. Bounded by the
+  // stored account set (one row per account) and pruned with the pauses.
+  let recent: Map<string, { at: number; generation: string }> | undefined;
   function pauseAnthropicRateAdmission(accountId: string, until: number): void {
     const credential = getAccountCredential(instance, accountId);
     if (!credential) return;
@@ -36,6 +45,9 @@ function createAnthropicRatePolicy(instance: AnthropicInstanceId) {
     for (const [id, pause] of rows) if (pause.until <= now) rows.delete(id);
     const previous = rows.get(accountId);
     rows.set(accountId, { until: Math.max(previous?.generation === generation ? previous.until : 0, until), generation });
+    const marks = recent ??= new Map();
+    for (const [id, mark] of marks) if (now - mark.at > ANTHROPIC_DETOUR_GRACE_MS) marks.delete(id);
+    marks.set(accountId, { at: now, generation });
   }
   function anthropicRatePauseUntil(accountId: string, now = Date.now()): number | undefined {
     const pause = pauses?.get(accountId);
@@ -46,21 +58,33 @@ function createAnthropicRatePolicy(instance: AnthropicInstanceId) {
     }
     return pause.until;
   }
-  function clearAnthropicRatePauses(): void { pauses = undefined; }
+  /** True while the account's latest transient pause is younger than the detour grace window. */
+  function anthropicRatePausedRecently(accountId: string, now = Date.now()): boolean {
+    const mark = recent?.get(accountId);
+    if (!mark) return false;
+    const credential = getAccountCredential(instance, accountId);
+    if (now - mark.at > ANTHROPIC_DETOUR_GRACE_MS || !credential || credentialGeneration(credential) !== mark.generation) {
+      recent!.delete(accountId); return false;
+    }
+    return true;
+  }
+  function clearAnthropicRatePauses(): void { pauses = undefined; recent = undefined; }
   function reconcileAnthropicRatePauses(context: GenerationContext): number {
     let removed = 0;
     for (const id of pauses?.keys() ?? []) {
       if (context.oauthAccountKeys.has(`${instance}\0${id}`)) continue;
       pauses!.delete(id); removed++;
     }
+    for (const id of recent?.keys() ?? []) if (!context.oauthAccountKeys.has(`${instance}\0${id}`)) recent!.delete(id);
     return removed;
   }
   function sweepExpiredAnthropicRatePauses(now = Date.now()): number {
     let removed = 0;
     for (const [id, pause] of pauses ?? []) if (pause.until <= now) { pauses!.delete(id); removed++; }
+    for (const [id, mark] of recent ?? []) if (now - mark.at > ANTHROPIC_DETOUR_GRACE_MS) recent!.delete(id);
     return removed;
   }
-  return Object.freeze({ instance, pauseAnthropicRateAdmission, anthropicRatePauseUntil,
+  return Object.freeze({ instance, pauseAnthropicRateAdmission, anthropicRatePauseUntil, anthropicRatePausedRecently,
     clearAnthropicRatePauses, reconcileAnthropicRatePauses, sweepExpiredAnthropicRatePauses });
 }
 export type AnthropicRatePolicy = ReturnType<typeof createAnthropicRatePolicy>;

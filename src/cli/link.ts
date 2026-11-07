@@ -41,7 +41,7 @@ export const LINK_USAGE = `Usage:
   ocx link cleanup [--link-id <id>] [--json]
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
-Cleanup finds Windows Children and explains how to move them to Hub mode; it changes nothing.`;
+Cleanup reports each Child's platform with disconnect guidance; it changes nothing.`;
 
 /**
  * What `ocx link status` prints: the runtime's status DTO itself, so a field the server adds (like
@@ -134,7 +134,7 @@ function validatePeer(value: unknown, index: number): LinkPeerStatus {
   };
 }
 
-function validateStatus(value: unknown): LinkStatusPayload {
+export function validateStatus(value: unknown): LinkStatusPayload {
   if (!isRecord(value)) throw new Error("invalid link API response: status object");
   assertKeys(value, ["role", "listener", "links", "child"], ["local"], "status");
   if (value.role !== "standalone" && value.role !== "home" && value.role !== "child") {

@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 import {
   closeSync,
   constants as fsConstants,
@@ -125,7 +126,7 @@ function scrubOne(
     fd = openSync(path, flags);
     assertOpenIdentity(fd, path, parent, parentIdentity, observed, 1n);
 
-    ftruncateSync(fd, 0);
+    publishCredentialSync(() => ftruncateSync(fd!, 0));
     fsyncSync(fd);
     const truncated = fstatSync(fd, { bigint: true });
     if (!sameIdentity(truncated, observed) || truncated.nlink !== 1n || truncated.size !== 0n) {
@@ -137,7 +138,7 @@ function scrubOne(
     // The lifetime owner and exclusive claim exclude cooperative OpenCodex writers.
     // A malicious process running as the same OS user can still race Node's final
     // identity-check/unlink gap and is intentionally outside this trusted-owner boundary.
-    unlinkSync(path);
+    publishCredentialSync(() => unlinkSync(path));
     const unlinked = fstatSync(fd, { bigint: true });
     if (!sameIdentity(unlinked, observed) || unlinked.nlink !== 0n || unlinked.size !== 0n) {
       throw cleanupRequired();

@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 /* Keep timing-basis labels readable inside the fixed-width rate column in every locale. */
 .logs-stack-end.logs-decode-rate { display: flex; white-space: normal; }
 .logs-decode-rate > span:first-child { white-space: nowrap; }
@@ -6,3 +9,4 @@
 .log-detail-grid.log-detail-performance-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .log-detail-performance-grid > span { min-width: 0; overflow-wrap: break-word; }
 .logs-decode-basis-hint { grid-column: 1 / -1; }
+}

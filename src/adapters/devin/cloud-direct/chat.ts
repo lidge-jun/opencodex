@@ -1173,6 +1173,18 @@ function safeConnectCode(value: unknown): string | undefined {
 const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits)\b/i;
 
 /**
+ * Spent-window wording. A `failed_precondition` trailer is a 429 only with this evidence, and only
+ * this evidence earns the synthesized "usage limit reached" label: an ordinary rate limit or a
+ * per-minute "quota exceeded" stays out of both (#7625).
+ */
+const TRAILER_EXHAUSTED_RE = /\b(?:usage limit (?:has been )?reached|out of credits|(?:weekly|monthly|daily|usage(?:\s+window)?)\s+(?:usage\s+)?quota (?:has been|is) exhausted|usage window (?:has been|is) exhausted)\b/i;
+const TRAILER_TRANSIENT_LIMIT_RE = /\b(?:per[-\s](?:minute|hour)|rate)\b/i;
+
+function isSpentTrailerWindow(message: string): boolean {
+  return TRAILER_EXHAUSTED_RE.test(message) && !TRAILER_TRANSIENT_LIMIT_RE.test(message);
+}
+
+/**
  * Connect error code to HTTP status.
  *
  * Without this only the HTTP status line reached the adapter, so a cap or an
@@ -1182,7 +1194,8 @@ const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of
  * acts on.
  */
 export function connectTrailerHttpStatus(code: string | undefined, message: string): number | undefined {
-  if (code === 'permission_denied' && TRAILER_QUOTA_RE.test(message)) return 429;
+  if (code === 'permission_denied' && (TRAILER_QUOTA_RE.test(message) || isSpentTrailerWindow(message))) return 429;
+  if (code === 'failed_precondition' && isSpentTrailerWindow(message)) return 429;
   switch (code) {
     case 'unauthenticated': return 401;
     case 'permission_denied': return 403;
@@ -1379,8 +1392,8 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // chunk])` per chunk — O(n²) over a long stream because every chunk copies
   // every buffered byte again. Now we keep a queue of arriving chunks with a
   // running offset; we only `Buffer.concat` when a frame straddles a chunk
-  // boundary, and we slice/drop fully-consumed chunks immediately. For
-  // typical 50-200KB responses this is ~5x faster and produces zero waste.
+  // boundary. A drain clears the queue or removes its consumed prefix once,
+  // instead of shifting the array separately for every consumed chunk.
   const chunkQueue: Buffer[] = [];
   let queuedBytes = 0;
   // Bun + Node ReadableStream readers diverge on the type-level shape
@@ -1417,16 +1430,25 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   /** Drop the first `n` bytes from the chunk queue. */
   function drop(n: number): void {
     queuedBytes -= n;
+    if (queuedBytes === 0) {
+      chunkQueue.length = 0;
+      return;
+    }
     let remaining = n;
-    while (remaining > 0 && chunkQueue.length > 0) {
-      const head = chunkQueue[0];
+    let consumed = 0;
+    while (remaining > 0 && consumed < chunkQueue.length) {
+      const head = chunkQueue[consumed];
       if (head.length <= remaining) {
-        chunkQueue.shift();
+        consumed++;
         remaining -= head.length;
       } else {
-        chunkQueue[0] = head.slice(remaining);
+        chunkQueue[consumed] = head.slice(remaining);
         remaining = 0;
       }
+    }
+    if (consumed > 0) {
+      chunkQueue.copyWithin(0, consumed);
+      chunkQueue.length -= consumed;
     }
   }
 
@@ -1635,8 +1657,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // is disabled. The `~` marks the delay as approximate; the shared
     // parser accepts it once after Retry-After, so the outer client cooldown
     // reads this same delay back from the message.
+    const isQuotaExhausted = connectTrailerHttpStatus(trailerError.code, trailerError.message) === 429
+      && isSpentTrailerWindow(trailerError.message);
+    const quotaSuffix = isQuotaExhausted ? ': usage limit reached' : '';
     throw new CloudChatError(
-      `Cognition chat failed${trailerError.code ? ` (${trailerError.code})` : ''} ` +
+      `Cognition chat failed${trailerError.code ? ` (${trailerError.code}${quotaSuffix})` : ''} ` +
       `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})` +
       (trailerError.retryAfterSeconds === undefined
         ? ''

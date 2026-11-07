@@ -19,6 +19,11 @@ opencodex は、永続的な設定を `$OPENCODEX_HOME/config.json` (通常は `
 
 ファイルを解析できない場合、opencodex はファイルを `config.json.invalid-<timestamp>` としてバックアップし、コンソールに警告を表示し、デフォルトで起動します。欠落しているファイルでも、新規インストールのデフォルトである 1 つの `openai` フォワード プロバイダーが使用されます。
 
+ローカルの `ocx config set`、`unset`、`import`、オフラインの `ocx effort`、カスタムモデルの add/remove、
+プロバイダーの add/remove/set-default は、既存の `config.json` が無効または読み取り不能な場合、
+元のバイト列を変更せずに拒否します。`ocx config validate` を実行し、ファイルを修復してから再試行してください。
+既存の設定がある場合、import にも読み取り可能で有効な保存先ファイルが必要です。
+
 ## 優先順位とデフォルト
 
 `config.json` の有効な値は、組み込みのデフォルトをオーバーライドします。省略可能なフィールドが欠落している場合は、ドメイン ページに記載されているデフォルトが使用されます。 `OPENCODEX_HOME` は、デフォルトの構成ディレクトリよりも優先されます。 `apiKey: "${PROVIDER_API_KEY}"` などの環境参照を受け入れるフィールドは、リクエスト時にその変数を解決します。送信プロキシの場合、すでに設定されている `HTTP_PROXY` または `HTTPS_PROXY` が最上位の `proxy` フィールドよりも優先されます。

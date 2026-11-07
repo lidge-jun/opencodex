@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { FORWARD_HEADERS, createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { headersForCodexAuthContext } from "../../src/codex/auth-context";
+import {
+  deriveCodexAccountInstallationId,
+  isolateCodexPoolAccountHeaders,
+  isolateCodexPoolClientMetadata,
+  rewriteTurnMetadataInstallationId,
+} from "../../src/codex/forward-transport-headers";
+import { CodexInstallationIdUnavailableError } from "../../src/codex/installation-id";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -161,6 +168,124 @@ describe("Codex metadata integrity", () => {
     expect(sync.headers["thread-id"]).toBe("thread-real-2");
   });
 
+  test("pooled accounts isolate x-codex-installation-id, x-codex-turn-metadata.installation_id, and body.client_metadata idempotently while stripping x-oai-attestation", async () => {
+    const callerInstallId = "11111111-1111-4111-8111-111111111111";
+    const turnMeta = JSON.stringify({ installation_id: callerInstallId, thread_id: "thread-keep" });
+    const inbound = new Headers({
+      authorization: "Bearer caller-token",
+      "x-codex-installation-id": callerInstallId,
+      "x-codex-turn-metadata": turnMeta,
+      "x-oai-attestation": "caller-device-attestation",
+      version: "0.154.0",
+    });
+    const headersA = headersForCodexAuthContext(inbound, poolAuthContext);
+    const headersB = headersForCodexAuthContext(inbound, {
+      ...poolAuthContext,
+      accountId: "pool-b",
+      chatgptAccountId: "acct_pool_b",
+    });
+    const idA = headersA.get("x-codex-installation-id")!;
+    const idB = headersB.get("x-codex-installation-id")!;
+    expect(idA).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(idB).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(idA).not.toBe(callerInstallId);
+    expect(idA).not.toBe(idB);
+    expect(deriveCodexAccountInstallationId(accountA.chatgptAccountId, idA)).toBe(idA);
+    expect(JSON.parse(headersA.get("x-codex-turn-metadata")!)).toEqual({
+      installation_id: idA,
+      thread_id: "thread-keep",
+    });
+    expect(headersA.has("x-oai-attestation")).toBe(false);
+    expect(headersA.get("version")).toBe("0.154.0");
+
+    // Passing already-materialized headers and client_metadata through passthrough adapter with _codexAccountOverride stays idempotent.
+    const parsed = minimalParsed();
+    parsed._rawBody = {
+      model: "gpt-5.6-luna",
+      input: [],
+      client_metadata: {
+        "x-codex-installation-id": callerInstallId,
+        "x-codex-turn-metadata": turnMeta,
+      },
+    };
+    const providerWithOverride = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      _codexAccountOverride: {
+        accessToken: accountA.accessToken,
+        chatgptAccountId: accountA.chatgptAccountId,
+      },
+    } as unknown as OcxProviderConfig;
+    const built = await createResponsesPassthroughAdapter(providerWithOverride).buildRequest(parsed, { headers: headersA });
+    expect(built.headers["x-codex-installation-id"]).toBe(idA);
+    expect(built.headers["x-oai-attestation"]).toBeUndefined();
+    const sentBody = JSON.parse(built.body);
+    expect(sentBody.client_metadata["x-codex-installation-id"]).toBe(idA);
+    expect(JSON.parse(sentBody.client_metadata["x-codex-turn-metadata"]).installation_id).toBe(idA);
+    expect(isolateCodexPoolClientMetadata(sentBody, accountA.chatgptAccountId)).toBe(sentBody);
+    const copyHeaders = new Headers(built.headers);
+    isolateCodexPoolAccountHeaders(copyHeaders, accountA.chatgptAccountId);
+    expect(copyHeaders.get("x-codex-installation-id")).toBe(idA);
+  });
+  test("pooled turn metadata preserves non-ASCII values in header-safe JSON", () => {
+    const raw = String.raw`{"installation_id":"caller-installation","workspaces":["/tmp/\ubcd1\uc6d0/\ud83d\ude80"],"extra":{"note":"\ud55c\uae00 \ud83d\ude00"}}`;
+    const incoming = new Headers({ "x-codex-turn-metadata": raw });
+    const headers = headersForCodexAuthContext(incoming, poolAuthContext);
+    const rewritten = headers.get("x-codex-turn-metadata")!;
+    expect(rewritten).toMatch(/^[\x00-\x7f]*$/);
+    expect(JSON.parse(rewritten)).toEqual({
+      ...JSON.parse(raw),
+      installation_id: deriveCodexAccountInstallationId(accountA.chatgptAccountId, "caller-installation"),
+    });
+    const body = { client_metadata: { "x-codex-turn-metadata": raw } };
+    expect((isolateCodexPoolClientMetadata(body, accountA.chatgptAccountId) as typeof body)
+      .client_metadata["x-codex-turn-metadata"]).toBe(rewritten);
+    isolateCodexPoolAccountHeaders(headers, accountA.chatgptAccountId);
+    expect(headers.get("x-codex-turn-metadata")).toBe(rewritten);
+  });
+  test("pooled turn metadata escapes DEL so the header stays a valid field value", () => {
+    const raw = String.raw`{"installation_id":"caller-installation","workspaces":["/tmp/a\u007fb/\ubcd1\u0001"]}`;
+    const headers = headersForCodexAuthContext(new Headers({ "x-codex-turn-metadata": raw }), poolAuthContext);
+    const rewritten = headers.get("x-codex-turn-metadata")!;
+    expect(rewritten).toMatch(/^[\x20-\x7e\t]*$/);
+    expect(JSON.parse(rewritten).workspaces).toEqual(["/tmp/a\u007fb/\ubcd1\u0001"]);
+    expect(JSON.parse(rewritten).installation_id)
+      .toBe(deriveCodexAccountInstallationId(accountA.chatgptAccountId, "caller-installation"));
+  });
+  test("escaped turn metadata is accepted unchanged on re-entry and capped at 96 KiB", () => {
+    const account = accountA.chatgptAccountId;
+    const raw = JSON.stringify({ installation_id: "caller-installation", pad: "\u00e9".repeat(6000) });
+    const once = rewriteTurnMetadataInstallationId(raw, account);
+    expect(once.length).toBeGreaterThan(32 * 1024);
+    expect(rewriteTurnMetadataInstallationId(once, account)).toBe(once);
+    const headers = headersForCodexAuthContext(new Headers({ "x-codex-turn-metadata": raw }), poolAuthContext);
+    expect(headersForCodexAuthContext(headers, poolAuthContext).get("x-codex-turn-metadata")).toBe(once);
+    // DEL expands 6x: 20,000 of them fit the 32 KiB canonical bound but exceed the escaped cap.
+    const del = JSON.stringify({ installation_id: "caller-installation", pad: "\u007f".repeat(20_000) });
+    expect(() => rewriteTurnMetadataInstallationId(del, account)).toThrow(CodexInstallationIdUnavailableError);
+    // Non-JSON values pass through unchanged, so they keep the raw 32 KiB bound.
+    expect(() => rewriteTurnMetadataInstallationId("x".repeat(32 * 1024 + 1), account)).toThrow(CodexInstallationIdUnavailableError);
+  });
+  for (const value of ["漢字", "a\u007fb"]) test(`equal installation IDs escape ${JSON.stringify(value)}`, () => {
+    const account = accountA.chatgptAccountId;
+    const installation_id = deriveCodexAccountInstallationId(account, "caller");
+    const raw = JSON.stringify({ installation_id, value });
+    const once = rewriteTurnMetadataInstallationId(raw, account);
+    expect(once).toMatch(/^[\x20-\x7e]*$/);
+    expect(JSON.parse(once)).toEqual({ installation_id, value });
+    expect(rewriteTurnMetadataInstallationId(once, account)).toBe(once);
+  });
+  test("equal installation IDs use canonical and escaped size bounds", () => {
+    const account = accountA.chatgptAccountId;
+    const installation_id = deriveCodexAccountInstallationId(account, "caller");
+    const padded = ` ${" ".repeat(90_000)}${JSON.stringify({ installation_id })}`;
+    expect(rewriteTurnMetadataInstallationId(padded, account)).toBe(JSON.stringify({ installation_id }));
+    const oversized = JSON.stringify({ installation_id, pad: "a".repeat(32 * 1024) });
+    expect(() => rewriteTurnMetadataInstallationId(oversized, account)).toThrow(CodexInstallationIdUnavailableError);
+    const del = JSON.stringify({ installation_id, pad: "\u007f".repeat(20_000) });
+    expect(() => rewriteTurnMetadataInstallationId(del, account)).toThrow(CodexInstallationIdUnavailableError);
+  });
   test("Responses preserves caller User-Agent as a fallback in key and forward modes", async () => {
     for (const provider of [
       {

@@ -131,9 +131,12 @@ describe("the generated script still implements that rule", () => {
 
 describe("both teardown paths use the shared killer", () => {
   test("neither file keeps a private matcher", () => {
-    for (const rel of ["src/service/windows-ops.ts", "src/update/job.ts"]) {
+    for (const rel of ["src/service/windows-ops.ts", "src/update/job-windows-restart.ts"]) {
       const src = read(rel);
-      expect(src).toContain("killWindowsSchedulerWrappers");
+      if (rel === "src/update/job-windows-restart.ts") {
+        expect(src).toContain("killWindowsServiceWrapperProcesses(authorizeMutation);");
+        expect(src).toMatch(/const paths = \{[\s\S]*?scriptPath: join\(getConfigDir\(\), "opencodex-service.cmd"\),[\s\S]*?launcherPath: join\(getConfigDir\(\), "opencodex-service-launcher.vbs"\),\s*\};\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedKillWindowsWrappers\(authorizeMutation, paths\);/);
+      } else expect(src).toContain("killWindowsSchedulerWrappers({");
       expect(src).not.toContain("-like ('*' + $p + '*')");
       expect(src).not.toContain("$pats = @('opencodex-service.cmd'");
     }

@@ -33,7 +33,7 @@ export type StaticProviderPolicyField =
   | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "reasoningWireFormat" | "noVisionModels" | "noReasoningModels" | "noTemperatureModels"
   | "noTopPModels" | "noStopModels" | "noPenaltyModels" | "noJsonSchemaModels" | "noStructuredOutputModels" | "parallelToolCalls"
-  | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "statelessResponses"
+  | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "singleLeadingSystemMessage" | "statelessResponses"
   | "requiresAdjacentResponsesToolResults" | "requiresPairedResponsesToolResults" | "annotateEmptyToolOutputs"
   | "fastWire" | "supportsServiceTier" | "modelSupportsServiceTier" | "supportsOpenAiWebSearchToolFields"
   | "supportsResponsesCustomTools" | "preserveResponsesReasoningContent" | "dropResponsesReasoningItems"
@@ -174,7 +174,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "responsesPath", "chatCompletionsPath", "keyOptional", "freeTier", "modelSuffixBracketStrip",
     "defaultModel", "models", "liveModels", "contextWindow", "defaultMaxOutputTokens",
     "reasoningWireFormat", "parallelToolCalls", "promptCacheKey",
-    "openaiChatEofTolerance", "foldDeveloperRoleToSystem", "statelessResponses",
+    "openaiChatEofTolerance", "foldDeveloperRoleToSystem", "singleLeadingSystemMessage", "statelessResponses",
     "requiresAdjacentResponsesToolResults", "requiresPairedResponsesToolResults",
     "annotateEmptyToolOutputs", "fastWire", "supportsServiceTier",
     "supportsOpenAiWebSearchToolFields", "supportsResponsesCustomTools",

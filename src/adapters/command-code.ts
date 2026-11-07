@@ -1,3 +1,4 @@
+import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -7,6 +8,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { clearableDeadline } from "../lib/abort";
 import { debugDroppedFrame } from "../lib/debug";
 import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
@@ -423,27 +425,29 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
   const encoder = new TextEncoder();
   let buffer = "";
   let bufferBytes = 0;
+  // One live buffer owns one charge; resizing must not reserve old + replacement together.
+  const resizeBuffer = (nextBytes: number) => {
+    if (nextBytes > bufferBytes) {
+      budget.reserveTransient(nextBytes - bufferBytes, { kind: "live_transient" }).commitRetained();
+    } else {
+      budget.releaseRetained(bufferBytes - nextBytes, { kind: "live_transient" });
+    }
+    bufferBytes = nextBytes;
+  };
   try {
     for (;;) {
       const { value, done } = await reader.read();
       const next = buffer + decoder.decode(value, { stream: !done });
       const nextBytes = encoder.encode(next).byteLength;
-      const reservation = budget.reserveTransient(nextBytes, { kind: "live_transient" });
+      resizeBuffer(nextBytes);
       buffer = next;
-      reservation.commitRetained();
-      budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = nextBytes;
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
         if (line) yield* decodeEventLine(line);
         newline = buffer.indexOf("\n");
       }
-      const residualBytes = encoder.encode(buffer).byteLength;
-      const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
-      residualReservation.commitRetained();
-      budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = residualBytes;
+      resizeBuffer(encoder.encode(buffer).byteLength);
       if (done) break;
     }
     const final = buffer.trim();
@@ -541,17 +545,13 @@ function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest 
 
 /** The upstream's plan refusal prefix; `MODEL_NOT_IN_PLAN_OTHER` and later mentions do not count. */
 const COMMAND_CODE_PLAN_REFUSAL = /^MODEL_NOT_IN_PLAN(?::|$)/;
-/** A model id the message may quote; anything else is described without repeating it. */
-const DISPLAYABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-
 /**
  * Fixed client copy for a plan refusal. The upstream detail is never quoted: it is free text this
  * proxy does not control, and quota or reasoning-effort words in it would steer the downstream
  * classifiers (quota recording, effort repair) on a refusal that no resend can change.
  */
-function commandCodePlanRefusalMessage(modelId: string | undefined): string {
-  const model = modelId && DISPLAYABLE_MODEL_ID.test(modelId) ? `the model "${modelId}"` : "the requested model";
-  return `Command Code refused ${model}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
+function commandCodePlanRefusalMessage(model: ClientFacingModelLabel): string {
+  return `Command Code refused ${clientFacingModelText(model)}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
     + "Choose a model the plan includes or change the Command Code plan; retrying this request will not succeed.";
 }
 
@@ -583,7 +583,7 @@ async function normalizeCommandCodePlanRefusal(
     headers.set("x-opencodex-upstream-status", "403");
     headers.set("x-opencodex-refusal", MODEL_NOT_IN_PLAN_REFUSAL_MARKER);
     const refusal = new Response(JSON.stringify({ error: {
-      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(modelId),
+      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(clientFacingModelLabel(undefined)),
     } }), { status: 400, statusText: "Bad Request", headers });
     // Identity is the provenance dispatch, combo and policy fallback check; the header is diagnostic.
     markVerifiedModelNotInPlanResponse(refusal);
@@ -609,19 +609,17 @@ function requestModelId(request: AdapterRequest): string | undefined {
 }
 
 async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContext | undefined, executor: typeof globalThis.fetch): Promise<Response> {
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
-  const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
+  const deadline = clearableDeadline(ctx?.timeoutMs ?? 200_000, ctx?.abortSignal);
   try {
     return await executor(request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
       redirect: "manual",
-      signal: AbortSignal.any([callerSignal, timeout.signal]),
+      signal: deadline.signal,
     });
   } finally {
-    clearTimeout(timer);
+    deadline.clear();
   }
 }
 

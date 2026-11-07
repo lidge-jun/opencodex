@@ -226,6 +226,38 @@ describe("readBoundedResponseBody", () => {
 		expect(result.totalTimedOut).toBe(false);
 	});
 
+	test("a non-positive body-read budget arms no deadline and lets a slow body complete", async () => {
+		// Regression for the local-upstream JSON path: once headers arrive the body is governed by
+		// the stall clock, which resolves to disabled (0) for a local model. The old reader derived
+		// its budget as Math.max(connectMs, 5000) and a 0 budget armed setTimeout(fn, 0), firing on
+		// the next tick and cutting the body. A body that genuinely pauses between chunks must now
+		// complete under a disabled budget; a 20ms gap is well past the next-tick the old code armed.
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode("first"));
+				timer = setTimeout(() => {
+					controller.enqueue(encoder.encode("-rest"));
+					controller.close();
+				}, 20);
+			},
+			cancel() {
+				if (timer) clearTimeout(timer);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 0,
+			inactivityTimeoutMs: 0,
+		});
+
+		expect(result.timedOut).toBe(false);
+		expect(result.totalTimedOut).toBe(false);
+		expect(result.inactivityTimedOut).toBe(false);
+		expect(result.text).toBe("first-rest");
+		expect(result.truncated).toBe(false);
+	});
+
 	test("a partial body followed by silence times out and flushes UTF-8", async () => {
 		const response = new Response(new ReadableStream<Uint8Array>({
 			start(controller) {

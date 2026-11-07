@@ -86,11 +86,10 @@ describe("plaintext checkpoint historical framing", () => {
     kept.forEach((item, index) => expect(after.input[index]).toBe(item));
   });
 
-  test("no-op controls: no plaintext checkpoint, opaque or ocx1 state, summarizer, empty candidates", () => {
+  test("no-op controls: no readable checkpoint, opaque state, summarizer, empty candidates", () => {
     for (const input of [
       "direct input", [user(completed)], [checkpoint, later],
       [user(completed), { type: "compaction", encrypted_content: "gAAAA-native" }],
-      [user(completed), { type: "compaction", encrypted_content: encodeCompactionSummary("summary") }],
       [user(completed), checkpoint, { type: "compaction_trigger" }],
       [user("<environment_context/>"), checkpoint],
       [user(completed), { role: "assistant", content: `${SUMMARY_PREFIX}\nnot a checkpoint` }],

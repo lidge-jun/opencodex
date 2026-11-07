@@ -15,7 +15,7 @@ bun install
 bun run setup:hooks  # retire the managed pre-push and post-merge hooks
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # full suite (default)
 ```
 
@@ -33,10 +33,11 @@ yourself — the dev server is unaffected because it rebuilds on demand.
 ## Build and test commands
 
 The root package is Bun-native TypeScript; there is no separate server compile step. Use the checked-in
-scripts so local commands match CI:
+scripts for local verification:
 
 ```bash
-bun run typecheck                 # strict TypeScript check
+bun run typecheck                 # strict Bun-native type check
+bun run typecheck:tsc             # reference check with the installed TypeScript compiler
 bun run test:changed              # import-graph tests against the resolved dev merge base
 bun run test                      # full suite (default)
 bun test tests/routing/router.test.ts     # focused test file
@@ -44,6 +45,14 @@ bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
+
+`typecheck` uses Bun's native checker with the root `tsconfig.json`, preserving its `src/` scope
+and strict compiler options without emitting files. `--no-script` keeps it on the type checker
+if a `check` package script is added later. The installed Bun dependency supplies the checker;
+`typecheck:tsc` retains the TypeScript compiler for comparisons and fallback. CI and release preflight
+continue to invoke `tsc` directly, and the GUI retains its own TypeScript build check.
+The `prepublishOnly` hook also uses `typecheck:tsc`, between the audit and GUI build steps;
+an audit or compiler failure stops the remaining steps.
 
 The suite uses Bun 1.4.4 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.4.
 `scripts/test.ts` finds a 1.4.4 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.
@@ -181,7 +190,7 @@ does not change `main`/`preview` review rules or allow direct pushes, force-push
 
 ## Conventions
 
-- **ES Modules only** (`import`/`export`), TypeScript, `strict` mode. Keep `bun x tsc --noEmit` clean.
+- **ES Modules only** (`import`/`export`), TypeScript, `strict` mode. Keep `bun run typecheck` clean.
 - **~500 lines per file max** — split by responsibility (the `web-search/` and `vision/` sidecars are
   good examples of small, focused modules behind a single `index.ts`).
 - **Handle async errors at boundaries** — sidecars never throw into the request path; they degrade to

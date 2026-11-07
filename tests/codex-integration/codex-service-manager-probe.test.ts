@@ -30,11 +30,25 @@ let previousCodexHome: string | undefined;
 let previousOpencodexHome: string | undefined;
 let trustedSystem32 = "";
 
+/** A minimal ioreg -a Root reply: the console-user array sits at 0.IOConsoleUsers. */
+const IOREG_ROOT_PLIST = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array><dict><key>IOConsoleUsers</key><array/></dict></array></plist>';
+const PLUTIL_EXTRACT_ARGS = ["-extract", "0.IOConsoleUsers", "json", "-o", "-", "-"];
+
 /** Records exactly what production asked for, so the allowlist is observed. */
-function recorder(reply: (file: string, args: readonly string[]) => Partial<ReturnType<ProbeRunner>>) {
-  const calls: { file: string; args: readonly string[] }[] = [];
-  const run: ProbeRunner = (file, args) => {
-    calls.push({ file, args });
+function recorder(reply: (file: string, args: readonly string[]) => Partial<ReturnType<ProbeRunner>>, sessions?: string) {
+  const calls: { file: string; args: readonly string[]; input?: string }[] = [];
+  const run: ProbeRunner = (file, args, options) => {
+    calls.push({ file, args, input: options?.input });
+    if (sessions !== undefined && file === "/usr/sbin/ioreg") {
+      return { status: 0, stdout: IOREG_ROOT_PLIST, stderr: "", timedOut: false, spawnFailed: false };
+    }
+    if (sessions !== undefined && file === "/usr/bin/plutil") {
+      // Answer only the extraction production performs on the ioreg reply; anything else fails.
+      const extracts = JSON.stringify(args) === JSON.stringify(PLUTIL_EXTRACT_ARGS) && options?.input === IOREG_ROOT_PLIST;
+      return extracts
+        ? { status: 0, stdout: sessions, stderr: "", timedOut: false, spawnFailed: false }
+        : { status: 1, stdout: "", stderr: "Could not extract value", timedOut: false, spawnFailed: false };
+    }
     return { status: 0, stdout: "", stderr: "", timedOut: false, spawnFailed: false, ...reply(file, args) };
   };
   const runRaw: RawProbeRunner = (file, args) => {
@@ -241,6 +255,113 @@ describe("could not ask is not an answer", () => {
     // Something is staged to load and we could not see whether it did.
     expect(result.kind).not.toBe("absent");
   });
+
+  /**
+   * Measured on a headless macOS session (#7697): `launchctl print gui/<uid>/…`
+   * answers `Could not print domain: 125: Domain does not support specified
+   * action`, while the user-domain query in the same session answers 113. 125
+   * alone does not establish whether a GUI session exists. These headless
+   * fixtures independently supply an empty console-session roster; the user
+   * domain and on-disk definition still need to be checked.
+   */
+  test("GUI-domain exit 125 with the user domain answering 113 and no plist is absent", () => {
+    const { run, calls } = recorder((_file, args) => (
+      String(args[1]).startsWith("gui/")
+        ? { status: 125, stderr: "Could not print domain: 125: Domain does not support specified action" }
+        : { status: 113 }
+    ), "[]");
+    const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
+    // The early return the issue reported skipped the second domain entirely.
+    expect(calls.filter(c => c.file === "/bin/launchctl").map(c => c.args[1])).toEqual([
+      "gui/501/com.opencodex.proxy",
+      "user/501/com.opencodex.proxy",
+    ]);
+    expect(result).toEqual({ kind: "absent" });
+    expect(calls.filter(c => c.file !== "/bin/launchctl")).toEqual([
+      { file: "/usr/sbin/ioreg", args: ["-a", "-r", "-d", "1", "-n", "Root"], input: undefined },
+      { file: "/usr/bin/plutil", args: PLUTIL_EXTRACT_ARGS, input: IOREG_ROOT_PLIST },
+    ]);
+  });
+
+  test("GUI-domain exit 125 still reports a staged plist with its homes", () => {
+    const path = writePlist("/somewhere/.codex", "/somewhere/.opencodex");
+    const { run } = recorder((_file, args) => (
+      String(args[1]).startsWith("gui/") ? { status: 125 } : { status: 113 }
+    ), "[]");
+    const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") return;
+    expect(result.claims[0].registration).toBe("absent");
+    expect(result.claims[0].definitionPath).toBe(path);
+    expect(result.claims[0].homes).toEqual({ codexHome: "/somewhere/.codex", opencodexHome: "/somewhere/.opencodex" });
+  });
+
+  test("GUI-domain exit 125 does not hide a job loaded in the user domain", () => {
+    writePlist("/somewhere/.codex", null);
+    const { run } = recorder((_file, args) => (
+      String(args[1]).startsWith("gui/") ? { status: 125 } : { status: 0 }
+    ), "[]");
+    const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") return;
+    expect(result.claims[0].registration).toBe("present");
+  });
+
+  test("user-domain exit 125 is still unknown — the fallback failing to answer is not an answer", () => {
+    const { run, calls } = recorder((_file, args) => (
+      String(args[1]).startsWith("gui/") ? { status: 113 } : { status: 125 }
+    ));
+    const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
+    expect(result.kind).toBe("unknown");
+    expect(calls.every(call => call.file === "/bin/launchctl")).toBe(true);
+  });
+
+  test("GUI 125 with only another UID in the complete roster is absent", () => {
+    const { run } = recorder((_file, args) => ({
+      status: String(args[1]).startsWith("gui/") ? 125 : 113,
+    }), '[{"kCGSSessionUserIDKey":502}]');
+    expect(inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home })).toEqual({ kind: "absent" });
+  });
+
+  for (const [name, sessions] of [
+    ["console owned by uid", '[{"kCGSSessionUserIDKey":501,"kCGSSessionOnConsoleKey":true}]'],
+    ["uid switched out while another user owns console", '[{"kCGSSessionUserIDKey":502},{"kCGSSessionUserIDKey":501,"kCGSSessionOnConsoleKey":false}]'],
+    ["malformed JSON", "not JSON"],
+    ["missing roster", "null"],
+    ["malformed session", "[{}]"],
+    ["string UID", '[{"kCGSSessionUserIDKey":"501"}]'],
+    ["fractional UID", '[{"kCGSSessionUserIDKey":501.5}]'],
+    ["negative UID", '[{"kCGSSessionUserIDKey":-1}]'],
+    ["UID sentinel", '[{"kCGSSessionUserIDKey":4294967295}]'],
+    ["invalid tail after another UID", '[{"kCGSSessionUserIDKey":502},null]'],
+  ]) {
+    test(`GUI-domain exit 125 stays unknown: ${name}`, () => {
+      const { run } = recorder((_file, args) => ({
+        status: String(args[1]).startsWith("gui/") ? 125 : 113,
+      }), sessions);
+      expect(inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home }).kind).toBe("unknown");
+      expect(inspectNativeCodexOwnership({
+        run, platform: "darwin", uid: 501, home, statePaths: [],
+        currentHomes: { codexHome: join(home, ".codex"), opencodexHome: join(home, ".opencodex") },
+      }).ownership).toBe("unknown");
+    });
+  }
+
+  for (const file of ["/usr/sbin/ioreg", "/usr/bin/plutil"]) {
+    for (const failure of ["unreadable", "timeout", "spawn failure"]) {
+      test(`GUI-domain exit 125 stays unknown: ${file} ${failure}`, () => {
+        const { run } = recorder((command, args) => {
+          if (command === file) return {
+            status: failure === "unreadable" ? 1 : null,
+            timedOut: failure === "timeout", spawnFailed: failure === "spawn failure",
+          };
+          if (command === "/usr/sbin/ioreg") return { status: 0, stdout: "<plist/>" };
+          return { status: String(args[1]).startsWith("gui/") ? 125 : 113 };
+        });
+        expect(inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home }).kind).toBe("unknown");
+      });
+    }
+  }
 
   /**
    * A dangling symlink at the plist path must not read as a clean machine.

@@ -120,7 +120,11 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
   return { ok: true, moved: written.length };
 }
 
-/** Reverse of `storeProviderKeyInKeychain`: read every reference back, write plaintext, delete items. */
+/**
+ * Reverse of `storeProviderKeyInKeychain`: read every reference back, persist plaintext, then delete
+ * the items. The config loses its references before any OS entry is removed, so a failed save
+ * deletes nothing and a deletion never races a reference that is still on disk.
+ */
 export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string): { ok: true; restored: number } | { ok: false; error: string; status: number } {
   const provider = config.providers[name];
   if (!provider) return { ok: false, error: "unknown provider", status: 404 };
@@ -154,10 +158,11 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
     if (isKeychainReference(entry.key)) entry.key = resolved.get(keychainAccount(entry.key))!;
   }
   if (isKeychainReference(provider.apiKey)) provider.apiKey = resolved.get(keychainAccount(provider.apiKey))!;
+  invalidateResolvedProviderKeyCache();
+  saveConfigPreservingClaudeCode(config);
   for (const account of resolved.keys()) {
     try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
   }
   invalidateResolvedProviderKeyCache();
-  saveConfigPreservingClaudeCode(config);
   return { ok: true, restored: resolved.size };
 }

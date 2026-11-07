@@ -17,7 +17,7 @@ bun install
 bun run setup:hooks  # eski yönetilen pre-push ve post-merge kancalarını kaldır
 bun run dev:proxy    # geliştirme modunda proxy API
 bun run dev:gui      # kontrol paneli geliştirme sunucusu (başka bir terminalde)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # tam test paketi (varsayılan)
 ```
 

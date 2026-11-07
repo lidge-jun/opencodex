@@ -1,4 +1,4 @@
-import { antigravityUserAgent } from "../../adapters/client-fingerprint";
+import { antigravityCliUserAgent, antigravityUserAgent } from "../../adapters/client-fingerprint";
 import { DestinationDnsResolutionError } from "../../lib/destination-policy";
 import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
@@ -303,7 +303,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   // An optional caller signal (account import) cancels every request of this probe, including the
   // 403 retry and the models fallback, alongside the per-request deadline.
   const requestSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const fetchQuota = (url: string, userAgent = antigravityUserAgent()) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
+  const fetchQuota = (url: string, userAgent: string) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
       Accept: "application/json", "Content-Type": "application/json",
       "User-Agent": userAgent, Authorization: `Bearer ${accessToken}`,
@@ -312,7 +312,9 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   }, antigravityOutboundDependencies);
   let summaryFailure: QuotaFailureCode | undefined;
   try {
-    let response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
+    // The summary includes the Gemini 4 Argon group only for the CLI client family; under the
+    // IDE UA the same account reports just the Gemini and Claude groups, so Argon usage is lost.
+    let response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL, antigravityCliUserAgent());
     if (response.status === 403) {
       // Some valid accounts reject the IDE fingerprint only for quota accounting.
       try { await response.body?.cancel(); } catch { /* Best-effort release before retry. */ }
@@ -330,7 +332,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   }
   if (signal?.aborted) return unavailableAntigravityQuota(summaryFailure ?? "transport_error");
   try {
-    const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL);
+    const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL, antigravityUserAgent());
     if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) {
       return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, "redirect_blocked"));
     }

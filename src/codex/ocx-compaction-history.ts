@@ -14,7 +14,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, toNamespacedPath } from "node:path";
 
 import { Database } from "bun:sqlite";
 
@@ -80,7 +80,8 @@ function writePrivateFile(path: string, content: string): void {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
   try {
     if (process.platform !== "win32") chmodSync(path, 0o600);
-    else hardenSecretPath(path, { required: true, timeoutMemoKey: path });
+    // icacls needs the extended Windows spelling once backup/temp names exceed MAX_PATH.
+    else hardenSecretPath(toNamespacedPath(path), { required: true, timeoutMemoKey: path });
     writeFileSync(fd, content, "utf8");
     fsyncSync(fd);
   } finally {

@@ -4,12 +4,12 @@ import {
   finalizeKiroDeviceFlow, observeKiroDeviceFinal, readKiroDeviceStatus,
   type KiroFinalOutcome, type KiroStatusRead,
 } from "../kiro-device-login-finalizer";
-import { parseKiroDeviceView, type KiroDeviceMethod, type KiroDeviceView } from "../kiro-device-login-helpers";
+import { parseKiroDeviceView, type KiroDeviceMethod, type KiroDeviceView, type KiroIamOptions } from "../kiro-device-login-helpers";
 
-type Phase = "idle" | "starting" | "pending" | "done" | "expired" | "failed" | "cancelled" | "ended";
-export type KiroLoginState = { phase: Phase; view?: KiroDeviceView; error?: "start" | "network" | "invalid" };
+type Phase = "idle" | "starting" | "pending" | "select-profile" | "selecting" | "done" | "expired" | "failed" | "cancelled" | "ended";
+export type KiroLoginState = { phase: Phase; view?: KiroDeviceView; error?: "start" | "network" | "invalid" | "profile" };
 type Session = { closed: boolean; closedController: AbortController; view?: KiroDeviceView;
-  inFlight?: KiroStatusRead; waitController?: AbortController; terminal?: KiroFinalOutcome };
+  inFlight?: KiroStatusRead; waitController?: AbortController; terminal?: KiroFinalOutcome; selecting?: boolean };
 const wait = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
   if (signal.aborted) { resolve(); return; }
   const timer = setTimeout(() => { signal.removeEventListener("abort", stop); resolve(); }, ms);
@@ -78,7 +78,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     return () => { mountedRef.current = false; void close(); };
   }, [close]);
 
-  const start = useCallback(async (method: KiroDeviceMethod) => {
+  const start = useCallback(async (method: KiroDeviceMethod, iam?: KiroIamOptions) => {
     if (sessionRef.current) return;
     const session: Session = { closed: false, closedController: new AbortController() };
     sessionRef.current = session;
@@ -87,7 +87,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     try {
       response = await afterOAuthCancellation(apiBase, "kiro", () => fetch(`${apiBase}/api/oauth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "kiro", method }),
+        body: JSON.stringify({ provider: "kiro", method, ...(method === "iam-identity-center" ? iam : {}) }),
       }));
     } catch {
       if (!session.closed && mountedRef.current) setState({ phase: "failed", error: "network" });
@@ -109,7 +109,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
       if (reply) observeKiroDeviceFinal(apiBase, view.flowId, reply, "cancel");
       return;
     }
-    if (view.state !== "pending") {
+    if (view.state !== "pending" && view.state !== "select-profile") {
       if (view.state === "done") settledRef.current?.("kiro", "added");
       else if (view.state === "failed") settledRef.current?.("kiro", "failed");
       if (mountedRef.current) setState({ phase: view.state, view });
@@ -117,7 +117,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
       sessionRef.current = null;
       return;
     }
-    setState({ phase: "pending", view });
+    setState({ phase: view.state, view });
     while (!session.closed && !session.terminal) {
       const waitController = new AbortController();
       session.waitController = waitController;
@@ -133,7 +133,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
       const request = readKiroDeviceStatus(apiBase, flowId);
       session.inFlight = request;
       const status = await unlessClosed(session, request.result);
-      if (status === CLOSED) break;
+      if (status === CLOSED || session.terminal) break;
       session.inFlight = undefined;
       if (status.kind === "missing") {
         session.terminal = "ended";
@@ -144,7 +144,10 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
       const next = status.kind === "view" ? status.view : null;
       if (!next || next.flowId !== flowId) continue;
       session.view = next;
-      if (next.state === "pending") { setState({ phase: "pending", view: next }); continue; }
+      if (next.state === "pending" || next.state === "select-profile") {
+        if (!session.selecting) setState({ phase: next.state, view: next });
+        continue;
+      }
       session.terminal = next.state === "done" ? "added" : next.state === "failed" ? "failed" : "ended";
       if (next.state === "done" || next.state === "failed") settledRef.current?.("kiro", session.terminal);
       setState({ phase: next.state, view: next });
@@ -153,6 +156,34 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     if (sessionRef.current === session) sessionRef.current = null;
   }, [apiBase, cancelServer, handoff, pollDelay]);
 
+  const selectProfile = useCallback(async (profileArn: string) => {
+    const session = sessionRef.current;
+    if (!session || session.closed || session.terminal || session.selecting || session.view?.state !== "select-profile") return;
+    const view = session.view;
+    session.selecting = true;
+    setState({ phase: "selecting", view });
+    let next: KiroDeviceView | null = null;
+    try {
+      const response = await fetch(`${apiBase}/api/oauth/login`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "kiro", flowId: view.flowId, profileArn }),
+      });
+      if (response.ok) next = parseKiroDeviceView(await response.json());
+    } catch { /* A retry uses the same flow and server-owned profile list. */ }
+    session.selecting = false;
+    if (session.closed || session.terminal || !mountedRef.current) return;
+    if (!next || next.flowId !== view.flowId || next.method !== "iam-identity-center") {
+      setState({ phase: "select-profile", view, error: "profile" }); return;
+    }
+    session.view = next;
+    if (next.state === "done" || next.state === "failed") {
+      session.terminal = next.state === "done" ? "added" : "failed";
+      settledRef.current?.("kiro", session.terminal);
+      session.waitController?.abort();
+    }
+    setState({ phase: next.state, view: next });
+  }, [apiBase]);
+
   const reset = useCallback(() => { if (!sessionRef.current) setState({ phase: "idle" }); }, []);
-  return { state, start, close, reset };
+  return { state, start, selectProfile, close, reset };
 }

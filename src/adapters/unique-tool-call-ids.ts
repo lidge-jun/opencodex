@@ -46,8 +46,8 @@ export function withUniqueToolCallIds(adapter: ProviderAdapter): ProviderAdapter
       return adapter.buildRequest(parsed, incoming);
     },
 
-    async *parseStream(response, budget, tierMetadata): AsyncGenerator<AdapterEvent> {
-      for await (const event of adapter.parseStream(response, budget, tierMetadata)) {
+    async *parseStream(response, budget, tierMetadata, streamContext): AsyncGenerator<AdapterEvent> {
+      for await (const event of adapter.parseStream(response, budget, tierMetadata, streamContext)) {
         yield event.type === "tool_call_start" ? { ...event, id: remintToolCallId(event.id) } : event;
       }
     },

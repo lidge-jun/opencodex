@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexAccountGatedCanonicalWireModel } from "../../src/server/responses/core";
+import type { BundledCatalogDeps } from "../../src/codex/catalog/bundled";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
 import { isGpt56NativeSlug } from "../../src/codex/catalog/effort";
 import { nativeOpenAiContextTier, nativeOpenAiMaxInputTokens } from "../../src/codex/catalog";
@@ -69,6 +70,19 @@ import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 
 const originalFetch = globalThis.fetch;
+
+function withBundledCatalogFixture<T>(models: unknown[], read: (deps: BundledCatalogDeps) => T): T {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-bundled-catalog-")));
+  const command = join(root, process.platform === "win32" ? "codex.exe" : "codex"), calls: unknown[][] = [];
+  try {
+    writeFileSync(command, "fixture only; execution must stay injected", { mode: 0o700 });
+    const result = read({ commandCandidates: () => [command], execFileSync: (file, args) => {
+      calls.push([file, args]); return JSON.stringify({ models });
+    } });
+    expect(calls).toEqual([[command, ["debug", "models", "--bundled"]]]);
+    return result;
+  } finally { removeTreeWithRetry(root); }
+}
 
 /**
  * Discovery runs on the pinned outbound transport, which does not read
@@ -3362,10 +3376,7 @@ describe("Codex catalog routed normalization", () => {
   });
 
   test("loads bundled Codex catalog from debug models output", () => {
-    const catalog = loadBundledCodexCatalog({
-      commandCandidates: () => ["codex"],
-      execFileSync: () => JSON.stringify({ models: [nativeTemplate()] }),
-    });
+    const catalog = withBundledCatalogFixture([nativeTemplate()], deps => loadBundledCodexCatalog(deps));
 
     expect(catalog?.models?.[0]?.slug).toBe("gpt-5.5");
   });
@@ -3374,10 +3385,7 @@ describe("Codex catalog routed normalization", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-"));
     const path = join(dir, "nested", "opencodex-catalog.json");
     try {
-      const catalog = materializeBundledCodexCatalog(path, {
-        commandCandidates: () => ["codex"],
-        execFileSync: () => JSON.stringify({ models: [nativeTemplate()] }),
-      });
+      const catalog = withBundledCatalogFixture([nativeTemplate()], deps => materializeBundledCodexCatalog(path, deps));
 
       expect(catalog?.models?.[0]?.slug).toBe("gpt-5.5");
       expect(existsSync(path)).toBe(true);
@@ -4232,8 +4240,8 @@ describe("Codex catalog routed normalization", () => {
         { effort: "low", description: "l" }, { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
       ],
     };
-    // Genuine: real display name — must be preserved untouched (installed codex is SoT once
-    // it catches up), marker field proves no replacement happened.
+    // Genuine metadata is preserved; priority is resolved separately from source provenance.
+    // The marker proves no metadata replacement happened.
     const genuineSol = {
       ...nativeTemplate(),
       slug: "gpt-5.6-sol",
@@ -4251,7 +4259,7 @@ describe("Codex catalog routed normalization", () => {
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(luna?.priority).toBe(8); // upstream priority restored for the upgraded entry
     expect(sol?.genuine_marker).toBe("from-installed-catalog");
-    expect(sol?.priority).toBe(1);
+    expect(sol?.priority).toBe(4); // no baseline/source field: use snapshot, never published rank
   });
 
   test("fallback-quality upgrades restore snapshot metadata without losing pristine priority", () => {
@@ -7107,18 +7115,13 @@ describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
 });
 
 describe("Codex reasoning-effort capability clamp", () => {
-  function bundledCatalogDeps(efforts: string[]) {
-    return {
-      commandCandidates: () => ["codex"],
-      execFileSync: () => JSON.stringify({
-        models: [{
-          slug: "gpt-5.5",
-          base_instructions: "test",
-          supported_reasoning_levels: efforts.map(effort => ({ effort, description: effort })),
-          default_reasoning_level: "medium",
-        }],
-      }),
-    };
+  function bundledCatalogDeps(efforts: string[], read: (deps: BundledCatalogDeps) => void) {
+    withBundledCatalogFixture([{
+      slug: "gpt-5.5",
+      base_instructions: "test",
+      supported_reasoning_levels: efforts.map(effort => ({ effort, description: effort })),
+      default_reasoning_level: "medium",
+    }], read);
   }
 
   function routedEntry() {
@@ -7161,7 +7164,7 @@ describe("Codex reasoning-effort capability clamp", () => {
   test("keeps max and ultra when the installed Codex ladder stops at xhigh", () => {
     const models = [routedEntry()];
 
-    clampCatalogModelsToCodexSupport(models, bundledCatalogDeps(["low", "medium", "high", "xhigh"]));
+    bundledCatalogDeps(["low", "medium", "high", "xhigh"], deps => clampCatalogModelsToCodexSupport(models, deps));
 
     expect(models[0]!.supported_reasoning_levels.map(level => level.effort))
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -7170,7 +7173,7 @@ describe("Codex reasoning-effort capability clamp", () => {
   test("preserves max and ultra when the installed Codex ladder includes them", () => {
     const models = [routedEntry()];
 
-    clampCatalogModelsToCodexSupport(models, bundledCatalogDeps(["low", "medium", "high", "xhigh", "max", "ultra"]));
+    bundledCatalogDeps(["low", "medium", "high", "xhigh", "max", "ultra"], deps => clampCatalogModelsToCodexSupport(models, deps));
 
     expect(models[0]!.supported_reasoning_levels.map(level => level.effort))
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);

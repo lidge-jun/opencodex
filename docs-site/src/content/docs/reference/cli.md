@@ -152,17 +152,34 @@ manifest can then establish `managed: true` when it proves ownership and, if a c
 The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
-`candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. On Windows this first slice performs no candidate or configuration filesystem I/O:
-only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
-every other Windows candidate fails closed. The command does not install or repair software, execute
+`candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. Windows x64 also supports
+a proof-captured absolute standard npm `codex.cmd` with a held-bound Node/npm toolchain — prefix-local
+when present, otherwise the captured-PATH pair anchored to the launcher architecture — and a verified
+in-prefix platform backing. It uses reparse-refusing held handles; other Windows layouts remain deferred
+or unmanaged. A `managed` Windows result classifies the observed installation layout only: the bound Node/npm
+is the updater's read-only metadata toolchain, never a claim about which interpreter a later `codex.cmd`
+invocation resolves, while inspection and planning stay read-only; applicability and confirmed apply are decided separately.
+The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
 
 `ocx system codex-cli-update plan --json` adds a read-only update decision for an attested POSIX
 npm-global installation. It resolves `latest` through the official npm registry, validates the
 exact version and SHA-512 integrity, and refuses active sessions or incomplete process observation.
 Registry queries use isolated temporary npm configuration, cache and logs with best-effort cleanup.
-No software is installed and no process is signalled. Windows returns `windows_inspection_deferred`.
+No software is installed and no process is signalled. Windows x64 apply requires a bounded npm
+prefix with verified private write authority and preserves unrelated packages and shims; unsupported observed layouts return
+`applicable: false` and `refusal: windows_apply_disabled`.
+PATH-only selection and OpenCodex autostart wrappers remain deferred.
+Windows planning also requires trusted write authority over npm's complete package tree and module
+lookup directories. Apply keeps selection changes and owned session starts busy through installer
+termination and readback; an unknown child lifetime keeps that exclusion in place.
+The selected Node must support synchronous module hooks; npm cannot load dependencies outside its verified tree.
 See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
+
+For a reviewed applicable npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`
+performs the exact update and returns a durable job. `ocx system codex-cli-update status <job-id> --json`
+reads its result; use a stable `--request-id` for a lost-response retry. See
+[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 

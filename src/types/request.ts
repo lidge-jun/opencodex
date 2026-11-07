@@ -87,6 +87,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /**
+   * The caller's `instructions` prefix through its last cache-marked system block. The anthropic
+   * adapter ends a system block there so the breakpoint stays off the per-turn tail.
+   */
+  _anthropicSystemCachePrefix?: string;
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
@@ -180,6 +185,13 @@ export interface OcxParsedRequest {
    * answer/"Sources:" text can't bleed into and corrupt the model's schema-constrained output.
    */
   _structuredOutput?: boolean;
+  /**
+   * True for a Claude Messages `output_config.format` json_schema. Anthropic promises an answer
+   * that conforms to that schema, whatever `strict` the Responses translation states for
+   * OpenAI-compatible destinations, so an emulating adapter (Kiro) holds it to full conformance.
+   * Process-local; never forwarded.
+   */
+  _structuredOutputConformance?: boolean;
   /**
    * True when the input carried `{type:"compaction_trigger"}` — Codex remote compaction v2 asking
    * this turn to produce a `{type:"compaction"}` output item. Routed adapters can't natively;
@@ -414,7 +426,7 @@ export interface OcxRequestOptions {
    * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
    * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts.
    * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
-   * keeps rejecting structured output via `_structuredOutput`.
+   * emulates it through a private structured-output tool (src/adapters/kiro/structured-output.ts).
    */
   textFormat?: {
     type: "json_schema" | "json_object";
@@ -479,7 +491,7 @@ export type AdapterEvent =
   | { type: "reasoning_raw_delta"; text: string }
   | { type: "tool_call_start"; id: string; name: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata }
   | { type: "tool_call_delta"; arguments: string }
-  | { type: "tool_call_end" }
+  | { type: "tool_call_end"; incomplete?: true }
   /** Internal boundary between a guarded first pass and its one-shot continuation. */
   | { type: "assistant_boundary" }
   // Native web-search activity surfaced by the web-search sidecar so Codex renders a "Searched the
@@ -573,6 +585,13 @@ export interface OcxUsage {
   cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
+  /**
+   * The adapter read these counts off the upstream's own usage frame. Only an adapter whose
+   * provider is estimated by default (usageForFinalLog) sets it, and a merge keeps it only when
+   * every leg had it. A figure taken off a bridged wire or guessed never carries it, so the
+   * provider default still marks those as estimated.
+   */
+  upstreamReported?: true;
   /**
    * The raw upstream usage object for Responses-shaped upstreams (openai/codex#41980 parity):
    * codex-rs preserves the complete `response.usage` object through its own pipeline, so fields

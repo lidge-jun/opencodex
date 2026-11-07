@@ -14,12 +14,14 @@ import { syncEnabledClientIntegrations } from "../../src/server/management/confi
 import type { CatalogModel } from "../../src/codex/catalog";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 // Gateway is the default Desktop mode. These guards keep that default from ever writing a
 // gateway profile behind a Desktop that runs first-party, and keep foreign proxy env from being
 // read as a first-party install.
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let library = "";
 let claudeDir = "";
 const previous: Record<string, string | undefined> = {};
@@ -78,6 +80,7 @@ function gatedDiscovery(models: CatalogModel[]) {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-1p-guards-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   library = join(root, "desktop-library");
   claudeDir = join(root, "claude");
   for (const key of ENV_KEYS) previous[key] = process.env[key];
@@ -88,6 +91,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  lifecycleLock.restore();
   resetSiblingStartForTests();
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];

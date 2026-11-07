@@ -375,7 +375,7 @@ describe("CLI subcommand help", () => {
       );
 
       expectSpawnFinished(result, "ocx recover-history --ocx-compaction");
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("Recovered 1 ocx1 compaction item(s)");
       expect(readFileSync(rollout, "utf8")).toContain("portable summary");
       expect(readFileSync(rollout, "utf8")).not.toContain("ocx1:");

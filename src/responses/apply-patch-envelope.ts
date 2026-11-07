@@ -39,6 +39,22 @@ function stripMarkdownCodeFence(text: string, toolName: string): string {
   return match ? match[1] : text;
 }
 
+/** Repair one extra canonical wrapper inside an already unwrapped executable body. */
+function repairUnwrappedBody(text: string, toolName: string): string {
+  if (toolName !== "exec" && toolName !== "apply_patch") return text;
+  try {
+    const nested: unknown = JSON.parse(text);
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const record = nested as Record<string, unknown>;
+      const keys = Object.keys(record);
+      if (keys.length === 1 && keys[0] === "input" && typeof record.input === "string") text = record.input;
+    }
+  } catch {
+    // Ordinary JavaScript and patches are not JSON wrappers.
+  }
+  return stripMarkdownCodeFence(text, toolName);
+}
+
 /** Unwrap the `{input:string}` function-call wrapper used for freeform tools. */
 export function unwrapFreeformToolInput(argumentsText: unknown, toolName = ""): string {
   if (typeof argumentsText !== "string") return "";
@@ -48,13 +64,13 @@ export function unwrapFreeformToolInput(argumentsText: unknown, toolName = ""): 
       const record = parsed as Record<string, unknown>;
       if (Object.prototype.hasOwnProperty.call(record, "input")) {
         return typeof record.input === "string"
-          ? stripMarkdownCodeFence(record.input, toolName)
+          ? repairUnwrappedBody(record.input, toolName)
           : argumentsText;
       }
       const fallbackKeys = freeformFallbackKeys(toolName);
       const candidates = fallbackKeys.filter(key => typeof record[key] === "string");
       if (candidates.length === 1) {
-        return stripMarkdownCodeFence(record[candidates[0]] as string, toolName);
+        return repairUnwrappedBody(record[candidates[0]] as string, toolName);
       }
     }
   } catch {
@@ -112,6 +128,51 @@ export function isCompletePatchEnvelope(text: string): boolean {
 export function mayBecomePatchEnvelope(text: string): boolean {
   if (text === "") return false;
   return text.startsWith(PATCH_BEGIN) || PATCH_BEGIN.startsWith(text);
+}
+
+/** Largest prefix of an exactly opened patch that completion cannot rewrite. */
+export function stableCanonicalPatchPrefix(
+  text: string,
+  boundedTail = text,
+  openingValidated = false,
+): string | null {
+  const lfOpening = `${PATCH_BEGIN}\n`;
+  const crlfOpening = `${PATCH_BEGIN}\r\n`;
+  if (!openingValidated && !text.startsWith(lfOpening) && !text.startsWith(crlfOpening)) {
+    return lfOpening.startsWith(text) || crlfOpening.startsWith(text) ? "" : null;
+  }
+
+  let coreLength = text.length;
+  let tail = boundedTail;
+  let trailingBreak = "";
+  if (tail.endsWith("\r\n")) {
+    coreLength -= 2;
+    tail = tail.slice(0, -2);
+    trailingBreak = "\r\n";
+  } else if (tail.endsWith("\n")) {
+    coreLength -= 1;
+    tail = tail.slice(0, -1);
+    trailingBreak = "\n";
+  } else if (tail.endsWith("\r")) {
+    // This may become the first byte of a CRLF. It is stable for a canonical
+    // closer, but must remain behind a decorated closer that may be rewritten.
+    coreLength -= 1;
+    tail = tail.slice(0, -1);
+    trailingBreak = "\r";
+  }
+  const decoration = " ***";
+  // Only a partial terminal decoration can be rewritten at completion. Match its
+  // bounded tail instead of searching the complete accumulated patch on every delta.
+  for (let suffixLength = decoration.length; suffixLength > 0; suffixLength--) {
+    const candidate = PATCH_END + decoration.slice(0, suffixLength);
+    if (!tail.endsWith(candidate)) continue;
+    const lineStart = coreLength - candidate.length;
+    const preceding = tail[tail.length - candidate.length - 1];
+    if (lineStart === 0 || preceding === "\n" || preceding === "\r") {
+      return text.slice(0, lineStart + PATCH_END.length);
+    }
+  }
+  return text;
 }
 
 /**

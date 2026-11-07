@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -17,8 +17,11 @@ import { flushConfigDirHardeningAndReaps, hardenConfigDir } from "../../src/conf
 import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 const roots: string[] = [];
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
+let lockRoot = "";
 const handles: Array<Awaited<ReturnType<typeof startClaudeIntercept>>> = [];
 const priorHome = process.env.OPENCODEX_HOME;
 const priorDesktop = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -29,6 +32,9 @@ const priorDesktop = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
 // even when an earlier one fails, the environment is always restored, and failures are rethrown.
 async function cleanupPickerStartup(remove: (dir: string) => void = removeTreeWithRetry): Promise<void> {
   const failures: unknown[] = [];
+  // A restart with an applied profile starts a detached controller.enable; join it before the
+  // handles stop and the lifecycle spy is restored, so it cannot reach the account-wide lock.
+  try { await getClaudePickerController()?.transition(async () => {}); } catch (error) { failures.push(error); }
   for (const handle of handles.splice(0)) {
     try { await handle?.stop(); } catch (error) { failures.push(error); }
   }
@@ -43,7 +49,15 @@ async function cleanupPickerStartup(remove: (dir: string) => void = removeTreeWi
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "picker-startup cleanup failed");
 }
-afterEach(() => cleanupPickerStartup());
+// Cases own multiple roots; keep their cleanup oracle intact and give the lock its own temp root.
+beforeEach(() => {
+  lockRoot = mkdtempSync(join(tmpdir(), "ocx-picker-startup-lock-"));
+  lifecycleLock = isolateClientLifecycleLock(lockRoot);
+});
+afterEach(async () => {
+  try { await cleanupPickerStartup(); }
+  finally { lifecycleLock.restore(); removeTreeWithRetry(lockRoot); }
+});
 const routes = async () => ({ nativeSlugs: [], routedModels: [] });
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "ocx-picker-startup-")); roots.push(root);

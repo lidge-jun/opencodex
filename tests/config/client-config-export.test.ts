@@ -25,6 +25,7 @@ import {
 import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, opencodeGlobalConfigPath } from "../../src/cli/opencode";
 import { exportModelsFromProxyRows } from "../../src/cli/export-command";
 import type { OcxConfig } from "../../src/types";
+import { configSchema } from "../../src/config/schema/config-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as facade from "../../src/clients/config-export";
 import { OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG as leafDefaultConfig } from "../../src/clients/config-export/constants";
@@ -544,7 +545,14 @@ describe("DSH rc.6 serializer", () => {
     expect(models.find(model => model.id === "a/context")?.contextWindow).toBe(128_000);
     expect(models.find(model => model.id === "a/fraction")).not.toHaveProperty("contextWindow");
     expect(models.find(model => model.id === "a/zero")).not.toHaveProperty("contextWindow");
+    // DSH reads maxTokens as the real output ceiling and falls back to 32768 without it,
+    // so a known limit must ride along with the context window (see #5828 for the same
+    // failure in the other exporters). No context window means no limit claim either.
     for (const model of models) expect(model).not.toHaveProperty("maxTokens");
+    const withLimit = dshConfig(ctx({
+      models: [{ namespaced: "a/limit", provider: "a", id: "limit", contextWindow: 200_000, maxTokens: 128_000 }],
+    }))["llm-pi-ai"].providers.opencodex!.models;
+    expect(withLimit[0]!.maxTokens).toBe(128_000);
   });
 
   test("maps only authoritative effort levels to DSH level-to-wire entries", () => {
@@ -787,6 +795,45 @@ describe("hub-resolved Fast exports", () => {
     expect(remote.v2.settings).toEqual(remote.v1.options);
   });
 
+  test("opencodeClientExport timeouts are omitted by default and emitted into both blocks when set", () => {
+    const off = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    for (const conn of [off.v1.options, off.v2.settings]) {
+      expect(conn).not.toHaveProperty("headerTimeout");
+      expect(conn).not.toHaveProperty("chunkTimeout");
+      expect(conn).not.toHaveProperty("timeout");
+    }
+    const full = opencodeProviderBlocks(BASE_URL, [eligible], cfg({
+      fastRows: false,
+      opencodeClientExport: { headerTimeoutMs: false, chunkTimeoutMs: 1_800_000, timeoutMs: 3_600_000 },
+    } as Partial<OcxConfig>));
+    const expected = { baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF, headerTimeout: false, chunkTimeout: 1_800_000, timeout: 3_600_000 };
+    expect(full.v1.options).toEqual(expected);
+    expect(full.v2.settings).toEqual(expected);
+
+    // A partial block emits only the fields the operator set.
+    const partial = opencodeProviderBlocks(BASE_URL, [eligible], cfg({
+      fastRows: false,
+      opencodeClientExport: { headerTimeoutMs: false },
+    } as Partial<OcxConfig>));
+    expect(partial.v1.options).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF, headerTimeout: false });
+    expect(partial.v2.settings).toEqual(partial.v1.options);
+  });
+
+  test("configSchema keeps valid opencodeClientExport timeouts and degrades malformed per-field values", () => {
+    const base = { port: 10100, defaultProvider: "mock", providers: { mock: { adapter: "openai-chat", baseUrl: "https://api.example.com/v1" } } };
+    const valid = configSchema.parse({ ...base, opencodeClientExport: { headerTimeoutMs: false, chunkTimeoutMs: 1_800_000, timeoutMs: 3_600_000 } });
+    expect(valid.opencodeClientExport).toEqual({ headerTimeoutMs: false, chunkTimeoutMs: 1_800_000, timeoutMs: 3_600_000 });
+
+    // A malformed per-field value is dropped (opencode keeps its native wait) without failing the
+    // whole parse or taking the sibling fields down with it.
+    const salvaged = configSchema.parse({ ...base, opencodeClientExport: { headerTimeoutMs: "nope", chunkTimeoutMs: -5, timeoutMs: 600_000 } });
+    expect(salvaged.opencodeClientExport).toEqual({ timeoutMs: 600_000 });
+
+    // An entirely malformed block degrades to undefined rather than rejecting the config.
+    const dropped = configSchema.parse({ ...base, opencodeClientExport: 42 });
+    expect(dropped.opencodeClientExport).toBeUndefined();
+  });
+
   test("each generation owns its modalities map, so an edit to one cannot move the other", () => {
     const blocks = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
     blocks.v1.models["remote/model"]!.modalities!.input.push("audio");
@@ -850,8 +897,8 @@ describe("hub-resolved Fast exports", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the twenty-three file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell"]);
+  test("covers exactly the twenty-four file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell", "t3code"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);

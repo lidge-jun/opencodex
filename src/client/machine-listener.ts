@@ -41,6 +41,8 @@ import { linkRouteAllowed } from "../link/routes";
 import { linkHomeName, linkHomePhrase } from "./link-home";
 import { relayLinkManagementRead } from "./link-management-relay";
 import type { ClientRestartAdmission } from "./runtime-restart";
+import { clientRestartRollbackAction } from "./runtime-restart";
+import { isLinkConnectionGeneration } from "../link/relay-auth";
 
 const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
@@ -72,6 +74,8 @@ export interface MachineListenerDeps {
    * with `link.reason` while it is not; `/healthz` is unaffected (`link-readiness.ts`).
    */
   linkReadiness?: () => LinkReadiness | Promise<LinkReadiness>;
+  /** Link mode: the current tunnel connection, reported by a ready `/readyz` for `ocx status`. */
+  linkConnectionGeneration?: () => string | undefined;
   /**
    * The bound restart (OCX-6). With it, `/healthz` proves this process's identity to a challenge,
    * advertises `restartCapability` and `startedAt`, and `POST /api/system/restart` accepts a
@@ -133,6 +137,7 @@ export function startMachineListener(
     return state.value;
   })();
   const linkMode = isLinkConnection(connection);
+  const connectionChanged = () => clientRestartRollbackAction(connection, readClientConnectionState()) === "recycle";
   if (linkMode && !connection.link) throw new Error("link machine listener requires link transport metadata");
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
   let hubReachability: HubReachability = "unknown";
@@ -199,12 +204,17 @@ export function startMachineListener(
         if (linkMode && deps.linkReadiness) {
           try { link = await deps.linkReadiness(); } catch { link = { ready: false, reason: "link_unverified" }; }
         }
+        // Read durable ownership once, after any probe, so a change during the probe still shows.
+        if (linkMode && connectionChanged()) link = { ready: false, reason: "client_state_changed" };
         if (link && !link.ready) {
           // The /readyz contract: not ready is 503 with Retry-After and status pending or failed.
           return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: link.reason } },
             { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
         }
-        return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: { state: "available" } } : {}) });
+        let connectionGeneration: string | undefined;
+        try { connectionGeneration = link ? deps.linkConnectionGeneration?.() : undefined; } catch { connectionGeneration = undefined; }
+        const linkBody = isLinkConnectionGeneration(connectionGeneration) ? { state: "available", connectionGeneration } : { state: "available" };
+        return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: linkBody } : {}) });
       }
       if (url.pathname.startsWith("/api/machine/hub-relay/")) {
         if (!relayEnabled) return json404(req);
@@ -246,6 +256,9 @@ export function startMachineListener(
         if (authError) return authError;
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
           return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
+        }
+        if (linkMode && (url.pathname === "/api/machine/status" || url.pathname === "/api/machine/clients" || url.pathname === "/api/link/status") && connectionChanged()) {
+          return Response.json({ error: "client_state_changed" }, { status: 503, headers: { "Cache-Control": "no-store" } });
         }
         // A loopback dashboard session proves possession, not user presence: any local
         // process can fetch the dashboard bootstrap and replay its token and CSRF value.
@@ -318,6 +331,9 @@ async function handleBoundRestart(
   );
   if (!authorized) return Response.json({ success: false, error: "restart capability required" }, { status: 401, headers: noStore });
   const admission = await restart.request();
+  if (admission.kind === "stopping") {
+    return Response.json({ success: false, error: { code: "runtime_stopping" } }, { status: 409, headers: noStore });
+  }
   if (admission.kind === "supervised") {
     return Response.json({
       success: false,

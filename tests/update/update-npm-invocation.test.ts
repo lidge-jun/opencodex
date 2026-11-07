@@ -6,6 +6,7 @@ import {
   npmInvocation,
   resolveNpmCommand,
 } from "../../src/update/npm-invocation.mjs";
+import { spawnedNpmOperation } from "../helpers/npm-operation";
 
 const cwd = "C:\\work\\untrusted-project";
 const trustedNpm = "C:\\Program Files\\nodejs\\npm.cmd";
@@ -312,5 +313,44 @@ describe("Windows npm update invocation", () => {
       cwd: appDataNpmDir,
       exists: path => path === only,
     })).toBeNull();
+  });
+
+  describe("registry-query classification against real npmInvocation shapes", () => {
+    const query = ["view", "@bitkyc08/opencodex@latest", "version"];
+    const winEnv = {
+      PATH: "C:\\Program Files\\nodejs", PATHEXT: ".CMD", SystemRoot: "C:\\Windows",
+    };
+    const winDeps = { cwd, exists: (path: string) => path === trustedNpm };
+
+    test("the cmd /d /s /c wrapper still reports 'view' as the npm operation", () => {
+      const invocation = npmInvocation(query, "win32", winEnv, winDeps);
+      expect(invocation?.options.windowsVerbatimArguments).toBe(true);
+      expect(spawnedNpmOperation(invocation?.args ?? [], invocation?.options)).toBe("view");
+    });
+
+    test("a spaced npm path holding a bare 'view' word cannot forge the operation", () => {
+      const spacedViewNpm = "C:\\Program Files\\tools view area\\npm.cmd";
+      const env = {
+        PATH: "C:\\Program Files\\tools view area",
+        ProgramFiles: "C:\\Program Files", PATHEXT: ".CMD", SystemRoot: "C:\\Windows",
+      };
+      const deps = { cwd, exists: (path: string) => path === spacedViewNpm };
+      const invocation = npmInvocation(query, "win32", env, deps);
+      expect(invocation?.args.at(-1)).toContain("tools^ view^ area");
+      expect(spawnedNpmOperation(invocation?.args ?? [], invocation?.options)).toBe("view");
+      const install = npmInvocation(["install", "-g", "@bitkyc08/opencodex@latest"], "win32", env, deps);
+      expect(spawnedNpmOperation(install?.args ?? [], install?.options)).toBe("install");
+    });
+
+    test("installs — including a package literally named 'view' — are not queries", () => {
+      for (const args of [["install", "-g", "@bitkyc08/opencodex@latest"], ["install", "view"]]) {
+        const wrapped = npmInvocation(args, "win32", winEnv, winDeps);
+        expect(spawnedNpmOperation(wrapped?.args ?? [], wrapped?.options)).toBe("install");
+      }
+      // Bare POSIX argv: the operation is argv[0], so a 'view' value later cannot match.
+      expect(spawnedNpmOperation(npmInvocation(query, "linux")?.args ?? [])).toBe("view");
+      expect(spawnedNpmOperation(["install", "view"])).toBe("install");
+      expect(spawnedNpmOperation(["install", "-g", "pkg@latest"])).toBe("install");
+    });
   });
 });

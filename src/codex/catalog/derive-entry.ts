@@ -26,6 +26,7 @@ import {
   isGpt56NativeSlug,
 } from "./effort";
 import { CATALOG_INACTIVE_REASON_FIELD, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
+import { OCX_NATIVE_SOURCE_PRIORITY_FIELD } from "./native-priority";
 import { applyRoutedDescription } from "./ownership";
 
 export function finishUpstreamNativeEntry(clone: RawEntry, priority: number, contextCap?: NativeContextLimitsInput): RawEntry {
@@ -127,6 +128,7 @@ export function deriveEntry(
     delete e.opencodex_native_display_name;
     // A cached template may carry display-order history; each new row owns its natural rank.
     delete e[SPAWN_PRIORITY_FIELD];
+    delete e[OCX_NATIVE_SOURCE_PRIORITY_FIELD];
     e.slug = slug;
     e.display_name = routedDisplayName(slug, model);
     applyRoutedDescription(e, desc, model);

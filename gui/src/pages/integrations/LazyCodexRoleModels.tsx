@@ -5,6 +5,7 @@ import { readJsonOrThrow } from "../../fetch-json";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Select, type SelectOption } from "../../ui";
 import LazyCodexRoleAutoAssign from "./LazyCodexRoleAutoAssign";
+import LazyCodexRoleHistory, { type RoleChange, type SavedRole } from "./LazyCodexRoleHistory";
 
 interface RoleRow {
   role: string;
@@ -19,6 +20,8 @@ type OmoWriteStatus = "written" | "unchanged" | "absent" | "skipped_comments" | 
 interface RoleModels {
   detected: boolean;
   roles: RoleRow[];
+  history: RoleChange[];
+  historyUnavailable: boolean;
   omoJsonc: { state: OmoFileState } | null;
   available: string[];
   efforts: string[];
@@ -40,11 +43,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   const [result, setResult] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null);
 
   const load = useCallback(async (signal: AbortSignal): Promise<RoleModels> => {
-    const roles = await readJsonOrThrow<{ lazycodex?: { detected?: boolean }; roles?: RoleRow[]; omoJsonc?: { state: OmoFileState } | null }>(
+    const roles = await readJsonOrThrow<{ lazycodex?: { detected?: boolean }; roles?: RoleRow[]; history?: RoleChange[]; historyUnavailable?: boolean; omoJsonc?: { state: OmoFileState } | null }>(
       await fetch(`${apiBase}/api/codex-agent-roles`, { signal }),
       t("integrations.lazycodexRoles.loadFailed"),
     );
-    if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], omoJsonc: null, available: [], efforts: [] };
+    if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], history: [], historyUnavailable: false, omoJsonc: null, available: [], efforts: [] };
     // The effort list is the one the Subagents page offers for its delegation model. It only adds
     // choices, so a failed lookup leaves each row with its pinned effort instead of failing the table.
     const [models, delegation] = await Promise.all([
@@ -57,6 +60,8 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     return {
       detected: true,
       roles: roles.roles ?? [],
+      history: roles.history ?? [],
+      historyUnavailable: roles.historyUnavailable === true,
       omoJsonc: roles.omoJsonc ?? null,
       available: models?.available ?? [],
       efforts: delegation?.efforts ?? [],
@@ -73,22 +78,35 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   useLayoutEffect(() => { latestData.current = data; }, [data]);
 
   // An undefined model saves the effort alone and leaves the role's model pin, or its inheritance,
-  // as it is. Auto-assign and model picks always pass a model.
-  const save = async (role: string, model: string | undefined, effort: string | null | undefined = undefined, displayedEffort?: string): Promise<boolean> => {
-    if (pending !== null) return false;
+  // as it is. Auto-assign and model picks always pass a model. A save resolves to the batch the
+  // server recorded it in (absent when nothing was written or recorded), or null when it failed.
+  const save = async (
+    role: string,
+    model: string | undefined,
+    effort: string | null | undefined = undefined,
+    displayedEffort?: string,
+    batch?: string,
+    restores?: string,
+  ): Promise<SavedRole | null> => {
+    if (pending !== null) return null;
     // An omitted effort still carries a pending omo.jsonc retry's effort, so a later save from any
     // path (the row or auto-assign) cannot drop it. An explicit effort replaces the retry.
     const sent = effort === undefined ? mirrorRetries[role]?.sent : effort;
-    if (model === undefined && sent === undefined) return false;
+    if (model === undefined && sent === undefined) return null;
     setPending(role);
     setResult(null);
     try {
       const response = await fetch(`${apiBase}/api/codex-agent-roles/${encodeURIComponent(role)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(model !== undefined ? { model } : {}), ...(sent !== undefined ? { effort: sent } : {}) }),
+        body: JSON.stringify({
+          ...(model !== undefined ? { model } : {}),
+          ...(sent !== undefined ? { effort: sent } : {}),
+          ...(batch !== undefined ? { batch } : {}),
+          ...(restores !== undefined ? { restores } : {}),
+        }),
       });
-      const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
+      const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus }; batch?: string }>(
         response,
         t("integrations.lazycodexRoles.saveFailed", { role }),
       );
@@ -128,10 +146,10 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       setEffortDrafts(current => keepOnFailure(current, shownEffort));
       setMirrorRetries(current => keepOnFailure(current, { sent }));
       await resource.refresh();
-      return true;
+      return { batch: payload?.batch };
     } catch {
       setResult({ tone: "err", text: t("integrations.lazycodexRoles.saveFailed", { role }) });
-      return false;
+      return null;
     } finally {
       setPending(null);
     }
@@ -167,7 +185,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         <p className="page-sub">{t("integrations.lazycodexRoles.empty")}</p>
       ) : (
         <>
-        <LazyCodexRoleAutoAssign apiBase={apiBase} busy={pending !== null} apply={save} />
+        <LazyCodexRoleAutoAssign
+          apiBase={apiBase}
+          busy={pending !== null}
+          apply={(role, model, effort, batch) => save(role, model, effort, undefined, batch)}
+        />
         <div className="tbl-wrap">
           <table className="tbl">
             <thead>
@@ -235,6 +257,12 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
             </tbody>
           </table>
         </div>
+        <LazyCodexRoleHistory
+          history={data.history}
+          unavailable={data.historyUnavailable}
+          busy={pending !== null}
+          restore={(role, model, effort, batch, restores) => save(role, model, effort, undefined, batch, restores)}
+        />
         </>
       )}
     </section>

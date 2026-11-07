@@ -1345,3 +1345,47 @@ test("a stop triggered by failure diagnostics leaves admission closed", async ()
     await h.close();
   }
 });
+
+test("a reconnect with the same link and listener ids names a new connection generation, and a steady tunnel keeps it", async () => {
+  const h = supervisorHarness();
+  try {
+    await h.start();
+    expect(h.supervisor.connectionGeneration()).toBeUndefined();
+    await h.step();
+    expect(h.state()).toBe("connected");
+    const first = h.supervisor.connectionGeneration();
+    expect(first).toEqual(expect.any(String));
+    for (let tick = 0; tick < 12; tick += 1) await h.step(5_000);
+    expect(h.state()).toBe("connected");
+    expect(h.supervisor.connectionGeneration()).toBe(first);
+    h.ssh.children[0]!.exit(255, "client_loop: send disconnect: Broken pipe");
+    await h.settle();
+    expect(h.supervisor.connectionGeneration()).toBeUndefined();
+    for (let tick = 0; tick < 10 && h.state() !== "connected"; tick += 1) await h.step();
+    expect(h.state()).toBe("connected");
+    const second = h.supervisor.connectionGeneration();
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a supervisor rebuilt by a restart rollback in the same process never repeats a connection generation", async () => {
+  // startClientRuntime's serve() builds a fresh supervisor when a failed restart rolls back.
+  const seen: string[] = [];
+  for (let round = 0; round < 2; round += 1) {
+    const h = supervisorHarness();
+    try {
+      await h.start();
+      await h.step();
+      expect(h.state()).toBe("connected");
+      seen.push(h.supervisor.connectionGeneration()!);
+    } finally {
+      await h.close();
+    }
+  }
+  expect(seen[0]).toEqual(expect.any(String));
+  expect(seen[1]).toEqual(expect.any(String));
+  expect(seen[1]).not.toBe(seen[0]);
+});

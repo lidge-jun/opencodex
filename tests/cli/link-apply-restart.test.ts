@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyRestartMessage, restartRuntimeAfterApply, type ApplyRestartDeps } from "../../src/cli/link-apply-restart";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
-import { reportRestartFailure } from "../../src/cli/restart-failure";
+import { deferSupervisedRestart, reportRestartFailure, supervisedRestartRefusal } from "../../src/cli/restart-failure";
 import { collectAppliedCodexSettingsStatus } from "../../src/cli/status-codex-settings";
 import { recordHomeCodexSettings, type HomeCodexSettingsRecord } from "../../src/client/link-home";
 import type { HomeCodexSettingsDocument } from "../../src/link/codex-settings";
@@ -29,7 +29,7 @@ import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const LINK_ID = `lnk_${"e".repeat(16)}`;
-const child: LiveProxy = { pid: 5151, port: 10100, hostname: "127.0.0.1", source: "runtime", role: "client" };
+const child: LiveProxy = { pid: 5151, port: 23499, hostname: "127.0.0.1", source: "runtime", role: "client" };
 const document: HomeCodexSettingsDocument = {
   version: 1,
   home: { name: "home-box", version: "2.91.0" },
@@ -105,6 +105,20 @@ describe("ocx sync restarts the runtime after an apply", () => {
     expect(outcome).toEqual({ kind: "failed" });
     expect(applyRestartMessage(outcome)).toContain("the previous runtime keeps serving");
   });
+
+  for (const supervisor of ["desktop", "service"] as const) {
+    test(`a ${supervisor}-supervised refusal defers the restart without starting a runtime`, async () => {
+      const { value, calls } = deps(0, {
+        restart: async (_start, onSupervised) => { onSupervised(supervisor); return false; },
+      });
+      const outcome = await restartRuntimeAfterApply(record, value);
+      expect(outcome).toEqual({ kind: "deferred-supervisor", supervisor });
+      expect(applyRestartMessage(outcome)).toBe(supervisor === "desktop"
+        ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+        : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.");
+      expect(calls).toEqual([]);
+    });
+  }
 });
 
 function clientHealthDeps(postResponse: Response) {
@@ -135,6 +149,21 @@ function clientHealthDeps(postResponse: Response) {
 }
 
 describe("ocx restart against a client runtime", () => {
+  test("only explicit request-phase supervision refusals qualify for deferral", () => {
+    const notices: string[] = [];
+    for (const supervisor of ["desktop", "service"] as const) {
+      const refused = { ok: false as const, phase: "request" as const, error: new Error(`restart_supervised_${supervisor}`) };
+      expect(supervisedRestartRefusal(refused)).toBe(supervisor);
+      expect(deferSupervisedRestart(refused, value => notices.push(value))).toBe(true);
+      expect(supervisedRestartRefusal({ ok: false, phase: "replacement", error: new Error(`restart_supervised_${supervisor}`) })).toBeNull();
+    }
+    const uncertain = { ok: false as const, phase: "request" as const, error: new Error("restart_request_outcome_unknown") };
+    expect(supervisedRestartRefusal(uncertain)).toBeNull();
+    expect(deferSupervisedRestart(uncertain, value => notices.push(value))).toBe(false);
+    expect(notices).toEqual(["desktop", "service"]);
+    expect(supervisedRestartRefusal({ ok: false, phase: "request", error: new Error("restart_supervised_other") })).toBeNull();
+    expect(supervisedRestartRefusal({ ok: true, mode: "skipped" })).toBeNull();
+  });
   test("a request that would leave the rollback too little time is refused before it is sent", async () => {
     const { deps: d, posts } = clientHealthDeps(new Response(null, { status: 202 }));
     const outcome = await requestBoundSystemRestart(child, 1_000 + CLIENT_RESTART_REQUEST_MIN_REMAINING_MS - 1, d);
@@ -144,11 +173,13 @@ describe("ocx restart against a client runtime", () => {
   });
 
   test("in time, the request is sent; a supervised refusal comes back as its own code", async () => {
-    const supervised = new Response(JSON.stringify({ success: false, error: { code: "restart_supervised", supervisor: "service" } }), { status: 409 });
-    const { deps: d, posts } = clientHealthDeps(supervised);
-    const outcome = await requestBoundSystemRestart(child, 1_000 + CLIENT_RESTART_REQUEST_MIN_REMAINING_MS, d);
-    expect(posts).toEqual([`http://127.0.0.1:${child.port}${SYSTEM_RESTART_PATH}`]);
-    expect(outcome.accepted ? "" : (outcome.error as Error).message).toBe("restart_supervised_service");
+    for (const supervisor of ["desktop", "service"] as const) {
+      const supervised = new Response(JSON.stringify({ success: false, error: { code: "restart_supervised", supervisor } }), { status: 409 });
+      const { deps: d, posts } = clientHealthDeps(supervised);
+      const outcome = await requestBoundSystemRestart(child, 1_000 + CLIENT_RESTART_REQUEST_MIN_REMAINING_MS, d);
+      expect(posts).toEqual([`http://127.0.0.1:${child.port}${SYSTEM_RESTART_PATH}`]);
+      expect(outcome.accepted ? "" : (outcome.error as Error).message).toBe(`restart_supervised_${supervisor}`);
+    }
 
     const other = clientHealthDeps(new Response(JSON.stringify({ success: false, error: "Restart target identity changed." }), { status: 409 }));
     const generic = await requestBoundSystemRestart(child, 1_000 + CLIENT_RESTART_REQUEST_MIN_REMAINING_MS, other.deps);

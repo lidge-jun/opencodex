@@ -12,7 +12,7 @@ import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { readMainAuth } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
-import { clearAccountQuota } from "./quota";
+import { clearAccountQuota, discardMismatchedMainQuota } from "./quota";
 import { forgetManualPreference } from "./routing/active-account";
 import { deleteAllHealthForAccount } from "./routing/health-store";
 import { forgetCodexFailureWindow } from "./routing/failure-window";
@@ -20,7 +20,7 @@ import { clearThreadAccountMapForAccount } from "./routing/thread-affinity";
 
 import { clearCodexPoolRefreshFailure } from "./pool-refresh-backoff";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
-import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "./main-account-cache";
+import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity, type MainQuotaWriter } from "./main-account-cache";
 import { extractAccountId, extractAccountIdClaims } from "../oauth/chatgpt";
 import { forgetCodexAccountPause } from "./account-pause";
 import { forgetCodexAccountCreditUse } from "./account-credit-use";
@@ -73,6 +73,28 @@ function purgeMainCodexAccountRuntimeState(): void {
   invalidateCodexWebSocketsForAccount(MAIN_CODEX_ACCOUNT_ID);
 }
 
+function observeMainCodexAccountIdentity(accountId: string): boolean {
+  const previousAccountId = observedMainChatgptAccountId;
+  observedMainChatgptAccountId = accountId;
+  const changed = previousAccountId !== undefined && previousAccountId !== accountId;
+  if (changed) purgeMainCodexAccountRuntimeState();
+  observeMainQuotaIdentity(accountId);
+  discardMismatchedMainQuota();
+  return changed;
+}
+
+/** Only the pinned-home, exclusively claimed Codex RPC may supply this credential. */
+export function observeCodexOwnedMainAccountCredential(accessToken: string): MainQuotaWriter | undefined {
+  const identity = extractAccountIdClaims(accessToken);
+  // An opaque or conflicting answer cannot retire a previously verified identity or its policy.
+  if (!identity.accountId || identity.conflict) return undefined;
+  observeMainCodexAccountIdentity(identity.accountId);
+  const tokens = { access_token: accessToken, account_id: identity.accountId };
+  observeSignedInCodexIdentity(tokens);
+  observeMainCodexCollisionIdentity(tokens);
+  return observeMainQuotaCredential(accessToken, identity.accountId);
+}
+
 /**
  * The main Codex login is stored under the stable `__main__` alias, while
  * `~/.codex/auth.json` can be replaced with credentials for another physical
@@ -89,18 +111,9 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
   // A missing/malformed auth.json is an unknown identity, not a confirmed account switch. Keep the
   // prior observation and its safety state until a real account id can be read again.
   if (currentAccountId === null) return false;
-  const previousAccountId = observedMainChatgptAccountId;
-  observedMainChatgptAccountId = currentAccountId;
-  if (previousAccountId === undefined || previousAccountId === currentAccountId) {
-    observeMainQuotaIdentity(currentAccountId);
-    if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
-    return false;
-  }
-
-  purgeMainCodexAccountRuntimeState();
-  observeMainQuotaIdentity(currentAccountId);
+  const changed = observeMainCodexAccountIdentity(currentAccountId);
   if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
-  return true;
+  return changed;
 }
 
 /**
@@ -134,6 +147,7 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();
   observeSignedInCodexIdentity(tokens);
   observeMainQuotaIdentity(accountId);
+  discardMismatchedMainQuota();
   observeMainCodexCollisionIdentity(tokens);
   return observeMainQuotaCredential(tokens.access_token, accountId) !== undefined;
 }

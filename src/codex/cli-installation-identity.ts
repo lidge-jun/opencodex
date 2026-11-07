@@ -113,7 +113,7 @@ function manifest(file: ObservedInstallationFile, name: string, bin: string, exp
 }
 
 /** Only the standard npm cmd-shim is linked here; arbitrary wrappers remain unverified. */
-function npmCodexCommandShim(bytes: Uint8Array): boolean {
+export function npmCodexCommandShim(bytes: Uint8Array): boolean {
   const expected = `@ECHO off
 GOTO start
 :find_dp0

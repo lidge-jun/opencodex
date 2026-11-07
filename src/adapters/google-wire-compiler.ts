@@ -172,6 +172,10 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
         : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
       if (thinkingLevel) thinking.thinkingLevel = thinkingLevel;
     }
+    const rawBudget = finiteNumber(value.thinkingConfig.thinkingBudget ?? value.thinkingConfig.thinking_budget);
+    if (!thinking.thinkingLevel && rawBudget !== undefined && (rawBudget === -1 || rawBudget >= 0)) {
+      thinking.thinkingBudget = Math.floor(rawBudget);
+    }
     // The one key that makes Google return `thought: true` text. Cloud Code Assist serves
     // thinking either way (thoughtsTokenCount stays non-zero) but withholds the text unless the
     // request opts in, so dropping it here silently reinstates the missing-thinking behavior.

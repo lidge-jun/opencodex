@@ -1,25 +1,11 @@
-/**
- * `ocx link cleanup`: find Home-initiated Remote Link Children that run Windows and explain how to
- * move each one to Hub mode. It never revokes or changes anything.
- *
- * Windows Children are refused at enrollment, but a link enrolled before that refusal existed keeps
- * its record, key and reverse tunnel. Its record carries no platform, so this command asks the
- * Child over the same pinned SSH trust the tunnel uses (`uname -s` through `sh`) and classifies the
- * answer with `detectRemotePlatform` (a localized cmd or PowerShell refusal gets the fixed %OS% probe).
- *
- * The recovery order matters. An ordinary `ocx link revoke` runs `ocx disconnect` on the Child
- * through the POSIX ocx prelude, which exits 125 on Windows, so for these Children the revoke must
- * be forced after the Child disconnected itself.
- */
+/** Read-only platform and disconnect guidance for recorded Remote Link Children. */
 import { linkKnownHostsPath, linkStorePath } from "../link/paths";
-import { detectRemotePlatform, REMOTE_UNAME_ARGV, type RemotePlatform } from "../link/remote-platform";
-import { buildExecArgv } from "../link/ssh-argv";
-import { createSshRunner, sshFailureHint, sshRunnerErrorHint, type SshRunner } from "../link/ssh-runner";
+import { requireRemotePlatform, type RemotePlatform } from "../link/remote-platform";
+import { createSshRunner, sshRunnerErrorHint, type SshRunner } from "../link/ssh-runner";
 import { readLinkStore, type LinkStore } from "../link/store";
 import { CliUsageError, printData, rejectArgs, takeJsonFlag, takeOption } from "./runtime-api";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
-const CHECK_TIMEOUT_MS = 30_000;
 
 export interface LinkCleanupDeps {
   readStore?: () => LinkStore;
@@ -39,16 +25,15 @@ export interface LinkCleanupEntry {
 export function windowsChildRecovery(linkId: string, alias: string): string[] {
   return [
     `On ${alias}, run 'ocx disconnect' and then 'ocx restart' so it stops using this link.`,
-    `On this Home, run 'ocx link revoke --link-id ${linkId} --force --yes'. A plain revoke cannot disconnect a Windows Child remotely.`,
-    `Then connect ${alias} in Hub mode: run 'ocx hub invite' on a Hub and the printed 'ocx connect' command on ${alias}.`,
+    `On this Home, run 'ocx link revoke --link-id ${linkId} --yes' to disconnect it through the recorded SSH trust.`,
+    `Retry Remote Link enrollment after updating Home if the remote shell or old installation cannot run the disconnect command.`,
   ];
 }
 
 async function checkPlatform(runner: SshRunner, alias: string, knownHostsFile: string): Promise<{ platform: RemotePlatform; reason: string | null }> {
   try {
-    const result = await runner.run(buildExecArgv({ alias, argv: REMOTE_UNAME_ARGV, knownHostsFile }), { timeoutMs: CHECK_TIMEOUT_MS });
-    const platform = await detectRemotePlatform(runner, alias, knownHostsFile, result);
-    return { platform, reason: platform === "unknown" ? (sshFailureHint(result.stderr) ?? `ssh exited ${result.code}`) : null };
+    const platform = await requireRemotePlatform(runner, alias, knownHostsFile);
+    return { platform, reason: null };
   } catch (error) {
     return { platform: "unknown", reason: sshRunnerErrorHint(error) ?? "ssh could not run" };
   }
@@ -60,7 +45,7 @@ function humanLines(entries: LinkCleanupEntry[]): string[] {
   for (const entry of entries) {
     const label = `${entry.linkId} (${entry.alias})`;
     if (entry.platform === "windows") {
-      lines.push(`${label}: Windows Child. Remote Link does not support Windows Children; this link predates that refusal.`);
+      lines.push(`${label}: Windows Child. Current Home releases support Remote Link over PowerShell; this report changes nothing.`);
       for (const [index, step] of entry.recovery.entries()) lines.push(`  ${index + 1}. ${step}`);
     } else if (entry.platform === "posix") lines.push(`${label}: macOS or Linux Child; nothing to clean up.`);
     else if (entry.platform === "not_checked") lines.push(`${label}: Child-initiated; this Home has no SSH route to check it.`);

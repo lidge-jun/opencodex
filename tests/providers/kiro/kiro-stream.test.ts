@@ -1003,21 +1003,10 @@ describe("kiro adapter — parseStream", () => {
     expect(JSON.stringify(events)).not.toContain(KIRO_COMPLETION_TOOL_NAME);
   });
 
-  test("duplicate completion and completion mixed with real tools fail closed", async () => {
+  // A completion mixed with real tools is not an error; see kiro-completion-with-real-tools.test.ts.
+  test("duplicate completion fails closed", async () => {
     const cases: Uint8Array[][] = [
       [...completionFrames("one", "complete-1"), ...completionFrames("two", "complete-2")],
-      [
-        eventFrame({ name: "bash", toolUseId: "call-1" }),
-        eventFrame({ input: "{}", name: "bash", toolUseId: "call-1" }),
-        eventFrame({ name: "bash", stop: true, toolUseId: "call-1" }),
-        ...completionFrames("done", "complete-3"),
-      ],
-      [
-        ...completionFrames("done", "complete-4"),
-        eventFrame({ name: "bash", toolUseId: "call-2" }),
-        eventFrame({ input: "{}", name: "bash", toolUseId: "call-2" }),
-        eventFrame({ name: "bash", stop: true, toolUseId: "call-2" }),
-      ],
     ];
     for (const frames of cases) {
       const adapter = createKiroAdapter(provider);
@@ -1538,6 +1527,7 @@ describe("kiro adapter — parseStream", () => {
       cacheCreationInputTokens: 2,
       outputTokens: 4,
       totalTokens: 19,
+      upstreamReported: true,
     });
     // The whole-payload checkpoint must exceed this turn's own total, which is the point of
     // reporting it separately.

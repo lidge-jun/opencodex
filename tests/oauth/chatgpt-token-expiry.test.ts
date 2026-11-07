@@ -97,7 +97,7 @@ async function browserFlow(signal?: AbortSignal): Promise<ChatGPTOAuthFlow> {
 
 describe("ChatGPT OAuth refresh failure classification", () => {
   const deadCodes = ["invalid_grant", "refresh_token_reused", "refresh_token_invalidated",
-    "token_invalidated", "refresh_token_expired"];
+    "token_invalidated", "refresh_token_expired", "account_deactivated", "deactivated_workspace"];
 
   for (const status of [400, 401, 403]) {
     for (const code of deadCodes) {
@@ -169,7 +169,7 @@ describe("ChatGPT OAuth refresh failure classification", () => {
 });
 
 describe("ChatGPT token fetch cancellation and deadlines", () => {
-  test("refresh keeps the form grant and composes the caller with a fresh 30s deadline", async () => {
+  test("refresh sends the official JSON grant and composes the caller with a fresh 30s deadline", async () => {
     const observed: AbortSignal[] = [];
     const deadlines: number[] = [];
     globalThis.setTimeout = ((fn, ms, ...args) => {
@@ -178,10 +178,16 @@ describe("ChatGPT token fetch cancellation and deadlines", () => {
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       expect(String(url)).toBe("https://auth.openai.com/oauth/token");
       expect(init?.method).toBe("POST");
-      expect(init?.headers).toEqual({ "Content-Type": "application/x-www-form-urlencoded" });
-      const body = new URLSearchParams(String(init?.body));
-      expect(body.get("grant_type")).toBe("refresh_token");
-      expect(body.get("refresh_token")).toBe("synthetic-refresh");
+      expect(init?.headers).toEqual({
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      });
+      const body = JSON.parse(String(init?.body)) as Record<string, string>;
+      expect(body).toEqual({
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        grant_type: "refresh_token",
+        refresh_token: "synthetic-refresh",
+      });
       observed.push(init!.signal!);
       return Response.json({ access_token: "at", refresh_token: "rt", expires_in: 3600 });
     }) as typeof fetch;

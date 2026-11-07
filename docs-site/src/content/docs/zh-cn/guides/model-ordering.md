@@ -26,7 +26,7 @@ priority 为 `i * N + j` 的 selector 行，其中 `j` 是从 0 开始的 select
 | --- | ---: | --- |
 | `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的 featured rank map |
 | 其他路由模型 | `5` | `src/codex/catalog/sync.ts` 中创建路由条目的逻辑 |
-| 默认原生 GPT slug | `9` | `src/codex/catalog/sync.ts` 中创建原生条目的逻辑 |
+| 默认原生 GPT slug | `sourcePriority` | `src/codex/catalog/sync.ts` 中创建原生条目的逻辑 |
 | 存在 featured 列表时未选中的原生模型 | 至少为 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合并原生目录的逻辑 |
 
 管理 API 在 `src/server/management/agent-settings-routes.ts` 中使用 `slice(0, 5)`，把
@@ -67,7 +67,7 @@ priority，因此 Codex 的 priority 排序会保留这个开头序列。
 3. 在目录合并过程中被移到 featured 区块之后的未选中原生模型。
 
 如果没有 `subagentModels`，路由模型保持 priority `5`，原生 GPT 条目使用正常 priority
-（opencodex 创建的条目通常为 `9`），路由组内部仍按 provider/id 字母排序。
+（sourcePriority，缺少来源时回退到 `9`），路由组内部仍按 provider/id 字母排序。
 
 ## 示例
 

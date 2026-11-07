@@ -2,6 +2,50 @@ import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dial
 import { createBoundedFetch, withFetchDeadline } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
+/** Non-secret generation fencing every Usage report and inventory. */
+export const USAGE_SESSION_CHANGED = "opencodex:usage-session-changed";
+type UsageSessionSnapshot = { generation: number; blocked: boolean };
+let usageSession: UsageSessionSnapshot = { generation: 0, blocked: false };
+export function usageSessionSnapshot(): UsageSessionSnapshot { return usageSession; }
+export function purgeLegacyUsageCache(): void {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith("ocx.usage.v2:")) sessionStorage.removeItem(key);
+    }
+  } catch { /* Storage may be unavailable. */ }
+}
+function changeUsageSession(blocked: boolean): void {
+  usageSession = { generation: usageSession.generation + 1, blocked };
+  purgeLegacyUsageCache();
+  if (typeof window !== "undefined") {
+    try { window.dispatchEvent(new window.Event(USAGE_SESSION_CHANGED)); } catch { /* Non-browser event environments. */ }
+  }
+}
+/** An old request cannot revoke a newer session. */
+export function denyUsageSession(generation: number): void {
+  if (usageSession.generation === generation && !usageSession.blocked) changeUsageSession(true);
+}
+
+/** A successful management mutation may change the source-facet inventory. */
+export const USAGE_SOURCE_INVENTORY_CHANGED = "opencodex:usage-source-inventory-changed";
+
+function sourceInventoryMutation(path: string | null, method: string): boolean {
+  if (!path) return false;
+  if (path === "/api/keys") return ["POST", "PATCH", "DELETE"].includes(method);
+  if (path === "/api/keys/rotate") return method === "POST" || method === "DELETE";
+  if (path === "/api/keys/rotate/commit") return method === "POST";
+  if (["/api/link/apply", "/api/link/issue", "/api/link/join"].includes(path)) return method === "POST";
+  if (/^\/api\/link\/[^/]+$/.test(path)) return method === "DELETE";
+  return /^\/api\/link\/[^/]+\/reconnect$/.test(path) && method === "POST";
+}
+
+export function sourceInventoryEventMatches(event: Event, apiBase: string): boolean {
+  const detail = (event as CustomEvent<{ apiBase?: string }>).detail;
+  try { return typeof detail?.apiBase === "string" && new URL(detail.apiBase || "/", window.location.href).href.replace(/\/+$/, "") === new URL(apiBase || "/", window.location.href).href.replace(/\/+$/, ""); }
+  catch { return false; }
+}
+
 /**
  * Fired after an unauthorized request cannot recover a session. The shell synchronizes
  * its existing readiness state; cancelled callers and newer valid sessions emit no notice.
@@ -9,8 +53,12 @@ import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiT
 export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 /** Token identity changed; contains only the plane, never credential material. */
 export const SESSION_CHANGED_EVENT = "opencodex:session-changed";
+/** The remembered-device proof was stored or cleared; contains only the plane. */
+export const DEVICE_PROOF_CHANGED_EVENT = "opencodex:device-proof-changed";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
+const DEVICE_PROOF_KEY = "opencodex.dashboard-device-proof";
+const DEVICE_PROOF_PATTERN = /^ocx_proof_[A-Za-z0-9_-]{43}$/;
 // Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/settings
 // also resolves the Codex runtime and startup health, which made the token prompt hang.
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/combos";
@@ -41,13 +89,14 @@ interface SessionRevision { state: TargetRuntime; generation: object }
 interface SessionSnapshot extends SessionRevision { token: string | null }
 interface RecoveryAttempt extends SessionRevision { plane: ApiPlane; active: boolean }
 
-type AdminTokenPrompt = (verifyToken: AdminTokenVerifier) => Promise<string | null>;
+type AdminTokenPrompt = (verifyToken: AdminTokenVerifier, rememberAllowed?: boolean) => Promise<string | null>;
+const defaultAdminTokenPrompt: AdminTokenPrompt = (verify, allowed) => promptForAdminToken(verify, undefined, allowed);
 type RebootstrapResult = { kind: "minted"; token: string } | { kind: "unavailable" } | { kind: "failed" };
 
 let installed = false;
 let rawFetch: typeof fetch | null = null;
 let configuredTargets: ApiTargets | null = null;
-let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
+let requestAdminToken: AdminTokenPrompt = defaultAdminTokenPrompt;
 let rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
 let resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
 const runtimes = new Map<ApiPlane, TargetRuntime>();
@@ -55,6 +104,7 @@ const sessionHandoffOwners = new WeakMap<ApiSessionState, object>();
 
 function reportSessionEvent(plane: ApiPlane, event: string): void {
   if (typeof window === "undefined") return;
+  if (plane === "shared" && event === SESSION_UNAVAILABLE_EVENT && !usageSession.blocked) changeUsageSession(true);
   // Take the constructor off the same window we dispatch on: a test harness (and a
   // sandboxed embed) can supply a document without installing CustomEvent globally.
   const Ctor = (window as unknown as { CustomEvent?: typeof CustomEvent }).CustomEvent
@@ -65,9 +115,10 @@ function reportSessionEvent(plane: ApiPlane, event: string): void {
   } catch { /* a shell that cannot receive the notice must not break the fetch path */ }
 }
 
-function advanceSessionGeneration(state: TargetRuntime): void {
+function advanceSessionGeneration(state: TargetRuntime, notifyUsage = true): void {
   state.generation = {};
   state.resolutionInFlight = null;
+  if (notifyUsage && state.target.id === "shared") changeUsageSession(!!state.logoutBarrier || !state.session.token);
 }
 
 function sessionSnapshot(state: TargetRuntime): SessionSnapshot {
@@ -85,10 +136,11 @@ function isCurrentRecovery(recovery: RecoveryAttempt): boolean {
 function updateSession(state: TargetRuntime, session: ApiSessionState, recovery?: RecoveryAttempt): void {
   if (recovery && !isCurrentRecovery(recovery)) return;
   const changed = state.session.token !== session.token;
-  advanceSessionGeneration(state);
+  advanceSessionGeneration(state, false);
   state.session = session;
   // Advance our own recovery before synchronous session-event listeners can supersede it.
   if (recovery) recovery.generation = state.generation;
+  if (state.target.id === "shared") changeUsageSession(!session.token);
   if (changed) reportSessionEvent(state.target.id, SESSION_CHANGED_EVENT);
 }
 
@@ -191,6 +243,10 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
     if (!response.ok) return false;
     barrier.completed = true;
     if (runtimes.get(plane) === state && state.logoutBarrier === barrier) {
+      if (canRememberDashboardDevice(plane)) {
+        try { window.localStorage.removeItem(DEVICE_PROOF_KEY); } catch { /* storage may be disabled */ }
+        reportSessionEvent(plane, DEVICE_PROOF_CHANGED_EVENT);
+      }
       updateSession(state, blankSession());
       state.promptCancelled = false;
     }
@@ -200,7 +256,10 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
   } finally {
     bounded.clear();
     barrier.pending--;
-    if (!barrier.pending && !barrier.completed && state.logoutBarrier === barrier) state.logoutBarrier = null;
+    if (!barrier.pending && !barrier.completed && state.logoutBarrier === barrier) {
+      state.logoutBarrier = null;
+      if (plane === "shared") changeUsageSession(!state.session.token);
+    }
   }
 }
 
@@ -290,6 +349,26 @@ export function fetchApiSessionValidation(plane: ApiPlane, input: RequestInfo | 
 
 function clearLegacySessionToken(): void {
   try { sessionStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* storage may be disabled */ }
+  try {
+    const storage = window.localStorage;
+    for (let i = storage.length - 1; i >= 0; i--) {
+      const key = storage.key(i);
+      if (key === "opencodex.remembered-admin-token" || key?.startsWith("opencodex.remembered-admin-token:")) storage.removeItem(key);
+    }
+  } catch { /* do not read or migrate old bearer tokens */ }
+}
+
+export function canRememberDashboardDevice(plane: ApiPlane): boolean {
+  const target = runtime(plane).target;
+  return target.transport !== "relay" && target.serverOrigin === window.location.origin
+    && (window.location.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname));
+}
+
+/** Enrollment, not capability: the Forget control exists only once a proof is stored. */
+export function hasRememberedDashboardDevice(plane: ApiPlane): boolean {
+  if (!canRememberDashboardDevice(plane)) return false;
+  try { return DEVICE_PROOF_PATTERN.test(window.localStorage.getItem(DEVICE_PROOF_KEY) ?? ""); }
+  catch { return false; }
 }
 
 function targetAbsoluteBase(target: ApiTarget): URL {
@@ -318,7 +397,7 @@ function classify(input: RequestInfo | URL): { plane: ApiPlane; bootstrap: boole
   if (url.href === new URL(targets.shared.bootstrapPath, window.location.href).href) return { plane: "shared", bootstrap: true };
   if (targets.shared.transport === "relay" && targetMatchesUrl(targets.shared, url)) return { plane: "shared", bootstrap: false };
   const machinePath = relativeTargetPath(targets.machine, url);
-  if (machinePath?.startsWith("/api/machine/")) return { plane: "machine", bootstrap: false };
+  if (machinePath?.startsWith("/api/machine/") || machinePath?.startsWith("/api/codex/desktop-compatibility/")) return { plane: "machine", bootstrap: false };
   const sharedPath = relativeTargetPath(targets.shared, url);
   if (sharedPath?.startsWith("/api/")) return { plane: "shared", bootstrap: false };
   if (url.href === new URL(targets.machine.bootstrapPath, window.location.href).href) return { plane: "machine", bootstrap: true };
@@ -361,7 +440,14 @@ async function reBootstrapSessionToken(recovery: RecoveryAttempt, caller?: Abort
   const send = rawFetch;
   try {
     return await withFetchDeadline<RebootstrapResult>(deadlineMs, caller, async signal => {
-      const [input, init] = withAuth(plane, state.target.bootstrapPath, { cache: "no-store", signal }, null);
+      const headers = new Headers();
+      if (canRememberDashboardDevice(plane) && new URL(state.target.bootstrapPath, window.location.href).origin === window.location.origin) {
+        try {
+          const proof = window.localStorage.getItem(DEVICE_PROOF_KEY);
+          if (proof && DEVICE_PROOF_PATTERN.test(proof)) headers.set("X-OpenCodex-Device-Proof", proof);
+        } catch { /* ordinary session bootstrap still works without browser storage */ }
+      }
+      const [input, init] = withAuth(plane, state.target.bootstrapPath, { cache: "no-store", redirect: "error", signal, headers }, null);
       const response = await send(input, init);
       if (signal.aborted || !isCurrentRecovery(recovery)) return { kind: "failed" };
       if (!response.ok) return response.status >= 400 && response.status < 500 ? { kind: "unavailable" } : { kind: "failed" };
@@ -381,14 +467,35 @@ export async function bootstrapApiSession(plane: ApiPlane, signal?: AbortSignal)
   finally { recovery.active = false; }
 }
 
-async function verifyAdminToken(plane: ApiPlane, token: string): ReturnType<AdminTokenVerifier> {
+async function verifyAdminToken(recovery: RecoveryAttempt, token: string, remember = false): ReturnType<AdminTokenVerifier> {
   if (!rawFetch) return "unavailable";
+  const { plane, state } = recovery;
+  if (remember && !canRememberDashboardDevice(plane)) return "unavailable";
   try {
-    const state = runtime(plane);
-    const [input, init] = withAuth(plane, `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`, { cache: "no-store" }, token);
-    const response = await rawFetch(input, init);
-    if (response.status === 401) return "rejected";
-    return response.ok ? "accepted" : "unavailable";
+    return await withFetchDeadline(rebootstrapTimeoutMs, undefined, async signal => {
+      const path = remember ? "/api/session/remember" : ADMIN_TOKEN_VALIDATION_PATH;
+      const [input, init] = withAuth(plane, state.target.baseUrl + path,
+        { method: remember ? "POST" : "GET", cache: "no-store", signal, credentials: remember ? "same-origin" : "omit", redirect: "error" }, token);
+      const response = await rawFetch!(input, init);
+      if (signal.aborted || !isCurrentRecovery(recovery)) return "unavailable";
+      if (response.status === 401) return "rejected";
+      if (!response.ok) return "unavailable";
+      if (remember) {
+        const body = await response.json();
+        if (signal.aborted || !isCurrentRecovery(recovery) || !storeSession(plane, body?.session?.token,
+          body?.session?.csrfToken, body?.session?.browserOrigin, body?.session?.serverOrigin, recovery)) return "unavailable";
+        try {
+          const proof = body?.device?.proof;
+          if (typeof proof !== "string" || !DEVICE_PROOF_PATTERN.test(proof)) throw new Error("Invalid device proof");
+          window.localStorage.setItem(DEVICE_PROOF_KEY, proof);
+          reportSessionEvent(plane, DEVICE_PROOF_CHANGED_EVENT);
+        } catch {
+          invalidateSession(state, recovery);
+          return "unavailable";
+        }
+      }
+      return "accepted";
+    });
   } catch { return "unavailable"; }
 }
 
@@ -421,13 +528,14 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
         state.promptCancelled = true;
         return sessionSnapshot(state);
       }
-      const prompted = await requestAdminToken(async token => {
+      const prompted = await requestAdminToken(async (token, remember) => {
         if (!isCurrentRecovery(recovery)) return "unavailable";
-        const result = await verifyAdminToken(plane, token);
+        const result = await verifyAdminToken(recovery, token, remember);
         return isCurrentRecovery(recovery) ? result : "unavailable";
-      });
+      }, canRememberDashboardDevice(plane));
       if (!isCurrentRecovery(recovery)) return null;
       if (prompted) {
+        if (state.session.token?.startsWith("ocx_session_")) return sessionSnapshot(state);
         updateSession(state, { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin }, recovery);
         return isCurrentRecovery(recovery) ? sessionSnapshot(state) : null;
       }
@@ -464,41 +572,79 @@ export function installApiAuthFetch(): void {
     if (!classified) return originalFetch(input, init);
     const state = runtime(classified.plane);
     const generation = state.generation;
+    const usageGeneration = usageSession.generation;
     const token = state.session.token;
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    let mutation = false;
+    let usageRequest = false;
+    try {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      const path = relativeTargetPath(state.target, url);
+      mutation = classified.plane === "shared" && sourceInventoryMutation(path, method);
+      usageRequest = path === "/api/usage" || path === "/api/usage/devices" || path === "/api/usage/source-facets";
+    } catch { /* A malformed URL cannot name an inventory mutation. */ }
+    const mutationBase = state.target.baseUrl;
+    const finish = (result: Response) => {
+      if (mutation && result.ok) {
+        try { window.dispatchEvent(new window.CustomEvent(USAGE_SOURCE_INVENTORY_CHANGED, { detail: { apiBase: mutationBase } })); }
+        catch { /* A notification failure must not turn a successful mutation into an error. */ }
+      }
+      return result;
+    };
     // Pairing exchanges must not carry the old shared-plane credential. The relay's
     // separate machine-session headers are still attached by sessionHeaders().
     const pairingExchange = classified.bootstrap && method === "POST";
     const [firstInput, firstInit] = withAuth(classified.plane, input, init, pairingExchange ? null : undefined);
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const response = await originalFetch(firstInput, firstInit);
-    if (classified.bootstrap || response.status !== 401) return response;
+    if (callerSignal?.aborted && (response.status === 401 || response.status === 403)) return response;
+    const recoverUsage = usageRequest && !callerSignal?.aborted;
+    if (!classified.bootstrap && classified.plane === "shared" && state.generation === generation
+      && response.status === 401) denyUsageSession(usageGeneration);
+    if (classified.bootstrap || response.status !== 401) return finish(response);
     if (runtimes.get(classified.plane) !== state || state.logoutBarrier) return response;
     const refreshed = state.session.token;
     if (refreshed && (refreshed !== token || state.generation !== generation)) {
       const revision = sessionSnapshot(state);
       const [retryInput, retryInit] = withAuth(classified.plane, input, init);
       const retry = await originalFetch(retryInput, retryInit);
-      if (!isCurrentRevision(classified.plane, revision)) return retry;
-      if (retry.status !== 401) return retry;
+      if (!isCurrentRevision(classified.plane, revision)) return finish(retry);
+      if (retry.status !== 401) return finish(retry);
       clearSessionIfCurrent(classified.plane, refreshed);
     } else {
       if (state.generation !== generation && !state.resolutionInFlight) return response;
       clearSessionIfCurrent(classified.plane, token);
     }
-    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    const next = await resolveTokenAfter401(classified.plane, token, callerSignal ?? undefined);
-    if (!next || !isCurrentRevision(classified.plane, next) || callerSignal?.aborted) return response;
-    if (!next.token) {
-      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+    // Usage invalidation unsubscribes its loader and aborts its signal. Once an actual 401
+    // arrived, let the existing single-flight recovery finish independently; a request
+    // already cancelled before the 401 must not start recovery.
+    const recoverySignal = recoverUsage ? undefined : callerSignal ?? undefined;
+    const recoveryRevision = sessionSnapshot(state);
+    let next: SessionSnapshot | null;
+    try {
+      next = await resolveTokenAfter401(classified.plane, token, recoverySignal);
+    } catch (error) {
+      if (!recoverUsage) throw error;
+      if (isCurrentRevision(classified.plane, recoveryRevision) && !state.logoutBarrier && !state.session.token) {
+        reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+      }
       return response;
     }
+    if (!next || !isCurrentRevision(classified.plane, next) || state.logoutBarrier) return response;
+    if (!next.token) {
+      // Usage recovery is deliberately detached after an observed 401: its loader was
+      // aborted by session invalidation, but the still-current recovery owns this notice.
+      if ((recoverUsage || !callerSignal?.aborted) && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+      return response;
+    }
+    if (callerSignal?.aborted) return response;
     const [retryInput, retryInit] = withAuth(classified.plane, input, init, next.token);
     const retry = await originalFetch(retryInput, retryInit);
     if (retry.status === 401 && isCurrentRevision(classified.plane, next)) {
       clearSessionIfCurrent(classified.plane, next.token);
       if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
     }
-    return retry;
+    return finish(retry);
   };
 }
 
@@ -512,7 +658,8 @@ export function fetchAudioUpload(endpoint: string, init: RequestInit): Promise<R
   return (rawFetch ?? fetch)(url.href, { ...init, credentials: "omit", redirect: "error" });
 }
 
-export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = promptForAdminToken): void {
+export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = defaultAdminTokenPrompt): void {
+  changeUsageSession(false);
   installed = false;
   rawFetch = null;
   configuredTargets = null;
