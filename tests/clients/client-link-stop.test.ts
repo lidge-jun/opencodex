@@ -248,9 +248,11 @@ for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
 for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, { releaseFirst: false, hold: "home" }, { releaseFirst: true, hold: "catalog" }, { releaseFirst: false, hold: "lock" }] as const) {
   test(`a separate sync ${releaseFirst ? "finishes before" : "cannot commit after"} signal restoration (${hold})`, async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-link-sync-stop-"));
-    // Sync records the canonical catalog path (/private/var on macOS) and backup lookup hashes the
-    // spelling, so the fixture must create its native backup under the same spelling.
-    const home = join(root, "ocx"), codex = join(realpathSync(root), "codex");
+    // Sync records the canonical catalog path (/private/var on macOS, the long name for an NTFS
+    // 8.3 temp alias such as C:\Users\RUNNER~1 on hosted Windows) and backup lookup hashes the
+    // spelling. The runtime starts before CODEX_HOME exists and so keeps the spelling it is given;
+    // only the native resolver expands short names, so the fixture must hand both processes it.
+    const home = join(root, "ocx"), codex = join(realpathSync.native(root), "codex");
     const children: Array<{ child: ReturnType<typeof Bun.spawn>; drained: Promise<unknown> }> = [];
     const spawn = (file: string, options: unknown) => {
       const child = Bun.spawn([process.execPath, fixturePath(file)], {
