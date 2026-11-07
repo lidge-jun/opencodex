@@ -20,6 +20,121 @@ const init = { method: "POST", headers: { authorization: "Bearer synthetic-key" 
 const response = () => new Response(null, { headers: { "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "5" } });
 const trusted = (fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) => markPassiveKeyTransparent(fetcher as typeof globalThis.fetch);
 
+test("unobserved keychain accounts do not read the OS store during passive polling", () => {
+  const config = fixture("unobserved-many");
+  config.providers["unobserved-many"]!.apiKeyPool = Array.from({ length: 100 }, (_, i) => ({ id: `key-${i}`, key: `keychain:unobserved-many/${i}` }));
+  let reads = 0;
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { reads++; return "synthetic-key"; }, setPassword: () => {}, deletePassword: () => false }));
+  try {
+    expect(listPassiveKeyLimits(config)).toEqual([]);
+    expect(reads).toBe(0);
+  } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
+});
+
+test("passive sends and polls do not reread a resolved keychain credential", async () => {
+  const config = fixture("keychain-no-extra");
+  const provider = config.providers["keychain-no-extra"]!;
+  provider.apiKey = "keychain:keychain-no-extra";
+  let reads = 0, sends = 0, stored = "synthetic-key", release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { reads++; return stored; }, setPassword: value => { stored = value; }, deletePassword: () => false }));
+  try {
+    const routed = routedProviderConfig("keychain-no-extra", provider);
+    expect(reads).toBe(1);
+    const send = passiveKeyPhysicalFetch(trusted(async () => { sends++; await wait; return response(); }), config, "keychain-no-extra", routed);
+    const pending = send("https://api.groq.com/openai/v1/chat/completions", init);
+    stored = "replacement-synthetic-key";
+    release();
+    await pending;
+    expect(listPassiveKeyLimits(config)).toEqual([]);
+    expect(getPassiveKeyLimits(config, "keychain-no-extra", "model")).toEqual([]);
+    expect(reads).toBe(1);
+    expect(sends).toBe(1);
+  } finally { release(); setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
+});
+
+test("a malformed keychain credential cannot break another account's passive projection", async () => {
+  const config = fixture("malformed-passive");
+  const provider = config.providers["malformed-passive"]!;
+  provider.apiKeyPool = [{ id: "good", key: "synthetic-key" }, { id: "bad", key: "keychain:malformed-passive/bad" }];
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => '{"type":"service_account","private_key":"synthetic"}', setPassword: () => {}, deletePassword: () => false }));
+  try {
+    const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "malformed-passive", routedProviderConfig("malformed-passive", provider));
+    await send("https://api.groq.com/openai/v1/chat/completions", init);
+    expect(listPassiveKeyLimits(config)).toMatchObject([{ keyId: "good", model: "model" }]);
+  } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
+});
+
+test("a polled env A to B to A transition revokes cached and in-flight observations only for that account", async () => {
+  const name = "env-aba";
+  const config = fixture(name);
+  const provider = config.providers[name]!;
+  provider.apiKey = "${OCX_TEST_PASSIVE_ABA}";
+  provider.apiKeyPool = [{ id: "first", key: provider.apiKey }, { id: "sibling", key: "synthetic-sibling" }];
+  process.env.OCX_TEST_PASSIVE_ABA = "synthetic-key";
+  let release!: () => void, sends = 0;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const send = passiveKeyPhysicalFetch(trusted(async (_input, request) => { sends++; if (JSON.parse(String(request?.body)).model === "pending") await wait; return response(); }), config, name, routedProviderConfig(name, provider));
+    const sibling = passiveKeyPhysicalFetch(trusted(async () => { sends++; return response(); }), config, name, routedProviderConfig(name, { ...provider, apiKey: "synthetic-sibling" }));
+    await send("https://api.groq.com/openai/v1/chat/completions", init);
+    await sibling("https://api.groq.com/openai/v1/chat/completions", { ...init, headers: { authorization: "Bearer synthetic-sibling" } });
+    const pending = send("https://api.groq.com/openai/v1/chat/completions", { ...init, body: JSON.stringify({ model: "pending" }) });
+    process.env.OCX_TEST_PASSIVE_ABA = "replacement-synthetic-key";
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    process.env.OCX_TEST_PASSIVE_ABA = "synthetic-key";
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    release();
+    await pending;
+    expect(listPassiveKeyLimits(config).map(row => row.keyId)).toEqual(["sibling"]);
+    expect(sends).toBe(3);
+  } finally { release(); delete process.env.OCX_TEST_PASSIVE_ABA; observations.clearPassiveKeyLimits(); }
+});
+
+test("incarnation eviction revokes an outstanding response without affecting newer accounts", async () => {
+  const config = fixture("bounded-incarnations");
+  const provider = config.providers["bounded-incarnations"]!;
+  provider.apiKeyPool = Array.from({ length: 513 }, (_, i) => ({ id: `id-${i}`, key: `synthetic-key-${i}` }));
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const send = (i: number, pending = false) => {
+    const key = `synthetic-key-${i}`;
+    const fetcher = passiveKeyPhysicalFetch(trusted(async () => { if (pending) await wait; return response(); }), config, "bounded-incarnations", routedProviderConfig("bounded-incarnations", { ...provider, apiKey: key }));
+    return fetcher("https://api.groq.com/openai/v1/chat/completions", { ...init, headers: { authorization: `Bearer ${key}` } });
+  };
+  try {
+    const pending = send(0, true);
+    for (let i = 1; i <= 512; i++) await send(i);
+    release();
+    await pending;
+    const rows = listPassiveKeyLimits(config);
+    expect(rows).toHaveLength(512);
+    expect(rows.some(row => row.keyId === "id-0")).toBe(false);
+    expect(rows.some(row => row.keyId === "id-512")).toBe(true);
+  } finally { release(); observations.clearPassiveKeyLimits(); }
+});
+
+test("an old env response cannot retire a newer credential's observation", async () => {
+  const name = "env-newer";
+  const config = fixture(name);
+  const provider = config.providers[name]!;
+  provider.apiKey = "${OCX_TEST_PASSIVE_NEWER}";
+  process.env.OCX_TEST_PASSIVE_NEWER = "synthetic-key";
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const older = passiveKeyPhysicalFetch(trusted(async () => { await wait; return response(); }), config, name, routedProviderConfig(name, provider));
+    const pending = older("https://api.groq.com/openai/v1/chat/completions", init);
+    process.env.OCX_TEST_PASSIVE_NEWER = "replacement-synthetic-key";
+    const newer = passiveKeyPhysicalFetch(trusted(async () => response()), config, name, routedProviderConfig(name, provider));
+    await newer("https://api.groq.com/openai/v1/chat/completions", { ...init, headers: { authorization: `Bearer ${process.env.OCX_TEST_PASSIVE_NEWER}` } });
+    expect(listPassiveKeyLimits(config)).toHaveLength(1);
+    release();
+    await pending;
+    expect(listPassiveKeyLimits(config)).toHaveLength(1);
+  } finally { release(); delete process.env.OCX_TEST_PASSIVE_NEWER; observations.clearPassiveKeyLimits(); }
+});
+
 test("ineligible destinations and credentials never invoke the wire model parser", async () => {
   const config = fixture("parser-gate");
   let sends = 0;
@@ -241,7 +356,7 @@ test.each(["get", "list", "send"] as const)("passive %s does not observe or inva
   }
 });
 
-test("keychain replacement retires passive ownership while normal credential reads retain decision invalidation", async () => {
+test("unprovable keychain ownership is withheld while normal credential reads retain decision invalidation", async () => {
   const config = fixture("passive-keychain");
   const provider = config.providers["passive-keychain"]!;
   provider.apiKey = "keychain:passive-keychain";
@@ -256,7 +371,7 @@ test("keychain replacement retires passive ownership while normal credential rea
     const routed = routedProviderConfig("passive-keychain", provider);
     const send = passiveKeyPhysicalFetch(trusted(async () => response()), config, "passive-keychain", routed);
     await send("https://api.groq.com/openai/v1/chat/completions", init);
-    expect(getPassiveKeyLimits(config, "passive-keychain", "model")).toHaveLength(2);
+    expect(getPassiveKeyLimits(config, "passive-keychain", "model")).toEqual([]);
     stored = "replacement-synthetic-key";
     invalidateResolvedProviderKeyCache();
     const windows = [{ window: "5h" as const, percent: 25, observedAt: Date.now() }];

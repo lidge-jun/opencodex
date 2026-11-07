@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { isPassiveKeyTransparent } from "../lib/passive-key-fetch-proof";
-import { resolveProviderApiKeyPassively } from "./api-key-resolve";
+import { isKeychainReference, resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 import { extractPassiveWireModel } from "./quota/passive-wire-model";
 
@@ -16,10 +16,14 @@ const paths: Record<PassiveKeyProvider, readonly string[]> = {
 };
 let sequence = 0;
 const seenResponses = new WeakSet<Response>();
+// Account identities contain only hashes. Eviction also revokes reservations in the limit cache.
+const incarnations = new Map<string, { name: string; owner: string }>();
+const MAX_INCARNATIONS = 512;
 
 /** Invalidate both stored and in-flight observations after key-store mutation. */
 export function clearPassiveKeyLimits(name?: string): void {
   passiveKeyLimits.clear(name);
+  for (const [scope, entry] of incarnations) if (name === undefined || entry.name === name) incarnations.delete(scope);
 }
 
 function accountScope(name: string, id: string): string {
@@ -28,7 +32,9 @@ function accountScope(name: string, id: string): string {
 
 /** Retire all models and outstanding reservations for one account incarnation. */
 export function clearPassiveKeyAccount(name: string, id: string): void {
-  passiveKeyLimits.clear(name, accountScope(name, id));
+  const scope = accountScope(name, id);
+  passiveKeyLimits.clear(name, scope);
+  incarnations.delete(scope);
 }
 
 function keyId(reference: string): string {
@@ -39,6 +45,34 @@ function identity(name: string, provider: OcxProviderConfig, id: string, referen
   return new Bun.CryptoHasher("sha256").update(JSON.stringify([name, provider.adapter, provider.baseUrl, id, reference, key])).digest("hex");
 }
 
+function remember(name: string, id: string, owner: string): void {
+  const scope = accountScope(name, id);
+  const previous = incarnations.get(scope);
+  if (previous && previous.owner !== owner) clearPassiveKeyAccount(name, id);
+  incarnations.delete(scope);
+  incarnations.set(scope, { name, owner });
+  if (incarnations.size > MAX_INCARNATIONS) {
+    const oldest = incarnations.keys().next().value!;
+    const entry = incarnations.get(oldest)!;
+    passiveKeyLimits.clear(entry.name, oldest);
+    incarnations.delete(oldest);
+  }
+}
+
+/** Poll only accounts already observed; a changed value revokes every model and flight. */
+function currentOwner(name: string, provider: OcxProviderConfig, id: string, reference: string): string | undefined {
+  const existing = incarnations.get(accountScope(name, id));
+  if (!existing) return undefined;
+  try {
+    if (isKeychainReference(reference)) { clearPassiveKeyAccount(name, id); return undefined; }
+    const key = resolveProviderApiKeyPassively(reference);
+    const owner = key && identity(name, provider, id, reference, key);
+    if (owner === existing.owner) return owner;
+  } catch { /* A malformed account cannot invalidate another account's projection. */ }
+  clearPassiveKeyAccount(name, id);
+  return undefined;
+}
+
 /** A selected account remains the owner after a different account becomes active. */
 function stillConfigured(config: OcxConfig, name: string, snapshot: OcxProviderConfig): boolean {
   const current = config.providers[name];
@@ -47,11 +81,19 @@ function stillConfigured(config: OcxConfig, name: string, snapshot: OcxProviderC
     || (current.authMode !== undefined && current.authMode !== "key")
     || current.adapter !== snapshot.adapter || current.baseUrl !== snapshot.baseUrl) return false;
   const reference = selection.reference;
+  // An external keychain replacement is not observable without another OS read.
+  if (isKeychainReference(reference)) return false;
   if (current.apiKeyPool?.length) {
     const row = current.apiKeyPool.find(entry => entry.id === selection.entryId && entry.key === reference);
     if (!row || row.disabled) return false;
   } else if (current.apiKey !== reference) return false;
-  return resolveProviderApiKeyPassively(reference) === snapshot.apiKey;
+  const id = selection.entryId ?? keyId(reference);
+  const key = resolveProviderApiKeyPassively(reference);
+  if (key !== snapshot.apiKey) {
+    currentOwner(name, current, id, reference);
+    return false;
+  }
+  return true;
 }
 
 /** Record only a configured key at the final destination and credential boundary. */
@@ -88,7 +130,9 @@ export function passiveKeyPhysicalFetch(
       if (owned && vendor && model) {
         const reference = snapshot._apiKeyAttempt!.reference!;
         const id = snapshot._apiKeyAttempt!.entryId ?? keyId(reference);
-        reservation = passiveKeyLimits.reserve({ owner: identity(name, snapshot, id, reference, key), provider: vendor, model, namespace: name, account: accountScope(name, id) }, attempt);
+        const owner = identity(name, snapshot, id, reference, key);
+        remember(name, id, owner);
+        reservation = passiveKeyLimits.reserve({ owner, provider: vendor, model, namespace: name, account: accountScope(name, id) }, attempt);
       }
     } catch { /* Reservation failure cannot prevent a proxied send. */ }
     try {
@@ -110,13 +154,12 @@ export function passiveKeyPhysicalFetch(
 export function getPassiveKeyLimits(config: OcxConfig, name: string, model: string) {
   const provider = config.providers[name];
   if (!provider || (provider.authMode !== undefined && provider.authMode !== "key") || !provider.apiKey) return [];
-  const key = resolveProviderApiKeyPassively(provider.apiKey);
-  if (!key) return [];
   let vendor: PassiveKeyProvider | undefined;
   try { vendor = destinations.get(new URL(provider.baseUrl).origin); } catch { return []; }
   if (!vendor) return [];
   const id = provider.apiKeyPool?.find(entry => entry.key === provider.apiKey)?.id ?? keyId(provider.apiKey);
-  return passiveKeyLimits.get({ owner: identity(name, provider, id, provider.apiKey, key), provider: vendor, model }, Date.now());
+  const owner = currentOwner(name, provider, id, provider.apiKey);
+  return owner ? passiveKeyLimits.get({ owner, provider: vendor, model }, Date.now()) : [];
 }
 
 /** Cached-only projection, scoped to configured account IDs and without credential material. */
@@ -130,12 +173,14 @@ export function listPassiveKeyLimits(config: OcxConfig) {
     const entries = provider.apiKeyPool?.length ? provider.apiKeyPool : provider.apiKey
       ? [{ id: keyId(provider.apiKey), key: provider.apiKey }] : [];
     for (const entry of entries) {
-      if ("disabled" in entry && entry.disabled) continue;
-      const key = resolveProviderApiKeyPassively(entry.key);
-      if (!key || (vendor === "openai" && !key.startsWith("sk-"))) continue;
-      for (const reading of passiveKeyLimits.list(identity(name, provider, entry.id, entry.key, key), vendor, Date.now())) {
-        result.push({ provider: name, keyId: entry.id, ...reading });
-      }
+      try {
+        if ("disabled" in entry && entry.disabled) continue;
+        const owner = currentOwner(name, provider, entry.id, entry.key);
+        if (!owner) continue;
+        for (const reading of passiveKeyLimits.list(owner, vendor, Date.now())) {
+          result.push({ provider: name, keyId: entry.id, ...reading });
+        }
+      } catch { /* One invalid account cannot reject the whole projection. */ }
     }
   }
   return result;

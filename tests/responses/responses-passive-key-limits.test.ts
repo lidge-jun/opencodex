@@ -8,9 +8,32 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import * as observations from "../../src/providers/passive-key-observation";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { ManagementRequest } from "../helpers/management-auth";
+import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
+import { routedProviderConfig } from "../../src/providers/routed-config";
+import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("provider quotas isolate a malformed unobserved keychain account", async () => {
+  const config = getDefaultConfig();
+  config.providers = { fixture: { adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authMode: "key",
+    apiKey: "synthetic-key", apiKeyPool: [{ id: "good", key: "synthetic-key" }, { id: "bad", key: "keychain:fixture/bad" }],
+    models: ["model"], liveModels: false } };
+  let reads = 0, sends = 0;
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => { reads++; return '{"type":"service_account","private_key":"synthetic"}'; }, setPassword: () => {}, deletePassword: () => false }));
+  try {
+    const physical = markPassiveKeyTransparent((async () => { sends++; return new Response(null, { headers: { "x-ratelimit-remaining-requests": "5" } }); }) as typeof fetch);
+    const send = observations.passiveKeyPhysicalFetch(physical, config, "fixture", routedProviderConfig("fixture", config.providers.fixture!));
+    await send("https://api.groq.com/openai/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer synthetic-key" }, body: JSON.stringify({ model: "model" }) });
+    const url = new URL("http://localhost/api/provider-quotas");
+    const report = await handleManagementAPI(new ManagementRequest(url), url, config);
+    expect(report!.status).toBe(200);
+    expect((await report!.json()).passiveKeyLimits).toMatchObject([{ provider: "fixture", keyId: "good", model: "model" }]);
+    expect(reads).toBe(0);
+    expect(sends).toBe(1);
+  } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
+});
 
 test("a proxied response without rate headers publishes unknown Groq dimensions without a probe", async () => {
   const config = getDefaultConfig();

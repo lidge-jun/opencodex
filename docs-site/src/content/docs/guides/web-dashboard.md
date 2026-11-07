@@ -136,7 +136,9 @@ is visible) and never forces an upstream refresh.
   as **Unknown**, including when the response has no rate-limit headers. Prior measured values
   retain their original observation time and become stale at their reset; the server retains each
   observation for at most 24 hours. A failed dashboard poll can still show the previous snapshot.
-  These display-only readings do not trigger probes or affect routing.
+  These display-only readings do not trigger probes or affect routing. Readings for keys stored in
+  the OS keychain are withheld because the current key cannot be verified without another keychain
+  read; literal and environment-referenced keys can still show passive readings.
 - Providers with neither a quota report nor a retained passive key observation are left out. The bar
   is hidden when neither is available.
 - The right edge shows when the dashboard last read the reports. It turns amber when the latest
