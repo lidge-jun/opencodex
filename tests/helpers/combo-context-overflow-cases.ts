@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { isComboTargetInCooldown } from "../../src/combos";
-import { isDefiniteContextOverflow } from "../../src/combos/failover";
+import { comboFailureCooldownScope, isDefiniteContextOverflow } from "../../src/combos/failover";
 
 interface ComboHarness<Server> {
   serve(handler: () => Response | Promise<Response>): Server;
@@ -39,6 +39,14 @@ export function registerComboContextOverflowCases<Server>({
     // A relay that serializes a Python SDK exception quotes the provider verdict inside a dict repr.
     "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
+    JSON.stringify({ code: "invalid-argument", error: "Failed to start sampling: [input_too_large] The prompt is too long for this model's context window (555817 tokens > 500000 tokens)" }),
+    "The conversation has exceeded this model's context limit.",
+    "The input is not malformed; the input exceeds the model's context limit.",
+    "This input is beyond the context window for the selected model.",
+    "The request has reached the model context length limit.",
+    "Total tokens must not exceed the context window: 9000 > 8192",
+    // Devin's opaque context-window refusal: emitted as a structured event with code context_length_exceeded.
+    "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
   ]) {
     test(`context-length 400 advances once without cooling: ${message}`, async () => {
       const hits: string[] = [];
@@ -93,9 +101,24 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
       message: "Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { message: 'Invalid value for "user": "maximum context length" is not allowed.' } }),
+    "The model's context cache is full",
+    "Model context service is at capacity, please retry later",
+    "The model's context window is not full; the request is invalid",
+    "Your input does not exceed the context window",
+    "Your input does not actually exceed the context window",
+    "Unsupported parameter: user; supplied value 'The conversation has exceeded this model's context limit.'",
+    JSON.stringify({ error: { code: "invalid_value", param: "tools[0].function.name" },
+      last_error: "The conversation has exceeded this model's context limit." }),
+    JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
+      response: { error: "The conversation has exceeded this model's context limit." } }),
+    JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
+      error: "The conversation has exceeded this model's context limit." }),
+    JSON.stringify({ response: { code: "invalid_value", param: "tools[0].function.name",
+      error: "The conversation has exceeded this model's context limit." } }),
     JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
       message: "Invalid 'tools[0].function.name': 'customer's prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { param: "tools[0].function.name", message: "customer's prompt is too long" } }),
+    JSON.stringify({ error: { type: "invalid_request_error", param: "tools[0].function.name", message: "The conversation has exceeded this model's context limit." } }),
     "Invalid 'tools[0].function.name': 'customer\\'s prompt is too long'.",
     SDK_VALIDATION,
     JSON.stringify({ error: { type: "invalid_request_error", message: SDK_VALIDATION } }),
@@ -147,11 +170,47 @@ export function registerComboContextOverflowCases<Server>({
     expect(isDefiniteContextOverflow(400, "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}")).toBe(true);
     expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { param: "messages", code: "context_length_exceeded",
       message: "This model's maximum context length is 8192 tokens." } }))).toBe(true);
+    for (const message of [
+      "The conversation has exceeded this model's context limit.",
+      "The input is not malformed; the input exceeds the model's context limit.",
+      "Request was not accepted because the input exceeds the context window.",
+      "No tokens remain and the model's context window is full.",
+      "It is not a timeout! The model's context window is full.",
+      "It is not a timeout?\nThe model's context window is full.",
+      "This input is beyond the context window for the selected model.",
+      "The request has reached the model context length limit.",
+      "The model's context window is full.",
+      "This model's context limit has been exceeded.",
+      "Total tokens must not exceed the context window: 9000 > 8192",
+      "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
+    ]) {
+      expect(isDefiniteContextOverflow(400, message)).toBe(true);
+      expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { message } }))).toBe(true);
+    }
+    // String-valued `error` envelopes use the bounded leaf fallback.
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "This model's maximum context length is 8192 tokens." }))).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Please reduce the length of the messages or completion." }))).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Failed to start sampling: [input_too_large] The prompt is too long for this model's context window (555817 tokens > 500000 tokens)" }))).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Invalid 'tools[0].function.name': 'prompt is too long'" }))).toBe(false);
+    expect(comboFailureCooldownScope(503, "Model context service is at capacity, please retry later")).toBe("target");
     for (const echo of [
+      "The model's context cache is full",
+      "Model context service is at capacity, please retry later",
       JSON.stringify({ error: { code: "invalid_value", message: "customer's prompt is too long" } }),
       JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),
       "Invalid 'tools[0].function.name': 'customer's prompt is too long'.",
       'Invalid value for "user": "maximum context length" is not allowed.',
+      "Unsupported parameter: user; supplied value 'The conversation has exceeded this model's context limit.'",
+      "The model's context window is not full; the request is invalid",
+      "The input does not exceed the allowed limit; the context window is available.",
+      "Your input does not exceed the context window",
+      "Your input does not actually exceed the context window",
+      JSON.stringify({ error: { code: "invalid_value", param: "tools[0].function.name" },
+        last_error: "The conversation has exceeded this model's context limit." }),
+      JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
+        response: { error: "The conversation has exceeded this model's context limit." } }),
+      JSON.stringify({ code: "invalid_value", param: "tools[0].function.name",
+        error: "The conversation has exceeded this model's context limit." }),
       SDK_VALIDATION,
       "Invalid tool name: \u2018prompt is too long\u2019.",
       "Invalid tool name: 'prompt is too long",

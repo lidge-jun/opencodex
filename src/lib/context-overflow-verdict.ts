@@ -22,6 +22,17 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "too many tokens",
 ];
 
+/** Provider wording that says the conversation has reached/passed its model's context capacity. */
+const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
+  /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at(?:\s+or\s+past)?|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b[^;!?\n.]{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted)\b/i,
+];
+
+/** Explicit provider wording that an input is too long for a model's context capacity. */
+const CONTEXT_WINDOW_TOO_LONG_VERDICTS: readonly RegExp[] = [
+  /\b(?:prompt|input|request|messages?)\s+(?:is|are|was|were)\s+too\s+long\s+for\b[^;!?\n.]{0,60}\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+];
+
 /**
  * Short provider verdicts that a validation error could otherwise echo as the caller's own value
  * (#7443). Each counts only at the very start of the provider's leaf message, after JSON envelopes
@@ -50,6 +61,7 @@ const CONTEXT_PARAM = new RegExp(`^(?:${CONTEXT_PARAM_NAMES})(?:$|[.[])`, "i");
 const PARAMETER_VALIDATION_CODES: ReadonlySet<string> = new Set(["invalid_value", "invalid_type"]);
 const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
   /\binvalid_(?:value|type)\b/i,
+  /\bunsupported\s+parameter\b/i,
   new RegExp(`['"]param['"]\\s*:\\s*['"](?!(?:${CONTEXT_PARAM_NAMES})(?:['".[]))`, "i"),
   /\binvalid\s+(?:value\s+for\s+)?['"`\u2018\u201c]/i,
   /\binvalid\s+(?:tool|function|parameter|argument|field|value)\b/i,
@@ -62,10 +74,69 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
   return typeof record.param === "string" && record.param.length > 0 && !CONTEXT_PARAM.test(record.param);
 }
 
+const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/i;
+
+/** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
+function isNegatedAt(text: string, start: number, end: number): boolean {
+  const matchSlice = text.slice(start, end);
+  const lastBoundary = Math.max(
+    matchSlice.lastIndexOf(";"),
+    matchSlice.lastIndexOf("."),
+    matchSlice.lastIndexOf("!"),
+    matchSlice.lastIndexOf("?"),
+    matchSlice.lastIndexOf("\n"),
+  );
+  const verdictClause = lastBoundary !== -1 ? matchSlice.slice(lastBoundary + 1) : matchSlice;
+  const nonModalVerdict = verdictClause
+    .replace(/\b(?:must|may|shall)\s+(?:not|never)\b/gi, "")
+    .replace(/\b(?:mustn)['\u2019]t\b/gi, "");
+  if (NEGATED_CONTEXT_VERDICT.test(nonModalVerdict)) return true;
+  // Phrase matches can begin at the verb and omit its negating auxiliary (`does not exceed`).
+  // Check only a directly attached negator so unrelated wording such as `No tokens remain and
+  // the model's context window is full` still counts as an affirmed overflow verdict.
+  const before = text.slice(Math.max(0, start - 48), start);
+  const lastClauseBoundary = Math.max(
+    before.lastIndexOf(";"),
+    before.lastIndexOf("."),
+    before.lastIndexOf("!"),
+    before.lastIndexOf("?"),
+    before.lastIndexOf("\n"),
+  );
+  const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary + 1) : before;
+  // Modal prohibitions ("must not exceed", "may not exceed", "shall not exceed") describe the limit
+  // that was violated rather than asserting the absence of an overflow.
+  if (/\b(?:must|may|shall)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:mustn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)) {
+    return false;
+  }
+  return /\b(?:not|no|never|neither|nor)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|might)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore);
+}
+
+function hasAffirmedVerdict(text: string, verdict: RegExp): boolean {
+  const flags = verdict.flags.includes("g") ? verdict.flags : `${verdict.flags}g`;
+  const globalVerdict = new RegExp(verdict.source, flags);
+  for (const match of text.matchAll(globalVerdict)) {
+    const start = match.index ?? 0;
+    if (!isNegatedAt(text, start, start + match[0].length)) return true;
+  }
+  return false;
+}
+
+function hasAffirmedPhrase(text: string, phrase: string): boolean {
+  for (let start = text.indexOf(phrase); start !== -1; start = text.indexOf(phrase, start + 1)) {
+    if (!isNegatedAt(text, start, start + phrase.length)) return true;
+  }
+  return false;
+}
+
 function isDefiniteContextOverflowMessage(text: string): boolean {
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
-    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
+    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => hasAffirmedPhrase(normalized, phrase))
+    || CONTEXT_WINDOW_POSITION_VERDICTS.some(verdict => hasAffirmedVerdict(text, verdict))
+    || CONTEXT_WINDOW_TOO_LONG_VERDICTS.some(verdict => hasAffirmedVerdict(text, verdict))
     || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 
@@ -106,8 +177,32 @@ export function isDefiniteContextOverflow(status: number, message: string, match
       .find((candidate): candidate is Record<string, unknown> =>
         !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
         && typeof (candidate as Record<string, unknown>).message === "string");
-    if (!source || isParameterValidationRecord(source)) return false;
-    text = (source.message as string).trim();
+    if (source) {
+      if (isParameterValidationRecord(source)) return false;
+      text = (source.message as string).trim();
+      continue;
+    }
+    // Some gateways put their complete diagnostic in a string-valued `error` field rather
+    // than the usual `{ error: { message } }` envelope. Read only that bounded leaf; a code
+    // elsewhere in the JSON still cannot establish an overflow by itself.
+    const errorTextSource = [
+      { owner: record, value: record.error },
+      ...(response ? [
+        { owner: response, value: response.error },
+        { owner: response, value: response.last_error },
+      ] : []),
+      { owner: record, value: record.last_error },
+    ].find(candidate => typeof candidate.value === "string");
+    if (!errorTextSource || typeof errorTextSource.value !== "string") return false;
+    // A string-valued leaf can sit inside `response.error` while the outer envelope carries
+    // the validation code. Check both records before trusting the leaf's context wording.
+    const errorObject = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+      ? record.error as Record<string, unknown>
+      : undefined;
+    if (isParameterValidationRecord(record)
+      || (errorObject !== undefined && isParameterValidationRecord(errorObject))
+      || isParameterValidationRecord(errorTextSource.owner)) return false;
+    text = errorTextSource.value.trim();
   }
   return false;
 }
