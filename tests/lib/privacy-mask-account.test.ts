@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { emailMaskingEnabled, maskAccountId, maskEmail, projectEmail } from "../../src/lib/privacy";
+import { emailMaskingEnabled, maskAccountId, maskEmail, maskedAccountLabel, projectEmail } from "../../src/lib/privacy";
+
+test("account display labels omit malformed identities and mask valid addresses", () => {
+  expect(maskedAccountLabel("person@example.test")).toBe("p***n@example.test");
+  expect(maskedAccountLabel("a@domain")).toBe("*@domain");
+  for (const value of [undefined, "", "not-an-email", "a@@example.test", "a@-bad.test", "a@bad..test", "a@example.test\nextra", "x".repeat(255) + "@example.test"]) {
+    expect(maskedAccountLabel(value)).toBeUndefined();
+  }
+});
 
 describe("maskAccountId", () => {
   test("redacts long account ids to account-…suffix", () => {

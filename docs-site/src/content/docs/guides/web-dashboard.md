@@ -79,6 +79,23 @@ missing credential — the proxy did not recognise the request as loopback. Open
 the address the proxy prints on startup (usually `http://127.0.0.1:<port>`), and prefer that exact
 host and port over a LAN IP or an alias.
 
+## Classic dashboard
+
+The dashboard was redesigned: its sidebar now groups pages into **Everyday**, **Set up** and
+**Fine-tuning**, and it opens on a Home page. The previous design stays available as the
+**classic dashboard** at `/classic/` on the same proxy, for example `http://127.0.0.1:10100/classic/`.
+
+- To switch, select the clock icon (**Classic dashboard**) beside the theme switch at the foot of
+  the sidebar. The classic sidebar has **New dashboard** at the top of its foot to come back.
+- The choice is remembered per browser, so opening `/` later lands on the dashboard you picked.
+  The desktop app follows the same choice. The tray popover always uses the new design.
+- The classic dashboard is a snapshot of the previous design. It talks to the same proxy and
+  changes the same settings, but pages and settings added after the redesign appear only in the
+  new dashboard.
+
+The sidebar rows described under [Dashboard layout](#dashboard-layout) are the classic
+dashboard's.
+
 ## Dashboard layout
 
 The sidebar has eight rows, in order: **Dashboard**, **Connect**, **Codex**, **Providers**, **Models**, **Subagents**, **Usage & Logs**, and **Remote Link**. **Connect** opens the page headed **Connect**, with its tab strip ordered **Codex**, **Claude**, **Claude Desktop**, **Grok Build**, then the remaining integrations. Claude has no sub-tabs; it shows the Claude Code settings directly. Claude Desktop is a separate Connect tab at `#claude/desktop`. Connect has no section switcher. **Subagents** opens Subagents and groups Subagents and Advisor (`#advisor`) with a pill-shaped section switcher. **Usage & Logs** opens Usage and groups Usage, Logs & Debug, and Storage with a pill-shaped section switcher. The last row, **Remote Link**, groups Remote Link (`#remote`) and Remote Workspace (`#remote-workspace`, when available) with the same switcher. **Codex** is the renamed **Codex Set** row; the preserved URLs include `#codex-set`, `#claude`, `#claude/code`, and `#claude/desktop`; the former `#claude/settings` bookmark opens Code. The former `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Startup (`#startup`) stays outside the sidebar.
@@ -154,6 +171,20 @@ failover can still select another usable account with the pool off. A committed 
 selection updates the dashboard immediately; account changes do not wait for the quota refresh
 timer. Requests already sent upstream retain their original credentials.
 
+### Usage by app
+
+Usage opens with **All apps**, **All devices**, and **30d** selected within
+the current access scope. You can narrow the app, device, or time range while the page is
+open; reopening it restores these defaults.
+
+With **All apps** selected, **Apps** appears after Models and Providers. It shows each app's
+share of total tokens, token count, estimated API list-price cost, request count, and measured
+request count for the selected devices and time range. Codex CLI, desktop, and IDE usage is
+grouped under Codex. Historical records without client attribution appear as **Unclassified**,
+separately from **Unknown** and **Other**. Selecting one app hides this breakdown. A proxy
+that does not supply the breakdown shows it as unavailable; an empty breakdown means no app
+usage in the report.
+
 ### Filtering request logs
 
 Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
@@ -166,7 +197,13 @@ its request and attempt failure cause is `transport-ambiguous`, with resend perm
 A Codex move to another account after HTTP 402 appears as **Account quota exhausted (402)**
 in the attempt's recovery details and counts as a quota recovery in exported metrics.
 
-Logs filters combine surface, intercepted requests, provider, exact model, status, time,
+Logs shows all apps together, with an icon-only client chip on each request instead of
+app tabs. Recognized clients use their SVG logos; unknown or other clients use a neutral
+question-mark icon. App names remain available to screen readers without visible text.
+Missing client attribution does not imply Codex or a request failure. The chip identifies
+the client app, independently of the provider and protocol, and is not an app filter.
+
+Logs filters combine intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces
 but does not match partial names. Choices that disappear from the ring reset to All.
@@ -198,9 +235,8 @@ Historical logs are not rewritten and missing generation timestamps are not inve
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all
-rows and returns keyboard focus to the All surface control; “No matching requests”
-differs from an empty log ring. Use arrow keys or Home/End in
-the surface selector. These controls do not query historical records beyond the loaded ring.
+rows; “No matching requests” differs from an empty log ring. These controls do not query
+historical records beyond the loaded ring.
 
 The language picker includes **Português** (Brazilian Portuguese, `pt-BR`). Portuguese browser languages select it automatically unless a supported language preference is already saved.
 

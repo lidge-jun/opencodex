@@ -58,8 +58,10 @@ own state in the selected home; this feature creates no OpenCodex store.
 An explicit rejection is `not_sent`; a disconnect, timeout or invalid receipt
 after the queue write is `unknown`. Never replay an uncertain send. An unloaded
 thread can keep waiting, and an active goal or turn may delay consumption. The
-host does not wake an unloaded thread or read the resulting answer. Verify those
-behaviors in your installed app/CLI combination before relying on delivery.
+host does not wake an unloaded thread. The default queue tools do not read the
+resulting answer; see [Opt-in stored turn replies](#opt-in-stored-turn-replies)
+for explicit answer reading. Verify delivery behavior in your installed app/CLI
+combination before relying on it.
 
 One host allows at most four simultaneous helper calls. Each operation has a
 20-second budget including executable validation, with a 12-second RPC deadline
@@ -72,7 +74,64 @@ peer text is context, never proof of user approval or delegated authority.
 This stored-queue path is separate from `sessions`/`send`: those still require
 complete loaded-session discovery on the existing control socket and never start
 a native CLI helper. Remote peers, Claude inbox transport, persistent handoffs,
-answer readback, steering and automatic client configuration are outside this host.
+automatic reply delivery, steering and automatic client configuration are outside this host.
+
+## Opt-in stored turn replies
+
+Add `--allow-reply-read` to the MCP host's existing arguments to expose a third
+tool, `codex_read_reply`. Without this flag the existing two-tool surface and
+metadata-only discovery stay unchanged. This option explicitly permits conversation
+text to reach the MCP client; local-user access to the selected home is not
+per-project/thread authorization. A client message ID is correlation data, not a
+credential or proof of user permission.
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read
+```
+
+Call `codex_read_reply` with the exact `threadId` and the `clientMessageId` from a
+queue receipt. Each call searches at most one page of 50 stored items. A matched
+input identifies a turn, and the tool returns one page of that turn's explicit
+`final_answer` agent texts. It omits user bodies, reasoning, commands, citations
+and tool outputs. The entire call has a shared 20-second budget across up to
+three sequential helpers, plus owned cleanup. Each helper retains the existing
+12-second RPC deadline and 1 MiB output cap. Text is limited to 16 KiB per result
+page, with valid UTF-8 and an explicit per-item `truncated` flag. `nextCursor`
+continues items, not omitted bytes of a truncated item.
+
+Results distinguish these observations:
+
+- `observed`: the input was matched. `replies` can still be empty. The association
+  is always `same_turn_not_exclusive`: the result contains final texts from the
+  same turn, not a certified answer solely to that input. Text can precede a later
+  input in a shared turn. `turnStatus` is observed from the newest 50 turn summaries,
+  or `unverified` when outside that window; a completed turn does not complete a goal.
+- `not_observed`: no matching input in this search page. This does not mean
+  non-delivery, deletion or no response. `reachedHistoryEnd` describes this search
+  position, not delivery or processing. Continue a non-null `nextCursor` to search older items.
+- `ambiguous`: multiple matching inputs occurred in the search page. No text is returned.
+- `available: false`: disabled access, invalid input/cursor, malformed history,
+  an unavailable/unsupported native method, cancellation or another read failure.
+  Native diagnostics are not exposed and failures are not empty successes.
+
+Pass `nextCursor` back as `cursor` to continue a search or matched-turn page.
+After a match, `refreshCursor` rescans that turn from its beginning, allowing
+an item that was partial earlier to appear when finalized later. Revisit all
+pages when refreshing long turns. Keep/update item IDs in the caller to avoid
+duplicates; the host adds no persistent inbox or background polling. A null
+`nextCursor` ends only the current history snapshot, not future output.
+
+Cursors are bounded, caller-owned position data bound to both request IDs. They
+are not signed permissions. A matched-turn continuation re-reads the user item to
+check its ID, turn and client correlation before projecting turn text. Stale,
+malformed or cross-scope positions fail closed rather than restarting all history.
+The native methods are `thread/items/list`, `thread/items/read` and
+`thread/turns/list`, with no resume, steer, turn start or queue mutation.
+
+This opt-in contract was observed with Codex CLI 0.166.0. Older builds or legacy
+stores can be unavailable; there is no unbounded full-history fallback. These
+reads do not prove recipient liveness, goal completion or Claude Desktop registration,
+and do not add automatic reply delivery or a reverse Claude transport.
 
 ## Discover and send
 

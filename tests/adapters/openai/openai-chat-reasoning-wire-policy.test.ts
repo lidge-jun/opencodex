@@ -300,6 +300,107 @@ describe("toggle-only Chat reasoning capability", () => {
   });
 
   test.each([
+    ["max", undefined], ["ultra", undefined], ["max", "gateway-object"], ["ultra", "gateway-object"],
+  ] as const)("native dual-axis wire omits the aliased %s effort on %s", (effort, reasoningWireFormat) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const explicit of [undefined, false, true]) {
+      const raw = { ...request(effort), ...(explicit === undefined ? {} : { reasoning: { enabled: explicit } }) };
+      const body = JSON.parse(buildOpenAIChatPassthroughRequest(target, raw, toggleModel, false).body);
+      expect(body.thinking).toEqual({ type: explicit === false ? "disabled" : "enabled" });
+      expect(body.reasoning_effort).toBeUndefined();
+      expect(body.reasoning).toBeUndefined();
+    }
+  });
+
+  test.each([
+    [undefined, undefined], [undefined, false], [undefined, true],
+    ["gateway-object", undefined], ["gateway-object", false], ["gateway-object", true],
+  ] as const)("dual-axis %s omits ultra before ladder clamping with thinking override %s", (reasoningWireFormat, thinkingEnabled) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["low", "high"] },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const effort of ["max", "ultra"]) {
+      for (const body of Object.values(finalToggleBodies(request(effort), target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning_effort).toBeUndefined();
+        expect(body.reasoning).toBeUndefined();
+      }
+    }
+  });
+
+  test.each([undefined, "gateway-object"] as const)("dual-axis %s still clamps ultra when max has no omission alias", reasoningWireFormat => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["low", "high"] },
+    };
+    for (const thinkingEnabled of [undefined, false, true]) {
+      for (const body of Object.values(finalToggleBodies(request("ultra"), target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning_effort).toBe(reasoningWireFormat ? undefined : "high");
+        expect(body.reasoning).toEqual(reasoningWireFormat ? { enabled: thinkingEnabled !== false, effort: "high" } : undefined);
+      }
+    }
+  });
+
+  test.each([undefined, "gateway-object"] as const)("disabled toggle omits aliased ultra on %s", reasoningWireFormat => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: false, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["low", "high"] },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const thinkingEnabled of [undefined, false, true]) {
+      for (const body of Object.values(finalToggleBodies(request("ultra"), target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toBeUndefined();
+        expect(body.reasoning_effort).toBeUndefined();
+        expect(body.reasoning).toBeUndefined();
+      }
+    }
+  });
+
+  test("native dual-axis wire preserves explicitly supported ultra despite the max omission alias", () => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["high", "max", "ultra"] },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const thinkingEnabled of [undefined, false, true]) {
+      const bodies = finalToggleBodies(request("ultra"), target, toggleModel, thinkingEnabled);
+      expect(bodies.native.reasoning_effort).toBe("ultra");
+      expect(bodies.translated.reasoning_effort).toBeUndefined();
+      for (const body of Object.values(bodies)) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning).toBeUndefined();
+      }
+    }
+  });
+
+  test.each([
+    ["https://gateway.example.test/v1", undefined], ["https://gateway.example.test/v1", false], ["https://gateway.example.test/v1", true],
+    ["https://api.openai.com/v1", undefined], ["https://api.openai.com/v1", false], ["https://api.openai.com/v1", true],
+  ] as const)("dual gateway %s omits aliased none with thinking override %s", (baseUrl, thinkingEnabled) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, baseUrl, reasoningWireFormat: "gateway-object",
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      modelReasoningEffortMap: { [toggleModel]: { none: "__omit__" } },
+    };
+    for (const body of Object.values(finalToggleBodies(request("none"), target, toggleModel, thinkingEnabled))) {
+      expect(body.thinking).toEqual({ type: thinkingEnabled === true ? "enabled" : "disabled" });
+      expect(body.reasoning_effort).toBeUndefined();
+      expect(body.reasoning).toBeUndefined();
+    }
+  });
+
+  test.each([
     [undefined, false], [undefined, true],
     ["gateway-object", false], ["gateway-object", true],
   ] as const)("dual controls retain %s effort policy with tools=%s", (reasoningWireFormat, hasTools) => {

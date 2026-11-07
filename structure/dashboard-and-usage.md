@@ -165,7 +165,7 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`.
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
 
 ### Upstream key account attribution
 
@@ -180,7 +180,7 @@ identity; rotating the secret behind the same reference preserves the logical ac
 `src/usage/jev-stats.ts` owns the parallel content-free JEV projection; its accumulator contract lives in [providers/jev-decision.md](./providers/jev-decision.md).
 
 `src/providers/label.ts` stamps only key authentication, including implicit custom-provider
-keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
+keys. `src/server/request-log.ts` (with recovery markers in `src/server/request-log-attempt-recovery.ts`) commits identity at dispatch after queued selection changes,
 retains separate flat records when retries change keys, and isolates each record's raw usage
 from parent combo totals and adapter-loop aggregation. Reported failure usage is retained;
 missing usage and historical identities remain unknown. Native wire snapshots replace only the

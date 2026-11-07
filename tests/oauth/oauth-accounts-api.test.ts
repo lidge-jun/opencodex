@@ -299,6 +299,34 @@ describe("multiauth accounts API", () => {
     }
   });
 
+  test("GET provides a masked identity label even when email masking is disabled", async () => {
+    saveConfig({ ...baseConfig(), privacy: { maskEmails: false } });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; email?: string; maskedLabel?: string }> };
+      const first = body.accounts.find(account => account.id === "aaaa1111");
+      expect(first?.email).toBe("first@example.com");
+      expect(first?.maskedLabel).toBe("f***t@example.com");
+      expect(first?.maskedLabel).not.toBe(first?.email);
+    } finally { await server.stop(true); }
+  });
+
+  test("GET omits identity labels for malformed and absent stored emails", async () => {
+    const authPath = join(testDir, "auth.json");
+    const auth = JSON.parse(readFileSync(authPath, "utf8"));
+    auth.anthropic.accounts[0].credential.email = "not-an-email";
+    delete auth.anthropic.accounts[1].credential.email;
+    writeFileSync(authPath, JSON.stringify(auth), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      const body = await res.json() as { accounts: Array<{ maskedLabel?: string }> };
+      expect(body.accounts.map(account => account.maskedLabel)).toEqual([undefined, undefined]);
+    } finally { await server.stop(true); }
+  });
+
   test("GET includes projected health with redacted healthSummary", async () => {
     const server = startServer(0);
     try {

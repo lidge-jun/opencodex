@@ -1,122 +1,70 @@
 import { useI18n } from "../i18n/shared";
-import { IconRefresh } from "../icons";
 import { Switch } from "../ui";
-import type { DebugSettings, LogStream } from "./debug-shared";
+import { card, cardHint, cardTitle, quietButton } from "../components/v2-logs/classes";
+import type { DebugSettings } from "./debug-shared";
 import { isDebugFlagEnabled } from "./debug-shared";
 
+const FLAGS = ["debug", "usage", "injection", "claude"] as const;
+
+/*
+ * The four debug switches as one settings card: what the tab is for in one line, then a
+ * switch row per stream. Turning a stream on is what fills the live tail below.
+ */
 export function DebugSettingsPanel({
   debug,
   debugBusy,
-  stream,
   onSetFlag,
   onReset,
-  onStreamChange,
 }: {
   debug: DebugSettings;
   debugBusy: boolean;
-  stream: LogStream;
   onSetFlag: (flag: "debug" | "usage" | "injection" | "claude", enabled: boolean) => void;
   onReset: () => void;
-  onStreamChange: (stream: LogStream) => void;
 }) {
   const { t } = useI18n();
 
   return (
-    <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-          {(["debug", "usage", "injection", "claude"] as const).map(flag => {
-            const checked = isDebugFlagEnabled(debug, flag);
-            return (
-              <div key={flag} style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 220 }}>
-                <Switch
-                  on={checked}
-                  disabled={debugBusy}
-                  label={t(`debug.${flag}`)}
-                  onClick={() => onSetFlag(flag, !checked)}
-                />
-                <span className="text-control">{t(`debug.${flag}`)}</span>
-              </div>
-            );
-          })}
+    <section className={card} aria-labelledby="debug-logging-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 basis-80 flex-col gap-1">
+          <h3 id="debug-logging-title" className={cardTitle}>{t("logsV2.debugLogging")}</h3>
+          <p className={cardHint}>{t("debug.subtitle")}</p>
         </div>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={debugBusy} onClick={onReset}>
+        <button type="button" className={quietButton} disabled={debugBusy} onClick={onReset}>
           {t("debug.reset")}
         </button>
       </div>
 
-      {(debug.enabled || debug.usage || debug.injection) && (
-        <div style={{ display: "inline-flex", gap: 6, marginTop: 12 }}>
-          {debug.enabled && (
-            <button
-              type="button"
-              className={`btn btn-sm${stream === "provider" ? " btn-primary" : " btn-ghost"}`}
-              onClick={() => onStreamChange("provider")}
+      <div className="grid gap-2 sm:grid-cols-2">
+        {FLAGS.map(flag => {
+          const checked = isDebugFlagEnabled(debug, flag);
+          return (
+            <div
+              key={flag}
+              className="flex min-w-0 items-center gap-3 rounded-[10px] bg-bg px-3 py-2.5 ring-1 ring-inset ring-line"
             >
-              {t("debug.streamProvider")}
-            </button>
-          )}
-          {debug.usage && (
-            <button
-              type="button"
-              className={`btn btn-sm${stream === "usage" ? " btn-primary" : " btn-ghost"}`}
-              onClick={() => onStreamChange("usage")}
-            >
-              {t("debug.streamUsage")}
-            </button>
-          )}
-          {debug.injection && (
-            <button
-              type="button"
-              className={`btn btn-sm${stream === "injection" ? " btn-primary" : " btn-ghost"}`}
-              onClick={() => onStreamChange("injection")}
-            >
-              {t("debug.streamInjection")}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+              <Switch
+                on={checked}
+                disabled={debugBusy}
+                label={t(`debug.${flag}`)}
+                onClick={() => onSetFlag(flag, !checked)}
+              />
+              <span className="min-w-0 text-[13px] font-medium text-fg">{t(`debug.${flag}`)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
-export function DebugPageHeader({
-  embedded,
-  refreshing,
-  streamEnabled,
-  follow,
-  onRefresh,
-  onFollowChange,
-}: {
-  embedded?: boolean;
-  refreshing: boolean;
-  streamEnabled: boolean;
-  follow: boolean;
-  onRefresh: () => void;
-  onFollowChange: (follow: boolean) => void;
-}) {
+/** Standalone page title; the embedded tab already sits under the Logs & Debug heading. */
+export function DebugPageHeader({ embedded }: { embedded?: boolean }) {
   const { t } = useI18n();
-
+  if (embedded) return null;
   return (
-    <>
-      <div className={embedded ? "row" : "page-head"} style={embedded ? { justifyContent: "flex-end", marginBottom: 4 } : undefined}>
-        {!embedded && <h2>{t("debug.title")}</h2>}
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={refreshing || !streamEnabled}
-            onClick={onRefresh}
-          >
-            <IconRefresh /> {t("debug.refresh")}
-          </button>
-          <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <input type="checkbox" checked={follow} onChange={e => onFollowChange(e.target.checked)} />
-            {t("debug.follow")}
-          </label>
-        </div>
-      </div>
-      <p className="page-sub">{t("debug.subtitle")}</p>
-    </>
+    <div className="page-head">
+      <h2>{t("debug.title")}</h2>
+    </div>
   );
 }

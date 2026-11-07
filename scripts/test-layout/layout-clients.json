@@ -1,4 +1,5 @@
 {
+  "claude-endpoint-lifetime.test.ts": "claude-integration",
   "omo-responses-loop.test.ts": "clients",
   "codex-launcher-endpoint.test.ts": "codex-integration",
   "claude-translated-tool-restrictions.test.ts": "claude-integration",

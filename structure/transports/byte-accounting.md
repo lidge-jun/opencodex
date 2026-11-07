@@ -143,6 +143,12 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
+total, measuring only the arriving fragment instead of remeasuring retained chunks.
+Each new call starts at zero; transient replacement admission, per-call limits and
+close/cancellation release remain unchanged. `tests/providers/kiro/kiro-tool-byte-accounting.test.ts`
+bounds measurement work and covers Unicode byte limits and consecutive-call reset.
+
 Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
 its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
 removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps

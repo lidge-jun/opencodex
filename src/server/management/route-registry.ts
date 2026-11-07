@@ -289,6 +289,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/storage/trash", module: "server/management/logs-usage-routes", mutates: false },
   { method: "GET", path: "/api/storage/trash/restore/test-stream", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "test-seam", why: "Opt-in streaming seam declared at src/storage/restore-job.ts:34." } },
   { method: "GET", path: "/api/usage", module: "server/management/logs-usage-routes", mutates: false },
+  { method: "GET", path: "/api/usage/devices", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "session-only", why: "Device inventory requires a current dashboard session and refuses raw admin and data keys." } },
+  { method: "GET", path: "/api/usage/source-facets", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "session-only", why: "Usage source facets require a current dashboard session and refuse raw admin and data keys." } },
   // server/management/usage-timeline-routes
   { method: "GET", path: "/api/usage/timeline", module: "server/management/usage-timeline-routes", mutates: false },
   // server/management/advisor-routes
@@ -366,6 +368,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/oauth/logout", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/affinity-reset", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/alias", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/pause", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/auto-switch", module: "server/management/oauth-account-routes", mutates: true },

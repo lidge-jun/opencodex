@@ -109,9 +109,9 @@ known local endpoints before returning the normal not-running result.
 While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
 it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
 a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app
-started) or **Quit** to keep it stopped. For the same reason the dashboard's **Stop** button refuses
+started) or **Quit** to keep it stopped. For the same reason the dashboard's stop (the sidebar proxy lever pulled all the way down) refuses
 with `desktop_supervised`, and changes nothing, for a proxy the app started.
-The web dashboard's **Stop** button runs the same action (`POST /api/stop`) on every backend
+The web dashboard's stop lever runs the same action (`POST /api/stop`) on every backend
 except Windows Task Scheduler. There the wrapper can respawn the proxy after the task ends,
 and only a stop running outside the proxy can verify that restart window before restoring
 your client config — so the dashboard refuses with `respawnable_service`, changes nothing,
@@ -151,6 +151,12 @@ WinSW is stopped. A `wscript.exe`, `cscript.exe`, or `cmd.exe` process with an
 unreadable command line in the approved proxy's supervision chain (or surviving under the
 stopped manager) leaves wrapper ownership unknown, so the guarded stop cannot report success.
 Missing or unreadable evidence blocks the guarded stop.
+
+New runtime records include the bound hostname. For older records that omit it, a guarded
+stop accepts the discovered default loopback address only when the remaining approval and
+ownership checks agree. An omitted hostname cannot independently prove the listener's bind
+scope. When the record contains a hostname, it must match the approved value exactly;
+wildcard and loopback binds remain distinct.
 
 ### `ocx restart`
 
@@ -317,6 +323,33 @@ restart the proxy using the intended current installation; for a background serv
 `ocx service repair` would reload nothing and keep the old process serving. If the proxy is newer, upgrade the CLI
 or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
 change whether requests are allowed.
+
+If an update restart reports a blank hostname in the runtime record, it leaves the proxy running.
+Use `ocx status` and `ocx service status` as clues, not proof of ownership or the actual bind.
+Once ownership is verified, for a service use the owning installation's `ocx service restart`;
+for Desktop, use the app; for a foreground proxy, use its terminal. A standalone proxy started by `ocx ensure` may be
+detached and have no terminal:
+
+1. Independently verify the process identity, installation, home, supervisor and actual listening
+   address and port. Use OS process and listener inspection with sufficient permissions; check
+   IPv4, IPv6 and wildcard listeners as applicable. A PID alone can be reused, and missing or
+   incomplete inspection results do not prove ownership or absence. For example, on macOS or
+   Linux where `lsof` is available, `ps -p <pid> -o pid=,ppid=,args=` and
+   `lsof -nP -iTCP:<port> -sTCP:LISTEN` provide process and listener clues. They do not by
+   themselves establish the home, supervisor, or complete visibility; use the appropriate OS
+   tools and permissions to verify those separately.
+2. Only if those facts are verified and forced termination is acceptable, the owner can run
+   `ocx stop` from the owning installation and home. It tries a graceful stop first, but may
+   fall back to forced termination if that fails; it can also refuse, including when the blank
+   hostname prevents guarded ownership verification. Do not bypass a refusal.
+3. Independently confirm the identified process has exited, no supervisor will restart it,
+   and the intended address and port are free. A successful stop or a status result alone is
+   not proof of all three. Once confirmed, run `ocx start` from the intended installation and
+   home with the intended bind and port settings; a successful start regenerates the record.
+
+If any check is incomplete, the stop fails or is refused, or forced termination is unacceptable,
+stop and ask the owner or administrator to investigate. Do not edit the runtime record or kill
+unrelated processes. Retry the update restart if needed after the new proxy is running.
 
 Identical version strings and the `unknown` / `0.0.0` placeholders suppress the warning, as does
 an absent proxy version. Doctor does not report placeholders as a confirmed match. Different
@@ -560,10 +593,15 @@ upstream status but never consumes or resumes a grant.
 
 On a Remote Link Home, a successfully committed current catalog is also synced to eligible linked
 Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fanout/1` result with
-the Home outcome and each Child's state. A skipped Child is identified by its reason. The Home's
-own nonzero exit code is returned unchanged. When the Home exits 0, a failed or timed-out Child or
-an unreadable link store produces exit 6; otherwise the command exits 0, including when Children
-are skipped. An unreadable link store produces a path-free error in human output. Exit 7 is reserved
+the Home outcome and each Child's state. A connected Child skipped during fan-out includes its reason
+and an actionable `hint` in JSON and human output. Update OpenCodex on an older Child to at least
+2.93.0 using the installer that owns the selected `ocx`. For a Desktop install on headless Windows,
+use **Check for Updates** in the signed-in Desktop tray. A link
+mismatch may require re-linking the Child, while an updating Child can be retried after the update.
+The Home's own nonzero exit code is returned unchanged. When the Home exits 0, a connected Child
+skipped during fan-out, a failed or timed-out Child, or an unreadable link store produces exit 6.
+Intentional skips such as client-initiated links and `--local-only` keep their existing exit behavior.
+An unreadable link store produces a path-free error in human output. Exit 7 is reserved
 for an update in flight.
 If the Home sync throws in JSON mode, stdout still contains one result document and stderr gives a
 sanitized failure message.
