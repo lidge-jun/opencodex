@@ -10,6 +10,14 @@ import { readRouteIntentState, updateRouteIntentState } from "./route-intent-sta
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import type { OcxConfig } from "../types";
 
+/** Existing Aside ownership must be resolved explicitly, never projected as off. */
+export class HomeAsideIntentDerivationError extends Error {
+  constructor(cause: unknown) {
+    super("Existing Aside ownership needs an explicit Home route intent", { cause });
+    this.name = "HomeAsideIntentDerivationError";
+  }
+}
+
 export function readHomeRouteIntentState(config: OcxConfig, options: { store?: IntegrationStateStore; home?: string; state?: RouteIntentState } = {}): RouteIntentState {
   const state = structuredClone(options.state ?? readRouteIntentState());
   const store = options.store ?? createIntegrationStateStore();
@@ -26,28 +34,32 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
     state.defaults.aside = { enabled: true, accounts: "all" };
     return state;
   }
-  const raw: unknown = JSON.parse(readBoundedRegularFileSync(join(asideHomeDir(process.env, options.home ?? homedir()), "accounts.json"), 4 * 1024 * 1024).toString("utf8"));
-  if (!raw || typeof raw !== "object" || !("accounts" in raw) || !Array.isArray(raw.accounts)) throw new Error("existing Aside selection needs explicit route intent");
-  const slots = new Set(scopes.map(scope => scope.profileId));
-  if (records.aside) {
-    const root = asideHomeDir(process.env, options.home ?? homedir());
-    const owned = resolve(records.aside.configPath);
-    const matches = raw.accounts.filter((row: unknown) => row && typeof row === "object" && "id" in row
-      && typeof row.id === "number" && Number.isSafeInteger(row.id) && row.id >= 0
-      && resolve(join(root, "u", String(row.id), "models.json")) === owned);
-    if (matches.length !== 1) throw new Error("existing Aside owner needs explicit route intent");
-    slots.add(matches[0].id);
+  try {
+    const raw: unknown = JSON.parse(readBoundedRegularFileSync(join(asideHomeDir(process.env, options.home ?? homedir()), "accounts.json"), 4 * 1024 * 1024).toString("utf8"));
+    if (!raw || typeof raw !== "object" || !("accounts" in raw) || !Array.isArray(raw.accounts)) throw new Error("existing Aside selection needs explicit route intent");
+    const slots = new Set(scopes.map(scope => scope.profileId));
+    if (records.aside) {
+      const root = asideHomeDir(process.env, options.home ?? homedir());
+      const owned = resolve(records.aside.configPath);
+      const matches = raw.accounts.filter((row: unknown) => row && typeof row === "object" && "id" in row
+        && typeof row.id === "number" && Number.isSafeInteger(row.id) && row.id >= 0
+        && resolve(join(root, "u", String(row.id), "models.json")) === owned);
+      if (matches.length !== 1) throw new Error("existing Aside owner needs explicit route intent");
+      slots.add(matches[0].id);
+    }
+    const userIds: string[] = [];
+    for (const slot of slots) {
+      const row = raw.accounts.find((value: unknown) => value && typeof value === "object" && "id" in value && value.id === slot);
+      if (!row || typeof row !== "object" || !("userId" in row) || typeof row.userId !== "string") throw new Error("existing Aside selection needs explicit stable userIds");
+      userIds.push(row.userId);
+    }
+    const intent = parseRouteClientIntent({ enabled: true, accounts: [...new Set(userIds)] }, "aside");
+    if (!intent) throw new Error("existing Aside selection needs explicit stable userIds");
+    state.defaults.aside = intent;
+    return state;
+  } catch (cause) {
+    throw new HomeAsideIntentDerivationError(cause);
   }
-  const userIds: string[] = [];
-  for (const slot of slots) {
-    const row = raw.accounts.find((value: unknown) => value && typeof value === "object" && "id" in value && value.id === slot);
-    if (!row || typeof row !== "object" || !("userId" in row) || typeof row.userId !== "string") throw new Error("existing Aside selection needs explicit stable userIds");
-    userIds.push(row.userId);
-  }
-  const intent = parseRouteClientIntent({ enabled: true, accounts: [...new Set(userIds)] }, "aside");
-  if (!intent) throw new Error("existing Aside selection needs explicit stable userIds");
-  state.defaults.aside = intent;
-  return state;
 }
 
 /** Capture defaults before a local materializer changes legacy native switches or owners. */

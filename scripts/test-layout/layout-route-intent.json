@@ -12,6 +12,7 @@
   "home-route-intent-upgrade.test.ts": "clients",
   "link-home-route-intent.test.ts": "clients",
   "link-route-intent.test.ts": "server",
+  "management-route-intent-native-errors.test.ts": "server",
   "management-route-intent-native-review.test.ts": "server",
   "route-intent-aside.test.ts": "clients",
   "route-intent-claude-surface.test.ts": "clients",
