@@ -196,6 +196,15 @@ describe("remote-plant POSIX & Windows command contracts", () => {
     expect(purged.exitCode).toBe(0);
     expect(existsSync(plantedPath)).toBe(false);
 
+    // Preserves planted binary and returns nonzero when detach --purge fails (e.g. exit 4 conflict)
+    const failingScript = Buffer.from("#!/bin/sh\nif [ \"$1\" = \"detach\" ]; then exit 4; fi\necho \"opencodex 2.98.0\"\n", "utf8");
+    const failingSha = createHash("sha256").update(failingScript).digest("hex");
+    const failPlantArgv = remotePlantChildArgv("posix", failingScript.byteLength, failingSha);
+    expect(Bun.spawnSync([failPlantArgv[0]!, ...failPlantArgv.slice(1)], { env, stdin: failingScript }).exitCode).toBe(0);
+    const failedPurge = Bun.spawnSync([purgeArgv[0]!, ...purgeArgv.slice(1)], { env });
+    expect(failedPurge.exitCode).toBe(4);
+    expect(existsSync(plantedPath)).toBe(true);
+
     // Refuses symlinked .cache ancestor
     const symHome = join(scratch, "sym-remote-home");
     const targetCache = join(scratch, "real-cache");

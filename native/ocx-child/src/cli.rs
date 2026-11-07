@@ -1020,10 +1020,8 @@ pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> 
     };
     let _ = fs::remove_file(&paths.key_file);
     let _ = fs::remove_file(&paths.state_file);
-    drop(lock);
-    let _ = fs::remove_file(&paths.lock_file);
     let _ = fs::remove_dir(&paths.child_dir);
-    let _ = fs::remove_dir(&paths.opencodex_home);
+    drop(lock);
     let mut purged = false;
     if purge {
         let exe = match current_exe_override {

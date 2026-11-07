@@ -191,7 +191,8 @@ $rc=[OcxJob]::Run($dst,('"'+$dst+'" --version'));if($rc -ne 0){[IO.File]::Delete
 
 export function windowsPurgePlantedChildArgv(): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
-try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){[void][OcxJob]::Run($dst,('"'+$dst+'" detach --purge'))};try{[IO.File]::Delete($dst)}catch{$null=$_}};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
+$r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child"
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};try{[IO.File]::Delete($dst)}catch{$null=$_}}elseif([IO.File]::Exists("$cd\state.json")-or[IO.File]::Exists("$cd\codex-journal.json")){exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif([IO.File]::Exists("$cd\state.json")-or[IO.File]::Exists("$cd\codex-journal.json")){exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
 `);
 }
 
