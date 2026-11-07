@@ -1,12 +1,12 @@
 import type { UsageResponse } from "./usage-model";
-import { SOURCE_CLIENTS } from "./usage-source";
+import { USAGE_APPS } from "../../../../src/usage/app-breakdown";
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const optional = (row: Record<string, unknown>, names: string[], check: (value: unknown) => boolean) => names.every(name => row[name] === undefined || check(row[name]));
 const numeric = (row: Record<string, unknown>, names: string[]) => names.every(name => integer(row[name]));
-const appClients = new Set<string>([...SOURCE_CLIENTS.filter(client => client !== "all"), "unclassified"]);
+const appClients = new Set<string>(USAGE_APPS);
 
 function validApps(value: unknown): boolean {
   if (value === undefined) return true;

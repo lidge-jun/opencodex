@@ -832,6 +832,12 @@ function statusFromRequestFacts(facts: number): UsageStatus {
   return (statuses & REQUEST_REPORTED) !== 0 ? "reported" : "unreported";
 }
 
+/** A usage-less local or unsent attempt cannot make a request's usage unknown. */
+function attemptStatusFact(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number]): number {
+  return attempt.usage || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true)
+    ? requestStatusFact(attempt.usageStatus) : 0;
+}
+
 function blankRequestCounts(): UsageRequestCounts {
   return {
     requests: 0,
@@ -1089,6 +1095,7 @@ function projectedEntryForFilter(
     return filterMatchesAttribution(filter, attempt.provider, identity.model);
   });
   if (attempts.length === 0) return null;
+  const projectedStatus = attempts.length !== entry.attempts.length;
   const { usage: _parentUsage, totalTokens: _parentTotalTokens, spend: parentSpend, ...withoutParentUsage } = entry;
   return {
     entry: {
@@ -1098,6 +1105,7 @@ function projectedEntryForFilter(
       // reporting a full-request send count against a partial row.
       ...(parentSpend && attempts.length === entry.attempts.length ? { spend: parentSpend } : {}),
       attempts,
+      ...(projectedStatus ? { usageStatus: statusFromRequestFacts(attempts.reduce((facts, attempt) => facts | attemptStatusFact(attempt), 0)) } : {}),
       ...projectedComboUsage(attempts),
     },
     comboOverlap: entry.attempts.length > 1,
@@ -1633,7 +1641,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         ? costInfo.attemptEstimates?.[index] ?? null
         : costInfo.estimate;
       const ordinal = this.nextOrdinal++;
-      const facts = requestStatusFact(attribution.usageStatus)
+      const facts = (entry.attempts?.length ? attemptStatusFact(entry.attempts[index]!) : requestStatusFact(attribution.usageStatus))
         | (estimate ? REQUEST_PRICED : spentNothing(entry.attempts?.[index]) ? 0 : REQUEST_UNPRICED);
       const modelKey = this.addModelAttribution(partition, attribution, estimate, ordinal);
       modelFacts.set(modelKey, (modelFacts.get(modelKey) ?? 0) | facts);

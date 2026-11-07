@@ -6,6 +6,8 @@ import Usage from "../src/pages/Usage";
 import { LanguageProvider } from "../src/i18n/provider";
 import { usageV2Copy } from "../src/i18n/v2-pages/usage-copy";
 import { isUsageReport } from "../src/components/v2-usage/usage-validation";
+import { SOURCE_CLIENTS } from "../src/components/v2-usage/usage-source";
+import { USAGE_APPS } from "../../src/usage/app-breakdown";
 import { resetApiAuthFetchForTests } from "../src/api";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 
@@ -18,6 +20,10 @@ let host: HTMLElement;
 let calls: string[];
 let serial = 0;
 const app = (client = "codex") => ({ client, requests: 2, measuredRequests: 1, totalTokens: 100, estimatedCostUsd: 0, pricedRequests: 1, unpricedRequests: 1, shareRatio: 0.5 });
+test("source picker app roster matches the backend report roster", () => {
+  expect([...SOURCE_CLIENTS.filter(client => client !== "all"), "unclassified"].sort()).toEqual([...USAGE_APPS].sort());
+  expect(isUsageReport({ ...report(), apps: USAGE_APPS.map(client => app(client)) })).toBe(true);
+});
 function report(url = "http://usage/api/usage?client=all&device=all&range=30d") {
   const q = new URL(url).searchParams;
   return {

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
-import type { SourceClient, SourceFilter } from "./usage-source";
+import type { SourceFilter } from "./usage-source";
+import type { UsageApp as UsageAppClient } from "../../../../src/usage/app-breakdown";
 import type { Locale, TFn } from "../../i18n/shared";
 import { formatTokens } from "../../format-tokens";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
@@ -100,7 +101,7 @@ export interface UsageProvider {
 }
 
 export interface UsageApp {
-  client: Exclude<SourceClient, "all"> | "unclassified";
+  client: UsageAppClient;
   requests: number;
   measuredRequests: number;
   totalTokens: number;
