@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../../src/config";
@@ -13,12 +13,14 @@ import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } fr
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousCodexHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 let proxy: ReturnType<typeof startServer> | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousCodexHome = process.env.CODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-imgretry-e2e-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-imgretry-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -26,18 +28,62 @@ beforeEach(() => {
   resetNormalizeStateForTests();
 });
 
-afterEach(async () => {
-  await proxy?.stop(true);
-  proxy = undefined;
-  upstream?.stop(true);
-  upstream = null;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
+/** Restore process state even when shutdown rejects; retain trees until drain succeeds. */
+async function cleanupFixture(): Promise<void> {
+  const codexHome = isolatedCodexHome;
+  const directory = testDir;
   isolatedCodexHome = null;
-  if (testDir) await removeTreeAfterBackgroundWork(testDir);
-  clearKeyCooldowns();
-}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
+  testDir = "";
+  try {
+    try { await proxy?.stop(true); }
+    finally {
+      proxy = undefined;
+      try { await upstream?.stop(true); }
+      finally { upstream = null; }
+    }
+    if (directory) await removeTreeAfterBackgroundWork(directory);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    codexHome?.restoreEnvironment();
+    clearKeyCooldowns();
+  }
+  // A failed stop or drain must leave both owned trees intact for their wrapper.
+  codexHome?.removeAfterDrain();
+}
+
+afterEach(cleanupFixture, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
+
+for (const rejecting of ["proxy", "upstream"] as const) {
+  test(`fixture cleanup restores environment after ${rejecting} shutdown rejects`, async () => {
+    const directory = testDir, codexHome = isolatedCodexHome!;
+    const expectedHome = previousHome;
+    const failure = new Error(`synthetic ${rejecting} stop failure`);
+    const stopped: string[] = [];
+    // No real producer starts: these controlled failures exercise the hook itself.
+    proxy = { async stop() { stopped.push("proxy"); if (rejecting === "proxy") throw failure; } } as unknown as typeof proxy;
+    upstream = { async stop() { stopped.push("upstream"); if (rejecting === "upstream") throw failure; } } as unknown as typeof upstream;
+    try {
+      await expect(cleanupFixture()).rejects.toBe(failure);
+      expect(stopped).toEqual(["proxy", "upstream"]);
+      expect(proxy).toBeUndefined();
+      expect(upstream).toBeNull();
+      expect(isolatedCodexHome).toBeNull();
+      expect(process.env.OPENCODEX_HOME).toBe(expectedHome);
+      expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+      expect(existsSync(directory)).toBe(true);
+      expect(existsSync(codexHome.path)).toBe(true);
+    } finally {
+      // The synthetic stoppers own no live handles; clean up even if a regression fails.
+      proxy = undefined; upstream = null; isolatedCodexHome = null; testDir = "";
+      if (expectedHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = expectedHome;
+      codexHome.restoreEnvironment();
+      await removeTreeAfterBackgroundWork(directory);
+      codexHome.removeAfterDrain();
+    }
+  });
+}
 
 const ONE_PX_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
