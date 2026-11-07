@@ -12,7 +12,6 @@
 .page-head:has(~ .models-page-tabs) { align-items: flex-start; margin-bottom: 18px; }
 .models-page-tabs {
   display: inline-flex;
-  flex-wrap: nowrap;
   width: fit-content;
   max-width: 100%;
   gap: 2px;
