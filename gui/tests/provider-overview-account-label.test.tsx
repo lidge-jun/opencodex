@@ -25,6 +25,7 @@ const POOL_A = { name: "anthropic", adapter: "anthropic", baseUrl: "https://api.
 const POOL_B = { ...POOL_A, name: "anthropic2", anthropicOAuthInstance: "anthropic2" } as unknown as WorkspaceItem;
 const OTHER = { name: "xai", adapter: "openai-chat", baseUrl: "https://xai.invalid/v1", authMode: "oauth", hasApiKey: false } as unknown as WorkspaceItem;
 
+/** Two-account roster for `pool`: an inactive "Spare" row, then the active row with `active` applied. */
 function rows(pool: string, active: Partial<OAuthAccountRow>): OAuthAccountRow[] {
   return [
     { id: "first", email: "first@" + pool + ".test", active: false, paused: false, alias: "Spare" },
@@ -83,6 +84,7 @@ afterEach(async () => {
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
 });
 
+/** Mounts ProviderDetails on its default Overview tab and returns the rendered text. */
 async function overviewText(item: WorkspaceItem, accounts: OAuthAccountRow[], oauthEmail?: string): Promise<string> {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
@@ -135,6 +137,12 @@ for (const item of [POOL_A, POOL_B]) {
     const ordinal = await overviewText(item, rows(item.name, {}), email);
     expect(ordinal).toContain("Logged in as Account 2");
     expect(ordinal).not.toContain(email);
+  });
+
+  test(`${item.name} Overview treats a blank alias as missing`, async () => {
+    const text = await overviewText(item, rows(item.name, { alias: "   ", maskedLabel: "s***d@example.test" }), email);
+    expect(text).toContain("Logged in as s***d@example.test");
+    expect(text).not.toContain(email);
   });
 
   test(`${item.name} Overview without an active account keeps the generic status`, async () => {
