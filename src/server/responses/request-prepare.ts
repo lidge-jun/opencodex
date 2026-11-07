@@ -1464,7 +1464,9 @@ export async function prepareResponsesRequest(
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
     if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
-      if (policyScope.eligibility) throw new MandatoryToolChoiceUnavailableError();
+      // Combo children carry the refusal's local identity too, so a compatible sibling target
+      // can still be tried; a direct request keeps the client-facing 400 below.
+      if (policyScope.eligibility || options.comboAttempt) throw new MandatoryToolChoiceUnavailableError();
       return mandatoryToolChoiceUnavailableResponse();
     }
   } catch (error) {

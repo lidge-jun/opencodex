@@ -38,6 +38,9 @@ eligible model. Policy traversal records settled physical destinations and skips
 attempted through another candidate or redirect; same-target credential and transient retries retain
 their existing budgets. Local skips preserve the last upstream failure and its log context, including
 route identity, usage, active attempt and spend tracker; preparation-only fields are discarded.
+A refusal minted only after a physical send — a re-negotiated destination refused inside
+credential recovery — is a dispatched candidate instead: the hop it was sent on commits and
+that sent destination becomes the next hop's source for the fallback guard.
 Completed physical attempt rows remain intact, and final logging settles the last actual send's usage.
 The initial decision remains the selection evidence while physical attempts record execution.
 When every observed refusal is specifically a mandatory-tool incompatibility, exhausted policy traversal returns the direct 400 diagnostic. Generic local skips and upstream failures permanently exclude that projection; cancellation and replay boundaries retain precedence. Discarded local bodies and replaced upstream failure bodies are cancelled to settle their lifetime owners; a refused fallback guard also cancels the retained failure.

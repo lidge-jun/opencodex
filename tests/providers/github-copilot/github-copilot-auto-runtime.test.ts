@@ -22,6 +22,7 @@ import { spendTestJournal, spendTestPolicy, testSpendSalt } from "../../helpers/
 import { isNonReplayableResponse } from "../../../src/lib/upstream-retry";
 import { clearComboSelectionState } from "../../../src/combos/resolve";
 import { clearComboTargetCooldowns, isComboTargetInCooldown } from "../../../src/combos/failover";
+import { clearFallbackEventsForTests, recentFallbackEvents } from "../../../src/routing/fallback-policy";
 import { closeRequestHistoryIndex } from "../../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../../src/responses/state";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
@@ -259,6 +260,47 @@ describe("Copilot Auto through the Responses pipeline", () => {
       expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
       expect(fallbackBodies).toHaveLength(1);
     }
+  });
+  test("policy fallback treats a post-send renegotiation refusal as a taken hop", async () => {
+    // The Copilot child sends once, takes a 401, refreshes its OAuth credential, and only THEN
+    // learns the renewed negotiation settled on a Chat wire that cannot preserve tool_choice.
+    // That refusal is not a pre-send skip: the hop it rode must commit, and the next candidate's
+    // hop is guarded FROM github-copilot — the provider scope an operator can switch off.
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true });
+    f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+    let primarySends = 0, tailSends = 0;
+    f.config.providers.primary = { adapter: "openai-chat", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://primary.example.test/v1", models: ["m1"], fetch: async () => { primarySends++;
+        return Response.json({ error: { type: "rate_limit_error", message: "limited" } }, { status: 429 }); } };
+    f.config.providers.tail = { adapter: "openai-chat", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://tail.example.test/v1", models: ["m3"], fetch: async () => { tailSends++;
+        return Response.json({ id: "chat-tail", object: "chat.completion", choices: [{ index: 0,
+          message: { role: "assistant", content: "tail" }, finish_reason: "stop" }] }); } };
+    f.config.fallback = { providers: { "github-copilot": { provider: false } } };
+    f.config.routingProfiles = { postSend: { candidates: [
+      { provider: "primary", model: "m1" },
+      { provider: "github-copilot", model: "auto" },
+      { provider: "tail", model: "m3" },
+    ] } };
+    clearFallbackEventsForTests();
+    const response = await handleResponses(request("hello", false, {
+      model: "policy/postSend", tool_choice: "required",
+    }), f.config, {});
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("fallback_refused");
+    expect(body.error.fallback).toMatchObject({ kind: "provider", scope: "provider",
+      scopeKey: "github-copilot", from: "github-copilot/auto", to: "tail/m3" });
+    expect(f.refreshCount).toBe(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(primarySends).toBeGreaterThanOrEqual(1);
+    expect(tailSends).toBe(0);
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome })))
+      .toEqual([
+        { from: "primary/m1", to: "github-copilot/auto", outcome: "taken" },
+        { from: "github-copilot/auto", to: "tail/m3", outcome: "refused" },
+      ]);
   });
   test("negotiated Chat refuses required with an empty translated catalog before inference", async () => {
     await accounts();

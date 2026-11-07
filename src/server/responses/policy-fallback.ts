@@ -290,7 +290,11 @@ export async function handleResponsesWithPolicyFallback(
         toolChoiceRefusalsOnly &&= isMandatoryToolChoiceRefusal(nextResponse);
         // A locally skipped route owns neither the returned failure nor its usage/settlement.
         // Preparation can replace route metadata and the tracker, or add fields absent before it.
-        if (isPolicyCandidateRefusal(nextResponse)) {
+        // The sendCount seam separates that skip from a refusal minted only after a physical
+        // send — a re-negotiated Copilot destination refused inside 401 or account recovery.
+        // The send happened, so the hop it rode commits below and the sent destination becomes
+        // the next hop's source, which is what a provider-scoped fallback refusal keys on.
+        if (isPolicyCandidateRefusal(nextResponse) && (logCtx.activeAttempt?.sendCount ?? 0) === 0) {
           try { await nextResponse.body?.cancel(); } catch { /* settle the skipped candidate's lifetime owners */ }
           for (const key of Object.keys(logCtx)) {
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);

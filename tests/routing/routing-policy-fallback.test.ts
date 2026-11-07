@@ -8,8 +8,9 @@ import { RequestPacingQueueOverloadError } from "../../src/providers/request-pac
 import { fetchWithTransientRetry, isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
 import type { OcxConfig } from "../../src/types";
-import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
+import { beginRequestAttempt, noteAttemptSend, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
+import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
 import {
@@ -118,6 +119,84 @@ describe("policy candidate fallback", () => {
     if (status === 400) expect(isProxyError(response)).toBe(true);
     expect(released).toEqual([1, 1, 1]);
     expect(bodies.every(body => body.bodyUsed)).toBe(true);
+  });
+  test("a refusal minted after a physical send is a taken hop, not a skip", async () => {
+    // A re-negotiated destination can refuse only after its send — a Copilot credential or
+    // account recovery settles the wire mid-dispatch. That refusal is not a local skip: the
+    // hop it rode commits, and the sent destination becomes the next hop's source, which is
+    // where a provider-scoped fallback refusal keys on.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      fallback: { providers: { "provider-b": { provider: false } } },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    clearFallbackEventsForTests();
+    const response = await handleResponsesWithPolicyFallback(request(), config, logCtx, {}, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        if (seenModels.length === 1) {
+          seedAttempt(childLog, "provider-a", "model-a");
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        seedAttempt(childLog, "provider-b", "model-b");
+        noteAttemptSend(childLog.activeAttempt, undefined);
+        return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
+    const body = await response.json() as { error: { code: string; fallback?: Record<string, unknown> } };
+    expect(body.error.code).toBe("fallback_refused");
+    expect(body.error.fallback).toMatchObject({
+      kind: "provider", scope: "provider", scopeKey: "provider-b",
+      from: "provider-b/model-b", to: "provider-c/model-c",
+    });
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome }))).toEqual([
+      { from: "provider-a/model-a", to: "provider-b/model-b", outcome: "taken" },
+      { from: "provider-b/model-b", to: "provider-c/model-c", outcome: "refused" },
+    ]);
+  });
+  test("a refusal minted before any send still skips without committing its hop", async () => {
+    // Behavior pin for the seam's other side: a candidate refused before its first physical
+    // send remains a local skip. Its hop is never committed, the prior failure is retained,
+    // and the next hop is still evaluated from the candidate that actually failed before it.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      fallback: { providers: { "provider-b": { provider: false } } },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    clearFallbackEventsForTests();
+    const response = await handleResponsesWithPolicyFallback(request(), config, logCtx, {}, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        if (seenModels.length === 1) {
+          seedAttempt(childLog, "provider-a", "model-a");
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        if (seenModels.length === 2) {
+          seedAttempt(childLog, "provider-b", "model-b");
+          return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b", "provider-c/model-c"]);
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome }))).toEqual([
+      { from: "provider-a/model-a", to: "provider-c/model-c", outcome: "taken" },
+    ]);
   });
   test.each([400, 422])("HTTP %s reflected free-tier prose does not authorize a policy fallback", async status => {
     let calls = 0;
