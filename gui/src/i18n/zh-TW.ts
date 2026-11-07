@@ -2656,7 +2656,7 @@ export const zhTW: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "未出現在模型目錄中 — 成員能力不完整或不相容（缺少上下文視窗／中繼資料，或模態交集為空）。依別名路由仍可用",
   "cws.attention.allTargetsExhausted": "所有已啟用目標的額度均已用盡",
   "cws.emptyTitle": "建立第一個組合",
-  "cws.empty.createDesc": "命名虛擬模型並串聯兩個或多個後端。",
+  "cws.empty.createDesc": "至少新增一個目標；故障轉移需要使用兩個或更多目標。",
   "cws.backToAll": "返回全部組合",
   "cws.allCombos": "全部組合",
   "cws.copyModel": "複製 ID",

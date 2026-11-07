@@ -3497,7 +3497,7 @@ export const ko: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "모델 카탈로그에 없음 — 멤버 능력이 불완전하거나 호환되지 않음(context window/메타데이터 부족 또는 modality 교집합이 비어 있음). 별칭 라우팅은 계속 동작",
   "cws.attention.allTargetsExhausted": "활성화된 모든 대상의 할당량이 소진됨",
   "cws.emptyTitle": "첫 콤보 만들기",
-  "cws.empty.createDesc": "가상 모델 이름을 정하고 백엔드를 둘 이상 연결하세요.",
+  "cws.empty.createDesc": "대상을 하나 이상 추가하세요. 장애 조치를 위해서는 둘 이상을 사용하세요.",
   "cws.backToAll": "모든 콤보로",
   "cws.allCombos": "모든 콤보",
   "cws.copyModel": "ID 복사",

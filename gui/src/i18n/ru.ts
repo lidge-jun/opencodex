@@ -3661,7 +3661,7 @@ export const ru: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Отсутствует в каталоге моделей — возможности участников неполны или несовместимы (нет context window / метаданных, или пустое пересечение modalities). Маршрутизация по alias всё ещё работает",
   "cws.attention.allTargetsExhausted": "Квота исчерпана у всех включённых целей",
   "cws.emptyTitle": "Создайте первое комбо",
-  "cws.empty.createDesc": "Задайте имя виртуальной модели и объедините в цепочку два и более бэкенда.",
+  "cws.empty.createDesc": "Добавьте хотя бы одну цель; для переключения при сбое используйте две или более.",
   "cws.backToAll": "Назад ко всем комбо",
   "cws.allCombos": "Все комбо",
   "cws.copyModel": "Копировать id",

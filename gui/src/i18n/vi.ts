@@ -3488,7 +3488,7 @@ export const vi: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Bị thiếu khỏi danh mục model (model catalog) — các khả năng của thành viên bị thiếu hoặc không tương thích (thiếu cửa sổ ngữ cảnh / metadata, hoặc giao điểm phương thức bị rỗng). Tính năng định tuyến qua bí danh (alias) vẫn hoạt động",
   "cws.attention.allTargetsExhausted": "Tất cả các mục tiêu được bật đều đã hết hạn ngạch (quota)",
   "cws.emptyTitle": "Tạo combo đầu tiên của bạn",
-  "cws.empty.createDesc": "Đặt tên cho một model ảo và liên kết hai hoặc nhiều backend với nhau.",
+  "cws.empty.createDesc": "Thêm ít nhất một đích; dùng từ hai đích trở lên để chuyển dự phòng.",
   "cws.backToAll": "Quay lại tất cả combo",
   "cws.allCombos": "Tất cả combo",
   "cws.copyModel": "Sao chép id",

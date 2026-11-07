@@ -3450,7 +3450,7 @@ export const de: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Fehlt im Modellkatalog — Mitgliederfähigkeiten sind unvollständig oder inkompatibel (fehlendes Context-Window/Metadaten oder leere Modalitäts-Schnittmenge). Routing per Alias funktioniert weiterhin",
   "cws.attention.allTargetsExhausted": "Alle aktivierten Ziele haben ihr Kontingent ausgeschöpft",
   "cws.emptyTitle": "Erste Combo erstellen",
-  "cws.empty.createDesc": "Virtuelles Modell benennen und zwei oder mehr Backends verketten.",
+  "cws.empty.createDesc": "Mindestens ein Ziel hinzufügen; für Failover zwei oder mehr verwenden.",
   "cws.backToAll": "Zurück zu allen Combos",
   "cws.allCombos": "Alle Combos",
   "cws.copyModel": "ID kopieren",

@@ -232,3 +232,10 @@ After those fixes, `cd gui && bun test tests` exited 0 with 3,956 tests and
 checklist suites, root typecheck, GUI lint and i18n lint, privacy scan, structure
 check, and file-size ratchet also passed. The root full suite remains unrun by
 owner request, and the timed-out `test:changed` run is not passing evidence.
+
+The branch was combined with `origin/dev` at `35d5010f502a` after the dashboard
+layout change landed. The sole documentation conflict was resolved with both
+contracts preserved. On that combined tree the GUI suite passed 3,965 tests;
+typecheck, GUI lint and i18n lint, structure check and file-size ratchet passed.
+Final-head CI, refreshed browser observations and the fresh GOAT review are still
+required before integration.

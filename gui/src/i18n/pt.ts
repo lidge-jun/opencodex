@@ -3520,7 +3520,7 @@ export const pt: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Ausente do catálogo de modelos — as capacidades dos membros estão incompletas ou incompatíveis (janela de contexto/metadados ausentes, ou interseção de modalidades vazia). O roteamento por alias continua funcionando",
   "cws.attention.allTargetsExhausted": "Todos os destinos habilitados estão sem cota",
   "cws.emptyTitle": "Crie seu primeiro combo",
-  "cws.empty.createDesc": "Dê nome a um modelo virtual e encadeie dois ou mais backends.",
+  "cws.empty.createDesc": "Adicione pelo menos um destino; use dois ou mais para failover.",
   "cws.backToAll": "Voltar para todos os combos",
   "cws.allCombos": "Todos os combos",
   "cws.copyModel": "Copiar id",

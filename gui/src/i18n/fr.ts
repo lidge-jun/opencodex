@@ -3477,7 +3477,7 @@ export const fr: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Absent du catalogue de modèles — les capacités des membres sont incomplètes ou incompatibles (fenêtre de contexte ou métadonnées manquantes, ou intersection des modalités vide). Le routage par alias fonctionne toujours",
   "cws.attention.allTargetsExhausted": "Toutes les cibles activées ont épuisé leur quota",
   "cws.emptyTitle": "Créer votre première combinaison",
-  "cws.empty.createDesc": "Nommez un modèle virtuel et enchaînez au moins deux services principaux.",
+  "cws.empty.createDesc": "Ajoutez au moins une cible ; utilisez-en au moins deux pour le basculement.",
   "cws.backToAll": "Retour à toutes les combinaisons",
   "cws.capability.imageInputUnavailable": "Sélectionnez d'abord chaque cible dans le catalogue — les modèles inconnus ne peuvent pas être couverts par le Vision Sidecar.",
   "cws.capability.imageInputHint": "Activé par défaut lorsque toutes les cibles prennent en charge les images. Désactivez cette option pour n’accepter que du texte.",

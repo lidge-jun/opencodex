@@ -3570,7 +3570,7 @@ export const ja: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "モデルカタログにありません — メンバー能力が不完全または非互換です（context window / メタデータ不足、または modality 交差が空）。エイリアス指定のルーティングは動作します",
   "cws.attention.allTargetsExhausted": "有効なすべてのターゲットがクォータを使い切っています",
   "cws.emptyTitle": "最初のコンボを作成",
-  "cws.empty.createDesc": "仮想モデルに名前を付け、2 つ以上のバックエンドをつなぎます。",
+  "cws.empty.createDesc": "ターゲットを1つ以上追加してください。フェイルオーバーには2つ以上を使用します。",
   "cws.backToAll": "すべてのコンボに戻る",
   "cws.allCombos": "すべてのコンボ",
   "cws.copyModel": "ID をコピー",
