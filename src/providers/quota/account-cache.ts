@@ -21,6 +21,7 @@ import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailure
 import { isDisplayOnlyQuota, markDisplayOnlyQuota } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
+import { runPassiveReadSync } from "../../lib/passive-read";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -138,7 +139,7 @@ export function hydrateAccountQuotaCache(): void {
       const saved = quota as ProviderQuota & { museIdentity?: string };
       if (!owner || saved.museIdentity !== owner.identity) continue;
       const { museIdentity: _identity, ...publicQuota } = saved;
-      if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, isCurrent: owner.isCurrent });
+      if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, isCurrent: owner.isAccountCurrent });
       continue;
     }
     if (key.startsWith("kiro\0")) {
@@ -239,6 +240,8 @@ export function accountCacheKey(provider: string, accountId: string): string {
  * Returns null when nothing is cached (or the cached row has no bars).
  */
 export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  // A cold routing lookup must see persisted passive rows without publishing a roster or hardening files.
+  if (provider === "meta-muse") runPassiveReadSync(hydrateAccountQuotaCache);
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
@@ -384,7 +387,7 @@ export function recordPassiveAccountQuota(
   accountId: string,
   quota: ProviderQuota,
   writerGeneration: number,
-  owner: MuseQuotaOwner | null = captureMuseQuotaOwner(provider, accountId),
+  owner: MuseQuotaOwner | null = null,
   epoch = captureProviderAccountQuotaEpoch(provider),
 ): void {
   if (!hasPassiveAccountQuota(provider) || !accountId || !owner || owner.accountId !== accountId || !owner.isCurrent()
@@ -397,9 +400,9 @@ export function recordPassiveAccountQuota(
   // saved row -- and `diskHydrated` would then stop any later reader from recovering
   // them. A probe writer cannot hit this because its own read hydrates first; an
   // observation arrives unprompted, so it must hydrate itself.
-  hydrateAccountQuotaCache();
+  runPassiveReadSync(hydrateAccountQuotaCache);
   accountQuotaCache.set(key, { ts: Date.now(), quota, identity: owner.identity,
-    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent() });
+    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent() });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
   persistAccountQuotaCache();
