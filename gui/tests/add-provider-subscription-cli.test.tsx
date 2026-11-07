@@ -164,6 +164,7 @@ test("Vertex accepts ADC project and location without a dummy API key", async ()
   const location = inputFor("Location");
   expect(project).toBeDefined();
   expect(location).toBeDefined();
+  expect(location.getAttribute("aria-label")).toBe("Location (optional)");
   expect(win.document.body.textContent).toContain("Application Default Credentials");
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;

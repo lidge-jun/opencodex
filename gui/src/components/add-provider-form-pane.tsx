@@ -190,7 +190,7 @@ export function AddProviderFormPane({
           <input className="input" value={form.project ?? ""} onChange={e => onFormChange({ ...form, project: e.target.value })} />
         </AddProviderField>
         <AddProviderField label={t("modal.vertexLocation")}>
-          <input className="input" value={form.location ?? ""} onChange={e => onFormChange({ ...form, location: e.target.value })} placeholder="us-central1" />
+          <input className="input" aria-label={t("modal.vertexLocation")} value={form.location ?? ""} onChange={e => onFormChange({ ...form, location: e.target.value })} placeholder="us-central1" />
         </AddProviderField>
       </>}
       {!isReservedForward && <AddProviderField label={t("modal.defaultModel")}>
