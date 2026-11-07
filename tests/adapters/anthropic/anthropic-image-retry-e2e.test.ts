@@ -8,6 +8,7 @@ import { startServer } from "../../../src/server";
 import { resetNormalizeStateForTests } from "../../../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxConfig } from "../../../src/types";
+import { trackBackgroundWork } from "../../../src/lib/background-work";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../../helpers/isolated-codex-home";
 import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
@@ -84,6 +85,32 @@ for (const rejecting of ["proxy", "upstream"] as const) {
     }
   });
 }
+
+test("fixture cleanup restores environment and retains trees when drain fails", async () => {
+  const directory = testDir, codexHome = isolatedCodexHome!;
+  const expectedHome = previousHome;
+  let release!: () => void;
+  const work = trackBackgroundWork("image-retry fixture drain rejection", new Promise<void>(resolve => { release = resolve; }));
+  try {
+    await expect(cleanupFixture()).rejects.toThrow("in-process background work still running: image-retry fixture drain rejection");
+    expect(proxy).toBeUndefined();
+    expect(upstream).toBeNull();
+    expect(isolatedCodexHome).toBeNull();
+    expect(process.env.OPENCODEX_HOME).toBe(expectedHome);
+    expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+    expect(existsSync(directory)).toBe(true);
+    expect(existsSync(codexHome.path)).toBe(true);
+  } finally {
+    release();
+    await work;
+    proxy = undefined; upstream = null; isolatedCodexHome = null; testDir = "";
+    if (expectedHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = expectedHome;
+    codexHome.restoreEnvironment();
+    await removeTreeAfterBackgroundWork(directory);
+    codexHome.removeAfterDrain();
+  }
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 const ONE_PX_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
