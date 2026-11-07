@@ -286,6 +286,7 @@ try {
     if (kind !== "root" && kind !== "transition") {
       assert.equal(first.basisDigest, digest(after).sha256);
       assert.equal(first.basisRevision, 2);
+      assert.equal(first.releaseDigest, digest(release).sha256);
     }
     if (["target", "artifact", "receipt", "tree", "capability"].includes(kind)) {
       assert.equal(first.targetId, target);
@@ -295,11 +296,30 @@ try {
   const targetSnapshot = supply.snapshotEvidence(candidate);
   assert.deepEqual({ ...targetSnapshot.selection }, selection);
   assert.ok(Object.isFrozen(targetSnapshot.selection));
+  assert.throws(() => { targetSnapshot.selection.arch = "arm64"; }, TypeError);
+  assert.equal(supply.snapshotEvidence(candidate).selection.arch, "x64");
+  assert.equal(supply.snapshotEvidence(basis).rootDigest, digest(before).sha256);
+  assert.equal(supply.snapshotEvidence(basis).rootRevision, 1);
   assert.equal(supply.snapshotEvidence(basis).anchorDigest, digest(before).sha256);
+  assert.equal(supply.snapshotEvidence(successor).rootDigest, digest(after).sha256);
+  assert.equal(supply.snapshotEvidence(successor).rootRevision, 2);
   assert.equal(supply.snapshotEvidence(successor).predecessorDigest, digest(before).sha256);
+  assert.equal(supply.snapshotEvidence(successor).predecessorRevision, 1);
+  assert.equal(supply.snapshotEvidence(releaseEvidence).channel, "latest");
+  assert.equal(supply.snapshotEvidence(treeEvidence).treeDigest, digest(tree).sha256);
+  assert.equal(supply.snapshotEvidence(treeEvidence).treeSize, tree.length);
   assert.equal(supply.snapshotEvidence(treeEvidence).envelopeDigest, digest(treeEnvelope).sha256);
+  assert.equal(supply.snapshotEvidence(treeEvidence).envelopeSize, treeEnvelope.length);
+  assert.equal(supply.snapshotEvidence(treeEvidence).receiptDigest, digest(receipt).sha256);
   assert.equal(supply.snapshotEvidence(receiptEvidence).receiptDigest, digest(receipt).sha256);
+  assert.equal(supply.snapshotEvidence(receiptEvidence).receiptSize, receipt.length);
+  assert.equal(supply.snapshotEvidence(capabilityEvidence).capabilityDigest, digest(capability).sha256);
+  assert.equal(supply.snapshotEvidence(capabilityEvidence).capabilitySize, capability.length);
+  assert.equal(supply.snapshotEvidence(capabilityEvidence).receiptDigest, digest(receipt).sha256);
   assert.equal(supply.snapshotEvidence(artifactEvidence).artifactDigest, digest(artifact).sha256);
+  assert.equal(supply.snapshotEvidence(artifactEvidence).artifactSize, artifact.length);
+  assert.equal(supply.snapshotEvidence(artifactEvidence).signatureBox, JSON.parse(release.toString()).targets[0].artifact.signatureBox);
+  assert.equal(supply.snapshotEvidence(artifactEvidence).signerFingerprint, keys[2].key.keyId);
   assert.equal("artifactBytes" in supply.snapshotEvidence(artifactEvidence), false);
   assert.throws(() => supply.snapshotEvidence({}));
   assert.throws(() => supply.snapshotEvidence({ ...candidate }));
@@ -317,17 +337,29 @@ try {
   const sameReceipt = supply.verifyExternalMetadataEvidence(candidate, {kind: "receipt", bytes: receipt}, successor, now);
   assert.ok(supply.verifyExternalMetadataEvidence(candidate, {kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence: sameReceipt}, successor, now));
   assert.throws(() => supply.verifyExternalMetadataEvidence(sameTarget, {kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence}, successor, now));
+  const otherBasisRelease = supply.verifyReleaseEvidence(release, releaseEnvelope, sameSuccessor, "latest", now);
+  const otherBasisTarget = supply.selectTargetEvidence(otherBasisRelease, selection);
+  const otherBasisReceipt = supply.verifyExternalMetadataEvidence(otherBasisTarget, {kind: "receipt", bytes: receipt}, sameSuccessor, now);
+  assert.equal(supply.snapshotEvidence(otherBasisReceipt).receiptDigest, supply.snapshotEvidence(receiptEvidence).receiptDigest);
+  assert.throws(() => supply.verifyExternalMetadataEvidence(candidate, {kind: "tree", bytes: tree, signatureEnvelopeBytes: treeEnvelope, receiptEvidence: otherBasisReceipt}, successor, now));
   const production = await import("../../src/update/signed-supply.mjs");
   assert.throws(() => production.snapshotEvidence(candidate));
   assert.throws(() => supply.snapshotEvidence(production.bootstrapEmbeddedRoot(readFileSync(new URL("../../src/update/trust-root.json", import.meta.url)), now)));
   assert.ok(supply.snapshotEvidence(successor));
   assert.throws(() => supply.verifyReleaseEvidence(release, releaseEnvelope, successor, "latest", rootExpiry));
   const saved = expected.map(([handle]) => supply.snapshotEvidence(handle));
+  const artifactCopy = Buffer.from(artifact);
   for (const bytes of [before, after, transitionEnvelope, release, releaseEnvelope, receipt, tree, treeEnvelope, capability, artifact]) bytes.fill(0);
   expected.forEach(([handle], index) => {
     const again = supply.snapshotEvidence(handle);
     for (const field of Object.keys(again)) if (again[field] instanceof Uint8Array) assert.deepEqual(again[field], saved[index][field]);
   });
+  assert.ok(supply.verifyRootTransition(basis, saved[1].rootBytes, saved[1].envelopeBytes, now));
+  assert.ok(supply.verifyReleaseEvidence(saved[2].releaseBytes, saved[2].envelopeBytes, successor, "latest", now));
+  assert.ok(supply.verifyArtifactEvidence(candidate, artifactCopy, successor, now));
+  assert.ok(supply.verifyExternalMetadataEvidence(candidate, {kind: "receipt", bytes: saved[5].receiptBytes}, successor, now));
+  assert.ok(supply.verifyExternalMetadataEvidence(candidate, {kind: "tree", bytes: saved[6].treeBytes, signatureEnvelopeBytes: saved[6].envelopeBytes, receiptEvidence}, successor, now));
+  assert.ok(supply.verifyExternalMetadataEvidence(candidate, {kind: "capability", bytes: saved[7].capabilityBytes, receiptEvidence}, successor, now));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
