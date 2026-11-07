@@ -12,6 +12,8 @@ import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } f
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { startVisibilityPoll } from "../visibility-poll";
 import { createBoundedFetch } from "../bounded-fetch";
+import { HelpButton, HelpRegion, InlineBanner } from "../components/v2-accounts/surface";
+import { useHelp } from "../components/v2-accounts/use-help";
 
 export type OpenAiAccountBannerState = CodexAccountModeState | "invalid" | null;
 
@@ -25,40 +27,49 @@ export function OpenAiAccountModeBanner({
   onEnable: () => void;
 }) {
   const t = useT();
+  const help = useHelp();
   // Nothing is known yet: an empty titled card is a blank slab that later jumps when
   // /api/config arrives. Render nothing and let the pool section own the space.
   if (state === null) return null;
+  const settled = state === "pool" || state === "direct";
   return (
-    <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
-      <div className="row">
-        <strong>{t("codexAuth.accountModeTitle")}</strong>
+    // One quiet line when the mode is settled: the mode is the state, its explanation sits
+    // behind the "?". A missing or disabled provider is a problem, so it stays spelled out.
+    <div className={`openai-account-mode-banner acc-mode flex flex-col gap-2 rounded-[12px] px-4 py-3 ring-1 ring-line ${settled ? "bg-transparent" : "bg-surface"}`}>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+        <span className="text-[13px] font-medium text-fg-muted">{t("codexAuth.accountModeTitle")}</span>
         {state === "pool" ? (
-          <span className="badge badge-accent openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
+          <span className="badge openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
         ) : state === "direct" ? (
-          <span className="badge badge-green openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
+          <span className="badge openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
         ) : null}
-      </div>
-      {state === "pool" && (
-        <p className="card-sub openai-account-mode-banner__desc">{t("codexAuth.accountModePoolDesc")}</p>
-      )}
-      {state === "direct" && (
-        <p className="card-sub openai-account-mode-banner__desc">
-          {t("codexAuth.accountModeDirectDesc")}{" "}
-          <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
-            {t("codexAuth.openProviders")}
-          </button>
-        </p>
-      )}
-      {(state === "absent" || state === "disabled") && (
-        <div className="row" style={{ alignItems: "center", marginTop: 8 }}>
-          <p className="card-sub" style={{ flex: 1, margin: 0 }}>{t("codexAuth.openaiUnavailableDesc")}</p>
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={onEnable}>
+        {settled && (
+          <HelpButton open={help.open} controls={help.id} name={t("codexAuth.accountModeTitle")} onToggle={help.toggle} />
+        )}
+        {(state === "absent" || state === "disabled") && (
+          <button type="button" className="btn btn-primary btn-sm ml-auto" disabled={busy} onClick={onEnable}>
             {busy ? t("codexAuth.enablingOpenai") : t("codexAuth.enableOpenai")}
           </button>
-        </div>
+        )}
+      </div>
+      {settled && (
+        <HelpRegion id={help.id} open={help.open}>
+          {state === "pool" && t("codexAuth.accountModePoolDesc")}
+          {state === "direct" && (
+            <>
+              {t("codexAuth.accountModeDirectDesc")}{" "}
+              <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
+                {t("codexAuth.openProviders")}
+              </button>
+            </>
+          )}
+        </HelpRegion>
+      )}
+      {(state === "absent" || state === "disabled") && (
+        <p className="card-sub m-0 text-[13px] text-fg-muted">{t("codexAuth.openaiUnavailableDesc")}</p>
       )}
       {state === "invalid" && (
-        <p className="card-sub openai-account-mode-banner__desc">
+        <p className="card-sub openai-account-mode-banner__desc m-0 text-[13px] text-fg-muted">
           {t("codexAuth.openaiMissing")}{" "}
           <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
             {t("codexAuth.openProviders")}
@@ -203,7 +214,7 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
       busy={enableBusy}
       onEnable={() => { void enableOpenAi(); }}
     />
-    {enableError && <div className="notice notice-err" role="alert">{enableError}</div>}
+    {enableError && <InlineBanner tone="err" role="alert">{enableError}</InlineBanner>}
   </>;
 
   return (
