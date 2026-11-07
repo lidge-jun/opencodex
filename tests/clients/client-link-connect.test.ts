@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
@@ -23,6 +23,7 @@ import { buildServiceShellCommand } from "../../src/service/definition";
 import { inspectOrphanServiceAdmission } from "../../src/client/orphan-token-recovery";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -121,8 +122,8 @@ describe("client link connection contracts", () => {
       else process.env.OPENCODEX_HOME = previousHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      await removeTreeAfterBackgroundWork(home);
+      await removeTreeAfterBackgroundWork(codexHome);
     }
   }
 
@@ -325,7 +326,9 @@ describe("client link connection contracts", () => {
           mkdirSync(directory, { recursive: true });
           const definition = join(directory, "opencodex-proxy.service");
           const command = buildServiceShellCommand("/usr/bin/bun", null, 12345, tokenPath);
-          writeFileSync(definition, `[Service]\nEnvironment="OPENCODEX_HOME=${home}"\nExecStart=${command}\n`);
+          // systemd Environment quoting treats a backslash as an escape introducer, so
+          // a Windows fixture path must be written with escaped backslashes to parse.
+          writeFileSync(definition, `[Service]\nEnvironment="OPENCODEX_HOME=${home.replaceAll("\\", "\\\\")}"\nExecStart=${command}\n`);
           expect(command).toContain("OPENCODEX_API_AUTH_TOKEN");
           expect(command).toContain(tokenPath);
           const inspection = inspectServiceManagerInstallation({ platform: "linux", home: serviceHome,
@@ -727,16 +730,7 @@ describe("client link connection contracts", () => {
   });
 
   test("connects through the link credential strategy without issuing a hub key", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-client-link-connect-"));
-    const codexHome = mkdtempSync(join(tmpdir(), "ocx-client-link-codex-"));
-    const previousHome = process.env.OPENCODEX_HOME;
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
-    process.env.CODEX_HOME = codexHome;
-    try {
-      const config = getDefaultConfig();
-      config.port = 10100;
-      saveConfig(config);
+    await withLinkHome(async (home, codexHome) => {
       writeFileSync(join(codexHome, "config.toml"), 'model_provider = "openai"\n');
       const calls: Array<{ url: string; key?: string }> = [];
       const fetchImpl: typeof fetch = async (input, init = {}) => {
@@ -778,13 +772,6 @@ describe("client link connection contracts", () => {
       expect(calls[0]?.key).toBe(key);
       expect(calls[1]?.key).toBe(key);
       expect(calls.some(call => call.url.includes("/api/keys"))).toBe(false);
-    } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
-    }
+    });
   });
 });
