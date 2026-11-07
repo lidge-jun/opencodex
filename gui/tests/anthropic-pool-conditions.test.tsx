@@ -234,7 +234,9 @@ describe("Claude account pool conditions", () => {
     await act(async () => { nativeOf(host).click(); await flush(); });
     expect(nativeOf(host).checked).toBe(true);
     expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
-    for (const control of host.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) expect(control.disabled).toBe(true);
+    // Every EDIT is locked while the write is in flight. The rotation-strategy "?" only
+    // reveals its explanation, so it stays usable and is not an edit.
+    for (const control of host.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button:not(.acc-help-btn)")) expect(control.disabled).toBe(true);
     await act(async () => { resolveWrite(Response.json({ enabled: true, nativeMessages: false })); await flush(); });
     expect(nativeOf(host).checked).toBe(false);
     expect(nativeOf(host).disabled).toBe(false);

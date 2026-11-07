@@ -979,15 +979,15 @@ export default function ClaudeDesktop({
 
                     <div className="claude-move-row">
                       <label htmlFor={`move-${model.route}`}>{t("claudeDesktop.moveTo")}</label>
-                      <select
+                      <Select
                         id={`move-${model.route}`}
-                        className="input"
+                        fullWidth
+                        triggerClassName="h-[34px] py-1"
                         value={destination}
                         disabled={!model.available}
-                        onChange={event => setDestinations(current => ({ ...current, [model.route]: event.target.value as Family }))}
-                      >
-                        {FAMILIES.map(option => <option key={option} value={option}>{t(FAMILY_KEYS[option])}</option>)}
-                      </select>
+                        onChange={next => setDestinations(current => ({ ...current, [model.route]: next as Family }))}
+                        options={FAMILIES.map(option => ({ value: option, label: t(FAMILY_KEYS[option]) }))}
+                      />
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"

@@ -9,6 +9,7 @@ import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { buildProviderPayload, buildProviderPostBody } from "../src/provider-payload";
 import type { ProviderPayloadForm } from "../src/provider-payload";
 import { AddProviderFormPane } from "../src/components/add-provider-form-pane";
+import { chooseOption, selectTrigger } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<string, unknown>;
@@ -128,11 +129,7 @@ test("custom add form exposes an unchecked control, persists an explicit choice,
   expect(replay(container)?.checked).toBe(false);
   await act(async () => { replay(container)!.click(); });
   expect(buildProviderPayload(form).preserveResponsesReasoningContent).toBe(true);
-  const adapter = container.querySelector<HTMLSelectElement>("select")!;
-  await act(async () => {
-    adapter.value = "openai-chat";
-    adapter.dispatchEvent(new win.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(container, '[role="combobox"][aria-label="Adapter"]'), "openai-chat");
   expect(replay(container)).toBeNull();
   expect(buildProviderPayload(form)).not.toHaveProperty("preserveResponsesReasoningContent");
 });
