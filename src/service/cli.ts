@@ -362,6 +362,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // hand-typed in a real terminal, so it is the one interactive moment they get.
       // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
       await maybeShowStarPrompt();
+      await (await import("../cli/telemetry")).maybeShowTelemetryPrompt();
       break;
     case "start": {
       // The installed launcher preserves the recorded CODEX_SQLITE_HOME: a

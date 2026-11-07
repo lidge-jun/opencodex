@@ -9,6 +9,7 @@ import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
 import type { ServiceApiTokenState } from "../lib/service-secrets";
 import { redactUrlForLog } from "../lib/redact";
+import { isAgentDriven } from "./agent-driven";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -258,6 +259,9 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const raw = action === "set" ? args.shift() : undefined;
       if (!path || (action === "set" && raw === undefined)) throw new CliUsageError(action === "unset" ? "config path is required" : "config path and value are required", USAGE);
       rejectArgs(args, USAGE);
+      if (pathSegments(path)[0] === "telemetry") {
+        throw new CliUsageError("telemetry cannot be modified via ocx config; use `ocx telemetry enable` or `ocx telemetry disable`", USAGE);
+      }
       // #1835/#1838: the read used to happen OUTSIDE the mutation lock, so a concurrent
       // edit landing between it and the save was reverted by this whole-snapshot write.
       // `mutatePersistedConfig` reruns this callback against the latest validated disk
@@ -332,7 +336,12 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
         readCliConfigForMutation();
-        const imported = validate(loadInput(path));
+        const rawInput = loadInput(path);
+        if (isAgentDriven() && rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
+          delete (rawInput as Record<string, unknown>).telemetry;
+          console.warn("Note: dropped telemetry block during agent-driven config import; use `ocx telemetry` to manage telemetry consent.");
+        }
+        const imported = validate(rawInput);
         withConfigMutationLockSync(() => {
           const client = readClientConnectionState();
           if (client.kind === "connected" && (imported.runtimeRole !== "client"
