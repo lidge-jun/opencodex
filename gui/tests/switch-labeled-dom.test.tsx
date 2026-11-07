@@ -101,4 +101,8 @@ test("a tri-state bulk control keeps pressed-button semantics", () => {
   expect(button.getAttribute("role")).toBeNull();
   expect(button.getAttribute("aria-checked")).toBeNull();
   expect(button.getAttribute("aria-pressed")).toBe("mixed");
+  act(() => root!.render(<Switch on mixed={false} onClick={() => {}} label="All profiles" />));
+  expect(button.getAttribute("role")).toBeNull();
+  expect(button.getAttribute("aria-checked")).toBeNull();
+  expect(button.getAttribute("aria-pressed")).toBe("true");
 });
