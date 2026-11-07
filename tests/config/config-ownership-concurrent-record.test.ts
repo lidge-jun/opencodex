@@ -42,6 +42,26 @@ const childScript = (dir: string, rel: string, gate?: { ready: string; go: strin
 ].join("\n");
 const spawnChild = (dir: string, rel: string, gate?: { ready: string; go: string }) =>
   Bun.spawn([process.execPath, "-e", childScript(dir, rel, gate)], { stderr: "inherit" });
+
+/** Complete the owner's JSON at the first creation poll, without relying on process scheduling. */
+function observeOwnerPublication(dir: string, completedOwner: string | null): string {
+  const script = [
+    "import { writeFileSync } from \"node:fs\";",
+    "import { registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+    "const completedOwner = " + JSON.stringify(completedOwner) + ";",
+    "const realNow = Date.now; let reads = 0;",
+    "Date.now = () => {",
+    "  reads++;",
+    "  if (completedOwner !== null && reads === 2) writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", completedOwner);",
+    // An abandoned publication reaches the existing deadline without a wall-clock sleep.
+    "  return completedOwner === null ? reads * 20_000 : realNow();",
+    "};",
+    "console.log(JSON.stringify(registerOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, "after-publication")) + ")));",
+  ].join("\n");
+  const child = Bun.spawnSync([process.execPath, "-e", script]);
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  return JSON.parse(child.stdout.toString()) as string;
+}
 const manifest = (dir: string) =>
   JSON.parse(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[]; uninstallStartedAt?: number };
 
@@ -797,6 +817,32 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(recordOwnedConfigPath(dir, join(dir, "later"))).toBe(true);
     expect(manifest(dir).paths).toContain("later");
   }));
+
+  test("a first registration waits for an existing owner file whose JSON is still being published", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const ownerPath = join(dir, ".opencodex-owner.json");
+    const owner = readFileSync(ownerPath, "utf8");
+    // Exclusive create exposes the file name before writeFileSync finishes its bytes.
+    writeFileSync(ownerPath, "");
+    expect(observeOwnerPublication(dir, owner)).toBe("recorded");
+    expect(readFileSync(ownerPath, "utf8")).toBe(owner);
+    expect(manifest(dir).paths).toContain("after-publication");
+  }));
+
+  for (const state of ["empty", "mismatched"] as const) {
+    test(`an unfinished ${state} owner publication stays unowned and unchanged`, withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const ownerPath = join(dir, ".opencodex-owner.json");
+      const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+      const invalid = state === "empty" ? "" : JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" });
+      writeFileSync(ownerPath, invalid);
+      const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+      expect(observeOwnerPublication(dir, null)).toBe("unowned");
+      expect(readFileSync(ownerPath, "utf8")).toBe(invalid);
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
+      expect(existsSync(join(dir, "after-publication"))).toBe(false);
+    }));
+  }
 
   test("a first registration waits for a home another process is still creating", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
