@@ -6,6 +6,11 @@ import { repoPath } from "../helpers/repo-root";
 // calls made with { bigint: true }. A lexical tripwire over the named declarations, not a
 // full parser: it catches the regression forms below and fails closed on scopes it cannot find.
 const scopes: Record<string, string[]> = {
+  "src/lab/public/mutation-lock.ts": ["assertMutationLockDirectory"],
+  "src/lab/public/private-file.ts": ["cleanupPublishedPrivateFileStages"],
+  "src/lab/public/file-safety.ts": ["withPrivateRegularFile"],
+  "src/lab/artifacts/secure-fs.ts": ["assertOpenedPathMatchesDescriptor", "revalidateDir", "openTrustedArtifactDir"],
+  "src/lab/fabric/scratch.ts": ["revalidateScratchDir", "openAtScratch", "openTrustedScratchRoot", "openScratchRelativePath"],
   "src/codex/codex-home-owner.ts": ["readCodexHomeJournal"],
   "src/codex/cli-update-artifacts.ts": ["verifyCodexCliArchive"],
   "src/codex/cli-install-provenance.ts": ["readBoundedFile", "observeHeldFileSet"],
@@ -111,7 +116,7 @@ function matching(code: string, open: number, left: string, right: string): numb
 
 /** The body of NAME's declaration: a function, or a method head whose body opens on the same line. */
 function declarationBody(code: string, name: string): [number, number] | null {
-  const head = new RegExp(`(?:\\bfunction\\s+|^[ \\t]*(?:(?:export|async|public|private|protected|static|override)\\s+)*)${name}\\s*\\(`, "gm");
+  const head = new RegExp(`(?:\\bfunction\\s+|^[ \\t]*(?:(?:export|async|public|private|protected|static|override)\\s+)*)${name}(?:<[^<>]*>)?\\s*\\(`, "gm");
   for (const match of code.matchAll(head)) {
     const close = matching(code, match.index! + match[0].length - 1, "(", ")");
     if (close < 0) continue;
@@ -199,6 +204,8 @@ describe("file identity caller stats", () => {
   });
 
   test("resolves the declaration, not an earlier call, and needs a real observation", () => {
+    expect(inspect("function check<T>(value: T) { return lstatSync(path).ino; }", ["check"]))
+      .toEqual(["numeric stat: lstatSync(path)"]);
     expect(inspect("function caller() { return check(); }\nfunction check() { return lstatSync(path).ino; }", ["check"]))
       .toEqual(["numeric stat: lstatSync(path)"]);
     expect(inspect("check()\n{ lstatSync(p, { bigint: true }); }\nfunction check() { return lstatSync(path).ino; }", ["check"]))
