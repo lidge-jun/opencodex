@@ -152,6 +152,29 @@ function failures(accountId: string): number {
   return getCodexUpstreamHealth(accountId)?.consecutiveFailures ?? 0;
 }
 
+test("malformed retained compact input does not poison pooled account health", async () => {
+  const config = poolConfig();
+  const healthBefore = [WORK, OTHER].map(id => getCodexUpstreamHealth(id));
+  upstream(compacted);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const request = new Request("http://localhost/v1/responses/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5.5", input: [{ type: "compaction", encrypted_content: "ocx2:invalid" }] }),
+    });
+    const response = await handleResponsesCompact(request, config, { model: "", provider: "" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+    expect(sends).toHaveLength(0);
+    expect([WORK, OTHER].map(id => getCodexUpstreamHealth(id))).toEqual(healthBefore);
+  }
+  const { response } = await compact({ config });
+  expect(response.status).toBe(200);
+  expect(sends).toHaveLength(1);
+  expect(failures(WORK)).toBe(0);
+  expect(failures(OTHER)).toBe(0);
+});
+
 describe("native compact moves a surviving transient 5xx to one alternate account (#6969)", () => {
   test("A's ladder, then B from the final recovery reserve, serves the compact", async () => {
     upstream(overloaded(), overloaded(), overloaded(), compacted);
