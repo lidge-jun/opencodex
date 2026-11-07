@@ -4,14 +4,14 @@ import { loadConfig } from "../config";
 import { withClientLifecycleSync } from "../client/lifecycle-lock";
 import { nativeOpenAiSlugs } from "../codex/catalog/metadata";
 import { COMBO_NAMESPACE } from "../combos/identifiers";
-import { materializeLocalRouteIntent, type LocalRouteIntentOptions } from "../client/route-intent-apply";
+import type { LocalRouteIntentOptions } from "../client/route-intent-apply";
 import { clearHomeRouteIntentRecord, fetchHomeRouteIntent, homeRouteIntentReceipt, linkBoundFetch, readHomeRouteIntentRecord,
   writeHomeRouteIntentRecord, type LinkHomeConnection, type LinkHomeDeps } from "../client/link-home";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { ROUTE_CLIENT_IDS, type HomeRouteIntentDocument } from "../link/route-intent";
 import type { OcxClientConnectionConfig } from "../types";
-import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, type RouteIntentReceipt } from "./route-intent";
-import { writeRouteIntentReceipt } from "./route-intent-state";
+import type { RouteIntentReceipt } from "./route-intent-contract";
+import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, writeRouteIntentReceipt } from "./route-intent-state";
 import { resolveInitialRouteIntent, initialRouteOutcomeMetadata } from "./route-intent-initial";
 import { LINK_ROUTE_CATALOG_PATH } from "../link/management-routes";
 import { MAX_ROUTE_CATALOG_BYTES, parseRouteCatalogFacts } from "./route-intent-catalog";
@@ -116,6 +116,7 @@ export async function applyConnectedRouteIntent(
     options = { ...options, onlyClients: localOff };
   }
   if (!prepared) return undefined;
+  const { materializeLocalRouteIntent } = await import("../client/route-intent-apply");
   const intent = prepared;
   const linkId = connection.link.linkId;
   const guard = options.beforeWrite ?? (() => {});

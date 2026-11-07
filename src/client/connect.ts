@@ -30,9 +30,11 @@ import {
   type CodexRoutingTarget,
 } from "../codex/inject";
 import {
+  JOURNAL_PATH,
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
+import { readCodexHomeJournal } from "../codex/codex-home-owner";
 import { DEFAULT_CATALOG_PATH, getCodexHome } from "../codex/paths";
 import {
   readServiceApiTokenState,
@@ -100,7 +102,8 @@ import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from 
 import { isLinkPort } from "../link/ports";
 import { assertRouteIntentPort, clientSyncRuntimeGuard, ClientSyncRuntimeError } from "./sync-runtime";
 import { prepareConnectedRouteIntent, initialConnectRouteIntent, connectedRouteSelectedClients, applyConnectedRouteIntent } from "../integrations/route-intent-connected";
-import { clearRouteIntentReceipt, readRouteIntentReceiptStrict, type RouteIntentReceipt } from "../integrations/route-intent";
+import { clearRouteIntentReceipt, readRouteIntentReceiptStrict } from "../integrations/route-intent-state";
+import type { RouteIntentReceipt } from "../integrations/route-intent-contract";
 import { clearHomeRouteIntentRecord } from "./link-home";
 import { clearInitialRouteIntent, recordInitialRouteIntent } from "../integrations/route-intent-initial";
 import { cleanupConnectedRouteIntent } from "../integrations/route-intent-disconnect";
@@ -999,6 +1002,12 @@ async function syncConnectedClientUnlocked(
   let appliedRecord: HomeCodexSettingsRecord | undefined;
   let applyRecordFailed = false;
   if (next.selectedClients.includes("codex") && (!routeIntent || existsSync(getCodexHome()))) {
+    const beforeCodexWrite = () => {
+      beforeClientWrite();
+      if (routeIntent && !connectedRouteSelectedClients(routeIntent, next.selectedClients).includes("codex")) {
+        throw new Error("Codex route intent changed; retry sync");
+      }
+    };
     let config = loadConfig();
     // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
     if (isLinkConnection(next)) {
@@ -1012,9 +1021,15 @@ async function syncConnectedClientUnlocked(
         withClientWrite(() => withdrawChangingHomeCodexSettingsRecord(linkId, document));
       }
     }
+    // Off persisted false. Reconcile the effective Home intent before the injector rereads
+    // that durable gate, retaining local opt-outs and the owner/runtime/token commit fences.
+    if (routeIntent) {
+      const { persistNativeRouteIntent } = await import("./route-intent-apply");
+      withClientLifecycleSync(() => persistNativeRouteIntent("codex", true, beforeCodexWrite, config), deps.lifecycleLockDeps);
+    }
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
       routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
-      journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite,
+      journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite: beforeCodexWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
@@ -1115,8 +1130,23 @@ function verifyDisconnectCatalog(receipt: DesktopDisconnectReceipt): void {
 }
 
 function restoreConnectedCodex(connection: OcxClientConnectionConfig, receipt: DesktopDisconnectReceipt, recoverConfig = false): string | undefined {
-  if (!connection.selectedClients.includes("codex")) return;
-  const owner = journalOwner();
+  const inspection = readCodexHomeJournal(JOURNAL_PATH);
+  const owner = journalOwner({ readOnly: true });
+  const explicitOwner = inspection.kind === "read" ? inspection.journal.owner as Record<string, unknown> | undefined : undefined;
+  const invalidOwner = explicitOwner !== undefined && (!explicitOwner || typeof explicitOwner !== "object" || Array.isArray(explicitOwner)
+    || !(explicitOwner.kind === "client" && typeof explicitOwner.apiKeyId === "string" && explicitOwner.apiKeyId.length > 0
+      || explicitOwner.kind === "process" && typeof explicitOwner.pid === "number" && Number.isSafeInteger(explicitOwner.pid) && explicitOwner.pid > 0));
+  if (inspection.kind === "unknown" || invalidOwner || (inspection.kind === "read" && owner === null)) {
+    throw new Error("disconnect refused: Codex journal ownership is unknown; journal and connection credentials were retained");
+  }
+  // Deselection records desired state, not completed cleanup. A failed off still leaves
+  // this client's journal to drain; an unrelated process journal grants no such authority.
+  if (!connection.selectedClients.includes("codex") && owner?.kind !== "client") {
+    if (inspection.kind === "missing" && isCodexRoutingInjected()) {
+      throw new Error("disconnect refused: Codex routing is injected but no journal records the original state");
+    }
+    return;
+  }
   if (owner && owner.kind === "client" && owner.apiKeyId !== connection.apiKeyId) {
     throw new Error("disconnect refused: Codex journal ownership conflicts with the connected key");
   }

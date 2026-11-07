@@ -1,4 +1,4 @@
-{ "route-to-live-settings.test.ts": "server",
+{"route-intent-codex-transitions.test.ts":"clients", "route-to-live-settings.test.ts": "server",
     "route-intent-claude-surface.test.ts": "clients", "route-intent-local-receipt.test.ts": "clients", "route-intent-scheduler.test.ts": "clients", "route-intent-watch-client.test.ts": "clients", "route-intent-watch-boundary.test.ts": "server", "route-intent-watch-waiters.test.ts": "server",
     "home-route-intent-upgrade.test.ts": "clients", "route-intent-overwrite.test.ts": "clients", "codex-disconnect-owned-recovery.test.ts": "codex-integration", "service-restart-registration-guard.test.ts": "service",
     "client-disconnect-config-recovery.test.ts": "clients", "route-intent-aside.test.ts": "clients", "route-intent-connected.test.ts": "clients",

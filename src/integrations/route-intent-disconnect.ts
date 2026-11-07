@@ -5,9 +5,7 @@ import { readClientConnectionState, sameClientConnectionOwner } from "../client/
 import { withClientLifecycle, withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { readDesktopDisconnectReceipt, type DesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { readServiceApiTokenState } from "../lib/service-secrets";
-import { stripGrokConfig } from "../grok/inject";
-import { injectClaudeAgentDefs } from "../claude/agents-inject";
-import { cleanupRouteIntent, readRouteIntentReceiptStrict } from "./route-intent";
+import { readRouteIntentReceiptStrict } from "./route-intent-state";
 import { homeRouteIntentPath } from "../client/link-home";
 import type { OcxClientConnectionConfig } from "../types";
 
@@ -38,6 +36,9 @@ export async function cleanupConnectedRouteIntent(
     }
   };
   const local = loadConfig();
+  const { cleanupRouteIntent } = await import("./route-intent");
+  const { stripGrokConfig } = await import("../grok/inject");
+  const { injectClaudeAgentDefs } = await import("../claude/agents-inject");
   const config = { ...local, hostname: "127.0.0.1", unauthenticatedLoopbackListener: undefined };
   const outcomes = await cleanupRouteIntent({ config, linkId: connection.link.linkId, document: receipt.document, models: receipt.models ?? [], beforeWrite: guard, recoverConflicts,
     withReceiptWrite: write => withClientLifecycleSync(() => { guard(); write(); }, lifecycleLockDeps),

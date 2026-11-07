@@ -22,7 +22,8 @@ export interface LocalRouteIntentOptions extends Pick<RouteIntentApplyInput,
   lifecycleLockDeps?: ClientLifecycleLockDeps;
 }
 
-function persistNativeIntent(client: "codex" | "claude" | "claude-desktop" | "grok", enabled: boolean, guard: () => void, snapshot: OcxConfig): OcxConfig {
+/** Caller holds the lifecycle fence; the config coordinator rechecks guard before each commit. */
+export function persistNativeRouteIntent(client: "codex" | "claude" | "claude-desktop" | "grok", enabled: boolean, guard: () => void, snapshot: OcxConfig): OcxConfig {
   const result = mutatePersistedConfig(config => {
     guard();
     const previous = client === "claude" ? config.claudeCode?.enabled !== false : config.clientIntegrations?.[client] !== false;
@@ -56,7 +57,7 @@ async function applyNative(
   const env = input.env ?? process.env;
   // The committed flag reaches the caller's working snapshot too. The management owner mirrors
   // these individual flags onto its live config; a copied request config cannot do that for it.
-  const committedConfig = withClientLifecycleSync(() => persistNativeIntent(client, intent.enabled, guard, input.config), options.lifecycleLockDeps);
+  const committedConfig = withClientLifecycleSync(() => persistNativeRouteIntent(client, intent.enabled, guard, input.config), options.lifecycleLockDeps);
   if (client === "codex") {
     const { getCodexHome, CODEX_CONFIG_PATH, DEFAULT_CATALOG_PATH } = await import("../codex/paths");
     const { injectCodexConfig, restoreNativeCodexAsync, currentExternalCodexModelProvider, isCodexRoutingInjected } = await import("../codex/inject");

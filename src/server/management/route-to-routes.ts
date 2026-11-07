@@ -82,7 +82,7 @@ function parseWrite(value: unknown): { client: RouteClientId; action: "on" | "of
 /** Bounded body parsing and one device resolution precede every persisted write. */
 export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToRouteDeps = {}): Promise<Response | null> {
   const { url, req, config } = ctx;
-  if (url.pathname !== "/api/route-to" && url.pathname !== "/api/route-to/sync") return null;
+  if (!["/api/route-to", "/api/route-to/sync"].includes(url.pathname)) return null;
   const reply = (body: unknown, status = 200): Response => {
     const response = jsonResponse(body, status, req, config);
     response.headers.set("cache-control", "no-store");
@@ -94,8 +94,13 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       if ([...url.searchParams.keys()].some(key => key !== "device") || url.searchParams.getAll("device").length > 1) return reply({ error: "invalid_request" }, 400);
       return reply(await view(ctx, url.searchParams.get("device") ?? undefined));
     }
-    const sync = url.pathname === "/api/route-to/sync" && req.method === "POST";
-    if (!sync && !(url.pathname === "/api/route-to" && req.method === "PUT")) return reply({ error: "method_not_allowed" }, 405);
+    if (url.pathname === "/api/route-to") {
+      if (req.method !== "PUT") return reply({ error: "method_not_allowed" }, 405);
+    }
+    if (url.pathname === "/api/route-to/sync") {
+      if (req.method !== "POST") return reply({ error: "method_not_allowed" }, 405);
+    }
+    const sync = url.pathname.endsWith("/sync");
     let body: unknown;
     try { body = await readManagementJsonBody(req); }
     catch (error) { return managementBodyTooLargeResponse(error, req, config) ?? reply({ error: "invalid_request" }, 400); }

@@ -31,6 +31,18 @@ beforeEach(() => { home = createTempHome("route-to-api-"); applied = 0; remote =
 afterEach(() => home.remove());
 
 describe("Route-to device API", () => {
+  test("unsupported verbs never mutate intent or trigger apply", async () => {
+    for (const [path, methods] of [["/api/route-to", ["POST", "PATCH", "DELETE"]], ["/api/route-to/sync", ["GET", "PUT", "PATCH", "DELETE"]]] as const) {
+      for (const method of methods) {
+        const context = ctx(path);
+        context.req = new Request(context.req.url, { method });
+        expect((await handleRouteToRoutes(context, deps))?.status).toBe(405);
+      }
+    }
+    expect(applied).toBe(0);
+    expect(remote).toEqual([]);
+    expect(readRouteIntentState().defaults).toEqual({});
+  });
   test("status is versioned and passive, and includes Home and every Child", async () => {
     const response = await handleRouteToRoutes(ctx("/api/route-to?device=all"), deps);
     expect(response?.status).toBe(200);
