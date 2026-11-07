@@ -103,8 +103,10 @@ role. Root-key entries have no release delegation fields. Allowed release
 roles are `release`, `tree`, `desktop-artifact`, `standalone-artifact` and
 `guardian-artifact`; threshold and unique-key checks apply separately to the
 role being verified.
-Detached signatures carry `{keyFingerprint, signatureBox}` in the envelope
-defined in `010` and authenticate the exact file bytes. Reject duplicate keys, duplicate JSON names, thresholds outside the
+Detached signatures carry `{keyFingerprint, signatureBox}` in the role-specific
+envelopes defined in `010` and authenticate the exact file bytes. Root
+transitions use the distinct bounded transition envelope; release and tree
+metadata use the ordinary envelope. Reject duplicate keys, duplicate JSON names, thresholds outside the
 unique key count, unknown fields and unsupported algorithms. Initial threshold
 is one pinned root key and one delegated release key; a feed cannot add a new
 root without the rotation rule above. The signature-envelope proposal and

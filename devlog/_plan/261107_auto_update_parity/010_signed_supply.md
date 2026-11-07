@@ -70,8 +70,10 @@ the minisign global signature over the raw signature and trusted comment
 signature box for artifacts; do not invent a different cryptographic meaning
 for an existing `.sig` file.
 
-For root, release and tree metadata, propose a separate closed
-`ocx.update.signatures/1` JSON envelope `{schema, signatures}`. Each entry is
+For release and tree metadata, propose a closed `ocx.update.signatures/1` JSON
+envelope `{schema, signatures}`. Root transitions use the separate closed
+`ocx.update.root-transition-signatures/1` envelope with the same entry shape.
+Each entry is
 `{keyFingerprint, signatureBox}`, where `keyFingerprint` is lowercase SHA-256
 of the 32-byte Ed25519 public key and `signatureBox` is canonical standard
 base64 of the four-line Tauri minisign box. Each signature authenticates the
@@ -79,8 +81,13 @@ exact accompanying metadata file bytes; no parse-and-reserialize step occurs
 before verification. The expected metadata schema and verification role are
 chosen by the consumer and checked after cryptographic verification; a root
 record cannot be accepted as a release record. Limit root metadata to 64 KiB,
-release metadata to 1 MiB, tree inventory to 16 MiB, signature envelope to
-64 KiB, and keys/signatures to 16 per role. Reject duplicate fingerprints,
+release metadata to 1 MiB and tree inventory to 16 MiB. Ordinary signature
+envelopes are limited to 64 KiB and 16 signatures; transition envelopes are
+limited to 256 KiB and 32 signatures. Each root key set remains limited to 16
+keys. A transition envelope may contain only distinct keys from the old/new
+union; verify each set's threshold independently over the same successor bytes.
+An overlapping key may count once for each set when its packet identifier
+matches both root records. Reject duplicate fingerprints,
 noncanonical encodings, unknown algorithms, short packet IDs that disagree with
 the full authorized key, malformed UTF-8, invalid global comments, duplicate
 JSON keys and schema/role mismatches. Initial key threshold is one, as stated
@@ -101,6 +108,8 @@ only when signatures by distinct keys meet both the current-root and proposed-
 root thresholds; write the validated root and high-water mark atomically before
 using newly delegated keys. Replayed or partially authorized root transitions,
 unknown channels, mismatched key IDs and an interrupted persistence step refuse.
+Producer, acquisition, persisted replay and native-verifier tests must use the
+transition-specific schema and cap; ordinary metadata must reject that schema.
 
 For desktop assets require a verified minisign trusted comment containing the
 matching signed version on both fresh and restored updates. The pinned plugin
