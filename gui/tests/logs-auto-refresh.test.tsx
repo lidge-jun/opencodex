@@ -1438,11 +1438,11 @@ test("Logs: a pending refresh reconciles the user's latest selection rather than
 
 
 test.each([
-  ["codex_cli", "Codex", "openai.svg"], ["codex_desktop", "Codex", "openai.svg"], ["codex_ide", "Codex", "openai.svg"],
-  ["claude_code", "Claude Code", "claude-color.svg"], ["claude_desktop", "Claude Desktop", "claude-color.svg"],
-  ["grok", "Grok", "grok.svg"], ["opencode", "OpenCode", "opencode.svg"], ["aside", "Aside", "aside.svg"],
-  ["other", "Other", null], ["unknown", "Unknown", null],
-])("Logs: classified client %s has an icon-only far-left chip", async (client, label, icon) => {
+  ["codex_cli", "Codex", "openai.svg", false], ["codex_desktop", "Codex", "openai.svg", false], ["codex_ide", "Codex", "openai.svg", false],
+  ["claude_code", "Claude Code", "claude-color.svg", false], ["claude_desktop", "Claude Desktop", "claude-color.svg", false],
+  ["grok", "Grok", "grok.svg", true], ["opencode", "OpenCode", "opencode.svg", true], ["aside", "Aside", "aside.svg", true],
+  ["other", "Other", null, false], ["unknown", "Unknown", null, false],
+])("Logs: classified client %s has an icon-only far-left chip", async (client, label, icon, mono) => {
   // Intentionally conflicting legacy surface: it must not supply the chip label.
   serveLogSnapshot(() => [{ ...sampleLog, client, surface: "grok" }]);
   const { root, container } = await mountLogs();
@@ -1454,7 +1454,10 @@ test.each([
     expect(chip.textContent).toBe("");
     expect(chip.getAttribute("aria-label")).toBe(label);
     expect(chip.getAttribute("role")).toBe("img");
-    if (icon) expect(chip.querySelector("img")?.getAttribute("src")).toBe(`/provider-icons/${icon}`);
+    if (icon) {
+      expect(chip.querySelector("img")?.getAttribute("src")).toBe(`/provider-icons/${icon}`);
+      expect(chip.querySelector("img")?.classList.contains("usage-source-mark--mono")).toBe(mono);
+    }
     else expect(chip.querySelector("svg")).not.toBeNull();
     expect(chip.getAttribute("data-log-client")).toBe(client);
     expect(chip.classList.contains("rounded-full")).toBe(true);

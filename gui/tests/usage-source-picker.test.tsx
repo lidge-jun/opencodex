@@ -68,6 +68,16 @@ async function click(button: HTMLButtonElement) { await act(async () => button.c
 function trigger() { return host.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!; }
 function radio(name: string) { return [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(button => button.textContent?.includes(name))!; }
 
+test("monochrome client marks share dark-mode treatment while colored logos remain unchanged", async () => {
+  await mount();
+  await click(trigger());
+  for (const [name, mono] of [["Grok", true], ["OpenCode", true], ["Aside", true], ["Codex", false], ["Claude Code", false]] as const) {
+    const icon = radio(name).querySelector("img");
+    expect(icon).not.toBeNull();
+    expect(icon!.classList.contains("usage-source-mark--mono")).toBe(mono);
+  }
+});
+
 test("selects app and device independently, searches, and restores focus on Escape", async () => {
   await mount();
   expect(calls[0]!.url).toContain("client=all&device=all");
