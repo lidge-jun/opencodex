@@ -20,6 +20,7 @@ import { teardownClientLink } from "../client/link-teardown";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { recoverOrphanedTokens, type OrphanTokenRecoveryDeps } from "../client/orphan-token-recovery";
 import { linkKnownHostsPath } from "../link/paths";
 import { createSshRunner, type SshRunner } from "../link/ssh-runner";
 import type { OrphanTunnelResult } from "../client/link-tunnel";
@@ -83,7 +84,8 @@ export const CONNECT_USAGE = `Usage:
   ocx connect revoke --admin-token-stdin [--json]`;
 
 export const DISCONNECT_USAGE = `Usage:
-  ocx disconnect [--keep-catalog] [--json]`;
+  ocx disconnect [--keep-catalog] [--json]
+  ocx disconnect --orphaned-token --yes [--json]`;
 
 export type ClientConnectionStatus = {
   state: "disconnected" | "connected" | "invalid" | "mismatched";
@@ -529,13 +531,26 @@ export async function handleConnectCommand(argv: string[], deps: ClientCommandDe
 
 export async function handleDisconnectCommand(
   argv: string[],
-  deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> = {},
+  deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> & { orphanRecoveryDeps?: OrphanTokenRecoveryDeps } = {},
 ): Promise<number> {
   return runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
+    const orphanedToken = takeFlag(args, "--orphaned-token");
+    const yes = takeFlag(args, "--yes");
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
+    if (orphanedToken) {
+      if (!yes || keepCatalog) throw new CliUsageError("--orphaned-token requires --yes and cannot be combined with --keep-catalog", DISCONNECT_USAGE);
+      const backup = await recoverOrphanedTokens({ ...deps.orphanRecoveryDeps, lifecycleLockDeps: deps.lifecycleLockDeps });
+      const restore = "Stop OpenCodex and move the saved files back into its config directory only if the destination names are absent.";
+      printData({ ...backup, restore }, wantsJson, [
+        `Preserved token files in ${backup.backupDir}.`,
+        `To restore: ${restore}`,
+      ]);
+      return;
+    }
+    if (yes) throw new CliUsageError("--yes requires --orphaned-token", DISCONNECT_USAGE);
     const teardown = await teardownClientLink({
       readSidecar: readClientLinkState,
       connectedLinkId: () => {

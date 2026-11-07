@@ -139,7 +139,7 @@ import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ow
 import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
-import { workflowRefusalResponse } from "./workflow-refusal";
+import { carryWorkflowRefusal, workflowRefusalResponse, workflowSendCeilingRefusalResponse } from "./workflow-refusal";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { admissionModelDeniedResponse, projectAdmissionModelDeniedLog, type AdmissionModelScope } from "./admission-model-scope";
 import { nativeMessagesToolScopeDenial } from "./messages-native-scope";
@@ -157,6 +157,16 @@ const MAX_NATIVE_MESSAGES_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_NATIVE_MESSAGES_ERROR_BYTES = 64 * 1024;
 
 class NativeMessagesSpendRefusal extends Error {}
+
+/** Project only proxy-owned workflow refusals onto the native Messages error wire. */
+async function nativeWorkflowRefusalResponse(refusal: Response): Promise<Response> {
+  const { error } = await refusal.json() as { error: { message: string; type: string; code?: string } };
+  const projected = new Response(JSON.stringify(anthropicErrorBody(refusal.status, error.message, error.type, error.code)), {
+    status: refusal.status, headers: refusal.headers,
+  });
+  if (isNonReplayableResponse(refusal)) markResponseNonReplayable(projected);
+  return carryWorkflowRefusal(refusal, projected);
+}
 
 /** A rebuild for a destination that cannot carry the body's opaque state, under `reject`. */
 class NativeOpaqueStateRefusal extends Error {
@@ -361,8 +371,9 @@ async function prepareNativeBody(body: Rec, signal: AbortSignal): Promise<void> 
 /**
  * Handle one eligible Messages request natively. Opens the attempt, owns the request's final
  * log row, and answers in the Messages wire (SSE or JSON per the caller's own `stream`).
+ * Deliberately not `async`: an extra await turn changes when the relayed stream is first pulled.
  */
-export async function handleNativeMessages(options: HandleNativeMessagesOptions): Promise<Response> {
+export function handleNativeMessages(options: HandleNativeMessagesOptions): Promise<Response> {
   const { logCtx, logIds, route } = options;
   const attemptHandle = beginInferenceAttempt(logCtx, { provider: route.providerName, model: route.modelId, adapter: "anthropic" });
   const finalLog = createFinalRequestLog(logIds, logCtx);
@@ -728,10 +739,13 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
                 if ((logCtx.spendTracker as { refusals?: number } | undefined)?.refusals) throw new NativeMessagesSpendRefusal();
                 throw new SendBudgetExhaustedError();
               }
-              if (physicalBudget.spendEnforced) initialSendStarted = true;
-              else if (options.sendBudget) {
-                if (initialSendStarted && options.sendBudget.remainingBaseSends(sharedSendCap) <= 0) throw new SendBudgetExhaustedError();
-              } else if (!spendTracker?.charge()) throw new NativeMessagesSpendRefusal();
+              if (options.sendBudget) {
+                // A combo child shares the request's send budget; a tracker of its own would book twice.
+                if (physicalBudget.spendEnforced) initialSendStarted = true;
+                else if (initialSendStarted && options.sendBudget.remainingBaseSends(sharedSendCap) <= 0) throw new SendBudgetExhaustedError();
+              } else if (spendTracker) {
+                if (!physicalBudget.spendEnforced && !spendTracker.charge({ workflowAlreadyCounted: true })) throw new NativeMessagesSpendRefusal();
+              }
               noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               // Last synchronous ownership reservation before the physical fetch. Retain this
               // exact incarnation across its await; a returned response can never reserve one.
@@ -934,11 +948,16 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
-    if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
+    if (sendError instanceof SendBudgetExhaustedError) {
+      const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined);
+      if (refusal) { finishLog(429); return nativeWorkflowRefusalResponse(refusal); }
+      return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
+    }
     if (sendError instanceof NativeMessagesSpendRefusal) {
-      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx, undefined, undefined, logCtx.spendRefusalDetail);
+      const refusal = workflowRefusalResponse(logCtx.errorCode === "workflow_sends_exhausted"
+        ? "workflow-sends-exhausted" : "workflow-spend-exhausted", logCtx, undefined, undefined, logCtx.spendRefusalDetail);
       finishLog(429);
-      return refusal;
+      return nativeWorkflowRefusalResponse(refusal);
     }
     const localRefusal = localOAuthFailure(sendError);
     if (localRefusal) return localRefusal;
@@ -1034,8 +1053,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         } catch (error) {
           cleanupAbort(); releaseStreamTurn(); upstream.abort();
           if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
-          if (isTranslatorBudgetExceededError(error)) return fail(413, error.message, "request_too_large", "translation_buffer_limit");
-          return fail(502, error instanceof Error ? error.message : String(error), "api_error");
+          if (isTranslatorBudgetExceededError(error)) return fail(502, "upstream translation buffer exceeded the safe limit", "api_error", "translation_buffer_limit");
+          return fail(502, "upstream Messages stream failed before output", "api_error");
         }
       }
       return delivered;

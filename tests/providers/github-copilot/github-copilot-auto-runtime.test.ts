@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import type { RequestLogContext } from "../../../src/server/request-log";
 import { handleResponses } from "../../../src/server/responses";
+import { handleChatCompletions } from "../../../src/server/chat-completions";
+import { handleClaudeMessages } from "../../../src/server/claude-messages";
 import { saveConfig } from "../../../src/config";
 import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import { clearCopilotAutoModelsForTests } from "../../../src/providers/github-copilot-auto";
@@ -13,11 +15,18 @@ import { filterCatalogVisibleModels } from "../../../src/codex/catalog/model-vis
 import { reconcileSuccessfulModelDiscoveries } from "../../../src/providers/new-model-policy";
 import type { OcxConfig } from "../../../src/types";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { createSpendReservationLedger } from "../../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../../src/server/responses/request-spend";
+import { createInferenceSendBudget } from "../../../src/server/inference/context";
+import { spendTestJournal, spendTestPolicy, testSpendSalt } from "../../helpers/shipped-spend-ledger";
 import { isNonReplayableResponse } from "../../../src/lib/upstream-retry";
 import { clearComboSelectionState } from "../../../src/combos/resolve";
-import { clearComboTargetCooldowns } from "../../../src/combos/failover";
+import { clearComboTargetCooldowns, isComboTargetInCooldown } from "../../../src/combos/failover";
+import { clearFallbackEventsForTests, recentFallbackEvents } from "../../../src/routing/fallback-policy";
+import { closeRequestHistoryIndex } from "../../../src/routing/history/indexer";
+import { clearResponseStateForTests, flushResponseState } from "../../../src/responses/state";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 const previousFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -30,23 +39,34 @@ beforeEach(() => {
   clearGenericFailoverHealth();
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearResponseStateForTests();
   release = acquireOwnedSpendHome();
 });
-afterEach(() => {
-  release?.();
-  globalThis.fetch = previousFetch;
-  clearGenericFailoverHealth();
-  clearComboSelectionState();
-  clearComboTargetCooldowns();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  removeTreeWithRetry(home);
-});
+afterEach(async () => {
+  try {
+    await flushResponseState();
+    closeRequestHistoryIndex();
+    release?.();
+    release = undefined;
+    await removeTreeAfterBackgroundWork(home);
+  } finally {
+    release?.();
+    release = undefined;
+    globalThis.fetch = previousFetch;
+    closeRequestHistoryIndex();
+    clearResponseStateForTests();
+    clearGenericFailoverHealth();
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+  }
+}, 35_000); // Background settlement and removal each have a 15s bound, plus scheduling headroom.
 /** Build an Auto Responses request with caller-supplied history, stream mode, and a lookup tool for wire/continuation assertions. */
-function request(input: unknown, stream = true): Request {
+function request(input: unknown, stream = true, overrides: { model?: string; tool_choice?: unknown; tools?: unknown[] } = {}): Request {
   return new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "github-copilot/auto", input, stream,
-      tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: { name: { type: "string" } } } }] }) });
+      tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: { name: { type: "string" } } } }], ...overrides }) });
 }
 
 function scopedAdmission(config: OcxConfig, allowedModels: string[]) {
@@ -66,7 +86,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
+function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -93,7 +113,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
     expect(headers.get("authorization")).toStartWith(`Bearer synthetic-access-${account}`);
     sent.push({ host: destination.host, path: destination.pathname, token: headers.get("copilot-session-token"), body, signal: init?.signal });
     if (destination.pathname === "/models") return Response.json({ data: [{ id: model, model_picker_enabled: false,
-      supported_endpoints: [options.nativeExpiry ? (expiredNative ? "/chat/completions" : "/responses") : options.native429 ? (account === "a" ? "/responses" : "/chat/completions") : options.chatRefresh ? (renewed ? "/responses" : "/chat/completions") : options.nativeFirst ? (headers.get("authorization")!.includes("-renewed") ? "/chat/completions" : "/responses") : account === "a" ? "/chat/completions" : "/responses"] }] });
+      supported_endpoints: [options.chatOnly ? "/chat/completions" : options.nativeExpiry ? (expiredNative ? "/chat/completions" : "/responses") : options.native429 ? (account === "a" ? "/responses" : "/chat/completions") : options.chatRefresh ? (renewed ? "/responses" : "/chat/completions") : options.nativeFirst ? (headers.get("authorization")!.includes("-renewed") ? "/chat/completions" : "/responses") : account === "a" ? "/chat/completions" : "/responses"] }] });
     if (destination.pathname === "/models/session") {
       sessionCount++;
       await options.onSession?.(sessionCount);
@@ -113,6 +133,9 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
       expect(headers.get("authorization")).toBe(`Bearer synthetic-access-${"a"}-renewed`);
     inferenceCount++;
     await options.onInference?.(inferenceCount);
+    if (options.pauseRefusal && inferenceCount === 1) return Response.json({ error: {
+      type: "permission_error", message: "OAuth authentication is currently not allowed for this organization",
+    } }, { status: 403 });
     if (options.nativeFirst && options.closedNativeBody && inferenceCount === 1)
       return Response.json({ error: { message: "native-inference-secret" } }, { status: 401 });
     if (options.nativeFirst && inferenceCount === 1) return new Response(new ReadableStream({
@@ -126,7 +149,7 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
       usage: { input_tokens: 2, output_tokens: 1 } });
     if (options.renewedChatRefusal && destination.pathname === "/chat/completions")
       return Response.json({ error: { message: "must-not-echo" } }, { status: 401 });
-    if ((options.nativeFirst || options.nativeExpiry) && !body.stream) return Response.json({ id: "chat-fixture", model,
+    if ((options.chatOnly || options.nativeFirst || options.nativeExpiry) && !body.stream) return Response.json({ id: "chat-fixture", model,
       choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 2, completion_tokens: 1 } });
     const tool = options.tool && inferenceCount === (options.nativeFirst ? 2 : 1);
@@ -142,6 +165,343 @@ function fixture(options: { nativeExpiry?: boolean; nativeFirst?: boolean; nativ
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
+  test.each(["Chat", "Messages"])("%s retains the local mandatory-tool refusal after Copilot OAuth refresh", async wire => {
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true });
+    f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+    const req = new Request(`http://localhost/v1/${wire === "Chat" ? "chat/completions" : "messages"}`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "github-copilot/auto", messages: [{ role: "user", content: "Use lookup." }], stream: false,
+        ...(wire === "Chat" ? {
+          tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }], tool_choice: "required",
+        } : { max_tokens: 64, tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }], tool_choice: { type: "tool", name: "lookup" } }) }) });
+    const response = await (wire === "Chat" ? handleChatCompletions : handleClaudeMessages)(req, f.config, {});
+    const body = await response.json();
+    expect(response.status).toBe(400);
+    expect(body.error.message).toContain("mandatory tool_choice cannot be preserved");
+    expect(f.sent.filter(call => call.path === "/models/session/intent").map(call => call.host))
+      .toEqual(["a.githubcopilot.com", "a.githubcopilot.com"]);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(f.refreshCount).toBe(1);
+  });
+  test("mandatory tool choice uses the negotiated Responses wire instead of the initial Chat route", async () => {
+    const { b } = await accounts();
+    await setActiveAccount("github-copilot", b);
+    const f = fixture(), choice = { type: "computer_use" };
+    const response = await handleResponses(request("hello", false, { tool_choice: choice, tools: [choice] }), f.config, {});
+    expect(response.status, await response.text()).toBe(200);
+    expect(f.sent.some(call => call.path === "/models/session/intent")).toBe(true);
+    expect(f.sent.filter(call => call.path === "/chat/completions")).toHaveLength(0);
+    expect(f.sent.find(call => call.path === "/responses")?.body.tool_choice).toEqual(choice);
+  });
+  test("mandatory tool choice refuses a negotiated Chat wire after an initial Responses route", async () => {
+    await accounts();
+    const f = fixture(), choice = { type: "computer_use" };
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", true, {
+      model: "github-copilot/gpt-5.4", tool_choice: choice, tools: [choice],
+    }), f.config, log);
+    const body = await response.text();
+    expect(response.status).toBe(400);
+    expect(body).toContain("mandatory tool_choice cannot be preserved");
+    expect(f.sent.some(call => call.path === "/models/session/intent")).toBe(true);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+    expect(log.model).toBe("gpt-5.4");
+    expect(log.activeAttempt?.model).not.toBe("gpt-4o");
+  });
+  test.each([["combo", false, false], ["policy", false, false], ["combo", true, false], ["policy", true, false],
+    ["combo", true, true], ["policy", true, true]] as const)(
+    "mandatory tool choice negotiates a %s child and hops its local refusal (mid-dispatch=%s translated=%s)", async (mode, midDispatch, translated) => {
+    const { a, b } = await accounts();
+    if (midDispatch) await setActiveAccount("github-copilot", translated ? a : b);
+    const f = fixture(midDispatch ? { chatOnly: translated,
+      advanceAfterIntent: async () => { await setActiveAccount("github-copilot", translated ? b : a); } } : {});
+    if (translated) f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+    const choice = translated ? { type: "function", name: "lookup" } : { type: "mcp", server_label: "remote", name: "shell" };
+    const mcp = { type: "mcp", server_label: "remote", server_url: "https://mcp.example.test", require_approval: "never" };
+    const tools = translated ? [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] : [mcp];
+    const fallbackBodies: any[] = [];
+    const output = translated ? [{ id: "call_fixture", type: "function_call", status: "completed", call_id: "lookup_fixture", name: "lookup", arguments: "{}" }]
+      : [{ id: "mcp_fixture", type: "mcp_call", status: "completed", server_label: "remote", name: "shell", arguments: "{}", output: "done" }];
+    f.config.providers.fallback = { adapter: "openai-responses", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://fallback.example.test/v1", fetch: async (_url, init) => {
+        fallbackBodies.push(JSON.parse(String(init?.body)));
+        return Response.json({ id: "resp_fallback", object: "response", status: "completed", model: "fallback-model", output });
+      } };
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets: [
+      { provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" },
+    ] } };
+    f.config.routingProfiles = { mandatoryAuto: { candidates: [
+      { provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" },
+    ] } };
+    const log: RequestLogContext = {};
+    const spendTargets: Array<{ poolId?: string; identityId?: string }> = [];
+    const budget = mode === "policy" ? createRequestExecutionBudget(undefined, undefined, {
+      startRequest: target => { spendTargets.push({ ...target }); }, charge: () => true, refund: () => {},
+    }) : undefined;
+    const response = await handleResponses(request("hello", false, {
+      model: `${mode}/mandatoryAuto`, tool_choice: choice, tools,
+    }), f.config, log, { sendBudget: budget });
+    const body = await response.json();
+    expect(response.status).toBe(200); expect(body.output).toEqual(output);
+    expect(f.sent.some(call => call.path === "/models/session/intent")).toBe(true);
+    if (midDispatch) expect(f.sent.filter(call => call.path === "/models/session/intent").map(call => call.host))
+      .toEqual(translated ? ["a.githubcopilot.com", "b.githubcopilot.com"] : ["b.githubcopilot.com", "a.githubcopilot.com"]);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+    expect(fallbackBodies).toHaveLength(1); expect(fallbackBodies[0].tool_choice).toEqual(choice);
+    expect(fallbackBodies[0].tools).toEqual(tools); expect(log.provider).toBe(mode === "combo" ? "combo" : "fallback");
+    // The generic key route keeps its existing pre-key-commit identity, never Copilot's candidate.
+    if (mode === "policy") expect(spendTargets.at(-1)).toEqual({ poolId: "fallback", identityId: undefined });
+    if (mode === "combo") {
+      expect(isComboTargetInCooldown("mandatoryAuto", { provider: "github-copilot", model: "auto" })).toBe(false);
+      clearComboSelectionState(); // Reset selection history, retaining any real target cooldown.
+      const compatible = await handleResponses(request("hello", true, { model: "combo/mandatoryAuto" }), f.config, {});
+      expect(compatible.status).toBe(200);
+      await compatible.text();
+      expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+      expect(fallbackBodies).toHaveLength(1);
+    }
+  });
+  test("policy fallback treats a post-send renegotiation refusal as a taken hop", async () => {
+    // The Copilot child sends once, takes a 401, refreshes its OAuth credential, and only THEN
+    // learns the renewed negotiation settled on a Chat wire that cannot preserve tool_choice.
+    // That refusal is not a pre-send skip: the hop it rode must commit, and the next candidate's
+    // hop is guarded FROM github-copilot — the provider scope an operator can switch off.
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true });
+    f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+    let primarySends = 0, tailSends = 0;
+    f.config.providers.primary = { adapter: "openai-chat", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://primary.example.test/v1", models: ["m1"], fetch: async () => { primarySends++;
+        return Response.json({ error: { type: "rate_limit_error", message: "limited" } }, { status: 429 }); } };
+    f.config.providers.tail = { adapter: "openai-chat", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://tail.example.test/v1", models: ["m3"], fetch: async () => { tailSends++;
+        return Response.json({ id: "chat-tail", object: "chat.completion", choices: [{ index: 0,
+          message: { role: "assistant", content: "tail" }, finish_reason: "stop" }] }); } };
+    f.config.fallback = { providers: { "github-copilot": { provider: false } } };
+    f.config.routingProfiles = { postSend: { candidates: [
+      { provider: "primary", model: "m1" },
+      { provider: "github-copilot", model: "auto" },
+      { provider: "tail", model: "m3" },
+    ] } };
+    clearFallbackEventsForTests();
+    const response = await handleResponses(request("hello", false, {
+      model: "policy/postSend", tool_choice: "required",
+    }), f.config, {});
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("fallback_refused");
+    expect(body.error.fallback).toMatchObject({ kind: "provider", scope: "provider",
+      scopeKey: "github-copilot", from: "github-copilot/auto", to: "tail/m3" });
+    expect(f.refreshCount).toBe(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(primarySends).toBeGreaterThanOrEqual(1);
+    expect(tailSends).toBe(0);
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome })))
+      .toEqual([
+        { from: "primary/m1", to: "github-copilot/auto", outcome: "taken" },
+        { from: "github-copilot/auto", to: "tail/m3", outcome: "refused" },
+      ]);
+  });
+  test("negotiated Chat refuses required with an empty translated catalog before inference", async () => {
+    await accounts();
+    const f = fixture();
+    const response = await handleResponses(request("hello", false, {
+      tool_choice: "required", tools: [{ type: "computer_use" }],
+    }), f.config, {});
+    expect(response.status, await response.text()).toBe(400);
+    expect(f.sent.filter(call => call.path === "/models/session/intent")).toHaveLength(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
+  test("a denied combo send reservation retains the local refusal instead of claiming target exhaustion", async () => {
+    await accounts();
+    let reservations = 0;
+    const budget = createRequestExecutionBudget(undefined, undefined, {
+      charge: () => ++reservations === 1, refund: () => {},
+    });
+    const f = fixture();
+    let fallbackCalls = 0;
+    f.config.providers.fallback = { adapter: "openai-responses", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://fallback.example.test/v1", fetch: async () => { fallbackCalls++; return Response.json({ status: "completed", output: [] }); } };
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets: [
+      { provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" },
+    ] } };
+    const response = await handleResponses(request("hello", false, {
+      model: "combo/mandatoryAuto", tool_choice: { type: "mcp", server_label: "remote", name: "shell" },
+      tools: [{ type: "mcp", server_label: "remote", server_url: "https://mcp.example.test" }],
+    }), f.config, {}, { sendBudget: budget });
+    expect(response.status).toBe(409);
+    expect(await response.text()).not.toContain("cannot preserve mandatory tool_choice");
+    expect(fallbackCalls).toBe(0);
+    expect(reservations).toBe(2);
+    expect(budget.used).toBe(0);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
+  test.each(["combo", "policy"] as const)("%s exhaustion identifies mandatory tool incompatibility without inference", async mode => {
+    await accounts();
+    const f = fixture();
+    const targets = [{ provider: "github-copilot", model: "auto" }];
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets } };
+    f.config.routingProfiles = { mandatoryAuto: { candidates: targets } };
+    const response = await handleResponses(request("hello", false, {
+      model: `${mode}/mandatoryAuto`, tool_choice: { type: "mcp", server_label: "remote", name: "shell" },
+      tools: [{ type: "mcp", server_label: "remote", server_url: "https://mcp.example.test" }],
+    }), f.config, {});
+    const body = await response.json();
+    expect(response.status).toBe(mode === "combo" ? 503 : 400);
+    expect(body.error.message).toContain("mandatory tool_choice");
+    expect(f.sent.filter(call => call.path === "/models/session/intent")).toHaveLength(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+    expect(isComboTargetInCooldown("mandatoryAuto", targets[0]!)).toBe(false);
+  });
+  test.each([["combo", false], ["combo", true], ["policy", false], ["policy", true]] as const)(
+    "%s mixed exhaustion does not claim all targets refused tools (upstream-first=%s)", async (mode, upstreamFirst) => {
+    await accounts();
+    const f = fixture();
+    let fallbackCalls = 0;
+    f.config.providers.fallback = { adapter: "openai-responses", authMode: "key", apiKey: "fixture",
+      baseUrl: "https://fallback.example.test/v1", transientRetryOn5xx: { attempts: 1 }, fetch: async () => {
+        fallbackCalls++;
+        return Response.json({ error: { type: "upstream_error", message: "synthetic failure" } }, { status: 500 });
+      } };
+    const targets = [{ provider: "github-copilot", model: "auto" }, { provider: "fallback", model: "fallback-model" }];
+    if (upstreamFirst) targets.reverse();
+    f.config.combos = { mandatoryAuto: { strategy: "failover", targets } };
+    f.config.routingProfiles = { mandatoryAuto: { candidates: targets } };
+    const response = await handleResponses(request("hello", false, {
+      model: `${mode}/mandatoryAuto`, tool_choice: { type: "mcp", server_label: "remote", name: "shell" },
+      tools: [{ type: "mcp", server_label: "remote", server_url: "https://mcp.example.test" }],
+    }), f.config, {});
+    expect(response.status).toBe(mode === "combo" && upstreamFirst ? 409 : 500);
+    expect(await response.text()).not.toContain("cannot preserve mandatory tool_choice");
+    expect(fallbackCalls).toBe(1);
+    expect(f.sent.filter(call => call.path === "/models/session/intent")).toHaveLength(1);
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
+  });
+  test.each([false, true])("auto-pause negotiation refusal stays local after native=%s inference", async native => {
+    const { a, b } = await accounts();
+    const log: RequestLogContext = {};
+    let sentIdentity: Pick<RequestLogContext, "model" | "accountLogLabel" | "providerAdapter"> | undefined;
+    let sentAttemptModel: string | undefined;
+    const f = fixture({ pauseRefusal: true, native429: native, chatOnly: !native,
+      onInference: async () => {
+        sentIdentity = { model: log.model, accountLogLabel: log.accountLogLabel, providerAdapter: log.providerAdapter };
+        sentAttemptModel = log.activeAttempt?.model;
+        await setActiveAccount("github-copilot", b);
+      } });
+    f.config.providers["github-copilot"]!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+    if (!native) f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+    saveConfig(f.config);
+    const choice = native ? { type: "mcp", server_label: "remote", name: "shell" } : { type: "function", name: "lookup" };
+    const tools = native ? [{ type: "mcp", server_label: "remote", server_url: "https://mcp.example.test" }]
+      : [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
+    const budget = createRequestExecutionBudget();
+    const response = await handleResponses(request("hello", false, { tool_choice: choice, tools }), f.config, log, { sendBudget: budget });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("mandatory tool_choice cannot be preserved");
+    expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(f.sent.filter(call => call.path === "/models/session/intent").map(call => call.host))
+      .toEqual(["a.githubcopilot.com", "b.githubcopilot.com"]);
+    expect(getAccountSet("github-copilot")!.accounts.find(account => account.id === a)?.paused).toBe(true);
+    expect(budget.used).toBe(1);
+    expect(sentIdentity?.model).toBe("gpt-4o");
+    expect(log.model).toBe(sentIdentity?.model);
+    expect(log.accountLogLabel).toBe(sentIdentity?.accountLogLabel);
+    expect(log.providerAdapter).toBe(sentIdentity?.providerAdapter);
+    expect(log.activeAttempt?.model).toBe(sentAttemptModel);
+    expect(getAccountSet("github-copilot")!.activeAccountId).toBe(b);
+  });
+  test.each([false, true])("Copilot funds only ingress-owned roster budgets before sending (ingress=%s)", async ingress => {
+    await accounts();
+    const req = request("hello", false), log: RequestLogContext = {};
+    const budget = ingress ? createInferenceSendBudget(req, log) : createRequestExecutionBudget({
+      maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1,
+    });
+    let ceilingAtSend: number | undefined;
+    const f = fixture({ chatOnly: true, onInference: () => { ceilingAtSend = budget.policy.maxTotalModelSends; } });
+    try {
+      const response = await handleResponses(req, f.config, log, { sendBudget: budget });
+      expect(response.status, await response.text()).toBe(200);
+      expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(1);
+      expect(ceilingAtSend).toBe(ingress ? 6 : 2);
+      expect(budget.policy.maxTotalModelSends).toBe(ingress ? 6 : 2);
+    } finally { log.spendTracker?.settle(undefined); }
+  });
+  test.each([false, true])("accepted account negotiation preserves physical attribution (deny B=%s)", async deny => {
+    const { a, b } = await accounts();
+    const log: RequestLogContext = { provider: "github-copilot", spendInputEstimateTokens: 1 };
+    let firstLabel: string | undefined;
+    const targets: Array<string | undefined> = [];
+    const tracker = createRequestSpendTracker(log, undefined, createSpendReservationLedger({
+      journal: spendTestJournal(), salt: testSpendSalt, policy: spendTestPolicy({ pool: { maxTokens: 100_000 } }),
+    }));
+    const budget = createRequestExecutionBudget(undefined, undefined, { ...tracker,
+      ensureSeed: (target, proof) => {
+        targets.push(target.identityId);
+        if (deny && firstLabel && target.identityId && target.identityId !== firstLabel) return undefined;
+        return tracker.ensureSeed(target, proof);
+      },
+    });
+    const f = fixture({ chatOnly: true, pauseRefusal: true, onInference: async count => {
+      if (count === 1) { firstLabel = log.accountLogLabel; await setActiveAccount("github-copilot", b); }
+    } });
+    f.config.providers["github-copilot"]!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+    saveConfig(f.config);
+    try {
+      const response = await handleResponses(request("hello", false), f.config, log, { sendBudget: budget });
+      const text = await response.text();
+      expect(response.status, text).toBe(deny ? 429 : 200);
+      expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path)).map(call => call.body.model))
+        .toEqual(deny ? ["gpt-4o"] : ["gpt-4o", "gpt-5.4"]);
+      expect(budget.used).toBe(deny ? 1 : 2);
+      expect((log.attempts ?? []).filter(attempt => attempt.sendCount > 0).map(attempt => attempt.model))
+        .toEqual(deny ? ["gpt-4o"] : ["gpt-4o", "gpt-5.4"]);
+      expect(log.model).toBe(deny ? "gpt-4o" : "gpt-5.4");
+      if (deny) expect(log.accountLogLabel).toBe(firstLabel);
+      else expect(log.accountLogLabel).not.toBe(firstLabel);
+      expect(targets.some(identity => identity && identity !== firstLabel)).toBe(true);
+      expect(getAccountSet("github-copilot")!.accounts.find(account => account.id === a)?.paused).toBe(true);
+      expect(getAccountSet("github-copilot")!.activeAccountId).toBe(b);
+    } finally { tracker.settle(undefined); }
+  });
+  test.each([false, true])("physical spend denial leaves no Copilot attempt (Chat=%s)", async chat => {
+    await accounts();
+    const f = fixture({ nativeFirst: !chat, chatOnly: chat });
+    const budget = createRequestExecutionBudget(undefined, undefined, {
+      enforced: true, startRequest: () => {}, charge: () => true, refund: () => {}, ensureSeed: () => undefined,
+    });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", false), f.config, log, { sendBudget: budget });
+    expect(response.status).toBe(429);
+    expect(await response.text()).toContain("request_send_budget_exhausted");
+    expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(0);
+    expect({ charged: budget.used, physical: budget.physicalStarted,
+      attempts: (log.attempts ?? []).reduce((total, attempt) => total + attempt.sendCount, 0) })
+      .toEqual({ charged: 0, physical: 0, attempts: 0 });
+  });
+  test.each([[false, false], [true, false], [false, true], [true, true]] as const)(
+    "pre-physical tool refusal consumes no send or attempt (Chat=%s negotiation401=%s)", async (chat, negotiation401) => {
+    const { a } = await accounts();
+    const actualNow = Date.now;
+    let offset = 0;
+    Date.now = () => actualNow() + offset;
+    try {
+      const f = fixture({ nativeExpiry: true, chatOnly: chat, advanceAfterIntent: () => { offset = 61_000; },
+        ...(negotiation401 ? { negotiationRefusal: 401, negotiationRefusalAt: 2 } : {}) });
+      f.config.providers["github-copilot"]!.autoToolChoiceOnlyModels = ["gpt-5.4"];
+      const budget = createRequestExecutionBudget(), log: RequestLogContext = {};
+      const response = await handleResponses(request("hello", false, { tool_choice: { type: "function", name: "lookup" } }),
+        f.config, log, { sendBudget: budget });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("mandatory tool_choice cannot be preserved");
+      expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(0);
+      expect({ charged: budget.used, attempts: (log.attempts ?? []).reduce((total, attempt) => total + attempt.sendCount, 0) })
+        .toEqual({ charged: 0, attempts: 0 });
+      expect(log.model).toBe("auto"); // No physical send published a negotiated model.
+      expect(f.refreshCount).toBe(negotiation401 ? 1 : 0);
+      expect(getAccountSet("github-copilot")!.accounts.find(account => account.id === a)!.credential.access.endsWith("-renewed"))
+        .toBe(negotiation401);
+    } finally { Date.now = actualNow; }
+  });
   test.each([[false, false], [true, false], [false, true], [true, true]])(
     "expired native session hands off to Chat before inference with stream=%s negotiation401=%s", async (stream, negotiation401) => {
       await accounts();
@@ -190,10 +550,25 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(logCtx.providerAdapter).toBe("openai-chat");
     expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path)).map(call => call.path))
       .toEqual(["/responses", "/chat/completions"]);
+    expect((logCtx.attempts ?? []).filter(attempt => attempt.sendCount > 0)
+      .map(attempt => [attempt.model, attempt.adapter, attempt.sendCount]))
+      .toEqual([["gpt-4o", "openai-responses", 1], ["gpt-4o", "openai-chat", 1]]);
     expect(f.sent.filter(call => call.path === "/models/session")).toHaveLength(2);
     expect(f.refreshCount).toBe(1);
     expect(f.cancelledNativeBodies).toBe(1);
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
+  });
+  test.each([false, true])("same-account model refresh preserves each physical model (stream=%s)", async stream => {
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true }), log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", stream), f.config, log);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("ok");
+    expect(f.sent.filter(call => call.path === "/chat/completions").map(call => [call.host, call.body.model]))
+      .toEqual([["a.githubcopilot.com", "gpt-4o"], ["a.githubcopilot.com", "gpt-5.4"]]);
+    expect((log.attempts ?? []).filter(attempt => attempt.sendCount > 0).map(attempt => [attempt.model, attempt.adapter, attempt.sendCount]))
+      .toEqual([["gpt-4o", "openai-chat", 1], ["gpt-5.4", "openai-chat", 1]]);
+    expect(f.refreshCount).toBe(1);
   });
   test.each([401, 403, 429])("passthrough refresh negotiation refusal %s stays secret-safe", async status => {
     await accounts();

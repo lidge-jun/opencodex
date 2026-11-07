@@ -58,3 +58,11 @@ The tray and desktop-only dashboard entry beside Desktop update open `desktop/ui
 are guarded by the main window's local CLI page; Back uses `return_to_dashboard`, guarded for
 the update and CLI pages, falling back to the startup page when no dashboard is ready. Removal
 saves off first. Configuration cannot enforce selection against aliases or later PATH edits.
+
+For eligible POSIX npm/pnpm calls, `src/lib/desktop-cli-handoff.mjs` keeps a settled,
+enabled Desktop selection even when the target disappears: validation fails with
+`target-unusable`, and a synchronous or asynchronous spawn failure returns `spawn-failed`.
+Neither failure resumes package/Bun execution. Repair the Desktop command, disable it,
+or explicitly use `OCX_NO_DESKTOP_HANDOFF=1` for a package invocation. Missing/disabled
+records, maintenance exclusions and Windows PATH selection retain their existing behavior.
+`tests/cli/ocx-launcher-desktop-handoff.test.ts` exercises refusal and restored-target handoff.
