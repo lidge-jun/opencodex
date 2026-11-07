@@ -364,6 +364,21 @@ test("UX-05: equal account IDs keep pool-keyed rosters and thresholds in the acc
 });
 
 for (const item of [POOL_A, POOL_B]) {
+  test(`${item.name} account rows prefer aliases and masked labels without rendering raw email`, async () => {
+    respond = async request => request.path === "/api/pool/settings"
+      ? Response.json(poolSettings(item.name, false, 55)) : Response.json(grantSnapshot(item.name, 1));
+    const rows = accounts(item.name).map((row, index) => ({ ...row,
+      maskedLabel: index === 0 ? "s***d@example.test" : "o***r@example.test",
+      ...(index === 0 ? { alias: "Work" } : {}),
+    }));
+    await render(<ProviderAuthPanel item={item} apiBase="" accounts={rows} authHandlers={recordingHandlers([])} />);
+    await tick();
+    expect(host.textContent).toContain("Work");
+    expect(host.textContent).toContain("o***r@example.test");
+    expect(host.textContent).not.toContain(`shared@${item.name}.test`);
+    expect(host.textContent).not.toContain(`other@${item.name}.test`);
+    expect(host.querySelector('[aria-label*="Work"]')).not.toBeNull();
+  });
   test(`${item.name} reset-grant dialog keeps the ordinal account label`, async () => {
     respond = async request => request.path === "/api/pool/settings"
       ? Response.json(poolSettings(item.name, false, 55))
@@ -391,15 +406,15 @@ for (const item of [POOL_A, POOL_B, CUSTOM_B, { ...POOL_A, name: "cursor", adapt
       await act(async () => { await pools.pauseAccount(item.name, target, true); });
       let pending!: Promise<void>;
       await act(async () => { pending = pools.removeAccount(item.name, target); await Promise.resolve(); });
-      const expected = item === POOL_A || item === POOL_B ? "Account 1" : `shared@${item.name}.test`;
+      const expected = "Account 1";
       expect(win.document.querySelector("dialog")?.textContent).toContain(expected);
-      if (item === POOL_A || item === POOL_B) expect(win.document.body.textContent).not.toContain(`shared@${item.name}.test`);
+      expect(win.document.body.textContent).not.toContain(`shared@${item.name}.test`);
       const confirm = [...win.document.querySelectorAll("dialog button")].find(button => button.textContent === en["common.remove"]);
       expect(confirm).toBeTruthy();
       await act(async () => { (confirm as unknown as HTMLElement).click(); await pending; });
       expect(notices).toHaveLength(2);
       expect(notices.every(message => message.includes(expected))).toBe(true);
-      if (item === POOL_A || item === POOL_B) expect(notices.join(" ")).not.toContain(`shared@${item.name}.test`);
+      expect(notices.join(" ")).not.toContain(`shared@${item.name}.test`);
     });
   }
 }

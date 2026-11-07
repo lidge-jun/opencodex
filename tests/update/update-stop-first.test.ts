@@ -255,7 +255,7 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
   fixtureStatus("runtime-exit", { exitCode: code, signal });`);
   replaceOnce('child.on("error", err => {', `child.on("error", err => {
   fixtureStatus("runtime-spawn-error", recoveryErrorFields(err));`);
-  replaceOnce('const clearHandlers = () => {', 'child.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));\nconst clearHandlers = () => {');
+  replaceOnce('forwarding.attach(child);', 'forwarding.attach(child);\nchild.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));');
   return source;
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
@@ -348,7 +348,7 @@ describe("bounded recovery diagnostics", () => {
       'const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });',
       'const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });',
       'const child = probeSpawn(bun,', 'child.on("exit", (code, signal) => {',
-      'child.on("error", err => {', 'const clearHandlers = () => {',
+      'child.on("error", err => {', 'forwarding.attach(child);',
     ];
     for (const seam of seams) {
       expect(() => instrumentRecoveryLauncher(launcherSource.replace(seam, ""), "/fixture"))
@@ -435,11 +435,12 @@ function resolveBun() {
 const passiveSync = false;
 const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });
 const bun = bunRuntime.path;
+const forwarding = { attach() {}, clear() { events.push("clear"); } };
 const child = probeSpawn(bun, ["fixture-cli", "start"], childOptions);
-const clearHandlers = () => { events.push("clear"); };
-child.on("error", err => { clearHandlers(); events.push(err); process.exit(1); });
+forwarding.attach(child);
+child.on("error", err => { forwarding.clear(); events.push(err); process.exit(1); });
 child.on("exit", (code, signal) => {
-  clearHandlers();
+  forwarding.clear();
   if (signal) { process.kill(process.pid, signal); return; }
   process.exit(code ?? 1);
 });

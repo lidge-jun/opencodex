@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import Usage from "../src/pages/Usage";
 import { matchesFacetWindow } from "../src/components/v2-usage/usage-source";
+import { isUsageReport } from "../src/components/v2-usage/usage-validation";
 import { configureApiTargets, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, SESSION_UNAVAILABLE_EVENT, usageSessionSnapshot } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
 
@@ -22,7 +23,7 @@ function echo(url: string) {
   return { client: query.get("client"), device: query.get("device") === "key" ? { kind: "key", id: query.get("apiKeyId") } : { kind: query.get("device") } };
 }
 function report(url: string) {
-  return { sourceFilter: echo(url), legacyUnclassifiedRequests: 2, range: "30d", surface: "all", since: null, generatedAt: Date.now(), historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
+  return { sourceFilter: echo(url), legacyUnclassifiedRequests: 2, range: new URL(url).searchParams.get("range"), surface: "all", since: null, generatedAt: Date.now(), historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
     summary: { requests: 0, measuredRequests: 0, reportedRequests: 0, unreportedRequests: 0, unsupportedRequests: 0, estimatedRequests: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 0 }, days: [], models: [], providers: [] };
 }
 function facets(url: string) {
@@ -30,6 +31,11 @@ function facets(url: string) {
     devices: [{ device: { kind: "all" }, requests: 30 }, { device: { kind: "no-key" }, requests: 10 },
       { device: { kind: "key", id: "key-a" }, requests: 12 }, { device: { kind: "unconfigured" }, requests: 8 }],
     legacyUnclassifiedRequests: 2, usageIncomplete: false };
+}
+function markedReport(url: string, marker: string) {
+  const body = report(url);
+  return { ...body, summary: { ...body.summary, requests: 1 }, models: [{ provider: "openai", model: marker, requests: 1,
+    measuredRequests: 0, reportedRequests: 0, estimatedRequests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, shareRatio: 0 }] };
 }
 const response = (body: unknown) => Response.json(body, { headers: { "cache-control": "no-store" } });
 beforeEach(() => {
@@ -62,14 +68,26 @@ async function click(button: HTMLButtonElement) { await act(async () => button.c
 function trigger() { return host.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!; }
 function radio(name: string) { return [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(button => button.textContent?.includes(name))!; }
 
+test("monochrome client marks share dark-mode treatment while colored logos remain unchanged", async () => {
+  await mount();
+  await click(trigger());
+  for (const [name, mono] of [["Grok", true], ["OpenCode", true], ["Aside", true], ["Codex", false], ["Claude Code", false]] as const) {
+    const icon = radio(name).querySelector("img");
+    expect(icon).not.toBeNull();
+    expect(icon!.classList.contains("usage-source-mark--mono")).toBe(mono);
+  }
+});
+
 test("selects app and device independently, searches, and restores focus on Escape", async () => {
   await mount();
-  expect(calls[0]!.url).toContain("client=codex&device=all");
-  expect(host.textContent).toContain("2 older requests");
+  expect(calls[0]!.url).toContain("client=all&device=all");
+  expect(host.textContent).toContain("No usage recorded yet");
   await click(trigger());
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Search apps and devices");
   expect(document.querySelectorAll('[role="radiogroup"]')).toHaveLength(2);
-  expect(radio("Codex").getAttribute("aria-checked")).toBe("true");
+  expect(radio("All apps").getAttribute("aria-checked")).toBe("true");
+  await click(radio("Codex"));
+  expect(host.textContent).toContain("2 older requests");
   expect(radio("Laptop").textContent).toContain("12");
   await click(radio("Grok"));
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
@@ -96,8 +114,12 @@ test("unverified clients explain that traffic may remain unknown", async () => {
   expect(host.textContent).toContain("This app is not identified automatically yet; its traffic may appear as unknown.");
 });
 
-test.each([undefined, { client: "all", device: { kind: "all" } }, { client: "codex", device: { kind: "all", id: "unexpected" } }, { client: "codex", device: { kind: "all" }, scope: "unexpected" }])("refuses missing or mismatched report echoes", async sourceFilter => {
-  globalThis.fetch = (async (input: RequestInfo | URL) => response({ ...report(String(input)), sourceFilter, summary: { requests: 1 }, models: [{ model: "WRONG" }], providers: [], days: [] })) as typeof fetch;
+test.each([undefined, { client: "codex", device: { kind: "all" } }, { client: "all", device: { kind: "all", id: "unexpected" } }, { client: "all", device: { kind: "all" }, scope: "unexpected" }])("refuses missing or mismatched report echoes", async sourceFilter => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const body = markedReport(String(input), "WRONG");
+    expect(isUsageReport(body)).toBe(true);
+    return response({ ...body, sourceFilter });
+  }) as typeof fetch;
   await mount();
   expect(host.textContent).toContain("Could not load usage data");
   expect(host.textContent).not.toContain("WRONG");
@@ -105,7 +127,7 @@ test.each([undefined, { client: "all", device: { kind: "all" } }, { client: "cod
 
 test("link and unknown connections never request inventory or broad data; missing key fails closed", async () => {
   await mount({ connected: true, apiKeyId: "key-a", topology: "link" });
-  expect(calls[0]!.url).toContain("client=codex&device=key&apiKeyId=key-a");
+  expect(calls[0]!.url).toContain("client=all&device=key&apiKeyId=key-a");
   await click(trigger());
   expect(calls.some(call => call.url.includes("source-facets") || call.url.includes("/devices"))).toBe(false);
   expect(host.textContent).not.toContain("Hub-wide");
@@ -114,6 +136,19 @@ test("link and unknown connections never request inventory or broad data; missin
   await mount({ connected: true, topology: "unknown" });
   expect(calls).toHaveLength(0);
   expect(host.textContent).toContain("Could not load usage data");
+});
+
+test.each(["link", "unknown", "hub"] as const)("a restricted %s connection with a missing device key has no implied Codex choice", async topology => {
+  await mount({ connected: true, topology });
+  expect(calls).toHaveLength(0);
+  expect(host.textContent).toContain("Could not load usage data");
+  expect(trigger().textContent).toContain("All apps");
+  expect(trigger().textContent).not.toContain("Codex");
+  await click(trigger());
+  expect(radio("Codex").getAttribute("aria-checked")).toBe("false");
+  expect(radio("All apps").tabIndex).toBe(0);
+  expect(document.querySelector('[role="radiogroup"][aria-label="Devices"] [role="radio"]')).toBeNull();
+  expect(calls).toHaveLength(0);
 });
 
 test("discards old facet responses after selection and rejects mismatched facet echoes", async () => {
@@ -232,7 +267,7 @@ test("unconfigured reports require no-store, clear on focus, and reject late res
   await act(async () => waiting[1]!.resolve(response(report(waiting[1]!.url))));
   expect(host.textContent).toContain("Loading usage data");
   await act(async () => waiting[2]!.resolve(response(report(waiting[2]!.url))));
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   expect([...Array(sessionStorage.length)].map((_, i) => sessionStorage.key(i)).some(key => key?.includes("unconfigured"))).toBe(false);
 });
 
@@ -286,8 +321,12 @@ test("invalid or mismatched facet windows never display counts", async () => {
   expect(radio("Codex").textContent).not.toContain("30");
 });
 
-test("mismatched report range or surface is not displayed", async () => {
-  globalThis.fetch = (async (input: RequestInfo | URL) => response({ ...report(String(input)), range: "all", surface: "all", summary: { requests: 1 }, models: [{ model: "WRONG WINDOW" }], providers: [], days: [] })) as typeof fetch;
+test.each([{ range: "all" }, { surface: "codex" }])("mismatched report range or surface is not displayed: %o", async mismatch => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const body = markedReport(String(input), "WRONG WINDOW");
+    expect(isUsageReport(body)).toBe(true);
+    return response({ ...body, ...mismatch });
+  }) as typeof fetch;
   await mount();
   expect(host.textContent).toContain("Could not load usage data");
   expect(host.textContent).not.toContain("WRONG WINDOW");
@@ -298,7 +337,7 @@ test("no-key uses Mac, device, and connected Home context labels", async () => {
   await mount(); await click(trigger());
   expect(radio("This Mac")).toBeTruthy();
   await click(radio("This Mac"));
-  expect(calls.some(call => call.url.includes("client=codex&device=no-key"))).toBe(true);
+  expect(calls.some(call => call.url.includes("client=all&device=no-key"))).toBe(true);
   expect(document.body.textContent).toContain("does not prove the originating device");
   await act(async () => root.unmount());
   Object.defineProperty(win.navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 (X11; Linux x86_64)" });
@@ -357,7 +396,7 @@ test("a mutation fences in-flight facets and unconfigured report before they can
   expect(host.textContent).toContain("Loading usage data");
   expect(radio("Codex").textContent).not.toContain("30");
   await act(async () => { for (const gate of gates.slice(2)) gate.resolve(response(gate.url.includes("source-facets") ? facets(gate.url) : report(gate.url))); });
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   expect(radio("Codex").textContent).toContain("30");
 });
 
@@ -396,7 +435,7 @@ test.each([
   }) as typeof fetch;
   await mount();
   expect(host.textContent).toContain("Could not load usage data");
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(sessionStorage.length).toBe(0);
 });
 
@@ -518,7 +557,7 @@ test("logout immediately clears reports and aliases and fences a late successful
   expect(document.body.textContent).not.toContain("Private laptop");
   expect(sessionStorage.getItem("ocx.usage.v2:old")).toBeNull();
   await act(async () => release!(response(report(pendingUrl))));
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(host.textContent).toContain("Could not load usage data");
 });
 
@@ -535,7 +574,7 @@ test.each([401])("a %s report response revokes previously shown usage and source
   expect(document.body.textContent).toContain("Private laptop");
   await click(radio("Grok"));
   expect(document.body.textContent).not.toContain("Private laptop");
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(host.textContent).toContain("Could not load usage data");
 });
 
@@ -549,11 +588,11 @@ test.each([401])("a %s facet denial clears active report, counts, and inventory 
     return response(report(url));
   }) as typeof fetch;
   await mount(); await click(trigger());
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   expect(document.body.textContent).toContain("Private laptop");
   rejectFacets = true;
   await act(async () => win.dispatchEvent(new win.Event("focus")));
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(document.body.textContent).not.toContain("Private laptop");
   expect(radio("Codex").textContent).not.toContain("30");
 });
@@ -577,7 +616,7 @@ test("a session expiring during facet refresh clears previously shown device ali
   expect(release).toBeDefined();
   await act(async () => release!(Response.json({ error: "session_expired" }, { status: 401 })));
   expect(document.body.textContent).not.toContain("Private laptop");
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(usageSessionSnapshot().blocked).toBe(true);
 });
 
@@ -594,10 +633,10 @@ test("a new shared session rejects a previous session's late success", async () 
   await mount();
   expect(release).toBeDefined();
   await act(async () => installSharedSession("ocx_session_new"));
-  expect(host.textContent).toContain("2 older requests");
-  await act(async () => release!(response({ ...report(initialUrl), legacyUnclassifiedRequests: 17 })));
-  expect(host.textContent).toContain("2 older requests");
-  expect(host.textContent).not.toContain("17 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
+  await act(async () => release!(response(markedReport(initialUrl, "stale-session-model"))));
+  expect(host.textContent).toContain("No usage recorded yet");
+  expect(host.textContent).not.toContain("stale-session-model");
 });
 
 
@@ -607,11 +646,11 @@ test("policy 403 responses do not revoke the Usage session", async () => {
   installApiAuthFetch();
   await win.fetch("http://localhost/api/link/candidates");
   expect(usageSessionSnapshot().blocked).toBe(false);
-  await win.fetch("http://localhost/api/usage/source-facets?client=codex&device=all");
+  await win.fetch("http://localhost/api/usage/source-facets?client=all&device=all");
   expect(usageSessionSnapshot().blocked).toBe(false);
   await win.fetch("http://localhost/api/usage/devices");
   expect(usageSessionSnapshot().blocked).toBe(false);
-  await win.fetch("http://localhost/api/usage?client=codex&device=all");
+  await win.fetch("http://localhost/api/usage?client=all&device=all");
   expect(usageSessionSnapshot().blocked).toBe(false);
 });
 
@@ -620,7 +659,7 @@ test("a stale 403 cannot revoke a replacement shared session", async () => {
   let release: ((response: Response) => void) | undefined;
   Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: () => new Promise<Response>(resolve => { release = resolve; }) });
   installApiAuthFetch();
-  const old = win.fetch("http://localhost/api/usage?client=codex&device=all");
+  const old = win.fetch("http://localhost/api/usage?client=all&device=all");
   installSharedSession("ocx_session_replacement");
   release!(new Response(null, { status: 403 }));
   expect((await old).status).toBe(403);
@@ -646,7 +685,7 @@ test.each([
   globalThis.fetch = (async (input: RequestInfo | URL) => response({ ...report(String(input)), ...metadata })) as typeof fetch;
   await mount();
   expect(host.textContent).toContain("Could not load usage data");
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
 });
 
 test("shows an unavailable configured-key count while preserving valid choices", async () => {
@@ -712,10 +751,10 @@ test("raw admin facet 403 preserves the report and its Retry action", async () =
   installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
   expect((await fetch("http://localhost/api/combos")).status).toBe(200);
   await mount({}, "http://localhost");
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   await click(trigger());
   expect(document.body.textContent).toContain("Counts unavailable or incomplete");
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   expect(usageSessionSnapshot().blocked).toBe(false);
   failReport = true;
   const seven = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.getAttribute("aria-label") === "7d")!;
@@ -723,7 +762,7 @@ test("raw admin facet 403 preserves the report and its Retry action", async () =
   const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Retry")!;
   expect(retry).toBeTruthy();
   failReport = false; await click(retry);
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
 });
 
 test("Usage 401 hides old data while renewing the session and then recovers", async () => {
@@ -752,10 +791,10 @@ test("Usage 401 hides old data while renewing the session and then recovers", as
   Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
   installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
   await mount({}, "http://localhost");
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   await click(trigger()); expired = true;
   await click(radio("Grok"));
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(releaseBootstrap).toBeDefined();
   await act(async () => { releaseBootstrap!(); await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(usageSessionSnapshot().blocked).toBe(false);
@@ -794,7 +833,7 @@ test("accepts finite token totals beyond the safe-integer range", async () => {
     return response({ ...body, summary: { ...body.summary, totalTokens: 1e18 } });
   }) as typeof fetch;
   await mount();
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   expect(host.textContent).not.toContain("Could not load usage data");
 });
 
@@ -802,7 +841,7 @@ test("an aborted prior facet 401 cannot revoke the selected source's session", a
   let release: ((response: Response) => void) | undefined;
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("source-facets") && url.includes("client=codex")) return new Promise<Response>(resolve => { release = resolve; });
+    if (url.includes("source-facets") && url.includes("client=all")) return new Promise<Response>(resolve => { release = resolve; });
     if (url.includes("source-facets")) return Promise.resolve(response(facets(url)));
     if (url.includes("/devices")) return Promise.resolve(response({ devices: [] }));
     return Promise.resolve(response({ ...report(url), range: new URL(url).searchParams.get("range") }));
@@ -819,7 +858,7 @@ test("an incomplete report without a reason still displays its warning", async (
   globalThis.fetch = (async (input: RequestInfo | URL) => response({ ...report(String(input)), usageIncomplete: true })) as typeof fetch;
   await mount();
   expect(host.textContent).toContain("Some usage records could not be included");
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
 });
 
 test.each([undefined, 0])("an absent or zero unavailable-key count keeps valid facets", async unavailableConfiguredKeys => {
@@ -854,17 +893,17 @@ test("raw admin unconfigured 403 shows a local error and another device recovers
   installApiAuthFetch(); globalThis.fetch = win.fetch.bind(win) as typeof fetch;
   expect((await fetch("http://localhost/api/combos")).status).toBe(200);
   await mount({}, "http://localhost"); await click(trigger());
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   await click(radio("Unconfigured keys"));
   expect(host.textContent).toContain("Could not load usage data");
-  expect(host.textContent).not.toContain("2 older requests");
+  expect(host.textContent).not.toContain("No usage recorded yet");
   expect(usageSessionSnapshot().blocked).toBe(false);
   const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Retry")!;
   await click(retry);
   expect(host.textContent).toContain("Could not load usage data");
   expect(usageSessionSnapshot().blocked).toBe(false);
   await click(radio("All devices"));
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   expect(host.textContent).not.toContain("Could not load usage data");
 });
 
@@ -882,10 +921,10 @@ test.each([401, 403])("a late aborted report %s cannot block the newly selected 
   expect(release).toBeDefined();
   await click(radio("Codex"));
   expect(oldSignal?.aborted).toBe(true);
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   await act(async () => release!(new Response(null, { status })));
   expect(usageSessionSnapshot().blocked).toBe(false);
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
 });
 
 test.each([403, 503])("detached Usage recovery reports unavailable when bootstrap returns %s", async status => {
@@ -927,11 +966,11 @@ test("superseded detached recovery does not report the newer session unavailable
   await mount({}, "http://localhost");
   expect(release).toBeDefined();
   await act(async () => installSharedSession("ocx_session_new_detached"));
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
   await act(async () => { release!(new Response(null, { status: 403 })); await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(unavailableEvents).toBe(0);
   expect(usageSessionSnapshot().blocked).toBe(false);
-  expect(host.textContent).toContain("2 older requests");
+  expect(host.textContent).toContain("No usage recorded yet");
 });
 
 test.each([false, true])("a cancelled detached recovery reports unavailable only for the current session (superseded=%s)", async superseded => {
@@ -959,7 +998,7 @@ test.each([false, true])("a cancelled detached recovery reports unavailable only
   await act(async () => { cancel!(); await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(unavailableEvents).toBe(superseded ? 0 : 1);
   expect(usageSessionSnapshot().blocked).toBe(!superseded);
-  if (superseded) expect(host.textContent).toContain("2 older requests");
+  if (superseded) expect(host.textContent).toContain("No usage recorded yet");
 });
 
 test.each([false, true])("a rejected detached recovery reports unavailable only while current (superseded=%s)", async superseded => {
@@ -985,5 +1024,5 @@ test.each([false, true])("a rejected detached recovery reports unavailable only 
   await act(async () => { fail!(); await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(unavailableEvents).toBe(superseded ? 0 : 1);
   expect(usageSessionSnapshot().blocked).toBe(!superseded);
-  if (superseded) expect(host.textContent).toContain("2 older requests");
+  if (superseded) expect(host.textContent).toContain("No usage recorded yet");
 });
