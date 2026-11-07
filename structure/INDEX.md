@@ -147,6 +147,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`clients/t3code.md`](clients/t3code.md) | T3 Code settings.json Claude provider-instance ownership, proxy environment, custom models and loopback marker rules. |
 | [`companion.md`](companion.md) | Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts. |
 | [`codex-account-controls.md`](codex-account-controls.md) | Account selection order, custom usage thresholds, and stable account-card editing. |
+| [`telemetry.md`](telemetry.md) | Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, and CLI. |
 
 ### Tier 6 — Operations and process
 
@@ -256,6 +257,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/telemetry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/cli/update-restart.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
 | `src/client/hub-client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
@@ -448,6 +450,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/management/telemetry-routes.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/messages-native-tool-guard.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/messages-native.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -507,6 +510,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/sidecar/anthropic-binding.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/stall-timeout.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`runtime.md`](runtime.md) |
 | `src/storage/` | [`runtime.md`](runtime.md) |
+| `src/telemetry/` | [`telemetry.md`](telemetry.md) |
 | `src/tray/` | [`runtime.md`](runtime.md) |
 | `src/types.ts` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
 | `src/types/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md) |
@@ -514,6 +518,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types/admission-policy.ts` | [`advisor.md`](advisor.md) |
 | `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`config.md`](config.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
+| `src/types/telemetry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/update/guarded-port-reclaim.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/guarded-runtime-ops.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
