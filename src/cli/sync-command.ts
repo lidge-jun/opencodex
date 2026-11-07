@@ -50,7 +50,8 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
     if (expectation || clientState.kind === "connected") {
       try {
         const { syncConnectedClient } = await import("../client/connect");
-        const result = await syncConnectedClient({ restartCodex, ...(expectation ? { expect: expectation } : {}), overwriteConflict: syncArgs.includes("--overwrite-conflict"), overwriteClient: flags.overwriteClient });
+        const result = await syncConnectedClient({ restartCodex, ...(expectation ? { expect: expectation } : {}),
+          ...(syncArgs.includes("--overwrite-conflict") ? { overwriteConflict: true, ...(flags.overwriteClient ? { overwriteClient: flags.overwriteClient } : {}) } : {}) });
         if (expectation) {
           // The root preflight skipped the shim repair for a pinned sync; the identity held, so
           // run it now, as an unpinned sync would have.
