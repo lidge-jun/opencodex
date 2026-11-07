@@ -608,3 +608,98 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     assert!(!codex_home.join("models_cache.json").exists());
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[test]
+fn detach_purge_removes_only_managed_binary_refuses_symlinks_and_emits_conflict_codes() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_ocx-child"));
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-purge-test-{}-{}",
+        std::process::id(),
+        ocx_child::platform::now_epoch_ms()
+    ));
+    let fake_home = scratch.join("home");
+    let ocx_home = fake_home.join(".opencodex");
+    let codex_home = fake_home.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+
+    // 1. Conflict code: child_port_busy before Home contact
+    let held = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    let held_port = held.local_addr().unwrap().port();
+    let cred = r#"{"apiKeyId":"key_1","key":"ocx_data_0123456789abcdef0123456789abcdef01234567"}"#;
+    let (rc_busy, _, err_busy) = run_bin(
+        &ocx_home,
+        &codex_home,
+        held_port,
+        &["connect", "--link", "--key-stdin", "--link-id", "lnk_0123456789abcdef", "--tunnel-port", "24500"],
+        Some(cred.as_bytes()),
+    );
+    assert_eq!(rc_busy, 1);
+    assert!(err_busy.contains("ocx-child-conflict:child_port_busy:"), "got: {err_busy}");
+    drop(held);
+
+    // 2. Conflict code: child_external_provider_conflict across all 3 root conflict branches
+    for sample in [
+        "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://api.example.com/v1\"\n",
+        "openai_base_url = \"https://custom.example.com/v1\"\n",
+        "model_catalog_json = \"/tmp/custom-catalog.json\"\n",
+    ] {
+        let err = ocx_child::toml_surgeon::detect_unowned_root_routing_conflict(sample).unwrap_err();
+        assert!(err.contains("ocx-child-conflict:child_external_provider_conflict:"), "got: {err}");
+    }
+
+    // 3. Foreign executable path: --purge keeps foreign binary intact
+    let foreign_dir = scratch.join("foreign");
+    fs::create_dir_all(&foreign_dir).unwrap();
+    let exe_name = if cfg!(windows) { "ocx-child.exe" } else { "ocx-child" };
+    let foreign_exe = foreign_dir.join(exe_name);
+    fs::copy(bin, &foreign_exe).unwrap();
+    let out_foreign = Command::new(&foreign_exe)
+        .args(["detach", "--purge", "--json"])
+        .env("HOME", &fake_home)
+        .env("USERPROFILE", &fake_home)
+        .env("OPENCODEX_HOME", &ocx_home)
+        .env("CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert_eq!(out_foreign.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out_foreign.stdout).contains("\"purged\":false"));
+    assert!(foreign_exe.exists(), "foreign binary must never be deleted by --purge");
+
+    // 4. Managed plant path: --purge deletes planted binary and empty child directory
+    let managed_bin_dir = fake_home.join(".cache").join("opencodex").join("bin");
+    fs::create_dir_all(&managed_bin_dir).unwrap();
+    let planted_exe = managed_bin_dir.join(exe_name);
+    fs::copy(bin, &planted_exe).unwrap();
+    let out_managed = Command::new(&planted_exe)
+        .args(["disconnect", "--purge", "--json"])
+        .env("HOME", &fake_home)
+        .env("USERPROFILE", &fake_home)
+        .env("OPENCODEX_HOME", &ocx_home)
+        .env("CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert_eq!(out_managed.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out_managed.stdout).contains("\"purged\":true"));
+    #[cfg(unix)]
+    assert!(!planted_exe.exists(), "managed planted binary must be removed");
+    assert!(!ocx_home.join("child").exists(), "empty child state dir must be removed");
+
+    // 5. Ancestor symlink guard on Unix: refuses when .cache/opencodex is a symlink to foreign_dir
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let sym_home = scratch.join("sym-home");
+        fs::create_dir_all(sym_home.join(".cache")).unwrap();
+        let target_root = scratch.join("real-target");
+        fs::create_dir_all(target_root.join("bin")).unwrap();
+        let target_exe = target_root.join("bin").join("ocx-child");
+        fs::copy(bin, &target_exe).unwrap();
+        symlink(&target_root, sym_home.join(".cache").join("opencodex")).unwrap();
+        let via_sym = sym_home.join(".cache").join("opencodex").join("bin").join("ocx-child");
+        let sym_err = ocx_child::platform::purge_managed_executable(&via_sym, &sym_home, None).unwrap_err();
+        assert!(sym_err.contains("symlink"), "expected symlink refusal, got: {sym_err}");
+        assert!(target_exe.exists(), "target behind ancestor symlink must remain intact");
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+}

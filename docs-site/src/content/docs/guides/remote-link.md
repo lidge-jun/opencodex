@@ -9,7 +9,7 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 
 - The Home computer can log in to the Child with an OpenSSH key.
 - For a Child-initiated link, the Child can log in to Home with an OpenSSH key (password login is not supported).
-- OpenCodex 2.66.0 or later is installed on the Child computer, and on Home for a Child-initiated link.
+- OpenCodex 2.66.0 or later on Home (and on the Child for a Child-initiated link or full Child install). When adding a Child from Home, a bare SSH host needs no pre-installed Node, Bun, or OpenCodex: Home can plant the standalone lightweight `ocx-child` binary (~0.9 MB) over SSH during onboarding.
 - Both computers run macOS, Linux, or Windows x64. Windows requires OpenSSH Server and Windows PowerShell; Git Bash and curl are not required.
 - The dashboard that adds a Child from Home is opened on Home itself or through a paired Hub session. Turning the current computer into a Child requires an operator-paired dashboard session; a credentialless local dashboard session cannot commit that routing change.
 
@@ -21,7 +21,7 @@ Password SSH is not supported. Links can be started from Home or Child. Windows 
 2. Choose **Home**, then **Continue**. The SSH host list opens.
 3. Choose a host from the SSH candidates, or enter an SSH config alias.
 4. Run the connection test and compare the offered host fingerprint with the fingerprint for the machine you intend to use. Comparing it helps detect a wrong host or a changed host key before SSH trusts the host.
-5. Confirm the fingerprint, then connect the Child.
+5. Confirm the fingerprint, then choose **Connect child** (or **Plant lightweight agent & connect** when connecting a bare SSH host that does not have OpenCodex installed yet).
 
 The dashboard does not ask you to enter a token. It probes the host first, and it cannot apply the link until you explicitly confirm the fingerprint.
 
@@ -89,12 +89,12 @@ These reads need an OpenCodex version with the Remote Link management relay on b
 
 ## Remove a Child
 
-Select **Disconnect** for the Child and confirm the alias. The Home stops the tunnel, revokes that Child's link key, and removes the saved link record.
+Select **Disconnect** for the Child and confirm the alias. The Home stops the tunnel, revokes that Child's link key, and removes the saved link record. On a lightweight (`ocx-child`) Child, disconnecting restores `~/.codex` and stops the relay with zero background processes while keeping `~/.cache/opencodex/bin/ocx-child` cached by default for fast reconnects; check **Also delete the planted lightweight agent binary from the remote computer** (or pass `--purge` to `ocx link revoke`) to delete the planted binary as well.
 
 If the Home cannot reach the Child to run its disconnect command, choose **Remove here only**. This removes the local tunnel, key, and record. Then log in to the Child and run:
 
 ```bash
-ocx disconnect
+ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight Child
 ```
 
 To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disconnects the client tunnel and revokes the link on Home over SSH. If Home revocation fails, it prints: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
@@ -189,9 +189,9 @@ Home-initiated connections now restart the Child after saving its connection, in
 
 ### Ephemeral Child machines (`ocx-child`)
 
-For disposable SSH devboxes, containers and lightweight cloud VMs where installing the full Bun OpenCodex runtime is unnecessary, place the standalone Rust `ocx-child` binary (`cargo build --release --locked --manifest-path native/ocx-child/Cargo.toml`) in `~/.local/bin/ocx-child`, `~/.cache/opencodex/bin/ocx-child` (or `%LOCALAPPDATA%\opencodex\bin\ocx-child.exe` on Windows) or on `PATH`. Before enrollment, Home probes every full `ocx` candidate first and falls back to `ocx-child` when no runnable full `ocx` is present; once `$OPENCODEX_HOME/child/state.json` exists, remote commands keep targeting `ocx-child` until it detaches.
+For disposable SSH devboxes, containers and lightweight cloud VMs where installing the full Bun OpenCodex runtime is unnecessary, Home can stream a SHA-256-verified standalone `ocx-child` binary (~0.9 MB, zero Node/Bun required) directly over SSH `stdin` into `~/.cache/opencodex/bin/ocx-child` (`%LOCALAPPDATA%\opencodex\bin\ocx-child.exe` on Windows) when you choose **Plant lightweight agent & connect** in `#remote` or run `ocx link add <alias> --plant --expect-fingerprint SHA256:…` (interactive TTY `ocx link add <alias>` prompts once before planting; air-gapped Children with zero outbound internet work out of the box). You can also pre-place `ocx-child` in `~/.local/bin/ocx-child`, `~/.cache/opencodex/bin/ocx-child`, or `PATH`. Before enrollment, Home probes every full `ocx` candidate first and falls back to `ocx-child` when no runnable full `ocx` is present; once `$OPENCODEX_HOME/child/state.json` exists, remote commands keep targeting `ocx-child` until it detaches.
 
-Unlike a full `ocx` Child, a clean detached `ocx-child` host needs no pre-running background daemon before `ocx link add`: Home refuses any HTTP 200 `/healthz` listener on the target port during preflight, pipes the link credential over SSH stdin (`ocx-child connect` verifies TCP bind availability and Home compensates if the port is occupied), starts `ocx-child serve`, and confirms an authenticated `/v1/catalog` relay. Home `ocx sync` fan-out (`sync --expect-link <id> --json`) refreshes the Child's catalog and `models_cache.json` (retaining the last cached catalog as `stale` if Home is unreachable), ensures `ocx-child serve` is running at or after `lastApplyAt`, and posts OCX-6 parity on a best-effort basis when fresh (while `ocx-child serve` also reports periodically in the background). Running `ocx link revoke` on Home disconnects the Child, revokes its key, and removes the Home record; running offline `ocx-child detach` or `ocx-child disconnect` directly on the Child stops `ocx-child serve` with zero leftover daemon and restores `~/.codex` locally, so also run `ocx link revoke --link-id <id>` (or `ocx link revoke --link-id <id> --force --yes` if the Child is unreachable) on Home to remove the Home link record and key.
+Unlike a full `ocx` Child, a clean detached `ocx-child` host needs no pre-running background daemon before `ocx link add`: Home checks target-port availability and `~/.codex/config.toml` ownership before committing (`409 child_port_busy` if port `10100` is held by another process, or `409 child_external_provider_conflict` if another model provider or custom base URL already owns `config.toml`, leaving Child files untouched and rolling back any newly planted binary), pipes the link credential over SSH stdin, starts `ocx-child serve`, and confirms an authenticated `/v1/catalog` relay. Connected rows in `#remote` display a **Lightweight** / **Full install** badge and a **Home settings synced** / **Sync needed** parity badge. Running `ocx link revoke --link-id <id>` keeps the cached binary for fast re-attach, whereas `ocx link revoke --link-id <id> --purge` (or `ocx-child detach --purge` on the Child) also deletes the planted binary from the managed cache directory.
 
 ### Windows computers
 

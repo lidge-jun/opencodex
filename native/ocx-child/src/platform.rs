@@ -878,3 +878,88 @@ pub fn resolve_codex_home() -> PathBuf {
     }
     resolve_user_home().join(".codex")
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurgeExecutableOutcome {
+    Removed,
+    SkippedUnmanagedPath,
+}
+
+fn reject_managed_subpath_symlinks(root: &Path, components: &[&str]) -> Result<PathBuf, String> {
+    let mut cur = root.to_path_buf();
+    for comp in components {
+        cur.push(comp);
+        reject_symlink(&cur)?;
+    }
+    Ok(cur)
+}
+
+pub fn is_managed_plant_executable(
+    exe_path: &Path,
+    user_home: &Path,
+    local_appdata: Option<&Path>,
+) -> Result<bool, String> {
+    reject_symlink(exe_path)?;
+    if !fs::symlink_metadata(exe_path).is_ok_and(|m| m.file_type().is_file()) {
+        return Ok(false);
+    }
+    let Some(parent) = exe_path.parent() else {
+        return Ok(false);
+    };
+    reject_symlink(parent)?;
+    let expected_name = if cfg!(windows) { "ocx-child.exe" } else { "ocx-child" };
+    if exe_path.file_name().and_then(|n| n.to_str()) != Some(expected_name) {
+        return Ok(false);
+    }
+    let canon_parent = fs::canonicalize(parent)
+        .map_err(|e| format!("failed canonicalizing {}: {e}", parent.display()))?;
+    let cache_bin = reject_managed_subpath_symlinks(user_home, &[".cache", "opencodex", "bin"])?;
+    if fs::canonicalize(&cache_bin).ok().as_ref() == Some(&canon_parent) {
+        return Ok(true);
+    }
+    if let Some(appdata) = local_appdata {
+        let win_bin = reject_managed_subpath_symlinks(appdata, &["opencodex", "bin"])?;
+        if fs::canonicalize(&win_bin).ok().as_ref() == Some(&canon_parent) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn purge_managed_executable(
+    exe_path: &Path,
+    user_home: &Path,
+    local_appdata: Option<&Path>,
+) -> Result<PurgeExecutableOutcome, String> {
+    if !is_managed_plant_executable(exe_path, user_home, local_appdata)? {
+        return Ok(PurgeExecutableOutcome::SkippedUnmanagedPath);
+    }
+    #[cfg(unix)]
+    {
+        fs::remove_file(exe_path)
+            .map_err(|e| format!("failed removing planted ocx-child {}: {e}", exe_path.display()))?;
+        let _ = exe_path.parent().map(fs::remove_dir);
+        let _ = exe_path.parent().and_then(Path::parent).map(fs::remove_dir);
+        Ok(PurgeExecutableOutcome::Removed)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        let parent = exe_path.parent().ok_or_else(|| "missing parent".to_owned())?;
+        let trashed = parent.join(format!(".ocx-child.purge.{}.old", std::process::id()));
+        let _ = fs::remove_file(&trashed);
+        fs::rename(exe_path, &trashed)
+            .map_err(|e| format!("failed renaming planted ocx-child for purge: {e}"))?;
+        let _ = Command::new("cmd.exe")
+            .args(["/d", "/c", "ping -n 2 127.0.0.1 >nul & del /f /q \"%OCX_PURGE_TARGET%\""])
+            .env("OCX_PURGE_TARGET", &trashed)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+            .spawn();
+        Ok(PurgeExecutableOutcome::Removed)
+    }
+}

@@ -1024,7 +1024,7 @@ test("rescan after host confirmation preserves alias and requires fresh fingerpr
   expect([...sheet.querySelectorAll("button")].some(button => button.textContent === "Connect child")).toBe(false);
   expect(posts).toEqual([
     { path: "/api/link/probe", body: { alias: "manual-child" } },
-    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:old" } },
+    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:old", allowMissing: true } },
   ]);
 
   await act(async () => { sheetButton(sheet, "Test connection").click(); });
@@ -1043,9 +1043,9 @@ test("rescan after host confirmation preserves alias and requires fresh fingerpr
   await flush();
   expect(posts).toEqual([
     { path: "/api/link/probe", body: { alias: "manual-child" } },
-    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:old" } },
+    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:old", allowMissing: true } },
     { path: "/api/link/probe", body: { alias: "manual-child" } },
-    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:fresh" } },
+    { path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:fresh", allowMissing: true } },
     { path: "/api/link/apply", body: { alias: "manual-child" } },
   ]);
   expect(sheet.open).toBe(false);
@@ -1108,7 +1108,7 @@ test("network discovery failure still permits a manual alias and explicit finger
   await act(async () => { (sheet.querySelector('[type="checkbox"]') as HTMLInputElement).click(); });
   await act(async () => { sheetButton(sheet, "Confirm host").click(); });
   await flush();
-  expect(posts[1]).toEqual({ path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:manual" } });
+  expect(posts[1]).toEqual({ path: "/api/link/confirm-host", body: { alias: "manual-child", fingerprint: "SHA256:manual", allowMissing: true } });
   await act(async () => { sheetButton(sheet, "Connect child").click(); });
   await flush();
   expect(posts[2]).toEqual({ path: "/api/link/apply", body: { alias: "manual-child" } });
@@ -1128,4 +1128,111 @@ test("Find Home empty guidance names this computer rather than claiming it is Ho
   const sheet = host.querySelector(".remote-link-sheet")!;
   expect(sheet.textContent).toContain("this computer's ~/.ssh/config");
   expect(sheet.textContent).not.toContain("this Home's");
+});
+
+test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and ephemeral disconnect --purge flows", async () => {
+  const calls: Array<{ method: string; path: string; body: unknown }> = [];
+  let mode: "bare" | "unplantable" | "ephemeral" | "conflict" = "bare";
+  let disconnectFailOnce = false;
+  const digestA = "a".repeat(64);
+  const digestB = "b".repeat(64);
+  let currentStatus: RemoteLinkStatusWire = {
+    ...baseStatus,
+    homeCodexSettingsDigest: digestA,
+    links: [
+      { id: "lnk_eph", alias: "devbox-eph", direction: "hub-initiated", state: "connected", since: "2026-11-07T00:00:00Z", reason: null, tunnelPort: 24500, childKind: "ephemeral", appliedCodexSettingsDigest: digestA },
+      { id: "lnk_full", alias: "devbox-full", direction: "hub-initiated", state: "connected", since: "2026-11-07T00:00:00Z", reason: null, tunnelPort: 24501, childKind: "full", appliedCodexSettingsDigest: digestB },
+    ],
+  };
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    const method = init?.method ?? "GET";
+    const parsedBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (method !== "GET") calls.push({ method, path, body: parsedBody });
+    if (path.endsWith("/candidates")) return response({ candidates: [{ alias: "barebox", source: "ssh_config" }] });
+    if (path.endsWith("/probe")) return response({ alias: "barebox", fingerprint: "SHA256:barefp", keyType: "ed25519" });
+    if (path.endsWith("/confirm-host")) {
+      if (mode === "bare") return response({ alias: "barebox", fingerprint: "SHA256:barefp", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-x64", plantable: true, binarySizeBytes: 952_000 });
+      if (mode === "unplantable") return response({ alias: "barebox", fingerprint: "SHA256:barefp", ocxVersion: null, runtimeKind: "missing", targetTriple: null, plantable: false, plantUnavailableReason: "unsupported_target" });
+      return response({ alias: "barebox", fingerprint: "SHA256:barefp", ocxVersion: "2.98.0", runtimeKind: "ephemeral", targetTriple: "linux-x64", plantable: false });
+    }
+    if (path.endsWith("/apply")) {
+      if (mode === "conflict") return response({ error: { code: "child_port_busy" } }, 409);
+      return response({ linkId: "lnk_planted" }, 202);
+    }
+    if (method === "DELETE" && path.endsWith("/lnk_eph")) {
+      if (disconnectFailOnce) {
+        disconnectFailOnce = false;
+        return response({ error: { code: "remote_disconnect_failed" } }, 502);
+      }
+      return response({ linkId: "lnk_eph" });
+    }
+    return response(currentStatus);
+  }) as typeof fetch;
+
+  const host = await mount();
+  // 1. Connected list badges: Lightweight + Home settings synced on devbox-eph, Full install + Sync needed on devbox-full
+  expect(host.textContent).toContain("Lightweight");
+  expect(host.textContent).toContain("Home settings synced");
+  expect(host.textContent).toContain("Full install");
+  expect(host.textContent).toContain("Sync needed");
+
+  // 2. Open Add Child sheet -> Ready-to-Plant card -> sends { alias: 'barebox', plant: true }
+  const addBtn = [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Add child")) as HTMLButtonElement;
+  await act(async () => { addBtn.click(); });
+  await flush();
+  const sheet = host.querySelector(".remote-link-sheet") as HTMLDialogElement;
+  const candBtn = [...sheet.querySelectorAll(".remote-link-candidate")][0] as HTMLButtonElement;
+  await act(async () => { candBtn.click(); });
+  const probeBtn = [...sheet.querySelectorAll("button")].find(b => b.textContent?.includes("Test connection")) as HTMLButtonElement;
+  await act(async () => { probeBtn.click(); });
+  await flush();
+  await act(async () => { (sheet.querySelector('[type="checkbox"]') as HTMLInputElement).click(); });
+  const confirmBtn = [...sheet.querySelectorAll("button")].find(b => b.textContent?.includes("Confirm host")) as HTMLButtonElement;
+  await act(async () => { confirmBtn.click(); });
+  await flush();
+  expect(sheet.textContent).toContain("Ready to plant lightweight agent");
+  expect(sheet.textContent).toContain("linux-x64");
+  expect(sheet.textContent).toContain("~0.9 MB");
+  const plantBtn = [...sheet.querySelectorAll("button")].find(b => b.textContent?.includes("Plant lightweight agent & connect")) as HTMLButtonElement;
+  await act(async () => { plantBtn.click(); });
+  await flush();
+  expect(calls).toContainEqual({ method: "POST", path: "/api/link/apply", body: { alias: "barebox", plant: true } });
+
+  // 3. Cached ephemeral & child_port_busy conflict notice
+  mode = "conflict";
+  await act(async () => { addBtn.click(); });
+  await flush();
+  await act(async () => { ([...sheet.querySelectorAll(".remote-link-candidate")][0] as HTMLButtonElement).click(); });
+  await act(async () => { ([...sheet.querySelectorAll("button")].find(b => b.textContent?.includes("Test connection")) as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (sheet.querySelector('[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { ([...sheet.querySelectorAll("button")].find(b => b.textContent?.includes("Confirm host")) as HTMLButtonElement).click(); });
+  await flush();
+  expect(sheet.textContent).toContain("Lightweight agent ready (ocx-child 2.98.0)");
+  await act(async () => { ([...sheet.querySelectorAll("button")].find(b => b.textContent?.includes("Connect child")) as HTMLButtonElement).click(); });
+  await flush();
+  expect(sheet.textContent).toContain("already in use by another process");
+  await act(async () => { ([...sheet.querySelectorAll("button")].find(b => b.textContent === "Cancel") as HTMLButtonElement).click(); });
+
+  // 4. Ephemeral Disconnect --purge checkbox -> sends { purge: true }, and on remote_disconnect_failed shows ocx-child detach force modal
+  const disconnectBtns = [...host.querySelectorAll(".remote-link-row button")];
+  await act(async () => { (disconnectBtns[0] as HTMLButtonElement).click(); });
+  await flush();
+  const confirmDialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+  expect(confirmDialog.textContent).toContain("0 background processes");
+  const purgeCheckbox = confirmDialog.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  expect(purgeCheckbox.checked).toBe(false);
+  await act(async () => { purgeCheckbox.click(); });
+  const delBtn = [...confirmDialog.querySelectorAll("button")].find(b => b.textContent?.includes("Delete & disconnect")) as HTMLButtonElement;
+  disconnectFailOnce = true;
+  await act(async () => { delBtn.click(); });
+  await flush();
+  expect(calls).toContainEqual({ method: "DELETE", path: "/api/link/lnk_eph", body: { purge: true } });
+  // Force remove modal now shown with ocx-child detach guidance and exclusive { force: true } body
+  expect(confirmDialog.textContent).toContain("~/.cache/opencodex/bin/ocx-child detach");
+  const forceBtn = [...confirmDialog.querySelectorAll("button")].find(b => b.textContent?.includes("Remove here only")) as HTMLButtonElement;
+  await act(async () => { forceBtn.click(); });
+  await flush();
+  expect(calls.at(-1)).toEqual({ method: "DELETE", path: "/api/link/lnk_eph", body: { force: true } });
 });

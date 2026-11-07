@@ -14,6 +14,7 @@ import { assertSshAlias } from "../link/ssh-argv";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
+import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import {
   CliUsageError,
@@ -32,11 +33,11 @@ import {
 
 export const LINK_USAGE = `Usage:
   ocx link probe <alias> [--json]
-  ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--json]
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
-  ocx link revoke --link-id <id> [--force --yes] [--json]
+  ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
   ocx link cleanup [--link-id <id>] [--json]
 
@@ -63,7 +64,7 @@ export interface LinkCliDeps extends RuntimeApiDeps, Omit<LinkCleanupDeps, "read
   readConfig?: () => LinkStatusConfig;
   readClientLinkIdentity?: (linkId: string) => ClientLinkIdentity | null;
   readChildStatus?: () => LinkStatusDto["child"];
-  confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string }) => Promise<boolean>;
+  confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string; ocxVersion?: string | null; runtimeKind?: "full" | "ephemeral" | "missing"; binarySizeBytes?: number }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
 }
@@ -153,11 +154,12 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
       || (candidate.state !== "connecting" && candidate.state !== "connected" && candidate.state !== "reconnecting" && candidate.state !== "failed" && candidate.state !== "idle")
+      || (candidate.childKind !== undefined && candidate.childKind !== "full" && candidate.childKind !== "ephemeral")
       || !validString(candidate.since) || !validNullableString(candidate.reason) || !isLinkPort(candidate.tunnelPort)) {
       throw new Error(`invalid link API response: link ${index} fields`);
     }
@@ -169,6 +171,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       since: candidate.since,
       reason: candidate.reason,
       tunnelPort: candidate.tunnelPort,
+      ...(candidate.childKind !== undefined ? { childKind: candidate.childKind as LinkChildKind } : {}),
       ...parity,
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
@@ -303,13 +306,22 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
 
 async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   const wantsJson = takeJsonFlag(args);
+  const purge = takeFlag(args, "--purge");
   const force = takeFlag(args, "--force");
   const confirmed = takeFlag(args, "--yes");
   const linkId = takeOption(args, "--link-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("revoke requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
+  if (purge && force) throw new CliUsageError("--purge cannot be combined with --force", LINK_USAGE);
   if (force && !confirmed) throw new CliUsageError("forced revoke skips remote cleanup; pass --yes to confirm", LINK_USAGE);
   if (confirmed && !force) throw new CliUsageError("--yes requires --force", LINK_USAGE);
+  let wasEphemeral = false;
+  if (force) {
+    try {
+      const store = (deps.readStore ?? (() => readLinkStore(linkStorePath())))();
+      wasEphemeral = store.links.find(l => l.id === linkId)?.childKind === "ephemeral";
+    } catch { /* fallback to standard recovery message when store is unavailable */ }
+  }
   let remoteCleanup: "skipped" | "unverified" = "skipped";
   try {
     const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, force ? {
@@ -317,6 +329,11 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
       redirect: "error",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ force: true }),
+    } : purge ? {
+      method: "DELETE",
+      redirect: "error",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ purge: true }),
     } : { method: "DELETE" }, deps);
     // Legacy revoke accepts an empty response; a forced receipt needs observed identity.
     if (force && response === null) throw new Error("invalid link API response: revoke object");
@@ -333,7 +350,9 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     remoteCleanup = "unverified";
   }
   if (force) {
-    const recovery = "Run ocx disconnect on the remote client.";
+    const recovery = wasEphemeral
+      ? "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client."
+      : "Run ocx disconnect on the remote client.";
     printData({ linkId, remoteCleanup, recovery }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
       recovery,

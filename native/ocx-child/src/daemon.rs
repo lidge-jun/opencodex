@@ -78,13 +78,13 @@ pub fn ensure_port_available_for_attach(port: u16, owned_pid: Option<u32>) -> Re
             return Ok(());
         }
         return Err(format!(
-            "attach refused: 127.0.0.1:{port} is already served by foreign listener (pid {})",
+            "ocx-child-conflict:child_port_busy: attach refused: 127.0.0.1:{port} is already served by foreign listener (pid {})",
             health.pid
         ));
     }
     if TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).is_err() {
         return Err(format!(
-            "attach refused: 127.0.0.1:{port} is already in use"
+            "ocx-child-conflict:child_port_busy: attach refused: 127.0.0.1:{port} is already in use"
         ));
     }
     Ok(())

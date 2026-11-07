@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactElement } from "react";
 import {
-  LinkApiError, parseRemoteLinkStatus, readRuntimeHealth, requestLinkJson, waitForChildRuntime, type ChildRestartWaitDeps, type LinkCandidateView, type LinkConfirmHostView,
+  LinkApiError, parseRemoteLinkConfirmation, parseRemoteLinkStatus, readRuntimeHealth, requestLinkJson, waitForChildRuntime, type ChildRestartWaitDeps, type LinkCandidateView, type LinkConfirmHostView,
   type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
 } from "../remote-link-api";
-import { IconLink, IconPlus, IconRefresh, IconTrash, IconX } from "../icons";
-import { Trans } from "../i18n/provider";
+import { IconPlus, IconRefresh, IconTrash } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import { isStandaloneRuntime, standaloneApiTargets } from "../api-targets";
 import { ConnectPairingForm } from "../connect-pairing";
 import FallbackPanel from "../components/FallbackPanel";
+import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
+import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
 import "../styles-remote-link.css";
 
 type RemoteLinkRole = "home" | "child";
@@ -42,6 +43,8 @@ const STATUS_LABEL: Record<LinkWireState, TKey> = {
 const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   admission_failed: "remoteLink.error.admission_failed",
   admission_timeout: "remoteLink.error.admission_timeout",
+  child_external_provider_conflict: "remoteLink.error.child_external_provider_conflict",
+  child_port_busy: "remoteLink.error.child_port_busy",
   compensation_failed: "remoteLink.error.compensation_failed",
   fingerprint_failed: "remoteLink.error.fingerprint_failed",
   forbidden: "remoteLink.error.forbidden",
@@ -75,6 +78,9 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   remote_ocx_missing: "remoteLink.error.remote_ocx_missing",
   remote_ocx_outdated: "remoteLink.error.remote_ocx_outdated",
   remote_ocx_unrecognized: "remoteLink.error.remote_ocx_unrecognized",
+  remote_plant_failed: "remoteLink.error.remote_plant_failed",
+  remote_plant_timeout: "remoteLink.error.remote_plant_timeout",
+  remote_plant_unavailable: "remoteLink.error.remote_plant_unavailable",
   remote_port_failed: "remoteLink.error.remote_port_failed",
   standalone_required: "remoteLink.error.standalone_required",
   tailscale_session_refused: "remoteLink.error.tailscale_session_refused",
@@ -115,22 +121,12 @@ function parseProbe(value: unknown): LinkProbeView {
   return { alias: value.alias, fingerprint: value.fingerprint, keyType: value.keyType };
 }
 
-function parseConfirmation(value: unknown): LinkConfirmHostView {
-  if (!isRecord(value) || !nonEmpty(value.alias) || !nonEmpty(value.fingerprint) || !nonEmpty(value.ocxVersion)) throw new Error("invalid confirmation");
-  return { alias: value.alias, fingerprint: value.fingerprint, ocxVersion: value.ocxVersion };
-}
-
 function errorKey(error: unknown): TKey {
   if (error instanceof LinkApiError && error.code in ERROR_TKEY) return ERROR_TKEY[error.code as LinkErrorCode];
   return "remoteLink.error.generic";
 }
 
-type LinkActionError = { key: TKey; hint: string | null };
-function linkActionError(error: unknown): LinkActionError { return { key: errorKey(error), hint: error instanceof LinkApiError ? error.hint : null }; }
-function LinkErrorNotice({ error }: { error: LinkActionError }): ReactElement {
-  const t = useT();
-  return <Notice tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.hint && <span className="remote-link-hint">{t("remoteLink.reason.generic")} <code>{error.hint}</code></span>}</Notice>;
-}
+function linkActionError(error: unknown): LinkActionErrorView { return { key: errorKey(error), hint: error instanceof LinkApiError ? error.hint : null }; }
 
 export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
   const t = useT();
@@ -147,9 +143,10 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
   const [confirmation, setConfirmation] = useState<LinkConfirmHostView | null>(null);
   const [checkedFingerprint, setCheckedFingerprint] = useState(false);
   const [busy, setBusy] = useState<"candidates" | "probe" | "confirm" | "apply" | "join" | "remove" | "reconnect" | null>(null);
-  const [actionError, setActionError] = useState<LinkActionError | null>(null);
+  const [actionError, setActionError] = useState<LinkActionErrorView | null>(null);
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
   const [confirming, setConfirming] = useState<{ row: LinkRowWire; force: boolean } | null>(null);
+  const [purgeOnDisconnect, setPurgeOnDisconnect] = useState(false);
   const [forceError, setForceError] = useState<TKey | null>(null);
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const sheetRef = useRef<HTMLDialogElement>(null);
@@ -319,10 +316,13 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
     const attempt = linkAttemptRef.current;
     if (!attempt) return;
     setBusy("confirm"); setActionError(null);
+    const confirmBody = role === "home"
+      ? { alias: probe.alias, fingerprint: probe.fingerprint, allowMissing: true }
+      : { alias: probe.alias, fingerprint: probe.fingerprint };
     try {
-      const result = await requestLinkJson<unknown>(apiBase, "/api/link/confirm-host", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: probe.alias, fingerprint: probe.fingerprint }), signal: attempt.controller.signal });
+      const result = await requestLinkJson<unknown>(apiBase, "/api/link/confirm-host", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(confirmBody), signal: attempt.controller.signal });
       if (!isCurrentLinkAttempt(attempt)) return;
-      setConfirmation(parseConfirmation(result));
+      setConfirmation(parseRemoteLinkConfirmation(result));
     } catch (error) {
       if (!isCurrentLinkAttempt(attempt)) return;
       setActionError(linkActionError(error));
@@ -334,8 +334,9 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
     const confirmed = confirmation;
     if (!confirmed || !attempt) return;
     setBusy("apply"); setActionError(null); setFailedAction(null); setUiState("applying");
+    const applyBody = confirmed.runtimeKind === "missing" ? { alias: confirmed.alias, plant: true } : { alias: confirmed.alias };
     try {
-      await requestLinkJson<{ linkId: string }>(apiBase, "/api/link/apply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: confirmed.alias }), signal: attempt.controller.signal });
+      await requestLinkJson<{ linkId: string }>(apiBase, "/api/link/apply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(applyBody), signal: attempt.controller.signal });
       if (!isCurrentLinkAttempt(attempt)) return;
       closeSheet();
       void refreshStatus();
@@ -394,6 +395,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
 
   const closeConfirmation = () => {
     setConfirming(null);
+    setPurgeOnDisconnect(false);
     setForceError(null);
     window.setTimeout(() => disconnectTriggerRef.current?.focus(), 0);
   };
@@ -409,7 +411,12 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
     if (!confirming) return;
     const pending = confirming;
     setBusy("remove"); setForceError(null);
-    try { await requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(pending.row.id)}`, pending.force ? { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ force: true }) } : { method: "DELETE" }); closeConfirmation(); await refreshStatus(); }
+    const deleteInit: RequestInit = pending.force
+      ? { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ force: true }) }
+      : purgeOnDisconnect && pending.row.childKind === "ephemeral"
+        ? { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ purge: true }) }
+        : { method: "DELETE" };
+    try { await requestLinkJson<{ linkId: string }>(apiBase, `/api/link/${encodeURIComponent(pending.row.id)}`, deleteInit); closeConfirmation(); await refreshStatus(); }
     catch (error) {
       if (!pending.force && error instanceof LinkApiError && error.code === "remote_disconnect_failed") setConfirming({ row: pending.row, force: true });
       else setForceError(errorKey(error));
@@ -436,36 +443,45 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
       {uiState === "role-select" && canPairLocally && status?.joinAvailable === false && status.joinDenied === "pairing_required" && (
         <ConnectPairingForm local target={localPairingTarget} onConnected={() => { void refreshStatus(); }} />
       )}
-      {(uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining") && <section className="panel remote-link-panel"><div className="remote-link-toolbar"><div><h3>{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.children")}</h3><p className="remote-link-info">{uiState === "restart-waiting" ? t("remoteLink.restart.waiting") : t(roleLabel)}</p></div><button ref={addButtonRef} type="button" className="btn btn-primary btn-sm" onClick={() => void openSheet()} disabled={busy !== null || uiState === "applying" || uiState === "joining" || uiState === "restart-waiting" || status?.role === "child"}><IconPlus />{role === "child" && standaloneRuntime ? t("remoteLink.findHome.action") : t("link.addChild")}</button></div>{uiState === "restart-waiting" ? <div className="remote-link-restart" aria-live="polite"><strong>{t("remoteLink.restart.title")}</strong><p>{t("remoteLink.restart.body")}</p>{restartSlow && <Notice tone="warn">{t("remoteLink.restart.slow")}</Notice>}</div> : status?.role === "child" ? <div className="remote-link-children" aria-live="polite"><div className="remote-link-row"><div className="remote-link-row-main"><strong>{status.child?.alias ?? t("remoteLink.role.child")}</strong>{status.child && <div className="remote-link-row-meta"><span className="remote-link-status" data-state={status.child.state}>{t(STATUS_LABEL[status.child.state])}</span></div>}</div></div></div> : statusRows.length > 0 ? <div className="remote-link-children" aria-live="polite">{statusRows.map(row => <div className="remote-link-row" key={row.id}><div className="remote-link-row-main"><strong>{row.alias}</strong><div className="remote-link-row-meta"><span className="remote-link-status" data-state={row.state}>{t(STATUS_LABEL[row.state])}</span><span>{row.direction === "hub-initiated" ? t("remoteLink.direction.hub") : t("remoteLink.direction.client")}</span>{row.reason && <span className="remote-link-error">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code>{row.reason}</code></>}</span>}</div></div><button type="button" className="btn btn-ghost btn-sm" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setConfirming({ row, force: false }); }} disabled={busy !== null}><IconTrash />{t("link.disconnect")}</button></div>)}</div> : <p className="remote-link-info">{t(role === "child" && standaloneRuntime ? "remoteLink.findHome.empty" : "link.noChildren")}</p>}{(!sheetOpen && (uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError?.key !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed"))))) && <div className="remote-link-status-message" aria-live="polite"><span className="remote-link-status" data-state={uiState === "failed" ? "failed" : "reconnecting"}>{t(STATUS_LABEL[uiState === "failed" ? "failed" : "reconnecting"])}</span><button type="button" className="btn btn-ghost btn-sm" onClick={retryFailedAction} disabled={busy !== null}>{t("link.retry")}</button></div>}{uiState === "joining" && <p className="remote-link-info" aria-live="polite">{t("remoteLink.joining")}</p>}{!sheetOpen && actionError && <LinkErrorNotice error={actionError} />}</section>}
+      {(uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining") && <section className="panel remote-link-panel"><div className="remote-link-toolbar"><div><h3>{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.children")}</h3><p className="remote-link-info">{uiState === "restart-waiting" ? t("remoteLink.restart.waiting") : t(roleLabel)}</p></div><button ref={addButtonRef} type="button" className="btn btn-primary btn-sm" onClick={() => void openSheet()} disabled={busy !== null || uiState === "applying" || uiState === "joining" || uiState === "restart-waiting" || status?.role === "child"}><IconPlus />{role === "child" && standaloneRuntime ? t("remoteLink.findHome.action") : t("link.addChild")}</button></div>{uiState === "restart-waiting" ? <div className="remote-link-restart" aria-live="polite"><strong>{t("remoteLink.restart.title")}</strong><p>{t("remoteLink.restart.body")}</p>{restartSlow && <Notice tone="warn">{t("remoteLink.restart.slow")}</Notice>}</div> : status?.role === "child" ? <div className="remote-link-children" aria-live="polite"><div className="remote-link-row"><div className="remote-link-row-main"><strong>{status.child?.alias ?? t("remoteLink.role.child")}</strong>{status.child && <div className="remote-link-row-meta"><span className="remote-link-status" data-state={status.child.state}>{t(STATUS_LABEL[status.child.state])}</span></div>}</div></div></div> : statusRows.length > 0 ? <div className="remote-link-children" aria-live="polite">{statusRows.map(row => { const homeDigest = status?.homeCodexSettingsDigest ?? null; const childDigest = row.appliedCodexSettingsDigest ?? null; const paritySynced = homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null; return (<div className="remote-link-row" key={row.id}><div className="remote-link-row-main"><div className="remote-link-row-head"><strong>{row.alias}</strong><div className="remote-link-badges">{row.childKind && <span className={row.childKind === "ephemeral" ? "badge badge-green" : "badge badge-muted"}>{t(row.childKind === "ephemeral" ? "remoteLink.badge.ephemeral" : "remoteLink.badge.full")}</span>}{paritySynced !== null && <span className={paritySynced ? "badge badge-green" : "badge badge-amber"}>{t(paritySynced ? "remoteLink.parity.synced" : "remoteLink.parity.outdated")}</span>}</div></div><div className="remote-link-row-meta"><span className="remote-link-status" data-state={row.state}>{t(STATUS_LABEL[row.state])}</span><span>{row.direction === "hub-initiated" ? t("remoteLink.direction.hub") : t("remoteLink.direction.client")}</span>{row.reason && <span className="remote-link-error">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code>{row.reason}</code></>}</span>}</div></div><button type="button" className="btn btn-ghost btn-sm" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null}><IconTrash />{t("link.disconnect")}</button></div>); })}</div> : <p className="remote-link-info">{t(role === "child" && standaloneRuntime ? "remoteLink.findHome.empty" : "link.noChildren")}</p>}{(!sheetOpen && (uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError?.key !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed"))))) && <div className="remote-link-status-message" aria-live="polite"><span className="remote-link-status" data-state={uiState === "failed" ? "failed" : "reconnecting"}>{t(STATUS_LABEL[uiState === "failed" ? "failed" : "reconnecting"])}</span><button type="button" className="btn btn-ghost btn-sm" onClick={retryFailedAction} disabled={busy !== null}>{t("link.retry")}</button></div>}{uiState === "joining" && <p className="remote-link-info" aria-live="polite">{t("remoteLink.joining")}</p>}{!sheetOpen && actionError && <LinkErrorNotice error={actionError} />}</section>}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
 
-      <dialog ref={sheetRef} className="remote-link-sheet" aria-labelledby="remote-link-sheet-title" onCancel={event => { event.preventDefault(); closeSheet(); }}>
-        <div className="remote-link-sheet-head"><h3 id="remote-link-sheet-title">{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.sheetTitle")}</h3><button type="button" className="btn btn-ghost btn-icon" onClick={closeSheet} aria-label={t("link.close")}><IconX /></button></div>
-        <div className="remote-link-sheet-body">
-          {role === "home" && <div className="remote-link-info"><p>{t("link.setup.relationship")}</p><p>{t("link.setup.requirements")}</p></div>}
-          <div>
-            <h4>{role === "child" && standaloneRuntime ? t("remoteLink.findHome.body") : t("link.candidates")}</h4>
-            {discovery === "loading" && <p className="remote-link-info" role="status">{t("link.loading")}</p>}
-            {discovery === "failed" && <><p className="remote-link-info">{t("link.discoveryFailed")}</p>{sheetOpen && actionError && <LinkErrorNotice error={actionError} />}</>}
-            {discovery === "ready" && (candidates.length > 0 ? <div className="remote-link-candidates">{candidates.map(candidate => <button type="button" className="remote-link-candidate" key={`${candidate.source}:${candidate.alias}`} onClick={() => setAlias(candidate.alias)}><span>{candidate.alias}</span><small>{candidate.source}</small></button>)}</div> : <div className="remote-link-info">
-              <p>{t("link.noCandidates")}</p>
-              <p>{t(role === "home" ? "link.setup.emptyHome" : "link.setup.emptyLocal")}</p>
-              <pre><code>{"Host devbox\n  HostName devbox.example.com\n  User you\n  IdentityFile ~/.ssh/id_ed25519"}</code></pre>
-            </div>)}
-            <a href="https://opencodex.me/guides/remote-link/" target="_blank" rel="noopener noreferrer">{t("link.setup.guide")}</a>
-            <button type="button" className="btn btn-ghost" onClick={() => void loadCandidates()} disabled={busy !== null}>{t(discovery === "failed" ? "link.retry" : "link.rescan")}</button>
-          </div>
-          <div className="remote-link-form"><label className="field-label" htmlFor="remote-link-alias">{t("link.alias")}</label><input id="remote-link-alias" aria-describedby="remote-link-alias-help" className="input" spellCheck={false} value={alias} onChange={event => setAlias(event.target.value)} placeholder={t("link.aliasPlaceholder")} autoComplete="off" /><p id="remote-link-alias-help" className="remote-link-info">{t("link.aliasRequired")}</p><button type="button" className="btn btn-ghost" onClick={() => void runProbe()} disabled={!alias.trim() || busy !== null}><IconLink />{busy === "probe" ? t("link.probing") : t("link.probe")}</button></div>{probe && <div className="remote-link-panel"><div><span className="remote-link-info">{t("link.hostFingerprint")}</span><p className="remote-link-fingerprint"><code>{probe.fingerprint}</code></p><span className="remote-link-info">{probe.keyType}</span></div><label><input type="checkbox" checked={checkedFingerprint} onChange={event => setCheckedFingerprint(event.target.checked)} /> {t("link.confirmFingerprint")}</label><button type="button" className="btn btn-primary" onClick={() => void confirmHost()} disabled={!checkedFingerprint || busy !== null}>{busy === "confirm" ? t("link.confirming") : t("link.confirm")}</button></div>}{confirmation && <div className="remote-link-panel"><p className="remote-link-info">{t("link.ocxVersion", { version: confirmation.ocxVersion })}</p>{role === "child" && standaloneRuntime && <Notice tone="warn">{t("remoteLink.findHome.notice")}</Notice>}<button type="button" className="btn btn-primary" onClick={() => void (role === "child" && standaloneRuntime ? joinLink() : applyLink())} disabled={busy !== null || (role === "child" && !childSelectable)}>{role === "child" && standaloneRuntime ? (busy === "join" ? t("remoteLink.joining") : t("remoteLink.findHome.connect")) : (busy === "apply" ? t("link.applying") : t("link.apply"))}</button></div>}{sheetOpen && discovery !== "failed" && actionError && <LinkErrorNotice error={actionError} />}
-          {failedAction && actionError?.key !== "remoteLink.error.join_restart_failed" && <div>
-            {failedAction.phase === "probe" && <><p className="remote-link-info">{t("link.probeHelp")}</p><pre><code>{"ssh -o BatchMode=yes <alias> true"}</code></pre></>}
-            <button type="button" className="btn btn-ghost" onClick={retryFailedAction} disabled={busy !== null}>{t("link.retry")}</button>
-          </div>}
-          <div className="remote-link-sheet-actions"><button type="button" className="btn btn-ghost" onClick={closeSheet}>{t("link.cancel")}</button></div></div>
-      </dialog>
+      <RemoteLinkSheet
+        sheetRef={sheetRef}
+        role={role}
+        standaloneRuntime={standaloneRuntime}
+        childSelectable={childSelectable}
+        discovery={discovery}
+        candidates={candidates}
+        alias={alias}
+        onAliasChange={setAlias}
+        probe={probe}
+        checkedFingerprint={checkedFingerprint}
+        onCheckedFingerprintChange={setCheckedFingerprint}
+        confirmation={confirmation}
+        busy={busy}
+        sheetOpen={sheetOpen}
+        actionError={actionError}
+        failedAction={failedAction}
+        onClose={closeSheet}
+        onRescan={() => void loadCandidates()}
+        onProbe={() => void runProbe()}
+        onConfirmHost={() => void confirmHost()}
+        onApplyLink={() => void applyLink()}
+        onJoinLink={() => void joinLink()}
+        onRetryFailedAction={retryFailedAction}
+      />
 
-      <dialog ref={confirmRef} className="remote-link-confirm-dialog" aria-labelledby="remote-link-confirm-title" onCancel={event => { event.preventDefault(); closeConfirmation(); }}>
-        {confirming && <><h3 id="remote-link-confirm-title">{confirming.force ? t("remoteLink.forceRemove.title", { alias: confirming.row.alias }) : t("link.disconnect")}</h3><p>{confirming.force ? <Trans k="remoteLink.forceRemove.body" cmd="ocx disconnect" vars={{ alias: confirming.row.alias }} /> : t("link.disconnectConfirm", { alias: confirming.row.alias })}</p>{forceError && <p className="remote-link-error" role="alert">{t(forceError)}</p>}<div className="remote-link-sheet-actions"><button type="button" className="btn btn-ghost" onClick={closeConfirmation}>{t("link.cancel")}</button><button type="button" className="btn btn-danger" onClick={() => void removeLink()} disabled={busy === "remove"}>{confirming.force ? t("remoteLink.forceRemove.confirm") : t("link.disconnect")}</button></div></>}
-      </dialog>
+      <RemoteLinkDisconnectDialog
+        confirmRef={confirmRef}
+        confirming={confirming}
+        purge={purgeOnDisconnect}
+        onPurgeChange={setPurgeOnDisconnect}
+        forceError={forceError}
+        busy={busy === "remove"}
+        onClose={closeConfirmation}
+        onConfirm={() => void removeLink()}
+      />
     </div>
   );
 }
