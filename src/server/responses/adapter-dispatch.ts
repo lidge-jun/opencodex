@@ -1,3 +1,4 @@
+import { recordUpstreamValidationDetail } from "../request-log-failure-detail";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { responsesSpendTarget } from "./request-spend-target";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
@@ -1867,7 +1868,7 @@ export async function prepareAdapterExchange(
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -1882,6 +1883,7 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
+      recordUpstreamValidationDetail(logCtx, upstreamResponse.status, errorText);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream

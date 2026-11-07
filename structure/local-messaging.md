@@ -254,6 +254,9 @@ contracts, not native app processing, goal behavior or cross-client registration
 `src/messaging/mcp-reply-wait.ts` composes the existing stored read under one
 caller-owned waitMs budget (integer 1..20000, default 20000). The host exposes
 codex_wait_reply only with --allow-reply-read and shares its four pending slots.
+Each wait holds its slot until completion; four waits can make send/metadata
+calls return busy for up to 20 seconds. Admission refuses rather than queues,
+and the tool description documents that no send slot is reserved.
 One wait attempts at most three snapshots, with a cancellable two-second pause
 between them and at most nine sequential owned helpers. It adds no RPC method,
 persistent state, background poll, lifecycle control or automatic delivery.

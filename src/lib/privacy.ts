@@ -10,6 +10,12 @@ export function maskEmail(value: string | null | undefined): string | null {
   return `${local[0]}***${local[local.length - 1]}@${domain}`;
 }
 
+/** A display label that never falls back to an unmasked or malformed identity. */
+export function maskedAccountLabel(value: string | null | undefined): string | undefined {
+  if (!value || value.length > 254 || !/^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(value)) return undefined;
+  return maskEmail(value) ?? undefined;
+}
+
 /**
  * Whether stored account emails are masked in management and CLI projections (#3859).
  *

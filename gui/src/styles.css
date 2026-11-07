@@ -2441,7 +2441,7 @@ button.prov-account-row.active { cursor: default; }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
 .usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
-/* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored
+/* Monochrome source marks (Grok, OpenCode and Aside) are inverted for dark themes. Brand-colored
    marks (Claude, Codex/OpenAI) must keep their brand color; inverting shifts the hue. */
 :root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }
 
