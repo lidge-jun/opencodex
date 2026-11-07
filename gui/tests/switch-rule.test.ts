@@ -1,32 +1,55 @@
 import { expect, test } from "bun:test";
 import { Glob } from "bun";
+import ts from "typescript";
 
 /*
  * One switch look. v1 grew three switch drawings (.switch, .toggle and Remote Link's own
  * .remote-link-switch), each with its own size and knob colour, so the same on/off control
  * looked squashed on one page and roomy on the next. design/bridge.css now draws all three
  * from one spec. This rule keeps it that way:
- *   - every role="switch" control carries one of those three classes, so a fourth drawing
- *     cannot appear unnoticed (prefer the shared <Switch> from ui.tsx for new code);
+ *   - every role="switch" control carries one of those classes, or is a checkbox directly
+ *     inside a .toggle track with a .slider sibling (prefer shared <Switch> for new code);
  *   - the bridge still holds the rule that draws them alike.
  */
 const SANCTIONED = /\b(switch|toggle|remote-link-switch)\b/;
 
-function tagEnd(src: string, from: number): number {
-  let depth = 0;
-  let quote = "";
-  for (let i = from; i < src.length; i++) {
-    const c = src[i]!;
-    if (quote) {
-      if (c === quote && src[i - 1] !== "\\") quote = "";
-      continue;
+type JsxTag = ts.JsxOpeningElement | ts.JsxSelfClosingElement;
+function attr(tag: JsxTag, name: string): ts.JsxAttribute | undefined {
+  return tag.attributes.properties.find((item): item is ts.JsxAttribute => ts.isJsxAttribute(item) && item.name.getText() === name);
+}
+function staticClass(tag: JsxTag, name: string): boolean {
+  const value = attr(tag, "className")?.initializer;
+  return !!value && ts.isStringLiteral(value) && value.text.split(/\s+/).includes(name);
+}
+function wrappedToggle(tag: JsxTag): boolean {
+  const type = attr(tag, "type")?.initializer;
+  const parent = tag.parent;
+  if (tag.tagName.getText() !== "input" || !type || !ts.isStringLiteral(type) || type.text !== "checkbox"
+      || !ts.isJsxElement(parent) || !staticClass(parent.openingElement, "toggle")) return false;
+  const children = parent.children.filter(child => !ts.isJsxText(child) || child.text.trim() !== "");
+  const next = children[children.indexOf(tag as ts.JsxChild) + 1];
+  return !!next && (ts.isJsxElement(next) && staticClass(next.openingElement, "slider")
+    || ts.isJsxSelfClosingElement(next) && staticClass(next, "slider"));
+}
+function scan(source: string, file: string): { offenders: string[]; seen: number } {
+  const root = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const offenders: string[] = [];
+  let seen = 0;
+  function visit(node: ts.Node) {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const role = attr(node, "role")?.initializer;
+      if (role && ts.isStringLiteral(role) && role.text === "switch") {
+        seen++;
+        const className = attr(node, "className")?.initializer?.getText(root) ?? "";
+        if (!SANCTIONED.test(className) && !wrappedToggle(node)) {
+          offenders.push(`${file}:${root.getLineAndCharacterOfPosition(node.getStart(root)).line + 1}`);
+        }
+      }
     }
-    if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
-    if (c === "{") depth++;
-    else if (c === "}") depth--;
-    else if (c === ">" && depth === 0) return i;
+    ts.forEachChild(node, visit);
   }
-  return src.length;
+  visit(root);
+  return { offenders, seen };
 }
 
 test("every role=switch control uses one of the sanctioned switch classes", async () => {
@@ -35,20 +58,26 @@ test("every role=switch control uses one of the sanctioned switch classes", asyn
   for await (const file of new Glob("src/**/*.tsx").scan(new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"))) {
     const path = new URL(`../${file.replace(/\\/g, "/")}`, import.meta.url);
     const src = await Bun.file(path).text();
-    for (const m of src.matchAll(/<[a-z]+\b/g)) {
-      const start = m.index! + m[0].length;
-      const attrs = src.slice(start, tagEnd(src, start));
-      if (!/\brole="switch"/.test(attrs)) continue;
-      seen++;
-      const className = attrs.match(/className=(\{`[^`]*`\}|"[^"]*"|\{[^}]*\})/)?.[1] ?? "";
-      if (!SANCTIONED.test(className)) {
-        offenders.push(`${file}:${src.slice(0, m.index).split("\n").length}`);
-      }
-    }
+    const result = scan(src, file);
+    seen += result.seen;
+    offenders.push(...result.offenders);
   }
   // The scan must actually reach the switches it guards, or it would pass vacuously.
   expect(seen).toBeGreaterThanOrEqual(5);
   expect(offenders).toEqual([]);
+});
+
+test("only a checkbox inside a real toggle track with a slider can use the wrapper exception", () => {
+  const valid = '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider" /></span>';
+  expect(scan(valid, "valid.tsx").offenders).toEqual([]);
+  for (const invalid of [
+    '<span className="toggle"><input type="checkbox" role="switch" /></span>',
+    '<span className="other"><input type="checkbox" role="switch" /><span className="slider" /></span>',
+    '<span className="toggle"><input type="text" role="switch" /><span className="slider" /></span>',
+    '<span className="toggle"><span><input type="checkbox" role="switch" /></span><span className="slider" /></span>',
+    '<span className="toggle"><span className="slider" /><input type="checkbox" role="switch" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" /><i /><span className="slider" /></span>',
+  ]) expect(scan(invalid, "invalid.tsx").offenders).toHaveLength(1);
 });
 
 test("the bridge draws every sanctioned switch from one spec", async () => {
