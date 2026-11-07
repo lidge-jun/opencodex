@@ -9,6 +9,9 @@ import { saveConfig } from "../../src/config";
 import { selectProactiveApiKey, clearKeyCooldowns } from "../../src/providers/key-failover";
 import { providerWindowObservations } from "../../src/quota/window-mapping";
 import { detectQuotaResets } from "../../src/quota/reset-detector";
+import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
+import { readQuotaPool } from "../../src/quota-pool/assemble";
+import { QuotaPoolSchema } from "../helpers/quota-pool-schema";
 
 const originalFetch = globalThis.fetch;
 const provider = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "test-mistral-key" } as const;
@@ -238,4 +241,34 @@ test("display-only API and Vibe budgets do not rank keys in the quota strategy",
     await fetchProviderApiKeyQuotas(cfg, "mistral", true);
     expect(selectProactiveApiKey(cfg, "mistral")?.apiKey).toBe("first-key");
   }
+});
+
+test.each([[100, 0], [0, 100], [undefined, 100]] as const)("passive quota pool excludes Mistral display budgets (API %s, Vibe %s)", async (api, vibe) => {
+  const deepseek = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "test-deepseek-key" } as const;
+  const cfg = { ...config, providers: { mistral: provider, deepseek } } as OcxConfig;
+  const resetAt = "2099-12-01T00:00:00Z";
+  globalThis.fetch = (async input => {
+    const url = String(input);
+    if (url.includes("deepseek.com")) return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
+    if (url.endsWith("/subscription")) return Response.json(subscription);
+    return Response.json({
+      api_budget: { ...budget.api_budget, usage_percentage: api, initial_budget: api === undefined ? 0 : 20, reset_at: resetAt },
+      vibe_budget: { ...budget.vibe_budget, usage_percentage: vibe, reset_at: resetAt },
+    });
+  }) as typeof fetch;
+  const reports = await fetchProviderQuotaReports(cfg, true);
+  const mistral = reports.reports.find(row => row.provider === "mistral")!;
+  expect(mistral.quota.customWindows?.find(row => row.label === "Vibe budget")?.percent).toBe(vibe);
+  if (api === undefined) expect(mistral.quota.unknownBudgetWindows?.[0]?.label).toBe("API budget (EDU)");
+  else expect(mistral.quota.customWindows?.find(row => row.label === "API budget")?.percent).toBe(api);
+  expect(providerWindowObservations(mistral.quota).some(row => row.window === "custom:Vibe budget")).toBe(true);
+  ensureQuotaPoolIdentity();
+  let passiveFetches = 0;
+  globalThis.fetch = (async () => { passiveFetches++; throw new Error("unexpected passive network request"); }) as typeof fetch;
+  const result = await readQuotaPool(cfg);
+  expect(passiveFetches).toBe(0);
+  if (!result.ok) throw new Error(result.error);
+  expect(QuotaPoolSchema.parse(result.pool)).toEqual(result.pool);
+  expect(result.pool.providers.find(row => row.provider === "mistral")?.pooled).toEqual({ windows: [] });
+  expect(result.pool.providers.find(row => row.provider === "deepseek")?.pooled.windows.length).toBeGreaterThan(0);
 });

@@ -24,6 +24,7 @@
  */
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
+import { isDisplayOnlyQuota } from "../providers/quota-types";
 import type { StoredAccountQuota } from "../codex/quota-types";
 import { isTerminalShortWindow, resetAtToMs } from "../codex/quota-types";
 import { runPassiveRead } from "../lib/passive-read";
@@ -166,6 +167,7 @@ function customWindow(window: ProviderQuotaWindow, source: QuotaPoolSource, upda
 
 /** A `ProviderQuota` (provider report or per-account cache row). */
 export function providerQuotaWindows(quota: ProviderQuota, source: QuotaPoolSource, now: number): QuotaPoolWindow[] {
+  if (isDisplayOnlyQuota(quota)) return [];
   const out: QuotaPoolWindow[] = [];
   const push = (window: QuotaPoolWindow | null) => { if (window) out.push(window); };
   const at = quota.updatedAt;

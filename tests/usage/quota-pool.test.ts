@@ -28,6 +28,7 @@ import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests } from "
 import { clearCachedProviderQuotas, getCachedProviderQuota, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
 import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
 import { runPassiveRead } from "../../src/lib/passive-read";
+import { markDisplayOnlyQuota } from "../../src/providers/quota-types";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
@@ -163,6 +164,19 @@ for (const reader of ["provider", "pool"] as const) {
 }
 
 describe("ocx.quota-pool/1 producer", () => {
+  test("display-only account quota is unknown and cannot constrain the pool", async () => {
+    ensureQuotaPoolIdentity();
+    setCachedProviderAccountQuotaForTests("xai", xaiIds[0]!, markDisplayOnlyQuota({
+      weeklyPercent: 100, weeklyResetAt: NOW + HOUR, updatedAt: NOW,
+    }));
+    const result = await read();
+    if (!result.ok) throw new Error(result.error);
+    const xai = result.pool.providers.find(row => row.provider === "xai")!;
+    expect(xai.accounts.map(account => account.state)).toEqual(["unknown", "unknown"]);
+    expect(xai.accounts.every(account => account.windows.length === 0)).toBe(true);
+    expect(xai.pooled).toEqual({ windows: [] });
+  });
+
   test("reports the identity as unavailable instead of minting one on the read path", async () => {
     expect(await read()).toEqual({ ok: false, error: "quota_pool_identity_unavailable" });
     expect(() => readFileSync(quotaPoolIdentityPath())).toThrow();

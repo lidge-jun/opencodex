@@ -44,6 +44,11 @@ every caller, and reads only caches other paths filled:
   passive read cannot establish currentness without consulting the OS keychain. The same rule
   applies to passive provider quota reads.
 
+Display-only `ProviderQuota` readings are excluded from both account and pooled decision windows.
+The rows remain present; without other evidence their quota is unknown. Account pause and reauth
+states remain independent. Dashboard reports and reset observations retain the original readings.
+This applies regardless of provider or window kind.
+
 `tests/server/quota-pool-relay.test.ts` reads the route on the Home, over the link relay and over
 the hub relay against a pool account with an expired token and an empty provider-report cache. It
 fails on any fetch, process spawn or file write inside the read, on any change to the Home's files,
