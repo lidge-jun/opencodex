@@ -34,6 +34,7 @@ import {
   LAST_GOOD_MAX_AGE_MS,
   providerQuotaBeforePublishForTests,
   routingEvidence, publishCollectedDecisionQuota,
+  keyReportCredentialIds, keyReportCredentialCurrent,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
   type CodexAuthAccountsSnapshotPromise,
@@ -172,11 +173,9 @@ let pendingProviderObservation: Promise<void> = Promise.resolve();
 /**
  * Stable per-account observation key for one provider report.
  *
- * OAuth providers key by active account id. Key-auth providers have NO account set, so
- * every key in `apiKeyPool` would collapse onto "default" and rotating from a spent key to
- * a fresh one would read as a reset (measured: 97% -> 12% fired a false surprise). The
- * cache key already discriminates these at cacheKey() via apiKeyPoolEntryId, so this
- * mirrors that discriminator instead of inventing a second notion of identity.
+ * Fallback identity for reports without a probe-bound credential. OAuth providers use their
+ * active account; other reports use the configured key or "default". Key probes instead
+ * carry the digest of the credential they actually sent in private report metadata.
  */
 function providerObservationAccountKey(provider: string, config: OcxConfig): string {
   const oauthAccountId = getAccountSet(provider)?.activeAccountId;
@@ -199,13 +198,18 @@ function notifyProviderQuotaSnapshot(
   config: OcxConfig,
 ): void {
   if (reports.length === 0) return;
-  // Resolved here, synchronously, while the identity is still the one that produced these
-  // reports.
-  const observations = reports.map(report => ({
-    scope: report.provider,
-    accountKey: providerObservationAccountKey(report.provider, config),
-    quota: report.quota,
-  }));
+  // Key-probe identities were captured at the wire; resolve other identities synchronously.
+  const observations = reports.map(report => {
+    const keyId = keyReportCredentialIds.get(report);
+    const authMode = config.providers[report.provider]?.authMode;
+    return {
+      scope: report.provider,
+      accountKey: keyId && authMode !== "oauth" && authMode !== "forward"
+        ? `${report.provider}\u0000key:${keyId}`
+        : providerObservationAccountKey(report.provider, config),
+      quota: report.quota,
+    };
+  });
   pendingProviderObservation = pendingProviderObservation
     .then(async () => {
       const observer = await import("../quota/reset-observer");
@@ -306,7 +310,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       else generationMismatchedProviders.add(item.provider);
     }
     for (const item of fresh) {
-      if (isProviderQuotaReportCurrent(item)) {
+      if (isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, config.providers[item.provider])) {
         byProvider.set(item.provider, item);
         generationMismatchedProviders.delete(item.provider);
       } else {

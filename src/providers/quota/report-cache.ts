@@ -22,6 +22,18 @@ export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
+/** Credential identity captured by the probe; never serialized with the report. */
+export const keyReportCredentialIds = new WeakMap<ProviderQuotaReport, string>();
+const keyReportDestinations = new WeakMap<ProviderQuotaReport, { adapter: string; baseUrl: string }>();
+export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined): boolean {
+  const captured = keyReportCredentialIds.get(value);
+  if (!captured) return true;
+  if (!provider || provider.disabled || provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  const destination = keyReportDestinations.get(value);
+  if (!destination || destination.adapter !== provider.adapter || destination.baseUrl !== provider.baseUrl) return false;
+  const current = resolveProviderApiKey(provider.apiKey)?.trim();
+  return !!current && createHash("sha256").update(current).digest("hex") === captured;
+}
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
 export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();
 export let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
@@ -324,7 +336,12 @@ export function keyReport(
   inferenceQuota?: ProviderQuota,
 ): ProviderQuotaReport | null {
   const result = report(provider, source, quota);
-  if (!result || !inferenceQuota) return result;
+  if (!result) return result;
+  if (config.authMode !== "oauth" && config.authMode !== "forward") {
+    keyReportCredentialIds.set(result, createHash("sha256").update(probedCredential).digest("hex"));
+    keyReportDestinations.set(result, { adapter: config.adapter, baseUrl: config.baseUrl });
+  }
+  if (!inferenceQuota) return result;
   const binding = providerQuotaRoutingBinding(provider, config, probedCredential);
   if (binding) routingEvidence.set(result, { quota: inferenceQuota, binding });
   return result;
