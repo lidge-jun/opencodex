@@ -21,7 +21,7 @@ export function mirrorRouteNativeSettings(live: OcxConfig, current: OcxConfig): 
 export function refreshRouteNativeSettings(live: OcxConfig): void {
   withConfigMutationLockSync(() => {
     const latest = readConfigDiagnostics();
-    if (latest.source === "fallback" || latest.error) throw new Error("config_unavailable");
+    if (latest.source !== "file" || latest.error) throw new Error("config_unavailable");
     mirrorRouteNativeSettings(live, latest.config);
   });
 }

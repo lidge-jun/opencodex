@@ -24,7 +24,7 @@ export function routeToStatusLines(status: RouteToStatus): string[] {
     device.clients.map(row => [device.alias || device.id, row.client, row.intent, row.source,
       row.applied ?? "-", row.target ?? "-"].join("  "))),
     ...(status.syncs ?? []).map(row => `sync ${row.id}: ${row.state}${row.reason ? ` (${row.reason})` : ""}`),
-    ...(status.deferred ? [`Local reconciliation deferred: Home intent or the Child catalog is unavailable (${status.deferred.clients.join(", ")}).`] : [])];
+    ...(status.deferred ? [`Local reconciliation deferred: Home intent or the Child catalog is unavailable${status.deferred.clients.length ? ` (${status.deferred.clients.join(", ")})` : ""}.`] : [])];
 }
 
 function accountsOption(raw: string | undefined): "all" | "none" | string[] | undefined {

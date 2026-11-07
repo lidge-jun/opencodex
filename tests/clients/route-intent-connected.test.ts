@@ -8,6 +8,7 @@ import { repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
+// Isolated cold runtime startup can exceed 20s under concurrent CI/worktrees; protocol deadlines and all behavioral assertions remain unchanged.
 function scenario(body: string, enabledIds = ["pi"], explicitClients?: string[], servedId = "command-code/deepseek/deepseek-v4.1-flash-fast", fixture: { olderHome?: boolean; combos?: boolean; canonical?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "ocx-route-connected-")); const home = join(root, "home"); mkdirSync(home);
   try {
@@ -71,12 +72,12 @@ function scenario(body: string, enabledIds = ["pi"], explicitClients?: string[],
         link:{tunnelPort:22001,linkId:'lnk_0123456789abcdef'},credential:{kind:'link',apiKeyId:'fixture-key',key:'ocx_data_'+'a'.repeat(40)},
         selectedClients:${JSON.stringify(explicitClients ?? ["codex", "claude"])},selectedClientsExplicit:${explicitClients !== undefined}}, deps);
       ${body}
-    `], { cwd: repoRoot(), encoding: "utf8", timeout: 20_000, env: { ...process.env,
+    `], { cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, env: { ...process.env,
       HOME: home, USERPROFILE: home, CODEX_HOME: join(home, ".codex"), OPENCODEX_HOME: join(home, ".opencodex"),
       CLAUDE_CONFIG_DIR: join(home, ".claude"), OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(home, "desktop"),
       XDG_CONFIG_HOME: join(home, ".config"), GROK_HOME: join(home, ".grok"), OCX_TEST_HOME_GUARD: "1" } });
     expect(result.stderr).not.toContain("local route intent needs reconciliation");
-    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+    expect({ status: result.status, signal: result.signal, error: result.error?.message, stderr: result.stderr }).toMatchObject({ status: 0, signal: null });
     return JSON.parse(result.stdout.trim().split("\n").at(-1)!);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
@@ -338,6 +339,17 @@ test("cached Home intent cannot block local off while catalog discovery is offli
       desktop:receipt.outcomes.find(row=>row.client==='claude-desktop').outcome,pending:receipt.catalogPending,stale:synced.stale,digest:receipt.appliedRouteIntentDigest}));
   `, ["pi", "claude-desktop"]);
   expect(result).toEqual({ offObserved: true, pi: "current", desktop: "stale", pending: true, stale: true, digest: null });
+});
+
+test("explicit local sync reports deferred when Home is offline even with cached all-off receipts", () => {
+  const result = scenario(`
+    const {syncLocalRouteTo}=await import('./src/routing/route-to-local');
+    offline=true;
+    const status=await syncLocalRouteTo({connection,linkId:connection.link.linkId,homePhrase:'fixture Home'},false,
+      {sync:options=>syncConnectedClient(options,deps)});
+    console.log(JSON.stringify({deferred:status.deferred,allCurrent:status.devices[0].clients.every(row=>row.applied==='current')}));
+  `, []);
+  expect(result).toEqual({ deferred: { reason: "intent_or_catalog_pending", clients: [] }, allCurrent: true });
 });
 
 test("older Home enrollment stores explicit initial choices and applies them after a revision-zero upgrade", () => {

@@ -42,11 +42,14 @@ export function readLocalRouteToStatus(context: LinkChildContext): RouteToStatus
     ...(receipt.catalogPending || stale.length ? { deferred: { reason: "intent_or_catalog_pending" as const, clients: stale } } : {}) };
 }
 
-export async function syncLocalRouteTo(context: LinkChildContext, overwriteConflict = false): Promise<RouteToStatus> {
+export async function syncLocalRouteTo(context: LinkChildContext, overwriteConflict = false,
+  deps: { sync?: typeof import("../client/connect").syncConnectedClient } = {}): Promise<RouteToStatus> {
   assertChild(context);
   const { syncConnectedClient } = await import("../client/connect");
-  await syncConnectedClient({ expect: { kind: "link", linkId: context.linkId }, overwriteConflict });
-  return readLocalRouteToStatus(context);
+  const result = await (deps.sync ?? syncConnectedClient)({ expect: { kind: "link", linkId: context.linkId }, overwriteConflict });
+  const status = readLocalRouteToStatus(context);
+  if (result.stale) status.deferred ??= { reason: "intent_or_catalog_pending", clients: status.devices[0]!.clients.filter(row => row.applied === "stale").map(row => row.client) };
+  return status;
 }
 
 export async function setLocalRouteToOff(context: LinkChildContext, client: RouteClientId, off: boolean): Promise<RouteToStatus> {
