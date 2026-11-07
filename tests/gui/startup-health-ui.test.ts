@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { createElement } from "../../gui/node_modules/react";
 import { renderToStaticMarkup } from "../../gui/node_modules/react-dom/server";
 import { DICTS, I18nContext, type TFn } from "../../gui/src/i18n/shared";
 import { StartupHeroSection } from "../../gui/src/pages/startup-sections";
 import { DashboardOverviewHead } from "../../gui/src/pages/dashboard-overview-head";
 import type { StartupHealthData } from "../../gui/src/pages/startup-shared";
+import { diagnoseMacDesktopStartup } from "../../src/service/desktop-startup";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   beginPollEpochs,
@@ -21,6 +25,41 @@ import {
 } from "../../gui/src/startup-health-ui";
 
 describe("startup health UI decisions", () => {
+  test("confirmed absent supervision reaches both dashboard editions and their recovery guidance", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-startup-ui-"));
+    try {
+      const id = join(home, "Library/Application Support/com.opencodex.desktop/install-id");
+      mkdirSync(dirname(id), { recursive: true });
+      writeFileSync(id, "installation-a");
+      const desktop = diagnoseMacDesktopStartup({ platform: "darwin", home,
+        ownership: () => ({ kind: "owned", revision: 1, ownership: { owner: "desktop", installId: "installation-a", consentGeneration: 1 } }),
+        readPid: () => 100, readRuntimePortPid: () => null,
+        run: (_command, args) => args[1] === "100" ? `200 ${process.execPath}` : `1 ${process.execPath}`,
+      })!;
+      const data = { status: "at-risk", routingKind: "opencodex-local", desktop, diagnosticStale: false,
+        protection: "none", shimCoverage: "none", autostartEnabled: false } as StartupHealthData;
+      const status = mapStartupHealthProbe(data);
+      expect(status).toBe("at-risk");
+      const t: TFn = key => DICTS.en[key];
+      const wrap = (child: ReturnType<typeof createElement>) => renderToStaticMarkup(createElement(I18nContext.Provider,
+        { value: { locale: "en", setLocale: () => {}, t } }, child));
+      const hero = wrap(createElement(StartupHeroSection, { failed: false, data }));
+      expect(hero).toContain("Action required");
+      expect(hero).toContain("Reopen the desktop app");
+      const headProps = { locale: "en" as const, health: null, providers: [], usage30d: null, usageLoading: false,
+        healthLoading: false, startupHealth: status, projectConfigWarnings: [] };
+      const main = wrap(createElement(DashboardOverviewHead, headProps));
+      expect(main).toContain(DICTS.en["startup.summary.atRisk"]);
+      expect(main).not.toContain(DICTS.en["startup.unverified"]);
+      // Classic's overlay uses the same mapper, then renders its own head and hero.
+      const classicHead = readFileSync(new URL("../../gui/classic/src/pages/dashboard-overview-head.tsx", import.meta.url), "utf8");
+      const classicHero = readFileSync(new URL("../../gui/classic/src/pages/startup-sections.tsx", import.meta.url), "utf8");
+      expect(classicHead).toContain('startupHealth === "at-risk"');
+      expect(classicHead).toContain('"startup.summary.atRisk"');
+      expect(classicHero).toContain("startupPresentation(data, failed)");
+      expect(classicHero).toContain("startupRiskDetailKey(data)");
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
   test("desktop login evidence distinguishes unverified, disabled and protected presentation", () => {
     const base = {
       status: "at-risk", routingKind: "opencodex-local", routingInjected: true,

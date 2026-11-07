@@ -22,6 +22,7 @@ matching process and ownership evidence; ambiguous or unreadable evidence stays 
 dashboard presents unknown Desktop evidence informationally except for a fresh supervision failure;
 that failure and a verified disabled login require action when no other verified protection applies.
 Unreadable macOS registration or process evidence marks supervision unknown and does not prove failure.
+With an absent plist and matching Desktop install ownership, a stable `none` process probe is a verified supervision failure, provided ownership, install id, and plist absence still match afterward.
 The cases in `tests/fixtures/desktop-login-registration-cases.json` run against both
 implementations (`login_registration::tests` and
 `tests/service/service-desktop-login-registration.test.ts`); a change to either judgment

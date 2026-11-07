@@ -205,6 +205,12 @@ function diagnoseAbsentMacRegistration(deps: DesktopStartupDeps, owner: ServiceO
     const installId = owned ? readFileSync(installIdPath, "utf8").trim() : null;
     if (owned && (owner.kind !== "owned" || installId !== owner.ownership.installId)) return fallback;
     const first = inspectDesktopSupervision(deps);
+    if (owned && first.kind === "none") {
+      const currentOwner = ownership();
+      return currentOwner.kind !== "unknown" && sameServiceOwnershipSubject(owner, currentOwner)
+        && macRegistrationAbsent(deps) && readFileSync(installIdPath, "utf8").trim() === installId
+        ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : fallback;
+    }
     if (first.kind !== "desktop" || !macRegistrationAbsent(deps)) return fallback;
     const final = inspectDesktopSupervision({ ...deps, targetPid: first.runtimePid });
     const currentOwner = ownership();

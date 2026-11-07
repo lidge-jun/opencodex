@@ -135,6 +135,40 @@ test("a consistently absent login item is disabled only for a verified live Desk
   }
 });
 
+test("a stable foreign parent with an absent login item is a verified supervision failure", () => {
+  const f = fixture();
+  rmSync(f.plistPath);
+  f.state.parent = `1 ${process.execPath}`;
+  expect(inspectDesktopSupervision(f.deps)).toEqual({ kind: "none" });
+  expect(diagnoseMacDesktopStartup(f.deps)).toEqual({
+    owned: true, loginEnabled: false, loginState: "unknown", running: false, viable: false,
+  });
+});
+
+test("absent supervision is unknown when its ownership or absence evidence changes", () => {
+  for (const change of ["owner", "install-id", "plist", "snapshot", "probe"] as const) {
+    const f = fixture();
+    rmSync(f.plistPath);
+    f.state.parent = `1 ${process.execPath}`;
+    const run = f.deps.run;
+    let reads = 0;
+    f.deps.run = (command, args) => {
+      const output = run(command, args);
+      if (command === "/bin/ps" && ++reads === 2) {
+        if (change === "owner") f.state.changedOwner = true;
+        if (change === "install-id") writeFileSync(f.idPath, "another-installation");
+        if (change === "plist") writeFileSync(f.plistPath, "new registration");
+        if (change === "snapshot") f.state.parent = `1 ${f.app}`;
+        if (change === "probe") f.state.fail = "/bin/ps";
+      }
+      return output;
+    };
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({
+      owned: true, running: false, viable: false, supervisionUnknown: true,
+    });
+  }
+});
+
 test("a registration that reappears during an absence check is not reported disabled", () => {
   const f = fixture();
   rmSync(f.plistPath);
