@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { decodePublicKey, verifyMinisignBytes, verifyLegacyMinisignBytes } from "../../src/update/minisign.mjs";
+import { verifySignatureThreshold } from "../../src/update/update-signature-threshold.mjs";
 
 describe("offline minisign verification", () => {
   test("accepts the independent upstream prehashed vector and rejects changed bytes", () => {
@@ -35,5 +36,32 @@ describe("offline minisign verification", () => {
     expect(() => verifyMinisignBytes(bytes, `${exact}!`, key)).toThrow(/base64/);
     expect(verifyMinisignBytes(bytes, exact, { ...key, fingerprint: "0".repeat(64) }).fingerprint).toBe(key.fingerprint);
     expect(() => verifyMinisignBytes(bytes, "A".repeat(5468), key)).toThrow(/exceeds limit/);
+  });
+
+  test("counts distinct authorized signers and permits unrelated transition signatures", () => {
+    const bytes = Buffer.from("signed metadata");
+    const makeSigner = (idByte: number) => {
+      const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+      const raw = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32);
+      const id = Buffer.alloc(8, idByte);
+      const text = `untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), id, raw]).toString("base64")}\n`;
+      const fingerprint = createHash("sha256").update(raw).digest("hex");
+      const signature = sign(null, createHash("blake2b512").update(bytes).digest(), privateKey);
+      const global = sign(null, Buffer.concat([signature, Buffer.from("timestamp:1")]), privateKey);
+      const packet = Buffer.concat([Buffer.from("ED"), id, signature]).toString("base64");
+      const signatureBox = Buffer.from(`untrusted comment: fixture\n${packet}\ntrusted comment: timestamp:1\n${global.toString("base64")}\n`).toString("base64");
+      return { key: { keyId: fingerprint, algorithm: "minisign-ed25519-blake2b512/1", publicKey: Buffer.from(text).toString("base64") }, signature: { keyFingerprint: fingerprint, signatureBox } };
+    };
+    const a = makeSigner(1), b = makeSigner(2), unrelated = makeSigner(3);
+    const envelope = { signatures: [a.signature, b.signature, unrelated.signature] };
+    expect(() => verifySignatureThreshold(bytes, envelope, [a.key, b.key], 2)).not.toThrow();
+    expect(() => verifySignatureThreshold(bytes, envelope, [a.key], 1)).not.toThrow();
+    expect(() => verifySignatureThreshold(bytes, { signatures: [a.signature] }, [a.key, b.key], 2)).toThrow();
+    expect(() => verifySignatureThreshold(bytes, { signatures: [a.signature, a.signature] }, [a.key, b.key], 2)).toThrow();
+    expect(() => verifySignatureThreshold(bytes, { signatures: [{ ...a.signature, signatureBox: b.signature.signatureBox }] }, [a.key], 1)).toThrow();
+    expect(() => verifySignatureThreshold(bytes, envelope, [a.key, a.key], 2)).toThrow();
+    expect(() => verifySignatureThreshold(bytes, envelope, [a.key, b.key], 0)).toThrow();
+    expect(() => verifySignatureThreshold(Buffer.from("changed"), envelope, [a.key, b.key], 2)).toThrow();
+    expect(() => verifySignatureThreshold(bytes, envelope, [{ ...a.key, keyId: "0".repeat(64) }], 1)).toThrow();
   });
 });
