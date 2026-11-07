@@ -119,6 +119,8 @@ Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
 
 ## `anthropic`
 
+OAuth 호환성 옵션과 시스템 지침 우선순위 변경은 [영문 기준 문서](/reference/adapters/#anthropic)를 참고하세요.
+
 **대상:** Anthropic **Messages**(`/v1/messages`).
 **인증:** `key`(기본 `x-api-key`, 또는 `apiKeyTransport: "bearer"` 설정 시 `Authorization: Bearer`) 또는 `oauth`(Bearer + `anthropic-beta`, Claude Pro/Max용).
 

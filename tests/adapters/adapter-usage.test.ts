@@ -166,6 +166,36 @@ describe("adapter reasoning and usage details", () => {
       stream: true,
       options: {},
     });
+    const body = JSON.parse(request.body) as { system: Record<string, unknown>[]; cache_control?: unknown };
+
+    expect(body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(body.system[0]).toMatchObject({ type: "text" });
+    expect(body.system[0].cache_control).toBeUndefined();
+    // The last system block (user system prompt) gets the cache breakpoint.
+    expect(body.system[1]).toEqual({
+      type: "text",
+      text: "stable project instructions",
+      cache_control: { type: "ephemeral", ttl: "1h" },
+    });
+  });
+
+  test("Anthropic OAuth opt-in caches caller instructions at the start of the first user turn", async () => {
+    const adapter = createAnthropicAdapter({
+      ...provider,
+      adapter: "anthropic",
+      authMode: "oauth",
+      anthropicOAuthUserInstructions: true,
+      baseUrl: "https://api.anthropic.com",
+    });
+    const request = await adapter.buildRequest({
+      modelId: "claude-opus-4-1",
+      context: {
+        systemPrompt: ["stable project instructions"],
+        messages: [{ role: "user", content: "hi" }],
+      },
+      stream: true,
+      options: {},
+    });
     const body = JSON.parse(request.body) as {
       system: Record<string, unknown>[];
       messages: { content: Record<string, unknown>[] }[];
@@ -173,8 +203,6 @@ describe("adapter reasoning and usage details", () => {
     };
 
     expect(body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
-    // The top-level array carries the identity alone: caller text there is read by Anthropic as
-    // third-party traffic, so it travels at the head of the first user turn instead.
     expect(body.system).toHaveLength(1);
     expect(body.system[0]).toMatchObject({ type: "text" });
     expect(body.system[0].cache_control).toBeUndefined();

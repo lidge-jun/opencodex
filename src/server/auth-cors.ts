@@ -1345,6 +1345,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   messagePhaseInference: "editor",
   estimateMissingUsage: "editor",
   tlsProfile: "editor",
+  anthropicOAuthUserInstructions: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 
 type ProviderFieldWithPolicy<Policy extends ProviderConfigFieldPolicy> = {

@@ -1055,7 +1055,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const serverToolPlan = planAnthropicServerTools(provider, parsed._anthropicServerTools, parsed._anthropicServerReplay,
         new Set(parsed.context.tools?.map(tool => tool.name)), usesNativeAnthropicEndpoint(provider));
       const { system, callerSystem, messages } = messagesToAnthropicFormat(parsed, toolNames,
-        serverToolPlan.replay, isOAuth);
+        serverToolPlan.replay, isOAuth && provider.anthropicOAuthUserInstructions === true);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
