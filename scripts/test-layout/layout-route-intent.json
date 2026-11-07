@@ -11,6 +11,7 @@
   "link-route-intent.test.ts": "server",
   "route-intent-aside.test.ts": "clients",
   "route-intent-claude-surface.test.ts": "clients",
+  "route-intent-codex-connect-disabled.test.ts": "clients",
   "route-intent-codex-transitions.test.ts": "clients",
   "route-intent-connected.test.ts": "clients",
   "route-intent-desktop.test.ts": "clients",

@@ -617,6 +617,7 @@ async function connectClientUnlocked(
   let priorCatalog: CatalogSnapshot | null = null;
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
+  let restoreCodexIntent: (() => void) | undefined;
   let committed = false;
   // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
   // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
@@ -756,13 +757,32 @@ async function connectClientUnlocked(
       ...(homeSettings?.kind === "fresh" ? overlayHomeCodexSettings(config, homeSettings.document.settings) : config),
       syncResumeHistory: false,
     };
+    const beforeCodexWrite = () => {
+      assertActiveConnectingState(persisted.fingerprint);
+      if (routeIntent && (!connectedRouteSelectedClients(routeIntent, options.selectedClients).includes("codex")
+        || loadConfig().port !== config.port)) throw new Error("Codex route intent or runtime changed; retry connect");
+    };
+    if (!options.noSync && routeIntent && selectedClients.includes("codex") && existsSync(getCodexHome())) {
+      const { persistNativeRouteIntent } = await import("./route-intent-apply");
+      withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+        beforeCodexWrite();
+        // Home intent owns a selected installed client, including a standalone OFF. Keep
+        // compensation field-scoped: a failed enrollment must not enable standalone Codex
+        // or replace disjoint config changes made while injection was awaiting its locks.
+        const wasDisabled = loadConfig().clientIntegrations?.codex === false;
+        persistNativeRouteIntent("codex", true, beforeCodexWrite, injectConfig);
+        if (wasDisabled) restoreCodexIntent = () => {
+          persistNativeRouteIntent("codex", false, () => assertConnectingState(persisted.fingerprint), loadConfig());
+        };
+      }), deps.lifecycleLockDeps);
+    }
     const preflight = !selectedClients.includes("codex") || (routeIntent && !existsSync(getCodexHome()))
       ? { success: true, message: "Codex is not selected or installed" } : await injectCodexConfig(config.port, injectConfig, {
       validateOnly: true,
       routingTarget: target,
       catalogPath: DEFAULT_CATALOG_PATH,
       journalOwner: { kind: "client", apiKeyId },
-      beforeClientWrite: () => assertActiveConnectingState(persisted.fingerprint),
+      beforeClientWrite: beforeCodexWrite,
     });
     if (!preflight.success) throw new Error(preflight.message);
 
@@ -771,7 +791,7 @@ async function connectClientUnlocked(
         routingTarget: target,
         catalogPath: DEFAULT_CATALOG_PATH,
         journalOwner: { kind: "client", apiKeyId },
-        beforeClientWrite: () => assertActiveConnectingState(persisted.fingerprint),
+        beforeClientWrite: beforeCodexWrite,
       });
       if (!injected.success || injected.status === "skipped") throw new Error(injected.message);
       injectionCommitted = true;
@@ -841,6 +861,10 @@ async function connectClientUnlocked(
     try {
       withClientLifecycleSync(() => withConfigMutationLockSync(() => {
         assertNoClientDisconnectPending();
+        if (restoreCodexIntent) {
+          try { restoreCodexIntent(); }
+          catch { rollbackFailures.push("Codex intent rollback ownership unavailable"); }
+        }
         if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
           rollbackFailures.push("catalog rollback did not match the written artifact");
         }
