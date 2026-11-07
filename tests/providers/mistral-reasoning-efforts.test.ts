@@ -5,7 +5,7 @@ import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
 import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import type { OcxProviderConfig } from "../../src/types";
 
-// The configuration from #8254: the Mistral preset with no effort declarations of its own.
+/** The configuration from #8254: the Mistral preset with no effort declarations of its own. */
 function mistral(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   const provider: OcxProviderConfig = {
     adapter: "openai-chat", baseUrl: "https://api.mistral.ai/v1", apiKey: "test-mistral-efforts",
@@ -15,6 +15,7 @@ function mistral(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig 
   return provider;
 }
 
+/** Enabled OpenCode V1 variant keys and V2 variant ids exported for one Mistral model. */
 function exportedVariants(provider: OcxProviderConfig, id: string) {
   const row = applyProviderConfigHints("mistral", provider, { provider: "mistral", id });
   const namespaced = `mistral/${id}`;
@@ -28,6 +29,7 @@ function exportedVariants(provider: OcxProviderConfig, id: string) {
   };
 }
 
+/** The `reasoning_effort` a native Chat passthrough request puts on the upstream wire. */
 function wireEffort(provider: OcxProviderConfig, modelId: string, effort: string): unknown {
   const request = buildOpenAIChatPassthroughRequest(provider, {
     model: modelId, messages: [{ role: "user", content: "Reply with OK" }], reasoning_effort: effort,
