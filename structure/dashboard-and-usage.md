@@ -228,10 +228,7 @@ Account quota discovery is capability-based. Cheap OAuth and provider-key lists 
 `quotaMode` (`probe`, `passive`, or `unsupported`) without contacting upstream quota APIs.
 `GET /api/oauth/accounts?provider=...&quota=1` and
 `GET /api/providers/keys?name=...&quota=1` enrich each supported credential separately;
-`refresh=1` bypasses settled quota cache while joining a current same-identity read.
-Mistral quota reports include separately labelled API and Vibe windows; a window with no usable
-budget or currency is shown as unknown, without a percentage or exhaustion bar. The same windows
-and reset times are available in provider and API-key CLI reports.
+`refresh=1` bypasses settled quota cache while joining a current same-identity read. Mistral quota reports include separately labelled API and Vibe windows; a window with no usable budget or currency is shown as unknown, without a percentage or exhaustion bar. The same windows and reset times are available in provider and API-key CLI reports.
 OAuth readers use the named stored account; key readers use isolated per-key configuration,
 never active-key mutation or the provider-wide cache. Response projection rechecks key identity
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
