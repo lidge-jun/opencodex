@@ -94,15 +94,6 @@ beforeEach(() => {
         };
         return Response.json({ ok: true, ...statusResponse });
       }
-      if (path === "/api/telemetry/notice" && method === "POST") {
-        statusResponse = {
-          ...statusResponse,
-          effective: true,
-          reason: "default-on",
-          noticeShownAt: "2026-11-07T00:00:00.000Z",
-        };
-        return Response.json({ ok: true, ...statusResponse });
-      }
       return Response.json(statusResponse);
     },
   });
@@ -239,6 +230,7 @@ test("Preview the JSON button opens the preview dialog with autoFocus on Close a
   expect(dialog?.querySelector(`#${descId}`)?.classList.contains("modal-desc")).toBe(true);
   const pre = dialog?.querySelector("pre.telemetry-preview-json");
   expect(pre?.textContent).toBe(JSON.stringify(statusResponse.preview, null, 2));
+  expect(dialog?.querySelector(".telemetry-preview-ineligible")).toBeNull();
 
   const closeBtn = dialog?.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!;
   expect(win.document.activeElement).toBe(closeBtn as unknown as Element);
@@ -255,6 +247,22 @@ test("Preview the JSON button opens the preview dialog with autoFocus on Close a
   expect(host.querySelector("dialog.telemetry-preview-overlay")).toBeNull();
   expect(dialogPresentDuringFocusRestore).toBe(false);
   expect(win.document.activeElement).toBe(trigger as unknown as Element);
+});
+
+test("preview dialog shows 'This day would not be sent' when previewEligible is false", async () => {
+  statusResponse = makeStatus({ previewEligible: false });
+  await mountPanel();
+
+  const trigger = host.querySelector<HTMLButtonElement>(".telemetry-preview-trigger")!;
+  await act(async () => {
+    click(trigger);
+  });
+
+  const dialog = host.querySelector<HTMLDialogElement>("dialog.telemetry-preview-overlay");
+  expect(dialog).toBeTruthy();
+  expect(dialog?.querySelector(".telemetry-preview-ineligible")?.textContent).toBe(
+    "This day would not be sent",
+  );
 });
 
 test("never stacks preview dialog over an open TelemetryConsentCard and opens once the consent dialog closes", async () => {

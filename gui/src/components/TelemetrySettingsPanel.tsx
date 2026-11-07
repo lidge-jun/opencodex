@@ -266,6 +266,11 @@ export function TelemetrySettingsPanel({
             <p id={previewDescId} className="modal-desc m-0">
               {t("proxyV2.telemetryPreviewHint")}
             </p>
+            {status.previewEligible === false && (
+              <p className="telemetry-preview-ineligible m-0 text-[12px] text-fg-muted">
+                {t("proxyV2.telemetryPreviewIneligible")}
+              </p>
+            )}
             <pre className="log-detail-json telemetry-preview-json">{formatTelemetryPreviewJson(status)}</pre>
             <div className="modal-actions">
               <button
