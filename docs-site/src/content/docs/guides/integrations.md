@@ -173,7 +173,7 @@ runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the no
 `opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
 re-point it. Each routed model is a custom model keyed by its opencodex selector
-(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+(`provider/model`), which T3 Code sends verbatim. A model with an effort ladder declares it, so T3 Code offers its effort control and can start a subagent on it at a chosen effort. It appears in T3 Code's model picker under
 **opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
 `ocx sync` refresh the instance.
 
