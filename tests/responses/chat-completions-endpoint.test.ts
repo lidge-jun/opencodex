@@ -83,17 +83,20 @@ afterEach(async () => {
   try {
     // A timed-out case never reaches its finally; its live server would fail every later start.
     await stopLeftoverServers();
-    releaseSpendHome?.();
-    releaseSpendHome = undefined;
-    resetProviderRequestPacingForTest();
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    isolatedCodexHome?.restore();
-    isolatedCodexHome = null;
-    globalThis.fetch = originalFetch;
-    if (testDir) removeTreeWithRetry(testDir);
   } finally {
-    expect(refusedDials).toEqual([]);
+    try {
+      releaseSpendHome?.();
+      releaseSpendHome = undefined;
+      resetProviderRequestPacingForTest();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      isolatedCodexHome?.restore();
+      isolatedCodexHome = null;
+      globalThis.fetch = originalFetch;
+      if (testDir) removeTreeWithRetry(testDir);
+    } finally {
+      expect(refusedDials).toEqual([]);
+    }
   }
 });
 
