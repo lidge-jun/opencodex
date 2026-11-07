@@ -1,23 +1,34 @@
 /** Run against an isolated Vite/proxy seeded with at least 12 synthetic providers.
  * PLAYWRIGHT_MODULE_PATH and PLAYWRIGHT_BROWSERS_PATH point to temporary tooling. */
 import { pathToFileURL } from "node:url";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 const modulePath = process.env.PLAYWRIGHT_MODULE_PATH;
 if (!modulePath?.startsWith("/")) throw new Error("PLAYWRIGHT_MODULE_PATH must be an absolute path");
 const { webkit } = await import(pathToFileURL(modulePath).href);
 const base = process.env.GUI_TEST_BASE ?? "http://127.0.0.1:15174";
 const browser = await webkit.launch({ headless: true });
+const screenshots = process.env.RAIL_SCREENSHOT_DIR;
+if (screenshots && !screenshots.startsWith("/")) throw new Error("RAIL_SCREENSHOT_DIR must be absolute");
+if (screenshots) await mkdir(screenshots, { recursive: true });
 let failures = 0;
 try {
   const context = await browser.newContext({ viewport: { width: 860, height: 1000 }, colorScheme: "dark" });
   await context.addInitScript(() => localStorage.setItem("ocx-theme", "dark"));
   const page = await context.newPage();
+  // Playwright's WebKit protocol controls page zoom (the desktop shell uses WKWebView's
+  // pageZoom). This private protocol is intentionally required: no CSS-zoom fallback.
+  const pageProxy = page._connection.toImpl(page).delegate._pageProxySession;
+  if (!pageProxy?.connection?.browserSession || !pageProxy.sessionId) throw new Error("WebKit page-zoom protocol unavailable");
   await page.goto(`${base}/#models`, { waitUntil: "domcontentloaded" });
   await page.locator(".models-workspace-rail-row").first().waitFor();
   for (const width of [1440, 1100, 860, 768]) for (const zoom of [1, 0.9]) {
     await page.setViewportSize({ width, height: 1000 });
-    // CSS zoom approximates the desktop setting; this does not certify native app zoom.
-    await page.evaluate(value => { document.body.style.zoom = String(value); }, zoom);
+    await pageProxy.connection.browserSession.send("Playwright.setPageZoomFactor", { pageProxyId: pageProxy.sessionId, zoomFactor: zoom });
+    const ratio = await page.evaluate(() => window.devicePixelRatio);
+    if (Math.abs(ratio - zoom) > 0.02) throw new Error(`Page zoom did not take effect: ${zoom}, DPR ${ratio}`);
+    await page.evaluate(() => { window.scrollTo(0, 0); document.querySelector(".models-workspace-rail-list")!.scrollTop = 0; });
     const rows = page.locator(".models-workspace-rail-row");
     const count = await rows.count();
     if (count < 12) throw new Error(`Expected at least 12 synthetic rows; got ${count}`);
@@ -38,6 +49,7 @@ try {
         console.error(`FAIL ${width}/${zoom}/row-${i}: ${JSON.stringify(item)}`);
       }
     }
+    if (screenshots) await page.screenshot({ path: join(screenshots, `rail-${width}-${zoom}.png`) });
     if (width <= 860) {
       const list = page.locator(".models-workspace-rail-list");
       const scrollable = await list.evaluate(element => element.scrollHeight > element.clientHeight);
