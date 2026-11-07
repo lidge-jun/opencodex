@@ -164,8 +164,9 @@ than replaying early. Context windows and per-model compaction preferences remai
 
 Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
 rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry
-`modelReasoningEfforts` rows, so the Codex catalog clamps to them and client exports such as
-`ocx export --client opencode` offer only these variants:
+`modelReasoningEfforts` rows. Client exports such as `ocx export --client opencode` offer only
+these variants. The Codex catalog still adds its synthetic `ultra` rung, plus `max` where a
+model's list omits it, and requests clamp those to the highest listed rung:
 
 | Model | Efforts |
 |---|---|
@@ -178,10 +179,13 @@ Mistral documents no values for DeepSeek V4.1 Flash 1017, so its row is the set 
 answer HTTP 200 in November 2026 and may change. A `modelReasoningEfforts` entry of your own
 for a model replaces its row.
 
-On native Chat Completions, a caller's `ultra` is sent as `max`, or as the model's highest
+On native Chat Completions, for a model with reasoning enabled, a caller's `ultra` is sent as `max`, or as the model's highest
 declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
 unless the model's declared ladder lists `ultra` itself. A `reasoningEffortMap` alias for `max`
-applies to the folded value, and `__omit__` drops the field. Other caller values are forwarded as sent.
+applies to the folded value, and `__omit__` drops the field. Models with reasoning disabled (for
+example `noReasoningModels`) drop `reasoning_effort` entirely. Other caller values are forwarded
+as sent unless an effort pin or a qualifying effort cap rewrites them; rewritten values also go
+through the provider's wire mapping.
 
 When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This applies to native Chat, Messages, Responses and compact. Waiting for replacement-key capacity does not consume the upstream response-header timeout. Per-key pacing and round-robin use guarded HTTP/SSE even when upstream WebSockets are enabled; WebSocket-only steering and injection require a route without those key policies. This does not change the saved active key. An established upstream turn keeps its credential; later sends are refused if that key cools. Pre-output key rejection can recover to a healthy key within the existing request limit. Direct Images and compact requests record genuine 401/429 cooldowns without replaying that paid POST.
 
