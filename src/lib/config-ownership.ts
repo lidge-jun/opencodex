@@ -528,22 +528,9 @@ export function initializeConfigOwnership(configDir: string): boolean {
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
   let ownership = ownershipCache.get(cacheKey);
-  if (ownership === undefined) {
+  if (ownership === undefined || ownership === null) {
+    // A previously unowned home can enter creation later; use the same bounded publication wait.
     ownership = loadOrCreateOwnership(configDir);
-    ownershipCache.set(cacheKey, ownership);
-  } else if (ownership === null) {
-    // A home cached as unowned may have finished being created by another process since: re-read
-    // the metadata (no waiting) so a late owner marker is picked up. A root that has become empty
-    // since is claimed like an absent one; a nonempty unowned root still never is.
-    ownership = loadOwnership(configDir);
-    if (!ownership) {
-      try {
-        ownership = createOwnership(configDir);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        ownership = loadOwnership(configDir);
-      }
-    }
     ownershipCache.set(cacheKey, ownership);
   }
   return ownership !== null;
@@ -573,13 +560,13 @@ function loadOwnershipForUninstall(configDir: string): { owner: ConfigOwner; man
   return loadOwnership(configDir) ?? tombstonedManifestWithoutOwner(configDir);
 }
 
-/** How long a first registration waits for another process that is creating the same home. */
+/** How long an uncached or unowned registration waits for another process creating the same home. */
 const CONCURRENT_CREATION_WAIT_MS = 100;
 
 /**
  * Load the ownership metadata, or create it in an empty root. Two processes can start on the same
  * absent home: the loser of the exclusive manifest write, or one that sees the manifest before the
- * owner marker (creation writes them in that order), waits briefly and loads the winner's metadata
+ * complete owner marker (creation writes them in that order), waits briefly and loads the winner's metadata
  * instead of caching the home as unowned for the rest of its life.
  */
 function loadOrCreateOwnership(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
@@ -593,7 +580,9 @@ function loadOrCreateOwnership(configDir: string): { owner: ConfigOwner; manifes
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST)) && !existsSync(join(configDir, CONFIG_OWNER_FILE))
+    // Exclusive create publishes the owner file name before its JSON bytes are complete.
+    // Only a valid matching pair proves ownership; file presence alone must not end this wait.
+    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))
       && !tombstonedManifestWithoutOwner(configDir);
     if (!creating || Date.now() >= deadline) return loadOwnership(configDir);
     Bun.sleepSync(5);
