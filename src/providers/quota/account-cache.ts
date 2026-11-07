@@ -20,7 +20,7 @@ import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./ven
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 import { isDisplayOnlyQuota, markDisplayOnlyQuota } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
 import { runPassiveReadSync } from "../../lib/passive-read";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
@@ -46,6 +46,7 @@ export type AccountQuotaCacheEntry = {
   /** Private passive Anthropic ownership fence; not serialized with quota bars. */
   anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
+  isConfigCurrent?: (config: OcxConfig) => boolean;
 };
 /** Expired measurements become unknown; missing reset evidence never implies a fresh allowance. */
 export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined, now: number): ProviderQuota | null {
@@ -402,7 +403,8 @@ export function recordPassiveAccountQuota(
   // observation arrives unprompted, so it must hydrate itself.
   runPassiveReadSync(hydrateAccountQuotaCache);
   accountQuotaCache.set(key, { ts: Date.now(), quota, identity: owner.identity,
-    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent() });
+    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
+    isConfigCurrent: owner.isConfigCurrent });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
   persistAccountQuotaCache();
@@ -454,12 +456,27 @@ export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
   return removed;
 }
 
-export function reconcileProviderAccountQuotaRows(context: GenerationContext): number {
+export function reconcileProviderAccountQuotaRows(context: GenerationContext, config?: OcxConfig): number {
   if (context.generation <= lastReconciledGeneration) return 0;
   hydrateAccountQuotaCache();
   let removed = 0;
-  for (const key of accountQuotaCache.keys()) {
-    if (context.oauthAccountKeys.has(key)) continue;
+  for (const [key, entry] of accountQuotaCache) {
+    let current = context.oauthAccountKeys.has(key);
+    if (current && key.startsWith("meta-muse\0")) {
+      const provider = config?.providers["meta-muse"];
+      // A hydrated row has account ownership but no live provider object yet. Bind it
+      // on the first live reconciliation so later replacement or ABA retires it too.
+      if (config && provider && !entry.isConfigCurrent && entry.isCurrent?.() !== false) {
+        const owner = bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length)), config, "meta-muse");
+        if (owner && owner.identity === entry.identity) {
+          const previous = entry.isCurrent;
+          entry.isCurrent = () => previous?.() !== false && owner.isAccountCurrent();
+          entry.isConfigCurrent = owner.isConfigCurrent;
+        }
+      }
+      current = entry.isCurrent?.() !== false && (!config || entry.isConfigCurrent?.(config) === true);
+    }
+    if (current) continue;
     accountQuotaCache.delete(key);
     removed += 1;
   }

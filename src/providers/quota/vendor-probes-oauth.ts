@@ -411,7 +411,8 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   // Hydrate before writing: persistence serializes the whole in-memory map.
   hydrateAccountQuotaCache();
   const entry = { ts: Date.now(), quota, identity: owner.identity,
-    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent() };
+    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
+    isConfigCurrent: owner.isConfigCurrent };
   accountQuotaCache.set(probedAccountKey, entry);
   persistAccountQuotaCache();
   return bindMuseReport(report(provider, `${provider}:key-endpoint`, quota), {

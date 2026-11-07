@@ -27,7 +27,7 @@ import {
   parseMuseSubscriptionUsage,
 } from "../../src/providers/muse-subscription-usage";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
-import { setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { getAccountSet, saveAccountCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { heldProviderQuotaReports, setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
 import { fetchMuseKeyQuota } from "../../src/providers/quota/vendor-probes-oauth";
 import { captureMuseQuotaOwner, type MuseQuotaOwner } from "../../src/providers/quota/muse-owner";
@@ -42,6 +42,9 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
+import { reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
+import { hasHeadroomEvidence, rankAccountsByHeadroom } from "../../src/oauth/account-quota-rank";
+import { readPersistedAccountQuotas } from "../../src/providers/account-quota-disk";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testDir = "";
@@ -130,6 +133,63 @@ function observePayload(payload: unknown, servingAccountId: string | null, gener
 }
 
 describe("Muse subscription usage observed on the SSE seam", () => {
+  test("physical observations survive unrelated reconciliation for display, ranking, persistence and reset continuity", async () => {
+    writeTwoAccounts();
+    const config = museConfig(), events: unknown[] = [], original = globalThis.fetch;
+    let percent = 95, resetAt = Math.floor(Date.now() / 1000) - 1;
+    setLiveStateStoreConfig(config);
+    resetQuotaResetStoreForTests();
+    setQuotaResetSink(event => events.push(event));
+    globalThis.fetch = (async () => new Response(`data: ${JSON.stringify({
+      type: MUSE_SUBSCRIPTION_USAGE_TYPE,
+      subscription: { window: { used_percent: percent, resets_at: resetAt, window_duration_mins: 300 } },
+    })}\n\ndata: {"type":"response.completed","response":{"id":"resp-test","status":"completed","output":[]}}\n\ndata: [DONE]\n\n`,
+    { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    const send = async () => {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, input: "hello" }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      await response.text();
+    };
+    try {
+      await send();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(95);
+      await fetchProviderQuotaReports(config, true);
+      await flushProviderQuotaObservationsForTests();
+      expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+      reconcileLiveStateStores();
+      percent = 90;
+      await send();
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(95);
+      expect(getCachedProviderAccountQuota("meta-muse", "account-b")?.fiveHourPercent).toBe(90);
+      const request = new Request("http://localhost/api/oauth/accounts?provider=meta-muse&quota=1");
+      const accountResponse = await handleOauthAccountRoutes({ req: request, url: new URL(request.url), config, deps: {},
+        convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }), syncClaudeAgentDefsBestEffort: async () => {} });
+      const accountBody = await accountResponse!.json() as { accounts: Array<{ id: string; quota?: { fiveHourPercent?: number } }> };
+      expect(accountBody.accounts.find(row => row.id === ACCOUNT_ID)?.quota?.fiveHourPercent).toBe(95);
+      expect(accountBody.accounts.find(row => row.id === "account-b")?.quota?.fiveHourPercent).toBe(90);
+      const ids = [ACCOUNT_ID, "account-b"];
+      expect(hasHeadroomEvidence("meta-muse", ids)).toBe(true);
+      expect(rankAccountsByHeadroom("meta-muse", ids)[0]).toBe("account-b");
+      await Bun.sleep(400);
+      expect(readPersistedAccountQuotas().get(`meta-muse\0${ACCOUNT_ID}`)?.fiveHourPercent).toBe(95);
+      expect(readPersistedAccountQuotas().get("meta-muse\0account-b")?.fiveHourPercent).toBe(90);
+      expect(await setActiveAccount("meta-muse", ACCOUNT_ID)).toBe(true);
+      reconcileLiveStateStores();
+      expect((await fetchProviderQuotaReports(config, true)).reports[0]?.quota.fiveHourPercent).toBe(95);
+      percent = 2; resetAt = Math.floor(Date.now() / 1000) + 3600;
+      await send();
+      await fetchProviderQuotaReports(config, true);
+      await flushProviderQuotaObservationsForTests();
+      expect(events).toHaveLength(1);
+    } finally {
+      release(); globalThis.fetch = original; setQuotaResetSink(null); resetQuotaResetStoreForTests();
+    }
+  });
   test("affinity failover attributes the successful physical response to its serving account", async () => {
     writeTwoAccounts();
     clearGenericFailoverHealth();
@@ -311,6 +371,90 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
+  test.each((["removed", "replaced", "disabled", "destination", "auth"] as const).flatMap(change =>
+    [false, true].map(hydrated => ({ change, hydrated }))))("accepted bound row retires on $change, including after hydration=$hydrated", async ({ change, hydrated }) => {
+    writeTwoAccounts(true);
+    const config = museConfig(), original = globalThis.fetch;
+    const provider = config.providers["meta-muse"]!;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } }))) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      if (hydrated) {
+        clearAccountQuotaCache();
+        reconcileLiveStateStores();
+        expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+      }
+      if (change === "removed") delete config.providers["meta-muse"];
+      else if (change === "replaced") config.providers["meta-muse"] = { ...provider };
+      else if (change === "disabled") provider.disabled = true;
+      else if (change === "destination") provider.baseUrl = "https://elsewhere.example/v1";
+      else provider.authMode = "api-key";
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      config.providers["meta-muse"] = provider;
+      provider.disabled = false; provider.baseUrl = "https://api.meta.ai/v1"; provider.authMode = "oauth";
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      await Bun.sleep(400);
+      clearAccountQuotaCache();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = original; }
+  });
+
+  test("unrelated reconciliation fences an in-flight production-bound key probe", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), original = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    let release!: (response: Response) => void, started!: () => void;
+    const called = new Promise<void>(resolve => { started = resolve; });
+    globalThis.fetch = (() => { started(); return new Promise<Response>(resolve => { release = resolve; }); }) as typeof fetch;
+    try {
+      const pending = fetchMuseKeyQuota("meta-muse", config);
+      await called;
+      reconcileLiveStateStores();
+      release(new Response(JSON.stringify({ is_subs_active: true,
+        subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })));
+      expect(await pending).toBeNull();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = original; }
+  });
+
+  test("a production-bound observation cannot revive after managed credential ABA", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } }))) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      const credential = getAccountSet("meta-muse")!.accounts.find(row => row.id === ACCOUNT_ID)!.credential;
+      await saveAccountCredential("meta-muse", ACCOUNT_ID, { ...credential, access: "replacement" });
+      await saveAccountCredential("meta-muse", ACCOUNT_ID, credential);
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      await Bun.sleep(400);
+      clearAccountQuotaCache();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("an observed provider mismatch remains retired after an in-place ABA", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), provider = config.providers["meta-muse"]!, originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } }))) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      provider.baseUrl = "https://elsewhere.example/v1";
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      provider.baseUrl = "https://api.meta.ai/v1";
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
   test("cached and held reports retire after an active-account switch", async () => {
     writeTwoAccounts();
     const config = museConfig();
