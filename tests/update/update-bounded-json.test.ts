@@ -34,4 +34,19 @@ describe("bounded unverified update JSON", () => {
     expect(() => parse(`"${"x".repeat(16385)}"`)).toThrow();
     expect(parse("[".repeat(16) + "0" + "]".repeat(16))).toBeDefined();
   });
+
+  test("bounds aggregate values while retaining the largest planned capability-array shape", () => {
+    const entries = Array.from({ length: 4096 }, (_, index) => ({ id: `item-${index}`, version: 1 }));
+    const capabilityShape = Object.fromEntries(
+      ["homeProvides", "childRequires", "updateActions", "installerAdapters", "recoveryProtocols", "fleetJournalReaders"]
+        .map((name) => [name, entries]),
+    );
+    expect(parse(JSON.stringify(capabilityShape), 16777216)).toBeDefined();
+    const almostFull = `[${Array(4095).fill("{}").join(",")}]`;
+    const last = `[${Array(4094).fill("{}").join(",")}]`;
+    expect(parse(`[${[...Array(19).fill(almostFull), last].join(",")}]`, 16777216)).toBeDefined();
+    expect(() => parse(`[${Array(20).fill(almostFull).join(",")}]`, 16777216)).toThrow();
+    const group = `[${Array(4096).fill("{}").join(",")}]`;
+    expect(() => parse(`[${Array(20).fill(group).join(",")}]`, 16777216)).toThrow();
+  });
 });

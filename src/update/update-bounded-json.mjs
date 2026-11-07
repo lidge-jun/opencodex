@@ -4,6 +4,8 @@ const MAX_DEPTH = 16;
 const MAX_MEMBERS = 32;
 const MAX_ITEMS = 4096;
 const MAX_TEXT_BYTES = 16384;
+// The six maximal capability arrays require 73,735 values including containers.
+const MAX_VALUES = 81920;
 const NUMBER = /-?(?:0|[1-9][0-9]*)/y;
 
 function invalid() {
@@ -32,6 +34,7 @@ export function parseBoundedJson(bytes, maxBytes) {
     invalid();
   }
   let offset = 0;
+  let values = 0;
   const whitespace = () => {
     while (source[offset] === " " || source[offset] === "\n"
         || source[offset] === "\r" || source[offset] === "\t") offset++;
@@ -53,6 +56,7 @@ export function parseBoundedJson(bytes, maxBytes) {
     invalid();
   };
   const readValue = (depth) => {
+    if (++values > MAX_VALUES) invalid();
     whitespace();
     const first = source[offset];
     if (first === '"') return readString();
