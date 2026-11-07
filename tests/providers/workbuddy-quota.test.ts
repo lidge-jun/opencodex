@@ -19,6 +19,19 @@ const credentials = (suffix = "a"): OAuthCredentials => ({ access: `fixture-acce
 const amounts = (total = "100", used = "0", remaining = "100") => ({ CycleTotalCapacity: total, CycleUsedCapacity: used, CycleRemainCapacity: remaining, CycleFrozenCapacity: "0" });
 const summary = () => ({ Packages: [{ PackageCode: "fixture-base", ...amounts() }, { PackageCode: "fixture-gift", ...amounts("250", "0", "250") }],
   TotalCredits: "350", CreditGroups: [{ Kind: "plan_base", ...amounts() }, { Kind: "benefit", ...amounts("250", "0", "250") }] });
+
+test("decimal package totals preserve the reported remaining balance", () => {
+  const packages = Array.from({ length: 5 }, () => amounts("1", "0.065", "0.935"));
+  const credits = parseWorkBuddyCredits({ Packages: packages })!;
+  expect(credits.total).toBe(5);
+  expect(credits.remaining).toBe(4.675);
+  expect(credits.used).toBe(0.325);
+  const groups = packages.map(row => ({ Kind: "benefit", ...row }));
+  expect(parseWorkBuddyCredits({ Packages: packages, CreditGroups: groups })?.groups[0]?.remaining).toBe(4.675);
+  expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 0.3, CycleUsedCapacity: 0.2 }] })?.remaining).toBe(0.1);
+  expect(parseWorkBuddyCredits({ Packages: Array.from({ length: 512 }, () => amounts("0.1", "0", "0.1")) })?.total).toBe(51.2);
+  expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 1e-300, CycleUsedCapacity: 0, CycleRemainCapacity: 5e-301 }] })?.remaining).toBe(5e-301);
+});
 function stubSummary(value: unknown) {
   globalThis.fetch = (async (input, init) => {
     expect(String(input)).toStartWith("https://www.workbuddy.ai/billing/meter/");

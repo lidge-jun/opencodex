@@ -93,6 +93,17 @@ describe("quota summary", () => {
     expect(formatQuotaPercent(row!.headline.percent)).toBe("90%");
   });
 
+  test("summed WorkBuddy packages retain decimal half-percent and below-half distinctions", () => {
+    const balance = (remaining: number) => parseWorkBuddyCredits({ Packages: Array.from({ length: 5 }, () => ({
+      CycleTotalCapacity: 1, CycleUsedCapacity: 0, CycleRemainCapacity: remaining,
+    })) });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "tie", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0.935) } },
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0.93500000001) } },
+    ], now);
+    expect(buildQuotaSummary(reports, name).map(row => formatQuotaPercent(row.headline.percent))).toEqual(["7%", "6%"]);
+  });
+
   test("WorkBuddy rounds an exact half percent up and a smaller share down", () => {
     const balance = (total: number, remaining: number) => ({ total, used: 0, remaining, frozen: 0, groups: [] });
     const reports = freshQuotaReportsFromResponse([

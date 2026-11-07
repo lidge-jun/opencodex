@@ -38,7 +38,8 @@ account metadata; fresh/stale cache and failure cooldowns are bound to the crede
 Unavailable discovery degrades to the same-account cache, then the minimal `default-model` seed.
 
 `src/providers/quota/workbuddy.ts` reads the authenticated resource summary through the bounded,
-fixed-origin API helper. It sums `Packages` once and treats `CreditGroups` as a breakdown;
+fixed-origin API helper. It sums `Packages` once using the decimal representation of each validated
+number before returning numeric totals, and treats `CreditGroups` as a breakdown;
 explicit remaining/frozen amounts take precedence over arithmetic estimates. Team accounts use
 the enterprise meter when the personal summary has no capacity. Optional paid/free package
 queries use summary-owned codes, bounded pagination and the same total deadline; a failure
