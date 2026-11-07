@@ -3,7 +3,7 @@ import { anthropicRateLimitHeaders } from "../../server/anthropic-rate-limit-hea
 export type PassiveKeyProvider = "openai" | "xai" | "groq" | "anthropic" | "mistral";
 export type PassiveKeyLimit = {
   dimension: "requests" | "tokens" | "input-tokens" | "output-tokens";
-  window?: "minute" | "month";
+  window?: "minute" | "day" | "month";
   observedAt: number;
   limit?: number;
   remaining?: number;
@@ -83,7 +83,8 @@ export function parsePassiveKeyLimits(provider: PassiveKeyProvider, headers: Hea
     for (const dimension of ["requests", "tokens"] as const) {
       const reset = duration(headers.get(`x-ratelimit-reset-${dimension}`));
       add(dimension, count(headers.get(`x-ratelimit-limit-${dimension}`)),
-        count(headers.get(`x-ratelimit-remaining-${dimension}`)), reset === undefined ? undefined : observedAt + reset);
+        count(headers.get(`x-ratelimit-remaining-${dimension}`)), reset === undefined ? undefined : observedAt + reset,
+        provider === "groq" ? (dimension === "requests" ? "day" : "minute") : undefined);
     }
   }
   return result;

@@ -13,8 +13,8 @@ describe("passive key limit parsing", () => {
         "x-ratelimit-reset-requests": "1m2.250s", "x-ratelimit-limit-tokens": "9000",
         "x-ratelimit-remaining-tokens": "700", "x-ratelimit-reset-tokens": "750ms",
       }), at)).toEqual([
-        { dimension: "requests", observedAt: at, limit: 100, remaining: 0, resetAt: at + 62250 },
-        { dimension: "tokens", observedAt: at, limit: 9000, remaining: 700, resetAt: at + 750 },
+        { dimension: "requests", ...(provider === "groq" ? { window: "day" } : {}), observedAt: at, limit: 100, remaining: 0, resetAt: at + 62250 },
+        { dimension: "tokens", ...(provider === "groq" ? { window: "minute" } : {}), observedAt: at, limit: 9000, remaining: 700, resetAt: at + 750 },
       ]);
     });
   }
