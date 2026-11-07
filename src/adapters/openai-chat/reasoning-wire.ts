@@ -44,7 +44,12 @@ export function declaresIndependentChatReasoningControls(provider: OcxProviderCo
 export function nativeChatUltraWireEffort(provider: OcxProviderConfig, modelId: string): string | undefined {
   const ladder = configuredReasoningEfforts(provider, modelId);
   if (ladder?.includes("ultra")) return "ultra";
-  if (declaresThinkingToggleWire(provider, modelId)) return ladder ? resolveEffortAtOrBelow("max", ladder) ?? "max" : "max";
+  if (declaresThinkingToggleWire(provider, modelId)) {
+    // Keep the original alias for the independent policy to omit effort and select thinking.
+    if (declaresIndependentChatReasoningEffort(provider, modelId)
+      && isReasoningEffortOmitted(reasoningEffortMapFor(provider, modelId)?.max)) return "max";
+    return ladder ? resolveEffortAtOrBelow("max", ladder) ?? "max" : "max";
+  }
   return mapReasoningEffort(provider, modelId, "ultra");
 }
 
