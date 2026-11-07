@@ -171,6 +171,13 @@ try {
   assert.throws(() => checkField("ocx.link-capabilities/1", withCapabilityId("a".repeat(129))));
   assert.throws(() => checkField("ocx.link-capabilities/1", withCapabilityId("é")));
   const policyValue = JSON.parse(policy.toString());
+  assert.ok(checkField("ocx.update.policy/1", policyValue));
+  const channelOffset = policy.indexOf(Buffer.from("latest"));
+  assert.ok(channelOffset >= 0);
+  const malformedUtf8 = Buffer.concat([policy.subarray(0, channelOffset), Buffer.from([0xff]), policy.subarray(channelOffset + 6)]);
+  assert.throws(() => parseUpdateDocument(malformedUtf8, "ocx.update.policy/1"));
+  const loneSurrogate = Buffer.from(policy.toString().replace('"latest"', '"\\ud800"'));
+  assert.throws(() => parseUpdateDocument(loneSurrogate, "ocx.update.policy/1"));
   assert.ok(checkField("ocx.update.policy/1", { ...policyValue, revision: Number.MAX_SAFE_INTEGER }));
   assert.throws(() => checkField("ocx.update.policy/1", { ...policyValue, revision: Number.MAX_SAFE_INTEGER + 1 }));
   assert.throws(() => checkField("ocx.update.policy/1", { ...policyValue, channel: "é" }));
