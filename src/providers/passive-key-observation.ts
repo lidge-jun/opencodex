@@ -95,16 +95,24 @@ export function passiveKeyPhysicalFetch(
     const attempt = ++sequence;
     const generation = epoch;
     const providerGeneration = generationFor(name);
-    const response = await physicalFetch(input, init);
-    const reused = seenResponses.has(response);
-    seenResponses.add(response);
+    let reservation: ReturnType<typeof passiveKeyLimits.reserve>;
     try {
-      if (owned && vendor && model && !reused && generation === epoch && generations.get(name) === providerGeneration && stillConfigured(config, name, snapshot)) {
+      if (owned && vendor && model) {
         const reference = snapshot._apiKeyAttempt!.reference!;
-        passiveKeyLimits.record({ owner: identity(name, snapshot, snapshot._apiKeyAttempt!.entryId ?? keyId(reference), reference, key), provider: vendor, model, namespace: name }, response.headers, Date.now(), attempt);
+        reservation = passiveKeyLimits.reserve({ owner: identity(name, snapshot, snapshot._apiKeyAttempt!.entryId ?? keyId(reference), reference, key), provider: vendor, model, namespace: name }, attempt);
       }
-    } catch { /* Passive display evidence must not fail the proxied response. */ }
-    return response;
+    } catch { /* Reservation failure cannot prevent a proxied send. */ }
+    try {
+      const response = await physicalFetch(input, init);
+      const reused = seenResponses.has(response);
+      seenResponses.add(response);
+      try {
+        if (reservation && !reused && generation === epoch && generations.get(name) === providerGeneration && stillConfigured(config, name, snapshot)) {
+          reservation.record(response.headers, Date.now());
+        }
+      } catch { /* Passive display evidence must not fail the proxied response. */ }
+      return response;
+    } finally { reservation?.cancel(); }
   }) as typeof globalThis.fetch;
   return isEgressTransparentExecutor(physicalFetch) ? markEgressTransparentExecutor(wrapped) : wrapped;
 }
