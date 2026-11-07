@@ -169,6 +169,23 @@ test("a policy skips incompatible Chat and preserves the mandatory selector for 
   expect(sent[0]!.body.tool_choice).toEqual(choice);
 });
 
+test("a shadow-intercepted policy route retries a compatible candidate on the real endpoint", async () => {
+  // The intercept rewrites the model to the profile AFTER the body's parse hook, so the retry
+  // snapshot must exist before interception — otherwise the captured policy route skips
+  // traversal and the caller sees the internal candidate refusal instead of this hop.
+  const { config, sent } = fixture();
+  config.shadowCallIntercept = { enabled: true, model: "policy/tools", sourceModels: ["shadow-helper"] };
+  const choice = { type: "computer_use" };
+  const log: RequestLogContext = {};
+  const response = await handleResponses(
+    request(choice, [{ type: "computer_use" }, clientTool], "shadow-helper-x"), config, log);
+  expect(response.status, await response.text()).toBe(200);
+  expect(log.shadowCallRewrittenFrom).toBe("shadow-helper");
+  expect(log.routeDecision?.selected.provider).toBe("chat");
+  expect(sent.map(row => row.provider)).toEqual(["responses"]);
+  expect(sent[0]!.body.tool_choice).toEqual(choice);
+});
+
 test("a policy preserves required MCP ownership across translator-budget fallback", async () => {
   const output = [{ id: "mcp_fixture", type: "mcp_call", status: "completed", server_label: "remote", name: "shell", arguments: "{}", output: "done" }];
   const { config, sent } = fixture(output);

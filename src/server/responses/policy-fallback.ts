@@ -1,6 +1,7 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
+import { isShadowSourceModel } from "../../lib/shadow-call";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
@@ -205,7 +206,15 @@ export async function handleResponsesWithPolicyFallback(
         && typeof (body as { model?: unknown }).model === "string") {
         const model = (body as { model: string }).model;
         const { fastRow, effortRow } = parseSyntheticRowId(model, config);
-        if (resolvePolicyProfileId(config, fastRow?.baseId ?? effortRow?.baseId ?? model) === null) return;
+        // A shadow-intercepted request is rewritten to its configured target after this hook —
+        // and that target may resolve through a routing profile. The snapshot has to exist now,
+        // while the body still names the source: a captured policy route without a replay body
+        // skips traversal and leaks the internal candidate refusal to the caller.
+        const intercept = config.shadowCallIntercept;
+        const shadowRewritable = Boolean(intercept?.enabled && intercept.model)
+          && isShadowSourceModel(model, intercept?.sourceModels);
+        if (resolvePolicyProfileId(config, fastRow?.baseId ?? effortRow?.baseId ?? model) === null
+          && !shadowRewritable) return;
         // Recovery and other core preparation may mutate the parsed body in place. Keep an
         // immutable snapshot of the original wire body so a retry cannot serialize those
         // mutations. Object-identity metadata is re-established by each attempt, not serialized.
@@ -286,7 +295,13 @@ export async function handleResponsesWithPolicyFallback(
     delete policyScope.preparedDestination;
     try {
       try {
-        const nextResponse = await runCore(retryRequest, config, logCtx, { ...coreOptions, policyFallbackCandidate: next });
+        const nextResponse = await runCore(retryRequest, config, logCtx, {
+          ...coreOptions,
+          policyFallbackCandidate: next,
+          // A shadow-intercepted request retried on a candidate keeps helper isolation and
+          // its suppressed selector label; a first-party policy request leaves the flag unset.
+          ...(logCtx.shadowCallRewrittenFrom ? { shadowCallIntercepted: true } : {}),
+        });
         toolChoiceRefusalsOnly &&= isMandatoryToolChoiceRefusal(nextResponse);
         // A locally skipped route owns neither the returned failure nor its usage/settlement.
         // Preparation can replace route metadata and the tracker, or add fields absent before it.

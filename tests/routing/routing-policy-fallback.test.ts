@@ -877,4 +877,158 @@ describe("policy candidate fallback", () => {
     expect(await response.text()).toContain("hello");
     expect(calls).toBe(1);
   });
+
+  test("a shadow-intercepted policy route retries the next candidate with the original body", async () => {
+    // The intercept rewrites the model AFTER the body-parsed hook, so the snapshot gate cannot
+    // key on the destination. Without the snapshot this request's captured policy route loses
+    // traversal entirely and the caller receives the internal 409 instead of the next candidate.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const seenIsolated: boolean[] = [];
+    const seenCandidates: Array<string | undefined> = [];
+    let retriedBody: Record<string, unknown> | undefined;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "shadow-helper-x", input: "hello", stream: false,
+        tool_choice: { type: "function", name: "get_value" },
+        tools: [{ type: "function", name: "get_value" }],
+      }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as Record<string, unknown> & { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        seenIsolated.push(options.shadowCallIntercepted === true);
+        seenCandidates.push(options.policyFallbackCandidate === undefined
+          ? undefined : `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}`);
+        ctx.routeDecision = trace;
+        if (seenModels.length === 1) {
+          // What preparation records when interception rewrites to a policy target: the shared
+          // log carries the configured source prefix, the scope carries the captured decision.
+          ctx.shadowCallRewrittenFrom = "shadow-helper";
+          seedAttempt(ctx, "provider-a", "model-a");
+          // Emulate preparation's in-place normalization on the parsed body: the retry must
+          // replay the immutable snapshot, never these mutations.
+          body.model = "policy/daily";
+          body.input = "mutated by preparation";
+          (body.tools as unknown[]).push({ type: "function", name: "injected_tool" });
+          return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+        }
+        retriedBody = body;
+        seedAttempt(ctx, "provider-b", "model-b");
+        return Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b"]);
+    expect(seenCandidates).toEqual([undefined, "provider-b/model-b"]);
+    // The replay is the immutable caller body — original tools and tool_choice, not the
+    // post-interception mutations the first attempt's preparation made in place.
+    expect(retriedBody).toMatchObject({
+      model: "provider-b/model-b",
+      input: "hello",
+      tool_choice: { type: "function", name: "get_value" },
+    });
+    expect(retriedBody!.tools).toEqual([{ type: "function", name: "get_value" }]);
+    // The retried candidate keeps helper isolation and the suppressed selector label through
+    // the existing option; the first-party attempt left it unset.
+    expect(seenIsolated).toEqual([false, true]);
+  });
+
+  test("a shadow-intercepted policy route exhausts candidates to the client-facing 400", async () => {
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        ctx.routeDecision = trace;
+        ctx.shadowCallRewrittenFrom = "shadow-helper";
+        seedAttempt(ctx, "provider", body.model);
+        return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+      },
+    });
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b", "provider-c/model-c"]);
+    expect(response.status).toBe(400);
+    expect((await response.text()).includes("mandatory tool_choice")).toBe(true);
+    expect(isProxyError(response)).toBe(true);
+  });
+
+  test("a shadow-intercepted policy route keeps declared failover for upstream failures", async () => {
+    // The missing snapshot suppressed every retry on an intercepted policy route, not only the
+    // tool-choice refusal: an operator-approved failover target must still take the next
+    // eligible candidate after an ordinary retryable failure.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        ctx.routeDecision = trace;
+        ctx.shadowCallRewrittenFrom = "shadow-helper";
+        seedAttempt(ctx, "provider", body.model);
+        return seenModels.length === 1
+          ? Response.json({ error: { type: "rate_limit_error" } }, { status: 429 })
+          : Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b"]);
+  });
+
+  test("a shadow-source request without a policy decision takes no candidate retry", async () => {
+    // The widened snapshot only arms traversal; a source request that was not intercepted into
+    // a policy route still returns its first response untouched.
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "provider-a/model-a", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", attempts: [] } as unknown as RequestLogContext;
+    let calls = 0;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const failure = Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        calls += 1;
+        options.onRequestBodyParsed?.(await attempt.json());
+        return failure;
+      },
+    });
+    expect(response).toBe(failure);
+    expect(calls).toBe(1);
+  });
 });

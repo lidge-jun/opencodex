@@ -6,6 +6,12 @@ Subagent selection and encrypted-task recovery keep that membership; a replaceme
 refused before dispatch, and policy fallback may continue with another originally eligible candidate.
 A shadow-intercept target is probed without that capture and is captured only once interception is
 accepted, so a declined policy target never scopes the request's own route.
+The outer wrapper snapshots the original wire body of any request whose model a configured shadow
+intercept can rewrite: interception runs after that snapshot, so a routing-profile target selected
+by interception keeps the same candidate traversal and exhausted-refusal 400 a direct policy
+request has. A retried candidate replays the pre-interception body under the concrete candidate
+selector and carries the interception's helper isolation and suppressed label through
+`shadowCallIntercepted`.
 `src/server/responses/policy-fallback.ts` inspects and executes each retry as a concrete candidate,
 so a public combo or profile alias cannot reselect its destination. Redirects remain inside the
 original evaluation, including eligible destinations omitted from the bounded diagnostic trace.
@@ -60,7 +66,10 @@ Coverage: `tests/routing/routing-policy-dispatch-scope.test.ts` exercises real r
 normalization and configured subagent selection with synthetic dispatch. It also covers recovery,
 alias collisions, redirects, bounded traces and virtual models. `tests/routing/routing-policy-fallback.test.ts`
 pins request snapshots, terminal responses, cancellation, credential handoff and attempt accounting.
+It also covers shadow-intercepted policy routes: candidate traversal, upstream failover, exhaustion
+to the client-facing 400, and isolation carry onto the retried candidate.
 `tests/responses/responses-direct-chat-tool-choice.test.ts` exercises the real endpoint's pre-send
 Chat refusal, unchanged hosted/MCP selectors and tool declarations, and native MCP output on Responses fallback.
+It also runs a shadow-intercepted request through the real endpoint to a compatible policy candidate.
 `tests/adapters/translator-budget-lifetime.test.ts` distinguishes a local refusal from identical
 upstream wire bytes through both lifetime wrappers followed by combo failure rebuilding, including the tool-specific identity and exactly-once release of leases and translator accounting.
