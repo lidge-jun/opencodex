@@ -5,6 +5,7 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import { startupPresentation } from "../startup-health-ui";
 import {
   StartupDetailsSection,
   StartupHeroSection,
@@ -249,6 +250,7 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
   // warm revisits where `data` is already seeded from session cache.
   const loading = loadState.refreshing;
   const failed = Boolean(data?.diagnosticStale) || loadState.showError;
+  const unverified = data !== null && startupPresentation(data, failed) === "unverified";
 
   useEffect(() => {
     if (!data?.diagnosticStale) return;
@@ -346,8 +348,8 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
         </div>
       ) : data ? (
         <>
-          {loadState.showError && <Notice tone="err">{t("startup.error")}</Notice>}
-          {failed && (
+          {loadState.showError && !unverified && <Notice tone="err">{t("startup.error")}</Notice>}
+          {failed && !unverified && (
             <div className="notice notice-warn startup-page-notice" role="alert">
               {t("startup.staleData")}
             </div>
