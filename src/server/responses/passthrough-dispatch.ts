@@ -1,3 +1,4 @@
+import { isPlainObject } from "../../lib/plain-data";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
@@ -1063,7 +1064,8 @@ export async function preparePassthroughExchange(
     }
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
-    // At most one reasoning-effort downgrade per request.
+    // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
+    // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     /** Rebind the refreshed wire before transferring this request to the Chat pipeline. */
     function bindRefreshedAdapter(refreshedAdapter: typeof transportState.adapter) {
@@ -1827,15 +1829,14 @@ export async function preparePassthroughExchange(
         continue passthroughRecovery;
       }
     }
-    // Reasoning-effort downgrade: a rung the catalog still advertises can be refused upstream --
-    // the metadata records the model's ladder, not this account's entitlement (a Muse Code
-    // subscription gates max on muse-spark-1.3-contributor, for example). Learn the refusal so
-    // later turns clamp before dispatch, then replay once at the next lower published rung
-    // instead of failing the turn; requestedEffort/effectiveEffort keep both values in usage.
-    if (!reasoningEffortDowngradeGuard.attempted) {
+    // A rung the catalog advertises can still be refused upstream -- metadata describes the
+    // model's ladder, not this account's entitlement. Learn each refusal so later turns clamp
+    // before dispatch. Direct requests repair once; combo candidates may retry the next lower
+    // published rung until it works, the ladder ends, or the send budget is spent.
+    if (options.comboAttempt || !reasoningEffortDowngradeGuard.attempted) {
       const rejectionText = await reasoningEffortRejectionText(
         upstreamResponse,
-        reasoningEffortDowngradeGuard.attempted,
+        false,
         upstream.signal,
       );
       const downgrade = rejectionText === undefined
@@ -1847,13 +1848,41 @@ export async function preparePassthroughExchange(
             rejectionText,
           });
       if (downgrade && !configuredTransientSendBudgetExhausted()) {
+        const allowance = recoverySendAllowance(
+          transientSendAttempts(),
+          recoveryClassFor("reasoning-effort-downgrade"),
+          `${route.providerName}|${route.modelId}|reasoning-effort-downgrade`,
+          { allowFinalRecoveryReserve: transientSendPolicy() === null },
+        );
+        if (allowance.attempts < 1) {
+          allowance.permit?.release();
+          return upstreamResponse;
+        }
+        sendBudgetState.pendingHopPermit = allowance.permit;
         reasoningEffortDowngradeGuard.attempted = true;
         parsed.options.reasoning = downgrade.effort;
+        if (isPlainObject(parsed._rawBody)) {
+          const rawBody = parsed._rawBody as Record<string, unknown>;
+          const rawReasoning = isPlainObject(rawBody.reasoning)
+            ? { ...(rawBody.reasoning as Record<string, unknown>), effort: downgrade.effort }
+            : { effort: downgrade.effort };
+          parsed._rawBody = {
+            ...rawBody,
+            reasoning: rawReasoning,
+            ...("reasoning_effort" in rawBody ? { reasoning_effort: downgrade.effort } : {}),
+          };
+        }
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("reasoning-effort-downgrade");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
-        continue passthroughRecovery;
+        try {
+          const result = await rebuildAndRefetch("reasoning-effort-downgrade");
+          sendBudgetState.pendingHopPermit = undefined;
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue passthroughRecovery;
+        } finally {
+          if (sendBudgetState.pendingHopPermit === allowance.permit) sendBudgetState.pendingHopPermit = undefined;
+          allowance.permit?.release();
+        }
       }
     }
 

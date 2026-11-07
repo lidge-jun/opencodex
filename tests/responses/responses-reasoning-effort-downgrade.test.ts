@@ -3,9 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
+import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import { resetReasoningMetadataCachesForTests } from "../../src/providers/reasoning-metadata";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { chatSuccess } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
@@ -25,6 +27,7 @@ const REFUSAL = JSON.stringify({
     message: "Error from provider (Console Go): Upstream request failed: [invalid_request_error] reasoning_effort max requires an active Muse Code subscription for model muse-spark-1.3-contributor.",
   },
 });
+const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
 let testDir = "";
@@ -82,12 +85,12 @@ function effortOf(body: Record<string, unknown> | undefined): unknown {
   return body.reasoning_effort;
 }
 
-function request(stream = false): Request {
+function request(stream = false, model = "first/" + MODEL): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: "first/" + MODEL,
+      model,
       stream,
       store: false,
       reasoning: { effort: "max" },
@@ -101,6 +104,8 @@ function success(): Response {
 }
 
 beforeEach(() => {
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   testDir = mkdtempSync(join(tmpdir(), "ocx-reasoning-downgrade-"));
   process.env.OPENCODEX_HOME = testDir;
   // Direct handler dispatches need the writer lease that startServer normally holds.
@@ -113,6 +118,8 @@ afterEach(() => {
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   resetReasoningMetadataCachesForTests();
   if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalOpenCodexHome;
@@ -230,5 +237,147 @@ describe("rejected reasoning rungs", () => {
     expect(effortOf(outbound[0])).toBe("max");
     expect(effortOf(outbound[1])).toBe("high");
     expect(response.ok).toBe(false);
+  });
+
+  for (const adapter of ["openai-chat", "openai-responses"] as const) {
+    test(`combo tries every lower effort before falling back (${adapter})`, async () => {
+      writeSnapshot(["low", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return url.host === "fallback.example"
+          ? chatSuccess("fallback served the turn", MODEL)
+          : new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(result).toContain("fallback served the turn");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "high" },
+        { host: "opencode.ai", effort: "low" },
+        { host: "fallback.example", effort: "max" },
+      ]);
+    });
+
+    test(`unfunded downgrade stops walking and hops to fallback when send budget exhausts (${adapter})`, async () => {
+      // With 4+ rungs (minimal, low, medium, high, max), walking the full ladder would need 5 sends.
+      // With COMBO_TARGET_BASE_SENDS = 3, per-target sends exhaust after 3 sends to opencode.ai.
+      // The unfunded downgrade returns the 400, and the combo hops to the fallback target.
+      writeSnapshot(["minimal", "low", "medium", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return url.host === "fallback.example"
+          ? chatSuccess("fallback served the turn", MODEL)
+          : new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(result).toContain("fallback served the turn");
+      expect(isComboTargetInCooldown("effort", { provider: "first", model: MODEL })).toBe(false);
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "high" },
+        { host: "opencode.ai", effort: "medium" },
+        { host: "opencode.ai", effort: "low" },
+        { host: "fallback.example", effort: "max" },
+      ]);
+    });
+  }
+
+  test("passthrough retry applies downgraded effort for custom destination outside metadata list", async () => {
+    const CUSTOM_MODEL = "custom-external-reasoner";
+    const attempts: Array<{ host: string; effort: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      attempts.push({ host: url.host, effort: effortOf(body) });
+      return attempts.length === 1
+        ? new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } })
+        : chatSuccess("custom destination served high effort", CUSTOM_MODEL);
+    }) as typeof fetch;
+    const comboConfig = {
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://custom.example/v1",
+          authMode: "key",
+          apiKey: "custom-key",
+          reasoningEfforts: ["low", "high", "max"],
+        },
+        fallback: {
+          adapter: "openai-chat",
+          baseUrl: "https://fallback.example/v1",
+          authMode: "key",
+          apiKey: "fallback-key",
+        },
+      },
+      combos: {
+        custom_effort: {
+          strategy: "failover",
+          targets: [{ provider: "custom", model: CUSTOM_MODEL }, { provider: "fallback", model: CUSTOM_MODEL }],
+        },
+      },
+    } as OcxConfig;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/custom_effort",
+        store: false,
+        reasoning: { effort: "max" },
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "go" }] }],
+      }),
+    });
+
+    const response = await handleResponses(req, comboConfig, logCtx);
+    const result = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(result).toContain("custom destination served high effort");
+    expect(attempts).toEqual([
+      { host: "custom.example", effort: "max" },
+      { host: "custom.example", effort: "high" },
+    ]);
+    expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
   });
 });
