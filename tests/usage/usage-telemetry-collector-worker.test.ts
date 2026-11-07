@@ -13,6 +13,7 @@ import {
   formatBucketHour,
 } from "../../services/telemetry-collector/src/ingest";
 import { pruneCollectorTables } from "../../services/telemetry-collector/src/prune";
+import { clearStatsCache, handleStats } from "../../services/telemetry-collector/src/stats";
 import type {
   CollectorEnv,
   D1Database,
@@ -47,7 +48,7 @@ function createInMemoryD1(salt = "test-rate-limit-salt"): InMemoryD1Harness {
   sqlite.exec(schemaSql);
   const batchCalls: number[] = [];
 
-  function makeStatement(query: string, boundValues: unknown[] = []): D1PreparedStatement {
+  function makeStatement(query: string, boundValues: unknown[] = []): D1PreparedStatement & { isSelect: () => boolean } {
     const executeRun = <T = Record<string, unknown>>(): D1Result<T> => {
       const stmt = sqlite.query(query);
       const info = stmt.run(...(boundValues as never[]));
@@ -62,6 +63,9 @@ function createInMemoryD1(salt = "test-rate-limit-salt"): InMemoryD1Harness {
     };
 
     return {
+      isSelect(): boolean {
+        return sqlite.query(query).columnNames.length > 0;
+      },
       bind(...values: unknown[]): D1PreparedStatement {
         return makeStatement(query, values);
       },
@@ -99,7 +103,12 @@ function createInMemoryD1(salt = "test-rate-limit-salt"): InMemoryD1Harness {
       sqlite.exec("BEGIN IMMEDIATE");
       try {
         for (const stmt of statements) {
-          out.push(await stmt.run<T>());
+          const inspectable = stmt as D1PreparedStatement & { isSelect?: () => boolean };
+          if (typeof inspectable.isSelect === "function" && inspectable.isSelect()) {
+            out.push(await stmt.all<T>());
+          } else {
+            out.push(await stmt.run<T>());
+          }
         }
         sqlite.exec("COMMIT");
       } catch (error) {
@@ -265,7 +274,8 @@ describe("telemetry collector worker + D1", () => {
       expect(res1.status).toBe(200);
       expect(res1.headers.get("access-control-allow-origin")).toBe("https://opencodex.me");
       expect(await res1.json()).toEqual({ ok: true, deduplicated: false });
-      expect(h.batchCalls).toEqual([8]);
+      // 1 daily_totals + 4 daily_models + 3 daily_errors + 1 daily_installs = 9 statements in one atomic batch.
+      expect(h.batchCalls).toEqual([9]);
 
       // Re-send the same (day, installDayHash) with a brand-new batchId and inflated numbers.
       const payload2 = buildTelemetryPayloadV1({
@@ -291,8 +301,8 @@ describe("telemetry collector worker + D1", () => {
       );
       expect(res2.status).toBe(200);
       expect(await res2.json()).toEqual({ ok: true, deduplicated: true });
-      // Dedup must NOT execute a second rollup batch.
-      expect(h.batchCalls).toEqual([8]);
+      // Conditional batch runs atomically and leaves all rollup rows untouched.
+      expect(h.batchCalls).toEqual([9, 9]);
 
       const installs = h.sqlite.query("SELECT * FROM daily_installs").all() as Array<Record<string, unknown>>;
       expect(installs).toHaveLength(1);
@@ -790,6 +800,489 @@ describe("telemetry collector worker + D1", () => {
         { bucket_hour: oneHourAgo },
         { bucket_hour: currentHour },
       ]);
+    } finally {
+      h.close();
+    }
+  });
+
+  test("aborts streaming bodies exceeding 16 KiB before reading full stream and rejects malformed Content-Length", async () => {
+    const h = createInMemoryD1("stream-salt");
+    try {
+      for (const badLength of ["-1", "abc", "12.5", ""]) {
+        const badHeaderReq = new Request("https://telemetry.opencodex.me/v1/events", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": badLength,
+          },
+          body: "{}",
+        });
+        const res = await handleCollectorFetch(badHeaderReq, h.env, undefined, NOW);
+        expect(res.status).toBe(400);
+      }
+
+      let pulledChunks = 0;
+      let streamCancelled = false;
+      const chunkSize = 4096;
+      const totalChunks = 50; // 200 KiB total if fully buffered
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulledChunks += 1;
+          if (pulledChunks > totalChunks) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(new Uint8Array(chunkSize).fill(0x61));
+        },
+        cancel() {
+          streamCancelled = true;
+        },
+      });
+
+      // Lying small Content-Length (or chunked stream) must still abort as soon as > 16 KiB is read.
+      const lyingReq = new Request("https://telemetry.opencodex.me/v1/events", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": "64",
+        },
+        body: stream,
+        duplex: "half",
+      } as RequestInit);
+
+      const res413 = await handleCollectorFetch(lyingReq, h.env, undefined, NOW);
+      expect(res413.status).toBe(413);
+      expect(pulledChunks).toBeLessThanOrEqual(6);
+      expect(streamCancelled).toBe(true);
+
+      // Chunked stream with no Content-Length header must also abort as soon as > 16 KiB is read.
+      let chunkedPulled = 0;
+      let chunkedCancelled = false;
+      const chunkedStream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          chunkedPulled += 1;
+          if (chunkedPulled > totalChunks) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(new Uint8Array(chunkSize).fill(0x62));
+        },
+        cancel() {
+          chunkedCancelled = true;
+        },
+      });
+      const chunkedReq = new Request("https://telemetry.opencodex.me/v1/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: chunkedStream,
+        duplex: "half",
+      } as RequestInit);
+      const res413Chunked = await handleCollectorFetch(chunkedReq, h.env, undefined, NOW);
+      expect(res413Chunked.status).toBe(413);
+      expect(chunkedPulled).toBeLessThanOrEqual(6);
+      expect(chunkedCancelled).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+
+  test("fails closed with 503 when RATE_LIMIT_SALT is missing or empty and delimits IP hash components", async () => {
+    const h = createInMemoryD1("");
+    try {
+      const day = "2026-11-06";
+      const payload = buildTelemetryPayloadV1({
+        aggregate: makeAggregate(day),
+        installDayHash: computeInstallDayHash("11111111-2222-4333-8444-555555555555", day),
+        newInstall: false,
+        version: "2.41.0",
+        os: "darwin",
+        arch: "arm64",
+        installChannel: "npm-global",
+        now: NOW,
+      });
+
+      const resEmpty = await handleCollectorFetch(
+        postEventRequest(JSON.stringify(payload), { origin: "https://opencodex.me" }),
+        { DB: h.db, RATE_LIMIT_SALT: "   " },
+        undefined,
+        NOW,
+      );
+      expect(resEmpty.status).toBe(503);
+      expect(resEmpty.headers.get("access-control-allow-origin")).toBe("https://opencodex.me");
+      expect(await resEmpty.json()).toEqual({
+        ok: false,
+        error: "collector rate-limit salt is not configured",
+      });
+
+      const resMissing = await handleCollectorFetch(
+        postEventRequest(JSON.stringify(payload)),
+        { DB: h.db } as unknown as CollectorEnv,
+        undefined,
+        NOW,
+      );
+      expect(resMissing.status).toBe(503);
+
+      const rateCount = h.sqlite.query("SELECT COUNT(*) AS n FROM rate_limits").get() as { n: number };
+      const installCount = h.sqlite.query("SELECT COUNT(*) AS n FROM daily_installs").get() as { n: number };
+      expect(rateCount.n).toBe(0);
+      expect(installCount.n).toBe(0);
+
+      // Delimiter check: shifting characters across salt/ip/bucketHour boundaries must not collide.
+      const hashA = await computeHourlyIpHash("saltA", "1.2.3.4", "2026-11-07T12");
+      const hashB = await computeHourlyIpHash("salt", "A1.2.3.4", "2026-11-07T12");
+      const hashC = await computeHourlyIpHash("salt", "1.2.3.4", "2026-11-07T120");
+      const hashD = await computeHourlyIpHash("salt", "01.2.3.4", "2026-11-07T12");
+      expect(hashA).not.toBe(hashB);
+      expect(hashC).not.toBe(hashD);
+    } finally {
+      h.close();
+    }
+  });
+
+  test("rolls back daily_installs and rollups atomically on batch failure and succeeds on retry without leaking D1 errors", async () => {
+    const h = createInMemoryD1("atomic-salt");
+    try {
+      const day = "2026-11-06";
+      const payload = buildTelemetryPayloadV1({
+        aggregate: makeAggregate(day),
+        installDayHash: computeInstallDayHash("aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb", day),
+        newInstall: true,
+        version: "2.41.0",
+        os: "darwin",
+        arch: "arm64",
+        installChannel: "npm-global",
+        now: NOW,
+      });
+
+      // Inject a failure on daily_errors inside the rollup transaction.
+      h.sqlite.exec(
+        "CREATE TRIGGER fail_daily_errors BEFORE INSERT ON daily_errors " +
+        "BEGIN SELECT RAISE(ABORT, 'secret_internal_d1_error_detail'); END;",
+      );
+
+      const failedRes = await handleCollectorFetch(
+        postEventRequest(JSON.stringify(payload), {
+          ip: "198.51.100.200",
+          origin: "https://opencodex.me",
+        }),
+        h.env,
+        undefined,
+        NOW,
+      );
+      expect(failedRes.status).toBe(500);
+      expect(failedRes.headers.get("access-control-allow-origin")).toBe("https://opencodex.me");
+      const failedBody = await failedRes.text();
+      expect(failedBody).not.toContain("secret_internal_d1_error_detail");
+      expect(JSON.parse(failedBody)).toEqual({ ok: false, error: "internal error" });
+
+      // Neither daily_installs nor any rollup table may have committed rows.
+      for (const table of ["daily_installs", "daily_totals", "daily_models", "daily_errors"] as const) {
+        const count = h.sqlite.query("SELECT COUNT(*) AS n FROM " + table).get() as { n: number };
+        expect(count.n).toBe(0);
+      }
+
+      // Remove trigger and retry the exact same report: must succeed with deduplicated: false.
+      h.sqlite.exec("DROP TRIGGER fail_daily_errors;");
+      const retryRes = await handleCollectorFetch(
+        postEventRequest(JSON.stringify(payload), {
+          ip: "198.51.100.200",
+          origin: "https://opencodex.me",
+        }),
+        h.env,
+        undefined,
+        NOW,
+      );
+      expect(retryRes.status).toBe(200);
+      expect(await retryRes.json()).toEqual({ ok: true, deduplicated: false });
+
+      const installs = h.sqlite.query("SELECT COUNT(*) AS n FROM daily_installs").get() as { n: number };
+      const totals = h.sqlite.query("SELECT reports FROM daily_totals WHERE day = ?1").get(day) as { reports: number };
+      expect(installs.n).toBe(1);
+      expect(totals.reports).toBe(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  test("enforces per-report aggregate ceilings, version length cap, versions LIMIT 50, and MAX_SAFE_INTEGER clamping", async () => {
+    const h = createInMemoryD1("bounds-salt");
+    try {
+      const day = "2026-11-06";
+      const valid = buildTelemetryPayloadV1({
+        aggregate: makeAggregate(day),
+        installDayHash: computeInstallDayHash("cccccccc-1111-4222-8333-dddddddddddd", day),
+        newInstall: false,
+        version: "2.41.0",
+        os: "linux",
+        arch: "x64",
+        installChannel: "standalone",
+        now: NOW,
+      });
+
+      // 1. Model row with 0 requests but positive tokens -> 400
+      const zeroReqWithTokens = {
+        ...valid,
+        models: [
+          {
+            providerKind: "openai",
+            modelFamily: "gpt-5",
+            requests: 0,
+            inputTokens: 100,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+          },
+        ],
+      };
+      expect(
+        (await handleCollectorFetch(postEventRequest(JSON.stringify(zeroReqWithTokens)), h.env, undefined, NOW)).status,
+      ).toBe(400);
+
+      // 2. Aggregate report tokens > 1_000_000_000_000 across buckets/rows -> 400
+      const overAggregateTokens = {
+        ...valid,
+        models: [
+          {
+            providerKind: "openai",
+            modelFamily: "gpt-5",
+            requests: 1,
+            inputTokens: 600_000_000_000,
+            cacheReadTokens: 600_000_000_000,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+          },
+        ],
+      };
+      expect(
+        (await handleCollectorFetch(postEventRequest(JSON.stringify(overAggregateTokens)), h.env, undefined, NOW)).status,
+      ).toBe(400);
+
+      // 3. Aggregate requests > 10_000_000 -> 400
+      const overAggregateRequests = {
+        ...valid,
+        requests: {
+          completed: 6_000_000,
+          failed: 5_000_000,
+          incomplete: 0,
+          aborted: 0,
+        },
+      };
+      expect(
+        (await handleCollectorFetch(postEventRequest(JSON.stringify(overAggregateRequests)), h.env, undefined, NOW)).status,
+      ).toBe(400);
+
+      const overModelRequests = {
+        ...valid,
+        models: [
+          { ...valid.models[0]!, providerKind: "openai", modelFamily: "gpt-5", requests: 6_000_000 },
+          { ...valid.models[0]!, providerKind: "anthropic", modelFamily: "claude-opus", requests: 5_000_000 },
+        ],
+      };
+      expect(
+        (await handleCollectorFetch(postEventRequest(JSON.stringify(overModelRequests)), h.env, undefined, NOW)).status,
+      ).toBe(400);
+
+      const overErrorCounts = {
+        ...valid,
+        errors: {
+          "rate-limit": 6_000_000,
+          "empty-output": 5_000_000,
+        },
+      };
+      expect(
+        (await handleCollectorFetch(postEventRequest(JSON.stringify(overErrorCounts)), h.env, undefined, NOW)).status,
+      ).toBe(400);
+
+      // 4. env.version longer than 32 chars -> 400
+      const longVersion = {
+        ...valid,
+        env: {
+          ...valid.env,
+          version: "1.0." + "9".repeat(35),
+        },
+      };
+      expect(
+        (await handleCollectorFetch(postEventRequest(JSON.stringify(longVersion)), h.env, undefined, NOW)).status,
+      ).toBe(400);
+
+      // 5. Seed near-MAX_SAFE_INTEGER counters in daily_totals and daily_models, then ingest another report
+      // and verify counters clamp to Number.MAX_SAFE_INTEGER without overflowing SQLite 64-bit INTEGER.
+      const nearMax = Number.MAX_SAFE_INTEGER - 10;
+      h.sqlite
+        .query(
+          "INSERT INTO daily_totals (day, reports, new_installs, active_minutes, completed, failed, incomplete, aborted, input, cache_read, cache_write, output, reasoning) " +
+          "VALUES (?1, 1, 1, 1, ?2, 0, 0, 0, ?2, ?2, ?2, ?2, ?2)",
+        )
+        .run(day, nearMax);
+      h.sqlite
+        .query(
+          "INSERT INTO daily_models (day, provider_kind, model_family, requests, input, cache_read, cache_write, output, reasoning) " +
+          "VALUES (?1, 'claude-subscription', 'claude-opus', ?2, ?2, ?2, ?2, ?2, ?2)",
+        )
+        .run(day, nearMax);
+
+      const clampRes = await handleCollectorFetch(
+        postEventRequest(JSON.stringify(valid), { ip: "198.51.100.201" }),
+        h.env,
+        undefined,
+        NOW,
+      );
+      expect(clampRes.status).toBe(200);
+
+      // Also seed 60 distinct versions in daily_installs to verify LIMIT 50 in /v1/stats.
+      for (let i = 0; i < 60; i++) {
+        h.sqlite
+          .query(
+            "INSERT INTO daily_installs (day, install_day_hash, version, release_channel, os, arch, install_channel, new_install, active_minutes) " +
+            "VALUES (?1, ?2, ?3, 'latest', 'linux', 'x64', 'standalone', 0, 1)",
+          )
+          .run(day, i.toString(16).padStart(64, "0"), "2.0." + String(i));
+      }
+
+      const statsRes = await handleCollectorFetch(
+        new Request("https://telemetry.opencodex.me/v1/stats?range=7d"),
+        h.env,
+        undefined,
+        NOW,
+      );
+      expect(statsRes.status).toBe(200);
+      const stats = (await statsRes.json()) as TelemetryStatsV1;
+      expect(stats.totals.tokens.input).toBe(Number.MAX_SAFE_INTEGER);
+      expect(stats.totals.requests).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
+      expect(stats.daily[0]?.tokens).toBe(Number.MAX_SAFE_INTEGER);
+      expect(stats.providers[0]?.tokens).toBe(Number.MAX_SAFE_INTEGER);
+      expect(stats.models[0]?.tokens).toBe(Number.MAX_SAFE_INTEGER);
+      expect(stats.versions).toHaveLength(50);
+    } finally {
+      h.close();
+    }
+  });
+
+  test("enforces exact N-day UTC range boundaries aligned with heatmap and caches /v1/stats in one D1 batch", async () => {
+    const h = createInMemoryD1("range-cache-salt");
+    try {
+      // NOW is 2026-11-07T12:30:00Z -> today = 2026-11-07.
+      // For 7d: [2026-11-01 (today - 6d), 2026-11-07 (today)].
+      // 2026-10-31 (today - 7d) and 2026-11-08 (today + 1d) must both be excluded from 7d.
+      const boundaryDays = [
+        { day: "2026-10-31", ip: "10.1.0.1" }, // today - 7d (outside 7d, inside 30d)
+        { day: "2026-11-01", ip: "10.1.0.2" }, // today - 6d (inside 7d)
+        { day: "2026-11-07", ip: "10.1.0.3" }, // today (inside 7d)
+        { day: "2026-11-08", ip: "10.1.0.4" }, // today + 1d (accepted on ingest for clock skew, excluded from stats ranges <= today)
+      ];
+
+      for (const { day, ip } of boundaryDays) {
+        const payload = buildTelemetryPayloadV1({
+          aggregate: makeAggregate(day),
+          installDayHash: computeInstallDayHash("eeeeeeee-1111-4222-8333-ffffffffffff", day),
+          newInstall: false,
+          version: "2.41.0",
+          os: "darwin",
+          arch: "arm64",
+          installChannel: "npm-global",
+          now: NOW,
+        });
+        const res = await handleCollectorFetch(
+          postEventRequest(JSON.stringify(payload), { ip }),
+          h.env,
+          undefined,
+          NOW,
+        );
+        expect(res.status).toBe(200);
+      }
+
+      const batchCountBeforeStats = h.batchCalls.length;
+      const stats7dRes = await handleCollectorFetch(
+        new Request("https://telemetry.opencodex.me/v1/stats?range=7d&_=1"),
+        h.env,
+        undefined,
+        NOW,
+      );
+      expect(stats7dRes.status).toBe(200);
+      const stats7d = (await stats7dRes.json()) as TelemetryStatsV1;
+      expect(stats7d.daily.map(d => d.day)).toEqual(["2026-11-01", "2026-11-07"]);
+      expect(stats7d.totals.activeInstalls).toBe(2);
+      expect(stats7d.heatmap.filter(d => d.activeInstalls > 0).map(d => d.day)).toEqual([
+        "2026-10-31",
+        "2026-11-01",
+        "2026-11-07",
+      ]);
+
+      // Stats query must execute in a single D1 batch call.
+      expect(h.batchCalls.length).toBe(batchCountBeforeStats + 1);
+
+      // Cache-busted repeat request within 300s TTL must be served from Worker cache without hitting D1.
+      const cachedRes = await handleCollectorFetch(
+        new Request("https://telemetry.opencodex.me/v1/stats?range=7d&_=cachebust2"),
+        h.env,
+        undefined,
+        NOW + 30_000,
+      );
+      expect(cachedRes.status).toBe(200);
+      expect(h.batchCalls.length).toBe(batchCountBeforeStats + 1);
+      expect(await cachedRes.json()).toEqual(stats7d);
+
+      // Advancing past the 300s TTL expires the cached entry and triggers a fresh D1 batch.
+      const expiredRes = await handleCollectorFetch(
+        new Request("https://telemetry.opencodex.me/v1/stats?range=7d&_=afterTtl"),
+        h.env,
+        undefined,
+        NOW + 300_001,
+      );
+      expect(expiredRes.status).toBe(200);
+      expect(h.batchCalls.length).toBe(batchCountBeforeStats + 2);
+
+      // Explicit bypassCache option skips the cache even within the TTL window.
+      const bypassRes = await handleStats(
+        new Request("https://telemetry.opencodex.me/v1/stats?range=7d"),
+        h.env,
+        NOW + 300_010,
+        { bypassCache: true },
+      );
+      expect(bypassRes.status).toBe(200);
+      expect(h.batchCalls.length).toBe(batchCountBeforeStats + 3);
+
+      // When caches.default is available and in-isolate memory is cleared, edge cache serves the canonical range key.
+      const edgeStore = new Map<string, string>();
+      const prevCaches = (globalThis as { caches?: unknown }).caches;
+      (globalThis as { caches?: unknown }).caches = {
+        default: {
+          async match(req: Request): Promise<Response | undefined> {
+            const hit = edgeStore.get(req.url);
+            return hit ? new Response(hit) : undefined;
+          },
+          async put(req: Request, res: Response): Promise<void> {
+            edgeStore.set(req.url, await res.clone().text());
+          },
+        },
+      };
+      try {
+        clearStatsCache();
+        const populateEdge = await handleCollectorFetch(
+          new Request("https://telemetry.opencodex.me/v1/stats?range=30d&utm=1"),
+          h.env,
+          undefined,
+          NOW,
+        );
+        expect(populateEdge.status).toBe(200);
+        expect(edgeStore.has("https://telemetry.opencodex.me/v1/stats?range=30d")).toBe(true);
+        const batchesAfterPopulate = h.batchCalls.length;
+
+        clearStatsCache();
+        const fromEdge = await handleCollectorFetch(
+          new Request("https://telemetry.opencodex.me/v1/stats?range=30d&utm=2"),
+          h.env,
+          undefined,
+          NOW + 5_000,
+        );
+        expect(fromEdge.status).toBe(200);
+        expect(h.batchCalls.length).toBe(batchesAfterPopulate);
+      } finally {
+        (globalThis as { caches?: unknown }).caches = prevCaches;
+        clearStatsCache();
+      }
     } finally {
       h.close();
     }

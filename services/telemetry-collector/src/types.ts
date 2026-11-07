@@ -36,7 +36,7 @@ export interface ScheduledController {
 
 export interface CollectorEnv {
   DB: D1Database;
-  RATE_LIMIT_SALT?: string;
+  RATE_LIMIT_SALT: string;
 }
 
 export type TelemetryStatsRange = "7d" | "30d" | "90d" | "365d";

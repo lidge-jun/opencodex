@@ -31,17 +31,13 @@ chosen and proven in B, since `node_modules/.bin/tsc` is absent and `bun check` 
 - `daily_errors(day, cause, count)`.
 - `rate_limits(bucket_hour, ip_hash, hits)` — pruned after 2 h.
 
-**Dedup:** ingest first `INSERT OR IGNORE` into `daily_installs`; only when that inserted a new
-`(day, install_day_hash)` row are the rollups incremented (one D1 `batch`). A re-sent day — new
-`batchId` or not — changes nothing, so lost client state cannot inflate totals. Raw install ids and IPs
-are never stored; `ip_hash = sha256(RATE_LIMIT_SALT + ip + hour)`.
+**Dedup:** ingest executes conditional rollup statements (`WHERE NOT EXISTS (SELECT 1 FROM daily_installs WHERE day = ? AND install_day_hash = ?)`) followed by `INSERT OR IGNORE INTO daily_installs` as the final statement of a single atomic D1 `batch`. A re-sent day — new `batchId` or not — changes nothing, and a failed batch rolls back completely so retries succeed. Raw install ids and IPs are never stored; `RATE_LIMIT_SALT` is mandatory (503 when missing) and `ip_hash = sha256(RATE_LIMIT_SALT + "\0" + hour + "\0" + ip)`.
 
 ## Validation and limits
 
 `validateTelemetryPayloadV1` from the contract (closed keys at every level, closed rosters for
 provider kind, model family, channels, os, arch, failure causes; calendar-checked `day` in
-[today − 7, today + 1]; strict version regex; bounded integers; ≤ 64 model rows). Body ≤ 16 KiB
-(413), JSON only (400), 30 reports/hour per IP hash (429 with `Retry-After`).
+[today − 7, today + 1]; strict version regex ≤ 32 chars; bounded per-row and per-report integers clamped to `Number.MAX_SAFE_INTEGER`; ≤ 64 model rows). Streaming body ≤ 16 KiB (413), JSON only (400), atomic 30 reports/hour per IP hash (429 with `Retry-After`), 503 if `RATE_LIMIT_SALT` is unset.
 
 ## Stats API (`TelemetryStatsV1`, consumed by 050)
 

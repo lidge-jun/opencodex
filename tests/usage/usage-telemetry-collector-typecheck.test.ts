@@ -81,4 +81,53 @@ describe("telemetry collector typecheck", () => {
       removeTreeWithRetry(tempRoot);
     }
   });
+
+  test("collector tsconfig excludes bun-types so Bun globals fail typecheck", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "ocx-collector-nobun-"));
+    try {
+      mkdirSync(join(tempRoot, "src", "telemetry"), { recursive: true });
+      mkdirSync(join(tempRoot, "services", "telemetry-collector"), { recursive: true });
+      cpSync(repoPath("tsconfig.json"), join(tempRoot, "tsconfig.json"));
+      symlinkSync(
+        repoPath("node_modules"),
+        join(tempRoot, "node_modules"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      cpSync(
+        repoPath("src", "telemetry", "contract.ts"),
+        join(tempRoot, "src", "telemetry", "contract.ts"),
+      );
+      cpSync(
+        repoPath("services", "telemetry-collector"),
+        join(tempRoot, "services", "telemetry-collector"),
+        { recursive: true },
+      );
+
+      writeFileSync(
+        join(tempRoot, "services", "telemetry-collector", "src", "injected-bun.ts"),
+        "export const leakedBunGlobal = Bun.version;\n",
+      );
+
+      const proc = Bun.spawnSync(
+        [
+          process.execPath,
+          "check",
+          "--no-script",
+          "--noEmit",
+          "-p",
+          join(tempRoot, "services", "telemetry-collector", "tsconfig.json"),
+        ],
+        {
+          cwd: tempRoot,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      expect(proc.exitCode).not.toBe(0);
+      expect(output).toContain("Cannot find name 'Bun'");
+    } finally {
+      removeTreeWithRetry(tempRoot);
+    }
+  });
 });

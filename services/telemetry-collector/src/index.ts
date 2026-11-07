@@ -57,41 +57,45 @@ export async function handleCollectorFetch(
   _ctx?: ExecutionContext,
   now: number = Date.now(),
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const pathname = url.pathname.replace(/\/+$/, "") || "/";
-  const method = request.method.toUpperCase();
+  try {
+    const url = new URL(request.url);
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    const method = request.method.toUpperCase();
 
-  if (pathname === "/v1/events") {
+    if (pathname === "/v1/events") {
+      if (method === "OPTIONS") {
+        return handlePreflight(request, "POST, OPTIONS");
+      }
+      if (method !== "POST") {
+        return withCors(
+          request,
+          jsonError(405, "method not allowed", { allow: "POST, OPTIONS" }),
+        );
+      }
+      return withCors(request, await handleIngest(request, env, now));
+    }
+
+    if (pathname === "/v1/stats") {
+      if (method === "OPTIONS") {
+        return handlePreflight(request, "GET, OPTIONS");
+      }
+      if (method !== "GET") {
+        return withCors(
+          request,
+          jsonError(405, "method not allowed", { allow: "GET, OPTIONS" }),
+        );
+      }
+      return withCors(request, await handleStats(request, env, now));
+    }
+
     if (method === "OPTIONS") {
-      return handlePreflight(request, "POST, OPTIONS");
+      return handlePreflight(request, "GET, POST, OPTIONS");
     }
-    if (method !== "POST") {
-      return withCors(
-        request,
-        jsonError(405, "method not allowed", { allow: "POST, OPTIONS" }),
-      );
-    }
-    return withCors(request, await handleIngest(request, env, now));
-  }
 
-  if (pathname === "/v1/stats") {
-    if (method === "OPTIONS") {
-      return handlePreflight(request, "GET, OPTIONS");
-    }
-    if (method !== "GET") {
-      return withCors(
-        request,
-        jsonError(405, "method not allowed", { allow: "GET, OPTIONS" }),
-      );
-    }
-    return withCors(request, await handleStats(request, env, now));
+    return withCors(request, jsonError(404, "not found"));
+  } catch {
+    return withCors(request, jsonError(500, "internal error"));
   }
-
-  if (method === "OPTIONS") {
-    return handlePreflight(request, "GET, POST, OPTIONS");
-  }
-
-  return withCors(request, jsonError(404, "not found"));
 }
 
 export async function handleCollectorScheduled(
