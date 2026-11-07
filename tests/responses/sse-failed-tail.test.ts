@@ -447,6 +447,49 @@ describe("relaySseWithFailedTail", () => {
     expect(doneEvents(out)).toHaveLength(1);
     expect(out).not.toContain("event: response.failed");
   });
+
+  /** Client relay output plus the terminal the tee inspection branch or eager hooks reported. */
+  async function relayAndInspect(mode: "tee" | "eager", raw: string): Promise<{ out: string; reported: string[] }> {
+    const reported: string[] = [];
+    const src = sourceStream([raw]);
+    if (mode === "eager") {
+      const hooks = { ...parityHooks, onSynthetic: (kind: string) => { reported.push(kind); } };
+      return { out: await drain(relaySseEagerBounded(src, new AbortController(), hooks)), reported };
+    }
+    const [client, inspection] = src.tee();
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const inspected = new Promise<void>(resolve => consumeForInspection(inspection, status => { reported.push(status); }, undefined, resolve, log));
+    const out = await drain(relaySseWithFailedTail(client, new AbortController()));
+    await inspected;
+    return { out, reported };
+  }
+
+  test.each(["tee", "eager"] as const)("%s untyped error envelope ends in response.failed, not adapter_eof (#8216)", async (mode) => {
+    // Captured gateway shape: heartbeat, an `error` object with no root `type`, DONE, EOF.
+    const raw = ": PING\n\n"
+      + 'data: {"error":{"message":"openai_error","type":"bad_response_status_code","param":"","code":"bad_response_status_code"}}\n\n'
+      + "data: [DONE]\n\n";
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(failedMessage(out)).toBe("openai_error");
+    expect(out).toContain('"code":"upstream_server_error"');
+    expect(terminalEvents(out)).toEqual(["response.failed"]);
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(out).not.toContain("adapter_eof");
+    expect(reported).toEqual(["failed"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s typed event carrying an error field is not a bare error (#8216)", async (mode) => {
+    const raw = 'data: {"type":"response.in_progress","response":{"status":"in_progress"},'
+      + '"error":{"message":"not a failure","code":"server_error"}}\n\n';
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(terminalEvents(out)).toEqual(["response.incomplete"]);
+    expect(out).toContain('"reason":"adapter_eof"');
+    expect(out).not.toContain("event: response.failed");
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(reported).toEqual(["incomplete"]);
+  });
 });
 
 
