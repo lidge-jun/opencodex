@@ -9,6 +9,7 @@ import { routedProviderConfig } from "./routed-config";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
+import { vertexEnvironmentKeyIsCurrent } from "./vertex-environment-authority";
 
 export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
@@ -62,6 +63,7 @@ function matchesConfiguredSelection(
   const expected = routedProvider._apiKeyAttempt;
   const current = currentKeyProvider(config, name, expected, allowCooling);
   return current !== null && expected !== undefined
+    && vertexEnvironmentKeyIsCurrent(expected)
     && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey
     && current.authMode === routedProvider.authMode

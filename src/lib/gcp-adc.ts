@@ -21,7 +21,8 @@
 import { Buffer } from "node:buffer";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { createHmac, randomBytes } from "node:crypto";
 import { GCP_CREDENTIAL_MARKER_PREFIX, providerKeychainEntry } from "../providers/api-key-resolve";
 export { isGcpCredentialMaterial } from "./gcp-credential-input";
 import {
@@ -89,6 +90,7 @@ export function parseGcpCredentialJson(value: string): AdcFileCredentials | unde
 interface CachedToken {
   token: string;
   expiresAtMs: number;
+  generation: number;
 }
 
 interface ServiceAccountCredentials {
@@ -114,7 +116,10 @@ interface TokenResponse {
 }
 
 const tokenCache = new Map<string, CachedToken>();
-const inflight = new Map<string, Promise<string>>();
+type VertexTokenAuthority = { token: string; source: string; generation: number; markerAccount?: string };
+const inflight = new Map<string, Promise<VertexTokenAuthority>>();
+const sourceObservations = new Map<string, { source: string; generation: number }>();
+let sourceEpoch = 0;
 let lastReconciledGeneration = 0;
 let liveSources = new Set<string>();
 
@@ -165,23 +170,24 @@ function userAdcPath(): string {
   return path.join(gcloudConfigDir(), "application_default_credentials.json");
 }
 
-/**
- * A content-freshness fingerprint for a credential file, so an in-place rewrite (e.g.
- * `gcloud auth application-default login`, or a rotated service-account key at the same path)
- * changes the cache key and invalidates the stale token. Falls back to the bare path when stat fails.
- */
-function fileSourceTag(prefix: string, filePath: string): string {
-  try {
-    const st = statSync(filePath);
-    return `${prefix}:${filePath}:${st.size}:${Math.floor(st.mtimeMs)}`;
-  } catch {
-    return `${prefix}:${filePath}`;
-  }
+// Cache identity is keyed and process-local: neither credential contents nor their digest is public.
+const sourceDigestKey = randomBytes(32);
+function sourceTag(kind: string, identity: string, content: string): string {
+  const digest = createHmac("sha256", sourceDigestKey)
+    .update(kind).update("\0").update(identity).update("\0").update(content).digest("hex");
+  return `${kind}:${digest}`;
 }
 
-function readJsonFile<T>(filePath: string): T | undefined {
-  if (!existsSync(filePath)) return undefined;
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
+function readJsonFile<T>(filePath: string): { value: T; content: string } | undefined {
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("Vertex ADC credential file could not be read");
+  }
+  try { return { value: JSON.parse(content) as T, content }; }
+  catch { throw new Error("Vertex ADC credential file is invalid"); }
 }
 
 /**
@@ -205,17 +211,17 @@ function loadAdcCredentials(markerAccount: string | undefined): { source: string
   if (markerAccount) {
     const creds = readMarkerCredential(markerAccount);
     if (!creds) throw new Error("GCP credential marker is set but its credential could not be read from the OS credential store");
-    return { source: `marker:${markerAccount}`, creds };
+    return { source: sourceTag("marker", markerAccount, JSON.stringify(creds)), creds };
   }
   const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (gacPath) {
     const creds = readJsonFile<AdcFileCredentials>(gacPath);
     if (!creds) throw new Error(`GOOGLE_APPLICATION_CREDENTIALS points to a missing file: ${gacPath}`);
-    return { source: fileSourceTag("gac", gacPath), creds };
+    return { source: sourceTag("gac", gacPath, creds.content), creds: creds.value };
   }
   const userPath = userAdcPath();
   const creds = readJsonFile<AdcFileCredentials>(userPath);
-  if (creds) return { source: fileSourceTag("user", userPath), creds };
+  if (creds) return { source: sourceTag("user", userPath, creds.content), creds: creds.value };
   return undefined;
 }
 
@@ -226,12 +232,24 @@ function loadAdcCredentials(markerAccount: string | undefined): { source: string
  * token from a different source. Falls back to "metadata" when no marker/file/env ADC is present.
  */
 function currentAdcSourceKey(markerAccount: string | undefined): string {
-  if (markerAccount) return `marker:${markerAccount}`;
-  const gacPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (gacPath) return fileSourceTag("gac", gacPath);
-  const userPath = userAdcPath();
-  if (existsSync(userPath)) return fileSourceTag("user", userPath);
-  return "metadata";
+  try {
+    return loadAdcCredentials(markerAccount)?.source ?? "metadata";
+  } catch {
+    return "invalid";
+  }
+}
+
+/** Every observed source transition gets a fresh incarnation, including A→B→A. */
+function observeAdcSource(markerAccount: string | undefined): { source: string; generation: number } {
+  const scope = markerAccount ? `marker:${markerAccount}` : "host";
+  const source = currentAdcSourceKey(markerAccount);
+  const previous = sourceObservations.get(scope);
+  if (previous?.source === source) return previous;
+  const next = { source, generation: ++sourceEpoch };
+  sourceObservations.delete(scope);
+  sourceObservations.set(scope, next);
+  if (sourceObservations.size > 512) sourceObservations.delete(sourceObservations.keys().next().value!);
+  return next;
 }
 
 function base64UrlEncode(bytes: Uint8Array | string): string {
@@ -371,7 +389,7 @@ async function resolveAccessTokenUncached(markerAccount: string | undefined, sig
 }
 
 /** Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed). */
-export async function getVertexAccessToken(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string }): Promise<string> {
+export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string }): Promise<VertexTokenAuthority> {
   // The marker travels as an argument, never as process-global state: a module-level "active
   // marker" written by the router would race across concurrent requests for different providers
   // and could resolve one provider's Vertex call with another provider's service account. The
@@ -383,7 +401,8 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 
   // Only serve a cached token that matches the source the next resolve would actually use; prune
   // expired or now-stale (different-source) entries so a credential-source change is honored.
-  const expectedSource = currentAdcSourceKey(markerAccount);
+  const expected = observeAdcSource(markerAccount);
+  const expectedSource = expected.source;
   // A cached bearer token is usable only while the explicitly selected store entry remains
   // readable. Removal or a locked store must fail closed before the cache can return it.
   if (markerAccount && !readMarkerCredential(markerAccount)) {
@@ -392,25 +411,31 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
   }
   const writerGeneration = captureConfigGeneration();
   for (const [source, cached] of tokenCache) {
-    if (source === expectedSource && cached.expiresAtMs - skew > now) return cached.token;
+    if (source === expectedSource && cached.generation === expected.generation && cached.expiresAtMs - skew > now) {
+      return { token: cached.token, source, generation: expected.generation, markerAccount };
+    }
     if (cached.expiresAtMs - skew <= now) tokenCache.delete(source);
   }
 
   // Dedup in-flight fetches PER source, not globally: if the credential source changes while a
   // fetch is in flight, a new caller must not reuse the old source's promise (cross-source bleed).
-  const cacheKey = expectedSource;
+  const cacheKey = `${expectedSource}:${expected.generation}`;
   const existing = inflight.get(cacheKey);
   if (existing) return existing;
 
   const promise = (async () => {
     try {
       const { source, token } = await resolveAccessTokenUncached(markerAccount, options?.signal, fetchImpl);
+      const current = observeAdcSource(markerAccount);
+      if (source !== expectedSource || current.source !== source || current.generation !== expected.generation) {
+        throw new Error("Vertex ADC source changed during token exchange");
+      }
       const expiresAtMs = Date.now() + Math.max(0, token.expires_in * 1000);
       if (writerGeneration >= lastReconciledGeneration || liveSources.has(source)) {
-        tokenCache.set(source, { token: token.access_token, expiresAtMs });
+        tokenCache.set(source, { token: token.access_token, expiresAtMs, generation: expected.generation });
         sweepExpiredOnWrite(Date.now());
       }
-      return token.access_token;
+      return { token: token.access_token, source, generation: expected.generation, markerAccount };
     } finally {
       inflight.delete(cacheKey);
     }
@@ -419,10 +444,60 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
   return promise;
 }
 
+/** Compatibility wrapper for callers that only need the access token. */
+export async function getVertexAccessToken(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string }): Promise<string> {
+  return (await getVertexAccessTokenWithAuthority(options)).token;
+}
+
+type VertexRequestAuthority = { source?: string; generation?: number; markerAccount?: string; ambientKey?: string; target: string; headerDigest: string };
+const requestAuthorities = new WeakMap<object, VertexRequestAuthority>();
+const requestDigestKey = randomBytes(32);
+function requestDigest(value: string): string {
+  return createHmac("sha256", requestDigestKey).update(value).digest("hex");
+}
+
+/** Bind the exact credential and target used by a built Vertex request without storing the secret. */
+export function bindVertexRequestAuthority(request: object, target: string, header: string,
+  authority: { source: string; generation: number; markerAccount?: string } | { ambientKey: string }): void {
+  requestAuthorities.set(request, {
+    target, headerDigest: requestDigest(header),
+    ...("ambientKey" in authority ? { ambientKey: requestDigest(authority.ambientKey) } : authority),
+  });
+}
+
+/** Rebuilds reuse the original request object, so transfer or clear its previous authority. */
+export function copyVertexRequestAuthority(from: object, to: object): void {
+  const authority = requestAuthorities.get(from);
+  if (authority) requestAuthorities.set(to, authority);
+  else requestAuthorities.delete(to);
+}
+
+export function hasVertexRequestAuthority(request: object): boolean {
+  return requestAuthorities.has(request);
+}
+
+/** Fail closed if the locally observable credential source or final request changed. */
+export function vertexRequestAuthorityIsCurrent(request: object, target?: string, headers?: Headers): boolean {
+  const authority = requestAuthorities.get(request);
+  if (!authority) return true;
+  if (authority.source) {
+    const current = observeAdcSource(authority.markerAccount);
+    if (current.source !== authority.source || current.generation !== authority.generation) return false;
+  }
+  if (authority.ambientKey && requestDigest(process.env.GOOGLE_CLOUD_API_KEY || "") !== authority.ambientKey) return false;
+  if (target !== undefined && target !== authority.target) return false;
+  if (headers) {
+    const actual = authority.source ? headers.get("authorization") : headers.get("x-goog-api-key");
+    if (!actual || requestDigest(actual) !== authority.headerDigest) return false;
+  }
+  return true;
+}
+
 /** Test seam: restores complete process-local token and reconciliation state. */
 export function __resetVertexTokenCache(): void {
   tokenCache.clear();
   inflight.clear();
+  sourceObservations.clear();
   lastReconciledGeneration = 0;
   liveSources = new Set();
 }

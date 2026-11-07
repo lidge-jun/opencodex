@@ -19,7 +19,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
-import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
+import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
@@ -1254,13 +1254,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           );
         }
         // Endpoint, location and model path were validated above, before any credential is attached.
+        let adcAuthority: Awaited<ReturnType<typeof getVertexAccessTokenWithAuthority>> | undefined;
         if (apiKey) headers["x-goog-api-key"] = apiKey;
         else {
           // Resolve each marker per request; never share a process-global active account.
           const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
-          headers["Authorization"] = `Bearer ${await getVertexAccessToken({ markerAccount })}`;
+          adcAuthority = await getVertexAccessTokenWithAuthority({ markerAccount, signal: incoming?.abortSignal });
+          headers["Authorization"] = `Bearer ${adcAuthority.token}`;
         }
-        return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        const request = { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        if (adcAuthority) bindVertexRequestAuthority(request, url, headers["Authorization"]!, { source: adcAuthority.source, generation: adcAuthority.generation, markerAccount: adcAuthority.markerAccount });
+        else if (apiKey && (!provider.apiKey || provider.apiKey.startsWith("<") || provider.apiKey === "N/A")) {
+          bindVertexRequestAuthority(request, url, apiKey, { ambientKey: apiKey });
+        }
+        return request;
       }
 
       // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.

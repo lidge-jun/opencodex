@@ -10,6 +10,7 @@ import type { OcxProviderConfig } from "../types";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./key-store";
 import { GCP_CREDENTIAL_MARKER_PREFIX } from "../lib/gcp-adc";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
+import { captureVertexEnvironmentKey } from "./vertex-environment-authority";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
@@ -115,11 +116,10 @@ function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConf
   if (provider.adapter !== "google" || provider.googleMode !== "vertex") return provider;
   const marker = provider.apiKey?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) === true;
   const configuredKey = provider.apiKey && !provider.apiKey.startsWith("<") && provider.apiKey !== "N/A" ? provider.apiKey : undefined;
-  const apiKey = marker ? provider.apiKey : configuredKey || process.env.GOOGLE_CLOUD_API_KEY || undefined;
-  if (apiKey && !marker) return { ...provider, apiKey };
+  captureVertexEnvironmentKey(provider._apiKeyAttempt, provider.apiKey);
+  if (!marker && (configuredKey || process.env.GOOGLE_CLOUD_API_KEY)) return provider;
   return {
     ...provider,
-    apiKey,
     project: provider.project?.trim() ? provider.project : process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT,
     location: provider.location || process.env.GOOGLE_CLOUD_LOCATION,
   };

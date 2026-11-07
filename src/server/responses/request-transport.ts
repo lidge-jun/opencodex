@@ -27,6 +27,7 @@ import {
 } from "../../oauth/store";
 import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
+import { copyVertexRequestAuthority, hasVertexRequestAuthority, vertexRequestAuthorityIsCurrent } from "../../lib/gcp-adc";
 import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
@@ -84,7 +85,7 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
@@ -905,7 +906,7 @@ export async function prepareResponsesTransport(
           await reacquirePacing(route.provider, route.modelId);
           pacingChanged = false;
         }
-        if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
+        if (selectionIsCurrent(requestBindings.get(wireRequest)) && vertexRequestAuthorityIsCurrent(wireRequest) && copilotSessionExpiresAt > Date.now() + 1000) {
           const ws = codexWsExecutorBinding(execute);
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
           const binding = requestBindings.get(wireRequest);
@@ -956,7 +957,10 @@ export async function prepareResponsesTransport(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined) },
+                ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined),
+                ...(hasVertexRequestAuthority(wireRequest) ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                    if (!vertexRequestAuthorityIsCurrent(wireRequest, finalTarget, finalHeaders)) throw new Error("Vertex credential authority changed before dispatch");
+                  }) : {}) },
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
@@ -1013,6 +1017,7 @@ export async function prepareResponsesTransport(
         for (const [name, value] of Object.entries(rebuilt.headers)) headers.set(name, value);
         wireRequest.releaseBodyObservation?.();
         Object.assign(wireRequest, rebuilt);
+        copyVertexRequestAuthority(rebuilt, wireRequest);
         const binding = requestBindings.get(rebuilt);
         if (binding) requestBindings.set(wireRequest, binding);
         else requestBindings.delete(wireRequest);
