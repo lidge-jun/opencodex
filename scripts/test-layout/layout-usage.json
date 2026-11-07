@@ -16,5 +16,6 @@
   "usage-telemetry-collector-worker.test.ts": "usage",
   "usage-telemetry-collector-typecheck.test.ts": "usage",
   "server-telemetry-routes.test.ts": "server",
-  "cli-telemetry.test.ts": "cli"
+  "cli-telemetry.test.ts": "cli",
+  "docs-telemetry-dashboard.test.ts": "ci-workflows"
 }

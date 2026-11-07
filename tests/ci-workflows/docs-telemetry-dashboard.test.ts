@@ -1,0 +1,546 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import pkg from "../../package.json";
+import {
+  INSTALL_CHANNELS,
+  MODEL_FAMILIES,
+  PROVIDER_KINDS,
+  REQUEST_FAILURE_CAUSES,
+} from "../../src/telemetry/contract";
+import type {
+  TelemetryStatsRange as CollectorStatsRange,
+  TelemetryStatsV1 as CollectorStatsV1,
+} from "../../services/telemetry-collector/src/types";
+import {
+  DEFAULT_TELEMETRY_RANGE,
+  GITHUB_RELEASES_URL,
+  GITHUB_REPO_SLUG,
+  HEATMAP_GRADE_COLORS,
+  NPM_DOWNLOADS_WEEKLY_URL,
+  NPM_PACKAGE_NAME,
+  TELEMETRY_GUIDE_LINK_ENABLED,
+  TELEMETRY_GUIDE_PATH,
+  TELEMETRY_RANGES,
+  TELEMETRY_STATS_ENDPOINT,
+  TOKSCALE_REPO_URL,
+  buildChannelRows,
+  buildDailyProviderChart,
+  buildHeatmapCalendar,
+  buildKpiStrip,
+  buildModelShareRows,
+  buildPlatformRows,
+  buildProviderShareRows,
+  buildReliabilitySummary,
+  buildStatsUrl,
+  buildTokenMix,
+  buildVersionRows,
+  classifyStatsResponse,
+  computeHeatmapGrade,
+  formatActiveHours,
+  formatCompactNumber,
+  formatHeatmapCellAriaLabel,
+  getHeatmapGradeColor,
+  isStatsSnapshotEmpty,
+  isValidTelemetryStatsV1,
+  navigateHeatmapDate,
+  parseDownloadsPayload,
+  parseStatsRangeParam,
+  type TelemetryStatsRange as DashboardStatsRange,
+  type TelemetryStatsV1 as DashboardStatsV1,
+} from "../../docs-site/src/components/telemetry-dashboard/index";
+import {
+  TELEMETRY_DASHBOARD_LOCALES,
+  TELEMETRY_DASHBOARD_STRINGS,
+  getTelemetryDashboardCopy,
+  resolveTelemetryDashboardLocale,
+} from "../../docs-site/src/data/telemetry-dashboard-i18n";
+import { repoPath } from "../helpers/repo-root";
+
+type AssertExactType<A, B> = [A] extends [B]
+  ? [B] extends [A]
+    ? true
+    : never
+  : never;
+
+const _assertStatsParity: AssertExactType<CollectorStatsV1, DashboardStatsV1> = true;
+const _assertRangeParity: AssertExactType<CollectorStatsRange, DashboardStatsRange> = true;
+
+function makeFixtureStats(overrides: Partial<DashboardStatsV1> = {}): DashboardStatsV1 {
+  const heatmap: DashboardStatsV1["heatmap"] = [];
+  const startMs = Date.UTC(2025, 10, 9); // 2025-11-09 .. 2026-11-08 (365 days)
+  for (let i = 0; i < 365; i++) {
+    const day = new Date(startMs + i * 86_400_000).toISOString().slice(0, 10);
+    const activeInstalls =
+      i === 364
+        ? 400
+        : i === 300
+          ? 250
+          : i === 200
+            ? 120
+            : i % 5 === 0
+              ? 40
+              : 0;
+    heatmap.push({ day, activeInstalls });
+  }
+
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-11-08T00:00:00.000Z",
+    range: "30d",
+    totals: {
+      activeInstalls: 4_820,
+      newInstalls: 640,
+      activeMinutes: 187_500,
+      requests: 1_250_000,
+      tokens: {
+        input: 450_000_000,
+        cacheRead: 1_200_000_000,
+        cacheWrite: 150_000_000,
+        output: 120_000_000,
+        reasoning: 80_000_000,
+      },
+    },
+    daily: [
+      {
+        day: "2026-11-06",
+        activeInstalls: 180,
+        newInstalls: 24,
+        activeMinutes: 6_200,
+        requests: 42_000,
+        failed: 420,
+        tokens: 68_000_000,
+      },
+      {
+        day: "2026-11-07",
+        activeInstalls: 210,
+        newInstalls: 31,
+        activeMinutes: 7_500,
+        requests: 51_000,
+        failed: 380,
+        tokens: 82_000_000,
+      },
+      {
+        day: "2026-11-08",
+        activeInstalls: 400,
+        newInstalls: 45,
+        activeMinutes: 9_600,
+        requests: 64_000,
+        failed: 510,
+        tokens: 110_000_000,
+      },
+    ],
+    dailyByProvider: [
+      { day: "2026-11-06", providerKind: "anthropic", requests: 22_000, tokens: 38_000_000 },
+      { day: "2026-11-06", providerKind: "openai", requests: 14_000, tokens: 20_000_000 },
+      { day: "2026-11-06", providerKind: "google", requests: 6_000, tokens: 10_000_000 },
+      { day: "2026-11-07", providerKind: "anthropic", requests: 28_000, tokens: 46_000_000 },
+      { day: "2026-11-07", providerKind: "openai", requests: 16_000, tokens: 24_000_000 },
+      { day: "2026-11-07", providerKind: "google", requests: 7_000, tokens: 12_000_000 },
+      { day: "2026-11-08", providerKind: "anthropic", requests: 34_000, tokens: 60_000_000 },
+      { day: "2026-11-08", providerKind: "openai", requests: 20_000, tokens: 32_000_000 },
+      { day: "2026-11-08", providerKind: "google", requests: 10_000, tokens: 18_000_000 },
+    ],
+    heatmap,
+    providers: [
+      { providerKind: PROVIDER_KINDS[2]!, requests: 640_000, tokens: 1_100_000_000 },
+      { providerKind: PROVIDER_KINDS[0]!, requests: 410_000, tokens: 620_000_000 },
+      { providerKind: PROVIDER_KINDS[4]!, requests: 200_000, tokens: 280_000_000 },
+    ],
+    models: [
+      { modelFamily: MODEL_FAMILIES[6]!, requests: 520_000, tokens: 900_000_000 },
+      { modelFamily: MODEL_FAMILIES[1]!, requests: 410_000, tokens: 620_000_000 },
+      { modelFamily: MODEL_FAMILIES[8]!, requests: 200_000, tokens: 280_000_000 },
+      { modelFamily: MODEL_FAMILIES[5]!, requests: 120_000, tokens: 200_000_000 },
+    ],
+    versions: [
+      { version: "2.99.0", installs: 3_100, newInstalls: 420 },
+      { version: "2.98.0", installs: 1_220, newInstalls: 150 },
+      { version: "2.97.0", installs: 500, newInstalls: 70 },
+    ],
+    platforms: [
+      { os: "darwin", arch: "arm64", installs: 2_600 },
+      { os: "linux", arch: "x64", installs: 1_420 },
+      { os: "win32", arch: "x64", installs: 800 },
+    ],
+    channels: [
+      { installChannel: INSTALL_CHANNELS[0]!, installs: 2_400, newInstalls: 310 },
+      { installChannel: INSTALL_CHANNELS[2]!, installs: 1_420, newInstalls: 190 },
+      { installChannel: INSTALL_CHANNELS[5]!, installs: 1_000, newInstalls: 140 },
+    ],
+    outcomes: {
+      completed: 1_210_000,
+      incomplete: 18_000,
+      aborted: 9_500,
+      failed: 12_500,
+    },
+    errors: [
+      { cause: REQUEST_FAILURE_CAUSES[3]!, count: 6_200 },
+      { cause: REQUEST_FAILURE_CAUSES[11]!, count: 3_800 },
+      { cause: REQUEST_FAILURE_CAUSES[4]!, count: 2_500 },
+    ],
+    ...overrides,
+  };
+}
+
+describe("docs telemetry dashboard route and navigation", () => {
+  test("dashboard.mdx exists as a splash page mounting TelemetryDashboard.astro", () => {
+    expect(_assertStatsParity).toBe(true);
+    expect(_assertRangeParity).toBe(true);
+
+    const mdxPath = repoPath("docs-site/src/content/docs/dashboard.mdx");
+    expect(existsSync(mdxPath)).toBe(true);
+    const mdx = readFileSync(mdxPath, "utf8");
+    expect(mdx).toContain("template: splash");
+    expect(mdx).toContain("import TelemetryDashboard from '../../components/TelemetryDashboard.astro'");
+    expect(mdx).toContain("<TelemetryDashboard />");
+  });
+
+  test("Header.astro links /dashboard/ in both the desktop nav and the splash mobile menu", () => {
+    const header = readFileSync(repoPath("docs-site/src/components/Header.astro"), "utf8");
+    expect(header).toContain("href: `${prefix}dashboard/`");
+    const desktopMatches = header.match(/href={dashboard.href}/g) ?? [];
+    expect(desktopMatches.length).toBeGreaterThanOrEqual(2);
+    expect(header).toContain('<a class="nav-link" href={dashboard.href}>{dashboard.label}</a>');
+    expect(header).toContain('<a class="lp-menu-contrib" href={dashboard.href}>{dashboard.label}</a>');
+  });
+
+  test("constants match collector endpoint, root package.json name, GitHub repo, and tokscale credit", () => {
+    expect(TELEMETRY_STATS_ENDPOINT).toBe("https://telemetry.opencodex.me/v1/stats");
+    expect(TELEMETRY_RANGES).toEqual(["7d", "30d", "90d", "365d"]);
+    expect(DEFAULT_TELEMETRY_RANGE).toBe("30d");
+    expect(NPM_PACKAGE_NAME).toBe(pkg.name);
+    expect(NPM_DOWNLOADS_WEEKLY_URL).toContain(pkg.name);
+    expect(GITHUB_REPO_SLUG).toBe("lidge-jun/opencodex");
+    expect(GITHUB_RELEASES_URL).toContain("lidge-jun/opencodex");
+    expect(TOKSCALE_REPO_URL).toBe("https://github.com/junhoyeo/tokscale");
+    expect(TELEMETRY_GUIDE_PATH).toBe("guides/telemetry/");
+    expect(typeof TELEMETRY_GUIDE_LINK_ENABLED).toBe("boolean");
+
+    const guideExists = existsSync(repoPath("docs-site/src/content/docs/guides/telemetry.md"));
+    if (!guideExists) {
+      expect(TELEMETRY_GUIDE_LINK_ENABLED).toBe(false);
+    }
+  });
+});
+
+describe("telemetry dashboard formatting and bucketing helpers", () => {
+  test("formatCompactNumber formats K/M/B/T and promotes boundary values without 1000.0K artifacts", () => {
+    expect(formatCompactNumber(-5)).toBe("0");
+    expect(formatCompactNumber(0)).toBe("0");
+    expect(formatCompactNumber(999)).toBe("999");
+    expect(formatCompactNumber(1_250)).toBe("1.3K");
+    expect(formatCompactNumber(999_960)).toBe("1.0M");
+    expect(formatCompactNumber(1_250_000)).toBe("1.3M");
+    expect(formatCompactNumber(999_960_000)).toBe("1.0B");
+    expect(formatCompactNumber(2_000_000_000)).toBe("2.0B");
+    expect(formatCompactNumber(1_500_000_000_000)).toBe("1.5T");
+  });
+
+  test("buildKpiStrip and buildTokenMix format and bucket a fixture TelemetryStatsV1", () => {
+    const fixture = makeFixtureStats();
+    const kpis = buildKpiStrip(fixture, "en-US");
+    expect(kpis).toEqual([
+      { id: "activeInstalls", rawValue: 4_820, compact: "4.8K", exactTitle: "4,820" },
+      { id: "newInstalls", rawValue: 640, compact: "640", exactTitle: "640" },
+      { id: "requests", rawValue: 1_250_000, compact: "1.3M", exactTitle: "1,250,000" },
+      { id: "tokens", rawValue: 2_000_000_000, compact: "2.0B", exactTitle: "2,000,000,000" },
+      {
+        id: "activeHours",
+        rawValue: 187_500,
+        compact: "3.1Kh",
+        exactTitle: "3,125h (187,500 min)",
+      },
+    ]);
+
+    expect(formatActiveHours(0)).toEqual({
+      hours: 0,
+      compact: "0h",
+      exactTitle: "0h (0 min)",
+    });
+
+    const mix = buildTokenMix(fixture.totals.tokens, "en-US");
+    expect(mix.totalTokens).toBe(2_000_000_000);
+    expect(mix.totalCompact).toBe("2.0B");
+    expect(mix.totalExactTitle).toBe("2,000,000,000");
+    expect(mix.segments.map((s) => s.id)).toEqual([
+      "input",
+      "cacheRead",
+      "cacheWrite",
+      "output",
+      "reasoning",
+    ]);
+    const sumValues = mix.segments.reduce((acc, s) => acc + s.value, 0);
+    const sumPct = mix.segments.reduce((acc, s) => acc + s.percent, 0);
+    expect(sumValues).toBe(mix.totalTokens);
+    expect(sumPct).toBeCloseTo(100, 5);
+    expect(mix.segments[1]).toMatchObject({
+      id: "cacheRead",
+      compact: "1.2B",
+      exactTitle: "1,200,000,000",
+      percentLabel: "60.0%",
+    });
+  });
+
+  test("parseStatsRangeParam and buildStatsUrl handle valid and fallback ranges", () => {
+    expect(parseStatsRangeParam("7d")).toBe("7d");
+    expect(parseStatsRangeParam("30d")).toBe("30d");
+    expect(parseStatsRangeParam("90d")).toBe("90d");
+    expect(parseStatsRangeParam("365d")).toBe("365d");
+    expect(parseStatsRangeParam("invalid")).toBe("30d");
+    expect(parseStatsRangeParam(null)).toBe("30d");
+    expect(buildStatsUrl("90d")).toBe("https://telemetry.opencodex.me/v1/stats?range=90d");
+  });
+
+  test("computeHeatmapGrade and buildHeatmapCalendar grade and lay out 365 days into 52/53 weeks", () => {
+    expect(computeHeatmapGrade(0, 400)).toBe(0);
+    expect(computeHeatmapGrade(50, 0)).toBe(0);
+    expect(computeHeatmapGrade(1, 400)).toBe(1);
+    expect(computeHeatmapGrade(99, 400)).toBe(1);
+    expect(computeHeatmapGrade(100, 400)).toBe(2);
+    expect(computeHeatmapGrade(199, 400)).toBe(2);
+    expect(computeHeatmapGrade(200, 400)).toBe(3);
+    expect(computeHeatmapGrade(299, 400)).toBe(3);
+    expect(computeHeatmapGrade(300, 400)).toBe(4);
+    expect(computeHeatmapGrade(400, 400)).toBe(4);
+
+    for (const grade of [0, 1, 2, 3, 4] as const) {
+      expect(getHeatmapGradeColor("light", grade)).toBe(HEATMAP_GRADE_COLORS.light[grade]);
+      expect(getHeatmapGradeColor("dark", grade)).toBe(HEATMAP_GRADE_COLORS.dark[grade]);
+    }
+
+    const fixture = makeFixtureStats();
+    const calendar = buildHeatmapCalendar(fixture.heatmap);
+    expect(calendar.weekCount).toBeGreaterThanOrEqual(52);
+    expect(calendar.weekCount).toBeLessThanOrEqual(54);
+    expect(calendar.cells.length).toBe(calendar.weekCount * 7);
+    expect(calendar.startDate).toBe("2025-11-09");
+    expect(calendar.endDate).toBe("2026-11-08");
+    expect(calendar.maxActiveInstalls).toBe(400);
+    expect(calendar.peakDay).toEqual({ date: "2026-11-08", activeInstalls: 400 });
+    expect(calendar.activeDays).toBeGreaterThan(70);
+    expect(calendar.monthMarkers.length).toBeGreaterThanOrEqual(10);
+
+    const selectable = calendar.cells.filter((c) => c.selectable);
+    expect(selectable.length).toBe(365);
+    const peakCell = selectable.find((c) => c.date === "2026-11-08")!;
+    expect(peakCell.grade).toBe(4);
+    expect(formatHeatmapCellAriaLabel(peakCell, "en-US")).toBe(
+      "2026-11-08: 400 active installs (grade 4)",
+    );
+
+    // Keyboard navigation across selectable days
+    expect(navigateHeatmapDate(calendar.cells, "2026-11-08", "Home")).toBe("2025-11-09");
+    expect(navigateHeatmapDate(calendar.cells, "2025-11-09", "End")).toBe("2026-11-08");
+    expect(navigateHeatmapDate(calendar.cells, "2026-11-08", "ArrowUp")).toBe("2026-11-07");
+    expect(navigateHeatmapDate(calendar.cells, "2026-11-08", "ArrowLeft")).toBe("2026-11-01");
+    expect(navigateHeatmapDate(calendar.cells, "2025-11-09", "ArrowDown")).toBe("2025-11-10");
+  });
+
+  test("buildDailyProviderChart, share tables, install tables, and reliability summary bucket fixture data", () => {
+    const fixture = makeFixtureStats();
+    const chartTokens = buildDailyProviderChart(
+      fixture.dailyByProvider,
+      fixture.daily,
+      "tokens",
+      2,
+    );
+    expect(chartTokens.days).toEqual(["2026-11-06", "2026-11-07", "2026-11-08"]);
+    // Top 2 providers ("anthropic", "openai") plus folded "other" ("google")
+    expect(chartTokens.series.map((s) => s.providerKind)).toEqual([
+      "anthropic",
+      "openai",
+      "other",
+    ]);
+    expect(chartTokens.series[0]?.values).toEqual([38_000_000, 46_000_000, 60_000_000]);
+    expect(chartTokens.series[2]?.values).toEqual([10_000_000, 12_000_000, 18_000_000]);
+
+    const providerRows = buildProviderShareRows(fixture.providers);
+    expect(providerRows[0]).toMatchObject({
+      key: "anthropic",
+      requestsCompact: "640.0K",
+      tokensCompact: "1.1B",
+      tokenShareLabel: "55.0%",
+    });
+
+    const modelRows = buildModelShareRows(fixture.models);
+    expect(modelRows[0]).toMatchObject({
+      key: "claude-sonnet",
+      tokensCompact: "900.0M",
+      tokenShareLabel: "45.0%",
+    });
+
+    const versionRows = buildVersionRows(fixture.versions);
+    expect(versionRows[0]).toMatchObject({
+      key: "2.99.0",
+      label: "v2.99.0",
+      installsCompact: "3.1K",
+      newInstallsCompact: "420",
+    });
+
+    const platformRows = buildPlatformRows(fixture.platforms);
+    expect(platformRows[0]).toMatchObject({
+      key: "darwin/arm64",
+      installsCompact: "2.6K",
+    });
+
+    const channelRows = buildChannelRows(fixture.channels);
+    expect(channelRows[0]).toMatchObject({
+      key: "npm-global",
+      installsCompact: "2.4K",
+      newInstallsCompact: "310",
+    });
+
+    const reliability = buildReliabilitySummary(fixture.outcomes, fixture.errors);
+    expect(reliability.totalRequests).toBe(1_250_000);
+    expect(reliability.completedRatioLabel).toBe("96.8%");
+    expect(reliability.totalErrors).toBe(12_500);
+    expect(reliability.errors[0]).toMatchObject({
+      cause: "rate-limit",
+      compact: "6.2K",
+      shareLabel: "49.6%",
+    });
+  });
+
+  test("classifyStatsResponse and parseDownloadsPayload handle ready, empty, error, and download fallbacks", () => {
+    const fixture = makeFixtureStats();
+    expect(isValidTelemetryStatsV1(fixture)).toBe(true);
+    expect(isStatsSnapshotEmpty(fixture)).toBe(false);
+
+    const ready = classifyStatsResponse({ ok: true, status: 200, body: fixture });
+    expect(ready.state).toBe("ready");
+    expect(ready.reason).toBe("ok");
+
+    // Not deployed yet (HTTP 404 / 503) -> explicit empty state
+    const notDeployed = classifyStatsResponse({ ok: false, status: 404, body: null });
+    expect(notDeployed).toEqual({
+      state: "empty",
+      stats: null,
+      reason: "collector-not-deployed",
+      detail: "HTTP 404",
+    });
+
+    // Zeroed stats snapshot -> explicit empty state
+    const emptySnapshot = makeFixtureStats({
+      totals: {
+        activeInstalls: 0,
+        newInstalls: 0,
+        activeMinutes: 0,
+        requests: 0,
+        tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+      },
+      heatmap: [{ day: "2026-11-08", activeInstalls: 0 }],
+    });
+    expect(classifyStatsResponse({ ok: true, status: 200, body: emptySnapshot })).toMatchObject({
+      state: "empty",
+      reason: "no-reports-yet",
+    });
+
+    // Server error / network error / invalid schema -> explicit error state
+    expect(classifyStatsResponse({ ok: false, status: 500, body: {} })).toMatchObject({
+      state: "error",
+      reason: "http-error",
+    });
+    expect(
+      classifyStatsResponse({ networkError: true, errorMessage: "Failed to fetch" }),
+    ).toMatchObject({
+      state: "error",
+      reason: "network-error",
+      detail: "Failed to fetch",
+    });
+    expect(
+      classifyStatsResponse({ ok: true, status: 200, body: { schemaVersion: 999 } }),
+    ).toMatchObject({
+      state: "error",
+      reason: "invalid-payload",
+    });
+
+    // Downloads parser with live-shaped payloads and graceful null fallback
+    const dl = parseDownloadsPayload({
+      npmWeekly: { downloads: 18_420 },
+      npmMonthly: { downloads: 74_900 },
+      npmYearly: { downloads: 612_300 },
+      githubReleases: [
+        {
+          tag_name: "v2.99.0",
+          draft: false,
+          assets: [{ download_count: 1_200 }, { download_count: 850 }],
+        },
+        {
+          tag_name: "v2.98.0",
+          draft: false,
+          assets: [{ download_count: 3_400 }],
+        },
+        {
+          tag_name: "v3.0.0-draft",
+          draft: true,
+          assets: [{ download_count: 99_999 }],
+        },
+      ],
+    });
+    expect(dl).toEqual({
+      npmWeekly: 18_420,
+      npmMonthly: 74_900,
+      npmYearly: 612_300,
+      githubTotalDownloads: 5_450,
+      githubLatestTag: "v2.99.0",
+      githubLatestDownloads: 2_050,
+      githubReleaseCount: 2,
+    });
+
+    expect(parseDownloadsPayload({})).toEqual({
+      npmWeekly: null,
+      npmMonthly: null,
+      npmYearly: null,
+      githubTotalDownloads: null,
+      githubLatestTag: null,
+      githubLatestDownloads: null,
+      githubReleaseCount: 0,
+    });
+  });
+
+  test("all 8 site locales carry complete dashboard copy and component markup contains no secrets", () => {
+    expect(TELEMETRY_DASHBOARD_LOCALES).toEqual([
+      "en",
+      "fr",
+      "ko",
+      "zh-cn",
+      "zh-tw",
+      "ru",
+      "ja",
+      "tr",
+    ]);
+    const enKeys = Object.keys(TELEMETRY_DASHBOARD_STRINGS.en).sort();
+    for (const locale of TELEMETRY_DASHBOARD_LOCALES) {
+      const copy = getTelemetryDashboardCopy(locale);
+      expect(Object.keys(copy).sort()).toEqual(enKeys);
+      for (const [k, v] of Object.entries(copy)) {
+        expect(typeof v, `${locale}.${k}`).toBe("string");
+        expect(v.trim().length, `${locale}.${k} non-empty`).toBeGreaterThan(0);
+      }
+    }
+    expect(resolveTelemetryDashboardLocale("KO")).toBe("ko");
+    expect(resolveTelemetryDashboardLocale("unknown")).toBe("en");
+
+    const astroSource = readFileSync(
+      repoPath("docs-site/src/components/TelemetryDashboard.astro"),
+      "utf8",
+    );
+    expect(astroSource).toContain('data-state-panel="loading"');
+    expect(astroSource).toContain('data-state-panel="empty"');
+    expect(astroSource).toContain('data-state-panel="error"');
+    expect(astroSource).toContain("junhoyeo/tokscale");
+
+    const helperDir = repoPath("docs-site/src/components/telemetry-dashboard");
+    const scannedFiles = [
+      repoPath("docs-site/src/content/docs/dashboard.mdx"),
+      repoPath("docs-site/src/components/TelemetryDashboard.astro"),
+      repoPath("docs-site/src/data/telemetry-dashboard-i18n.ts"),
+      ...readdirSync(helperDir).map((name) => repoPath("docs-site/src/components/telemetry-dashboard", name)),
+    ];
+    const secretPattern = /(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|AIza[0-9A-Za-z-_]{35}|Bearer\s+[A-Za-z0-9._-]{20,})/;
+    for (const file of scannedFiles) {
+      const text = readFileSync(file, "utf8");
+      expect(secretPattern.test(text), `secret pattern in ${file}`).toBe(false);
+    }
+  });
+});

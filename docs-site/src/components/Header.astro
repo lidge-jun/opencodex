@@ -47,6 +47,7 @@ const fr = {
 	'Architecture': 'Architecture',
 	'Proxy API Formats': 'Formats de l’API proxy',
 	'Management API': 'API de gestion',
+	'Dashboard': 'Tableau de bord',
 	'Contributing': 'Contribuer',
 	'Main': 'Navigation principale',
 	'Select language': 'Choisir la langue',
@@ -145,6 +146,11 @@ const groups: NavGroup[] = [
 	},
 ];
 
+const dashboard: NavLink = {
+	label: t('Dashboard', '대시보드', '仪表盘', 'Дашборд', 'ダッシュボード', '儀表板', 'Panel'),
+	href: `${prefix}dashboard/`,
+};
+
 const contributing: NavLink = {
 	label: t('Contributing', '기여하기', '贡献', 'Участие в проекте', 'コントリビュート', '貢獻', 'Katkıda Bulunma'),
 	href: `${prefix}contributing/`,
@@ -178,6 +184,9 @@ const contributing: NavLink = {
 					</li>
 				))
 			}
+			<li class="nav-item">
+				<a class="nav-link" href={dashboard.href}>{dashboard.label}</a>
+			</li>
 			<li class="nav-item">
 				<a class="nav-link" href={contributing.href}>{contributing.label}</a>
 			</li>
@@ -280,6 +289,7 @@ const contributing: NavLink = {
 						</ul>
 					</div>
 				))}
+				<a class="lp-menu-contrib" href={dashboard.href}>{dashboard.label}</a>
 				<a class="lp-menu-contrib" href={contributing.href}>{contributing.label}</a>
 			</div>
 		</div>
