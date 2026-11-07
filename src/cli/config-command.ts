@@ -9,7 +9,6 @@ import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
 import type { ServiceApiTokenState } from "../lib/service-secrets";
 import { redactUrlForLog } from "../lib/redact";
-import { isAgentDriven } from "./agent-driven";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -336,11 +335,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
         const current = readCliConfigForMutation();
-        const agentDriven = isAgentDriven();
         const rawInput = loadInput(path);
-        if (agentDriven && rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
+        if (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
           delete (rawInput as Record<string, unknown>).telemetry;
-          console.warn("Note: dropped telemetry block during agent-driven config import; use `ocx telemetry` to manage telemetry consent.");
+          console.warn("Note: ignored telemetry block during config import; use `ocx telemetry` to manage telemetry consent.");
         }
         const imported = validate(rawInput);
         withConfigMutationLockSync(() => {
@@ -349,13 +347,11 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
             || JSON.stringify(imported.client) !== JSON.stringify(client.value))) {
             throw new Error("config import refused: disconnect the active client before replacing its connection");
           }
-          if (agentDriven) {
-            const persistedTelemetry = readConfigDiagnostics({ passive: true }).config.telemetry ?? current.telemetry;
-            if (persistedTelemetry !== undefined) {
-              imported.telemetry = structuredClone(persistedTelemetry);
-            } else {
-              delete imported.telemetry;
-            }
+          const persistedTelemetry = readConfigDiagnostics({ passive: true }).config.telemetry ?? current.telemetry;
+          if (persistedTelemetry !== undefined) {
+            imported.telemetry = structuredClone(persistedTelemetry);
+          } else {
+            delete imported.telemetry;
           }
           saveConfig(imported);
         });

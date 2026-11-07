@@ -30,6 +30,19 @@ const USAGE = `Usage:
 export const TELEMETRY_DEFERRAL_FILE = ".telemetry-deferred";
 const DEFERRAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+export const TELEMETRY_CLI_DISCLOSURE_LINES = Object.freeze([
+  "  Anonymous daily usage telemetry:",
+  "  • Sent once per day to telemetry.opencodex.me: version, OS/arch, install channel, provider kind, coarse model family, active minutes, and request/token/error counts.",
+  "  • Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text.",
+  "  • Public aggregates: project-wide totals are published at opencodex.me/dashboard.",
+  "  • See the exact payload: ocx telemetry status --json",
+  "  • Turn off anytime: ocx telemetry disable, OCX_TELEMETRY=0, DO_NOT_TRACK=1, or the Proxy details toggle in the dashboard.",
+]);
+
+export function printTelemetryDisclosure(): void {
+  console.log(TELEMETRY_CLI_DISCLOSURE_LINES.join("\n"));
+}
+
 export function isTelemetryDeferralCurrent(record: string | null, version: string, now: number): boolean {
   if (!record) return false;
   const match = /^(\S+)\s+(\S+)\s*$/.exec(record.trim());
@@ -52,10 +65,18 @@ export function setTelemetryPromptDepsForTests(deps: TelemetryPromptTestDeps | n
   promptDepsForTests = deps;
 }
 
+function isInteractiveTty(): boolean {
+  try {
+    return promptDepsForTests?.isTty ? promptDepsForTests.isTty() : Boolean(isatty(0) && isatty(1));
+  } catch {
+    return false;
+  }
+}
+
 async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise<void> {
   const nowIso = new Date().toISOString();
   const dir = getConfigDir();
-  await withConfigDirHardeningSettled(dir, () =>
+  const outcome = await withConfigDirHardeningSettled(dir, () =>
     mutatePersistedConfig(fresh => {
       const prev = fresh.telemetry;
       const next: OcxTelemetryConfig = {
@@ -68,6 +89,11 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
       return { changed, value: next };
     }),
   );
+  if (outcome.status === "unavailable") {
+    throw new Error(
+      `Cannot update telemetry configuration: config.json is ${outcome.reason}. Fix or restore config.json before retrying.`,
+    );
+  }
   if (decision === "declined") {
     deleteTelemetryInstallId(dir);
   }
@@ -85,12 +111,7 @@ export async function maybeShowTelemetryPrompt(): Promise<void> {
     if (status.envOverride !== null || status.decision !== null || status.noticeShownAt !== null) {
       return;
     }
-    let isTty = false;
-    try {
-      isTty = promptDepsForTests?.isTty ? promptDepsForTests.isTty() : isatty(0) && isatty(1);
-    } catch {
-      /* best-effort */
-    }
+    const isTty = isInteractiveTty();
     const dir = getConfigDir();
     if (isAgentDriven() || !isTty || Boolean(process.env.OCX_SERVICE)) {
       const deferralPath = join(dir, TELEMETRY_DEFERRAL_FILE);
@@ -113,6 +134,7 @@ export async function maybeShowTelemetryPrompt(): Promise<void> {
       } catch { /* best-effort */ }
       return;
     }
+    printTelemetryDisclosure();
     const ask = promptDepsForTests?.interactiveConfirm ?? interactiveConfirm;
     const yes = await ask({
       question: "\n  Share anonymous usage statistics? [Y/n]",
@@ -131,7 +153,10 @@ function formatStatusLines(snapshot: TelemetryStatusSnapshot): string[] {
     ...(snapshot.envOverride ? [`Environment override: ${snapshot.envOverride}`] : []),
     `Install channel: ${snapshot.installChannel}`,
     `Last sent day: ${snapshot.lastSentDay ?? "never"}`,
-    `Preview (${snapshot.preview.day}):`,
+    `Preview eligible: ${snapshot.previewEligible ? "yes" : "no"}`,
+    snapshot.previewEligible
+      ? `Preview (${snapshot.preview.day}, next eligible send):`
+      : `Preview (${snapshot.preview.day}, sample only — not eligible to send):`,
     JSON.stringify(snapshot.preview, null, 2),
   ];
 }
@@ -149,15 +174,29 @@ export async function handleTelemetryCommand(argv: string[], deps: RuntimeApiDep
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const sub = (args.shift() ?? "status").toLowerCase();
-  if (sub === "enable" && isAgentDriven()) {
-    const error = {
-      ok: false,
-      code: "agent_consent_required",
-      error: "Refused: telemetry consent must be enabled by a human user in their own terminal or dashboard.",
-    };
-    if (wantsJson) console.log(JSON.stringify(error, null, 2));
-    else console.error(`${error.code}: ${error.error}`);
-    return 1;
+  if (sub === "enable") {
+    if (isAgentDriven()) {
+      const error = {
+        ok: false,
+        code: "agent_consent_required",
+        error:
+          "Refused: telemetry consent must be enabled by a human user in their own interactive terminal or in the dashboard (Proxy details).",
+      };
+      if (wantsJson) console.log(JSON.stringify(error, null, 2));
+      else console.error(`${error.code}: ${error.error}`);
+      return 1;
+    }
+    if (Boolean(process.env.OCX_SERVICE) || !isInteractiveTty()) {
+      const error = {
+        ok: false,
+        code: "tty_required",
+        error:
+          "Refused: 'ocx telemetry enable' requires an interactive human terminal (TTY stdin and stdout, not OCX_SERVICE). Enable telemetry in an interactive terminal or in the dashboard (Proxy details).",
+      };
+      if (wantsJson) console.log(JSON.stringify(error, null, 2));
+      else console.error(`${error.code}: ${error.error}`);
+      return 1;
+    }
   }
   return runCliAction(async () => {
     if (args.includes("--json")) {
@@ -171,6 +210,15 @@ export async function handleTelemetryCommand(argv: string[], deps: RuntimeApiDep
     }
     if (sub === "enable") {
       rejectArgs(args, USAGE);
+      printTelemetryDisclosure();
+      const ask = promptDepsForTests?.interactiveConfirm ?? interactiveConfirm;
+      const yes = await ask({
+        question: "\n  Share anonymous usage statistics? [Y/n]",
+        defaultYes: true,
+      });
+      if (!yes) {
+        throw new Error("Telemetry enable cancelled: confirmation was declined.");
+      }
       await persistTelemetryDecision("accepted");
       const snapshot = await buildTelemetryStatusSnapshot(readConfigDiagnostics({ passive: true }).config);
       printData({ ok: true, ...snapshot }, wantsJson, ["Anonymous telemetry enabled."]);

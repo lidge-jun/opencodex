@@ -8,7 +8,7 @@
 
 export const TELEMETRY_SCHEMA_VERSION = 1 as const;
 export const TELEMETRY_MAX_MODELS = 64;
-export const TELEMETRY_VERSION_RE = /^\d+\.\d+\.\d+(-preview\.\d+)?$/;
+export const TELEMETRY_VERSION_RE = /^\d+\.\d+\.\d+(-preview\.\d{8}(\.\d+)?)?$/;
 
 export const PROVIDER_KINDS = Object.freeze([
   "openai",

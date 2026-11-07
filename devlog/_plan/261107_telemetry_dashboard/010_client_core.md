@@ -21,7 +21,7 @@ client cannot emit a key or value the collector rejects and the two cannot drift
 - `MODEL_FAMILIES` (closed prefix buckets): gpt-6, gpt-5, gpt-4, o-series, codex, claude-opus,
   claude-sonnet, claude-haiku, gemini-3, gemini-2, grok, deepseek, qwen, kimi, glm, minimax, mistral,
   llama, other.
-- `version` must match `^\d+\.\d+\.\d+(-preview\.\d+)?$` (no build metadata).
+- `version` must match `^\d+\.\d+\.\d+(-preview\.\d{8}(\.\d+)?)?$` (no build metadata).
 
 ## State model
 
