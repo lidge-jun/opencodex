@@ -79,18 +79,22 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // A timed-out case never reaches its finally; its live server would fail every later start.
-  await stopLeftoverServers();
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
-  resetProviderRequestPacingForTest();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  globalThis.fetch = originalFetch;
-  if (testDir) removeTreeWithRetry(testDir);
-  expect(webSocketGuard?.restore() ?? []).toEqual([]);
+  const refusedDials = webSocketGuard?.restore() ?? [];
+  try {
+    // A timed-out case never reaches its finally; its live server would fail every later start.
+    await stopLeftoverServers();
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    resetProviderRequestPacingForTest();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    globalThis.fetch = originalFetch;
+    if (testDir) removeTreeWithRetry(testDir);
+  } finally {
+    expect(refusedDials).toEqual([]);
+  }
 });
 
 function mockChatUpstream() {
@@ -2171,7 +2175,6 @@ test("chat-native skips optional main enrichment while routed work survives drai
     await server.stop(true);
     saveConfig({
       port: 0,
-      openaiProviderTierVersion: 2,
       defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
       providers: {
         openai: {
