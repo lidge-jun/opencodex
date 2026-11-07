@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
 import { repoPath } from "../helpers/repo-root";
 import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
 import { resetWorkflowBudgetsForTest, workflowBudgetSnapshot, listWorkflowBudgetEvents, WORKFLOW_LOCAL_REFUSAL_HEADER } from "../../src/lib/workflow-budget";
@@ -220,18 +221,101 @@ test("an unpaced injection continuation preserves a known local refusal", async 
 // The continuation hook is only as strong as the legs that forward it. Every native-capable
 // executor in the passthrough path must pass onContinuationDispatch: a recovery leg that
 // rebuilds the native socket without it would let a successor bypass send-count and spend
-// admission. The HTTP-only ambiguous-replacement executor is intentionally absent -- a
-// replacement that cannot open a WebSocket exchange can never dispatch a native frame.
+// admission. The HTTP-only ambiguous-replacement executor carries no nativeControl slot at
+// all, so it is excluded structurally rather than by name. The oracle is a token scanner,
+// not text matching, so formatting, quoted keys and newly added legs are covered.
 test("every native-capable passthrough executor routes continuations through admission", () => {
-  const source = readFileSync(repoPath("src/server/responses/passthrough-dispatch.ts"), "utf8");
-  const legs = source.split("providerFetch(").slice(1).map(leg => {
-    const end = leg.indexOf("route.provider.authMode");
-    return leg.slice(0, end === -1 ? 2000 : end);
-  });
-  const nativeCapable = legs.filter(leg => leg.includes("nativeControl:"));
-  expect(nativeCapable).toHaveLength(5);
-  for (const leg of nativeCapable) expect(leg).toContain("onContinuationDispatch");
+  const legs = passthroughExecutorOptions(readFileSync(repoPath("src/server/responses/passthrough-dispatch.ts"), "utf8"))
+    .filter(options => options.has("nativeControl"));
+  expect(legs.length).toBeGreaterThan(0);
+  for (const options of legs) expect(options.has("onContinuationDispatch")).toBe(true);
+
+  // Oracle sanity on miniature sources: quoted, spaced and shorthand keys all register, but
+  // a hook name that only appears in a property VALUE does not count as the option itself.
+  for (const source of [
+    "providerFetch(a, b, { nativeControl: c, onContinuationDispatch })",
+    'providerFetch(a, b, {\n  nativeControl: c,\n  "onContinuationDispatch": fn,\n})',
+    "providerFetch(a, b, { onContinuationDispatch: () => {}, nativeControl: c })",
+    'const label = `value:${{ nested: `n:${1}` }.nested}`; /** `comment` */ providerFetch(a, b, { nativeControl: c, onContinuationDispatch })',
+  ]) {
+    const options = passthroughExecutorOptions(source).find(set => set.has("nativeControl"))!;
+    expect(options.has("onContinuationDispatch")).toBe(true);
+  }
+  for (const source of [
+    "providerFetch(a, b, { nativeControl: cond ? onContinuationDispatch : other })",
+    "providerFetch(a, b, { nativeControl: wrap(onContinuationDispatch) })",
+    'providerFetch(a, b, { nativeControl: c, label: "onContinuationDispatch" })',
+  ]) {
+    const options = passthroughExecutorOptions(source).find(set => set.has("nativeControl"))!;
+    expect(options.has("onContinuationDispatch")).toBe(false);
+  }
 });
+
+/**
+ * Direct property names of every object-literal argument passed to a providerFetch call,
+ * token-scanned so only real key positions count: a name is a property only at the start
+ * of an entry (after the opening brace or a same-level comma), never inside a value.
+ */
+function passthroughExecutorOptions(source: string): Set<string>[] {
+  const scanner = createScanner(true, LanguageVariant.Standard, source);
+  const tokens: { kind: SyntaxKind; text: string }[] = [];
+  let braces = 0;
+  const templates: number[] = [];
+  for (;;) {
+    let kind = scanner.scan();
+    // The scanner needs parser context to resume a template after its substitution.
+    // Without this rescan, a later backtick can swallow otherwise executable calls.
+    if (kind === SyntaxKind.CloseBraceToken && templates.at(-1) === braces) {
+      kind = scanner.reScanTemplateToken(false);
+      if (kind === SyntaxKind.TemplateTail) templates.pop();
+    } else if (kind === SyntaxKind.TemplateHead) templates.push(braces);
+    else if (kind === SyntaxKind.OpenBraceToken) braces++;
+    else if (kind === SyntaxKind.CloseBraceToken) braces--;
+    tokens.push({ kind, text: scanner.getTokenText() });
+    if (kind === SyntaxKind.EndOfFile) break;
+  }
+  const followers = new Set([SyntaxKind.ColonToken, SyntaxKind.CommaToken, SyntaxKind.CloseBraceToken, SyntaxKind.OpenParenToken]);
+  const optionSets: Set<string>[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i]!.kind !== SyntaxKind.Identifier || tokens[i]!.text !== "providerFetch") continue;
+    if (tokens[i - 1]?.kind === SyntaxKind.DotToken || tokens[i + 1]?.kind !== SyntaxKind.OpenParenToken) continue;
+    let depth = 1, argStart = true, j = i + 2;
+    while (depth > 0 && j < tokens.length) {
+      const kind = tokens[j]!.kind;
+      if (depth === 1 && argStart && kind === SyntaxKind.OpenBraceToken) {
+        const names = new Set<string>();
+        let braces = 1, calls = 0, propStart = true;
+        j++;
+        while (braces > 0 && j < tokens.length) {
+          const inner = tokens[j]!;
+          if (inner.kind === SyntaxKind.OpenBraceToken) { braces++; propStart = false; j++; continue; }
+          if (inner.kind === SyntaxKind.CloseBraceToken) { braces--; propStart = false; j++; continue; }
+          if (inner.kind === SyntaxKind.OpenParenToken || inner.kind === SyntaxKind.OpenBracketToken) { calls++; propStart = false; j++; continue; }
+          if (inner.kind === SyntaxKind.CloseParenToken || inner.kind === SyntaxKind.CloseBracketToken) { calls--; propStart = false; j++; continue; }
+          if (braces === 1 && calls === 0) {
+            if (inner.kind === SyntaxKind.CommaToken) { propStart = true; j++; continue; }
+            if (propStart && (inner.kind === SyntaxKind.Identifier || inner.kind === SyntaxKind.StringLiteral)
+              && followers.has(tokens[j + 1]!.kind)) {
+              names.add(inner.text.replace(/^["']|["']$/g, ""));
+            }
+            propStart = false;
+          }
+          j++;
+        }
+        optionSets.push(names);
+        argStart = false;
+        continue;
+      }
+      if (kind === SyntaxKind.OpenParenToken || kind === SyntaxKind.OpenBracketToken || kind === SyntaxKind.OpenBraceToken) depth++;
+      else if (kind === SyntaxKind.CloseParenToken || kind === SyntaxKind.CloseBracketToken || kind === SyntaxKind.CloseBraceToken) depth--;
+      else if (depth === 1 && kind === SyntaxKind.CommaToken) argStart = true;
+      else if (depth === 1) argStart = false;
+      j++;
+    }
+    i = j;
+  }
+  return optionSets;
+}
 
 // A saved-result continuation is a new inference priced on the frame actually leaving:
 // the reconstructed input and the successor's own output ceiling. The opening request's
