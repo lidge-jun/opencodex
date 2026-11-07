@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -8,6 +9,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { classifySyncResult, runHomeFanout } from "../../src/cli/sync-fanout";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { homeLinkChildParity } from "../../src/link/child-parity";
+import { childArtifactFilename, hostChildTargetTriple } from "../../src/link/child-binary-source";
 import { codexSettingsDigest, projectHomeCodexSettings } from "../../src/link/codex-settings";
 import { linkStorePath } from "../../src/link/paths";
 import { LINK_RELAY_SESSION_HEADER } from "../../src/link/relay-auth";
@@ -470,7 +472,22 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
   }, 30_000);
 
   test("streams verified ocx-child binary onto a bare Child host over SSH stdin, relays requests, and removes the planted binary on DELETE --purge", async () => {
-    findOrBuildOcxChildBinary();
+    const builtBinary = findOrBuildOcxChildBinary();
+    const hostTriple = hostChildTargetTriple();
+    if (!hostTriple) return;
+    const stagedBinDir = join(scratch, "staged-child-bin");
+    mkdirSync(stagedBinDir, { recursive: true, mode: 0o700 });
+    chmodSync(stagedBinDir, 0o700);
+    const artifactName = childArtifactFilename(hostTriple);
+    const stagedBinPath = join(stagedBinDir, artifactName);
+    copyFileSync(builtBinary, stagedBinPath);
+    chmodSync(stagedBinPath, 0o700);
+    const stagedSha = createHash("sha256").update(readFileSync(stagedBinPath)).digest("hex");
+    const sumsPath = join(stagedBinDir, "SHA256SUMS");
+    writeFileSync(sumsPath, `${stagedSha}  ${artifactName}\n`, { mode: 0o600 });
+    chmodSync(sumsPath, 0o600);
+    const prevBinDir = process.env.OPENCODEX_CHILD_BIN_DIR;
+    process.env.OPENCODEX_CHILD_BIN_DIR = stagedBinDir;
     const childUserHome = join(scratch, "bare-child-home");
     const childOcxHome = join(childUserHome, ".opencodex");
     const childCodexHome = join(childUserHome, ".codex");
@@ -633,6 +650,8 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
       expect(existsSync(join(childOcxHome, "child"))).toBe(false);
       expect(readFileSync(join(childCodexHome, "config.toml"), "utf8")).toBe("approval_policy = \"on-request\"\n");
     } finally {
+      if (prevBinDir === undefined) delete process.env.OPENCODEX_CHILD_BIN_DIR;
+      else process.env.OPENCODEX_CHILD_BIN_DIR = prevBinDir;
       if (existsSync(plantedPath)) await runShellAsync([plantedPath, "disconnect", "--purge"]);
       relaySessions.abortReservations();
       await homeHubLinkServer.stop(true);
