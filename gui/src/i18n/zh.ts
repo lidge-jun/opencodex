@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saveFailed": "无法保存工作流限制。",
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
+  ...shellV2Copy("zh"),
+  ...modelsV2Copy("zh"),
+  ...accountsV2Copy("zh"),
+  ...subagentsV2Copy("zh"),
+  ...usageV2Copy("zh"),
+  ...logsV2Copy("zh"),
+  ...connectV2Copy("zh"),
+  ...startupV2Copy("zh"),
+  ...proxyV2Copy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",
@@ -396,6 +414,9 @@ export const zh: Record<TKey, string> = {
   "common.remove": "移除",
   "common.loading": "加载中…",
   "common.retry": "重试",
+  "prov.affinityResetPending": "账户更改已保存，但对话路由更新尚未完成。请重试以完成更新。",
+  "prov.affinityResetComplete": "对话路由更新已完成。",
+  "prov.affinityResetRetryUnavailable": "此账户目前无法重试。请刷新账户列表，并在需要时恢复账户或重新登录。",
   "common.undo": "撤销",
   "auth.adminTokenTitle": "OpenCodex 管理员令牌 (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "账户",
@@ -480,6 +501,11 @@ export const zh: Record<TKey, string> = {
   "startup.viable": "可用",
   "startup.unhealthy": "已安装但异常",
   "startup.desktopLoginUnverified": "运行中 · 未确认登录时启动",
+  "startup.loginUnverifiedTitle": "未确认登录时启动",
+  "startup.unverified": "未确认",
+  "startup.loginUnverifiedAction": "请在 OpenCodex 菜单中检查登录时启动。 在没有系统托盘的 Linux 上，请检查 ~/.config/autostart/OpenCodex.desktop。",
+  "startup.loginDisabled": "运行中 · 登录时启动已关闭",
+  "startup.desktopRunning": "OpenCodex 桌面应用正在运行此代理。",
   "startup.conflict": "服务冲突",
   "startup.installedDisabled": "已安装但禁用",
   "startup.shimActivationPending": "已安装 · 未确认激活",
@@ -1587,7 +1613,7 @@ export const zh: Record<TKey, string> = {
   "nav.api": "API",
 "nav.codexAuth": "Codex 认证",
   "nav.codexSet": "Codex",
-  "nav.connect": "连接",
+  "nav.connect": "路由",
   "nav.usageLogs": "用量与日志",
   "nav.sectionNavigation": "分区页面",
   "codexSet.tab.multiauth": "多账号认证",
@@ -3444,7 +3470,7 @@ export const zh: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "未出现在模型目录中 — 成员能力不完整或不兼容（缺少上下文窗口/元数据，或模态交集为空）。按别名路由仍可用",
   "cws.attention.allTargetsExhausted": "所有已启用目标的额度均已用尽",
   "cws.emptyTitle": "创建第一个组合",
-  "cws.empty.createDesc": "命名虚拟模型并串联两个或多个后端。",
+  "cws.empty.createDesc": "至少添加一个目标；故障转移需要使用两个或更多目标。",
   "cws.backToAll": "返回全部组合",
   "cws.allCombos": "全部组合",
   "cws.copyModel": "复制 ID",
@@ -3843,6 +3869,7 @@ export const zh: Record<TKey, string> = {
   "models.aliasStale": "过期",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "此 Child 保存的 Remote Link 连接已丢失，或现在指向其他所有者或链接，与正在运行的 Child 不再一致。重新链接前，请停止或重启此 Child 并检查其连接。",
   "connection.linkManaged": "由 Home {home} 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.linkManagedUnnamed": "由其 Home 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.disconnect": "Disconnect from hub",

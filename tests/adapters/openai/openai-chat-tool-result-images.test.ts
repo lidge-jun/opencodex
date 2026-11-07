@@ -20,6 +20,7 @@ interface ChatPart {
   type: string;
   text?: string;
   image_url?: { url: string; detail?: string };
+  input_audio?: { data: string; format: string };
 }
 
 interface ChatMsg {
@@ -145,4 +146,40 @@ test("image-free tool results emit no carrier and an unchanged wire", () => {
   ]);
   expect(messages.some(isImageCarrier)).toBe(false);
   expect(messages.map(m => m.role)).toEqual(["user", "assistant", "tool", "user"]);
+});
+
+test("a late result keeps its text and image together after intervening conversation", () => {
+  const messages = wire([
+    user("start"), assistantWithCalls([{ id: "call_a", name: "exec" }]),
+    toolResult("call_a", "exec", "first"), user("next"),
+    toolResult("call_a", "exec", [{ type: "text", text: "late" }, { type: "image", imageUrl: IMAGE_URL }]),
+  ]);
+  assertRoundsUnbroken(messages);
+  expect(messages.map(m => m.role)).toEqual(["user", "assistant", "tool", "user", "user"]);
+  expect(messages[2]!.content).toBe("first");
+  expect(messages[4]!.content).toEqual([
+    { type: "text", text: "[ocx] additional output for tool call call_a:\nlate" },
+    { type: "image_url", image_url: { url: IMAGE_URL } },
+  ]);
+});
+
+test("late media for call A waits behind pending call B as an explicitly identified result", () => {
+  const messages = wire([
+    user("start"), assistantWithCalls([{ id: "call_a", name: "exec" }]),
+    toolResult("call_a", "exec", "first"), assistantWithCalls([{ id: "call_b", name: "wait" }]),
+    toolResult("call_a", "exec", [
+      { type: "text", text: "late" }, { type: "image", imageUrl: IMAGE_URL },
+      { type: "audio", data: "YXVkaW8=", format: "wav" },
+    ]),
+    toolResult("call_b", "wait", "done"),
+  ]);
+  assertRoundsUnbroken(messages);
+  expect(messages.map(m => m.role)).toEqual(["user", "assistant", "tool", "assistant", "tool", "user"]);
+  expect(messages[2]!.content).toBe("first");
+  expect(messages[4]!.tool_call_id).toBe("call_b");
+  expect(messages[5]!.content).toEqual([
+    { type: "text", text: "[ocx] additional output for tool call call_a:\nlate" },
+    { type: "image_url", image_url: { url: IMAGE_URL } },
+    { type: "input_audio", input_audio: { data: "YXVkaW8=", format: "wav" } },
+  ]);
 });

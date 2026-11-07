@@ -213,7 +213,7 @@ jobs:
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
       desktop: ${{ steps.scope.outputs.desktop }}
-      fast: ${{ steps.lane.outputs.fast }} # true: `test changed` replaces the four shards
+      fast: ${{ steps.lane.outputs.fast }} # true: `test changed` replaces the five shards
       native: ${{ steps.matrices.outputs.native }}
       # Matrix include lists for keyring-smoke and npm-global-smoke, built and
       # shape-checked by the same validation step as `native`.
@@ -633,7 +633,7 @@ jobs:
   # Keep role validation after the historical isolate preload and spawnSync failures
   # (#6713, #4956). Promotion requires a green full cross-platform lane=all run on
   # the exact candidate head; focused local results do not replace that proof.
-  # The suite, split by file across four Linux runners.
+  # The suite, split by file across five Linux runners.
   #
   # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
   # durations recorded in `scripts/ci/test-durations.tsv` (sorted round-robin when
@@ -649,21 +649,21 @@ jobs:
   # the same coverage in fresh Bun processes.
   #
   # Only the suite lives here. Typecheck, lint, build, and the scans run once in
-  # `gates` rather than four times — they are fixed cost, and paying it per shard
+  # `gates` rather than five times — they are fixed cost, and paying it per shard
   # would eat what the sharding saves.
   test:
-    name: test ${{ matrix.shard }}/4
+    name: test ${{ matrix.shard }}/5
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
     runs-on: ubuntu-latest
-    # A quarter of the suite. A shard that needs longer than this is wedged, not
+    # A fifth of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
     # longer runs here (see platform-windows).
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -711,7 +711,7 @@ jobs:
 
       - name: Test in fresh-process batches
         env:
-          TEST_SHARD: ${{ matrix.shard }}/4
+          TEST_SHARD: ${{ matrix.shard }}/5
         run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
   # Fast lane: import-graph tests for the diff; the batched dev dispatch is the backstop.

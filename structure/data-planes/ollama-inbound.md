@@ -29,7 +29,9 @@ key's model scope. Show returns no file, digest, template or license facts.
 
 `src/protocols/codecs/ollama.ts` validates the native body (unknown fields and options, `think`,
 `keep_alive`, non-JSON formats and remote images are 400s) and projects it to Chat; base64 images
-become Chat `image_url` data URLs with the sniffed media type. `src/server/ollama-inbound.ts` calls
+become Chat `image_url` data URLs with the sniffed media type. Chat requests accept at most 1,024
+tool calls in aggregate, and tool-call IDs and pending results are indexed so validation work stays
+linear in the request size. `src/server/ollama-inbound.ts` calls
 `handleChatCompletions` with a synthesized request carrying only the content type, caller session
 and workflow identity headers (`session_id`, `session-id`, `thread-id`, `x-session-id`,
 `x-codex-parent-thread-id`, so the workflow root's spend ceiling still applies) and the client

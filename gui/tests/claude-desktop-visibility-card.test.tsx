@@ -190,7 +190,8 @@ test("saving a new family default without applying does not claim external file 
 
 test("bulk labels disclose that matching rows beyond Show more are included", async () => {
   await mount();
-  const actions = container.querySelectorAll<HTMLButtonElement>(".claude-visibility-filters button");
+  // The provider filter is a Select (a button with role=combobox); the bulk actions are the rest.
+  const actions = container.querySelectorAll<HTMLButtonElement>(".claude-visibility-filters button:not([role=combobox])");
   expect(container.querySelectorAll(".claude-desktop-list-row")).toHaveLength(6);
   await act(async () => { actions[1]!.click(); });
   expect(container.querySelector(".claude-visibility-counts")?.textContent).toContain("0 selected");

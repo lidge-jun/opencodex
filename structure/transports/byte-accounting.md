@@ -143,6 +143,12 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
+total, measuring only the arriving fragment instead of remeasuring retained chunks.
+Each new call starts at zero; transient replacement admission, per-call limits and
+close/cancellation release remain unchanged. `tests/providers/kiro/kiro-tool-byte-accounting.test.ts`
+bounds measurement work and covers Unicode byte limits and consecutive-call reset.
+
 Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
 its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
 removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps
@@ -211,6 +217,17 @@ budget until downstream delivery. Cancellation and overflow release held events 
 the request translator budget. Each owner releases its own reservations on completion, error,
 cancellation or consumer closure; a buffer-limit failure terminates without another search.
 
+`src/server/messages-sse-error-filter.ts` keeps one confirmed first-field-error suffix in a single
+allocation capped at 1 MiB, including original-order protocol fields for a within-bound rename.
+Crossing the cap immediately drops that allocation and scans only finite framing state until the
+boundary. Ordinary fields have no prefix hold or new limit. Boundary parse/stringify uses transient
+O(1 MiB) objects, separate from the retained wire-byte cap. Cancellation, stream failure and failed
+enqueue release the suffix. This client presentation copy does not admit against TranslatorBudget:
+legacy tap/guard/rewrite bytes retain the original charges, so fixed frame growth cannot create 413.
+The final existing enqueue stage runs the filter synchronously with no extra stream queue or timer.
+`tests/claude-integration/messages-sse-guard-errors.test.ts` checks fixed growth near the turn limit;
+`tests/server/messages-sse-error-lifecycle.test.ts` covers teardown and ordinary events above 32 MiB.
+
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input plus a three-character delimiter prefix and counts consumed blocks rather than
 remaining suffixes. CR, LF and CRLF share partial-event, injection/drop and EOF behavior.
@@ -237,6 +254,10 @@ CR dispatches without awaiting EOF. A later LF extends that delimiter: byte deli
 framing-only continuation, excluded from event-count limits and the next event's byte cap;
 inspection consumes it without creating an event. The text rewrite relay keeps that continuation
 outside rewrite/drop callbacks and settles injected nonfinal CR delimiters as CRLF.
+The relay counts actual client enqueues, including late LF continuations suppressed by the Messages
+filter; with no emitted chunk it keeps reading through the next event or EOF.
+`tests/responses/sse-payload-rewrite-continuation.test.ts` binds that progress across rewrite, tap
+and standalone filter delivery; endpoint coverage also preserves later event bytes.
 
 `src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
 their charge/release lifecycle while it asks a per-call progressive reader from

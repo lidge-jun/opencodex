@@ -3,37 +3,84 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { trustWindowsTempFixtureAncestry, windowsTempAncestryPreload } from "../helpers/windows-temp-ancestry";
-import { dirname, join, parse } from "node:path";
+import { dirname, isAbsolute, join, parse } from "node:path";
 import { hardenSecretDir } from "../../src/lib/windows-secret-acl";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
-import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { runCodexCliUpdatePlanInWorker } from "../../src/codex/cli-update-job-worker";
 import { withWindowsCodexCliPlanToolchain, windowsCodexCliPlanRefusalForTests } from "../../src/codex/cli-windows-plan-provenance";
-import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
-import type { ManagementContext } from "../../src/server/management/context";
+import { assertNotRealHomeUnderTest, isTestHomeGuardArmed, protectedHomeForTests } from "../../src/lib/test-home-guard";
+import { TEST_TEMP_OWNER_FILE } from "../../scripts/test-temp";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
 import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
-import { repoPath, repoRoot } from "../helpers/repo-root";
+import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { trackBackgroundWork } from "../../src/lib/background-work";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../../src/update/codex-cli-update-launch-policy.mjs";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { proveWindowsPlanJobExit } from "../helpers/windows-plan-job-proof";
+import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
 const liveWorkerRoots = new Set<string>();
+type OwnedPlanChild = { exited: Promise<number>; exitCode: number | null; kill(): unknown };
+const ownedPlanChildren = new Map<string, OwnedPlanChild>();
+let planCleanupEpoch = 0;
+function independentPlanTemp(): string {
+  const local = process.env.LOCALAPPDATA?.trim();
+  if (!local || !isAbsolute(local)) throw new Error("native temp parent unavailable");
+  const tempParent = realpathSync.native(join(local, "Temp"));
+  for (let ancestor = tempParent;;) {
+    if (existsSync(join(ancestor, TEST_TEMP_OWNER_FILE))) throw new Error("native temp is inside a test sandbox");
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  return tempParent;
+}
+async function stopOwnedPlanChild(root: string, timeoutMs = INTERNAL_DEADLINE_MS,
+  requestStop: (child: OwnedPlanChild) => unknown = child => child.kill()): Promise<boolean> {
+  const child = ownedPlanChildren.get(root);
+  if (!child) return true;
+  let killFailed = false;
+  try { if (child.exitCode === null) requestStop(child); } catch { killFailed = true; }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); });
+  const exited = child.exited.then(() => true, () => false);
+  const confirmed = await Promise.race([exited, expired]);
+  clearTimeout(timer);
+  if (!confirmed || killFailed) return false;
+  ownedPlanChildren.delete(root);
+  return true;
+}
+async function stopAllOwnedPlanChildren(): Promise<string[]> {
+  const failures: string[] = [];
+  for (const root of ownedPlanChildren.keys()) {
+    if (!await stopOwnedPlanChild(root)) failures.push("Windows plan child exit unconfirmed; fixture retained");
+  }
+  return failures;
+}
+async function cleanupPlanFixture(root: string): Promise<boolean> {
+  if (liveWorkerRoots.has(root)) return false;
+  await removeTreeAfterBackgroundWork(root);
+  return true;
+}
 afterEach(async () => {
+  planCleanupEpoch++;
+  const failures: unknown[] = (await stopAllOwnedPlanChildren()).map(message => new Error(message));
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) {
     // A test timeout does not cancel its async body. Retain fixtures until a real
     // Worker close, or external reconciliation of an unsettled CLI process tree.
-    if (liveWorkerRoots.has(root)) { roots.push(root); continue; }
-    await removeTreeAfterBackgroundWork(root);
+    try { if (!await cleanupPlanFixture(root)) roots.push(root); }
+    catch (error) { roots.push(root); failures.push(error); }
   }
-});
+  if (failures.length) throw new AggregateError(failures, "Windows plan fixture cleanup failed");
+}, SPAWN_BUDGET_MS);
 // npm's independent cmd-shim fixture; no candidate is ever executed.
 const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL',
   'CALL :find_dp0', '', 'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (',
@@ -232,47 +279,174 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
 
-native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
-  const f = fixture();
-  // A TEMP ancestry can be safe on hosted Windows. Create an actual unsupported
-  // config-root reparse point instead of inferring unsafe ACLs from the host path.
-  const ledgerTarget = join(f.root, "ledger-target"); mkdirSync(ledgerTarget);
-  symlinkSync(ledgerTarget, f.deps.configDir, "junction");
-  const deps = { inspectionDeps: f.deps,
-    resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.4", integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }),
-    scanProcesses: () => ({ kind: "observed" as const, processes: [] }) };
-  const plan = await createCodexCliUpdatePlan(deps);
-  expect(plan.planId).toMatch(/^[a-f0-9]{32}$/);
-  expect(plan).toMatchObject({ applicable: false, refusal: "windows_apply_disabled" });
+native("Windows plan fixture job close terminates its handle-bound child", () => {
+  proveWindowsPlanJobExit(false); // Real child stays alive until its own release event.
+  proveWindowsPlanJobExit(true); // Same fixture job configuration used by the child preload.
+}, SPAWN_BUDGET_MS);
 
-  const oldHome = process.env.OPENCODEX_HOME;
-  process.env.OPENCODEX_HOME = f.deps.configDir;
+native("Windows plan cleanup stops its owned child before releasing its fixture", async () => {
+  const epoch = planCleanupEpoch;
   try {
-    const request = new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ requestId: "windows-nonapplicable-plan-001", planId: plan.planId, confirmed: true }) });
-    const ctx: ManagementContext = { req: request, url: new URL(request.url),
-      config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
-      deps: {}, version: "test", principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: null,
-      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
-      syncClaudeAgentDefsBestEffort: async () => {} };
-    const response = await handleCodexCliUpdateRoutes(ctx);
-    expect(response?.status).toBe(503);
-    expect(await response?.json()).toEqual({ error: "unsafe_store" });
-    expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
-
-    let leaseAttempts = 0, installAttempts = 0;
-    const apply = await applyCodexCliUpdate(plan.planId!, { platform: "win32", inspectionDeps: f.deps,
-      acquireLease: () => { leaseAttempts += 1; return null; },
-      resolveTarget: deps.resolveTarget, scanProcesses: deps.scanProcesses,
-      install: async () => { installAttempts += 1; return { terminal: true, exitCode: 0 }; } });
-    expect(apply).toMatchObject({ outcome: "refused", reason: "windows_apply_disabled" });
-    expect(leaseAttempts).toBe(0);
-    expect(installAttempts).toBe(0);
+  const root = realpathSync.native(mkdtempSync(join(independentPlanTemp(), "ocx-plan-owned-child-")));
+  roots.push(root); liveWorkerRoots.add(root);
+  expect(isTestHomeGuardArmed()).toBe(true);
+  assertNotRealHomeUnderTest(root);
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("READY"); for await(const chunk of Bun.stdin.stream()){void chunk;}'],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  ownedPlanChildren.set(root, child);
+  const reader = child.stdout.getReader();
+  let bodyFailed = false, bodyError: unknown;
+  try {
+    let ready = ""; const decoder = new TextDecoder();
+    while (!ready.includes("\n")) {
+      const part = await reader.read();
+      if (planCleanupEpoch !== epoch) return;
+      if (part.done || ready.length > 128) throw new Error("owned-child probe readiness unavailable");
+      ready += decoder.decode(part.value, { stream: true });
+    }
+    expect(ready).toBe("READY\n");
+    expect(child.exitCode).toBeNull();
+    const beforeStop = await cleanupPlanFixture(root);
+    if (planCleanupEpoch !== epoch) return;
+    expect(beforeStop).toBe(false);
+    expect(existsSync(root)).toBe(true);
+    // If termination does not settle, the bounded cleanup must retain ownership.
+    const unconfirmed = await stopOwnedPlanChild(root, 1, () => {});
+    if (planCleanupEpoch !== epoch) return;
+    expect(unconfirmed).toBe(false);
+    expect(ownedPlanChildren.get(root)).toBe(child);
+    expect(child.exitCode).toBeNull();
+    const afterUnconfirmed = await cleanupPlanFixture(root);
+    if (planCleanupEpoch !== epoch) return;
+    expect(afterUnconfirmed).toBe(false);
+    expect(existsSync(root)).toBe(true);
+    const failures = await stopAllOwnedPlanChildren();
+    if (planCleanupEpoch !== epoch) return;
+    expect(failures).toEqual([]);
+    const exit = await child.exited;
+    if (planCleanupEpoch !== epoch) return;
+    expect(exit).not.toBeNull();
+    expect(ownedPlanChildren.has(root)).toBe(false);
+    expect(existsSync(root)).toBe(true);
+  } catch (error) {
+    bodyFailed = true; bodyError = error;
   } finally {
-    if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+    try {
+      reader.releaseLock();
+      child.stdin.end();
+      await child.exited;
+      if (planCleanupEpoch === epoch) {
+        ownedPlanChildren.delete(root);
+        liveWorkerRoots.delete(root);
+      }
+    } catch (cleanupError) {
+      if (bodyFailed) throw new AggregateError([bodyError, cleanupError], "owned-child probe and cleanup failed");
+      throw cleanupError;
+    }
   }
-});
+  if (bodyFailed) throw bodyError;
+  } catch (error) {
+    if (planCleanupEpoch === epoch) throw error;
+    console.error(`[test] owned-child probe settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}, SPAWN_BUDGET_MS);
+
+// This case owns a real Bun child, its real lifetime-probe child, and Windows ACL
+// subprocesses. It reached 5.02s locally against Bun's 5s default; Windows CI
+// already supplies 60s. The shared spawn budget bounds the same intrinsic work.
+test.skipIf(hostedWindowsQuarantine || process.platform !== "win32" || process.arch !== "x64")("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
+  const epoch = planCleanupEpoch;
+  try {
+  // The child may outlive this test and the preload sandbox after a timeout.
+  // Its fixture therefore lives outside every ownership-marked test sandbox.
+  const tempParent = independentPlanTemp();
+  const root = realpathSync.native(mkdtempSync(join(tempParent, "ocx-windows-plan-")));
+  roots.push(root);
+  // No fixture subprocess may start before ownership is registered.
+  liveWorkerRoots.add(root);
+  const f = { root, deps: { configDir: join(root, "absent-home") } };
+  expect(isTestHomeGuardArmed()).toBe(true);
+  assertNotRealHomeUnderTest(f.deps.configDir);
+  const temp = join(f.root, "tmp"), localAppData = join(f.root, "AppData", "Local");
+  for (const path of [temp, localAppData, join(f.root, "AppData", "Roaming")]) mkdirSync(path, { recursive: true });
+  const drive = parse(f.root).root.slice(0, -1);
+  const env = { ...process.env, HOME: f.root, USERPROFILE: f.root, HOMEDRIVE: drive, HOMEPATH: f.root.slice(drive.length),
+    LOCALAPPDATA: localAppData, APPDATA: join(f.root, "AppData", "Roaming"), TEMP: temp, TMP: temp, TMPDIR: temp,
+    XDG_CONFIG_HOME: join(f.root, "xdg", "config"), XDG_DATA_HOME: join(f.root, "xdg", "data"), XDG_CACHE_HOME: join(f.root, "xdg", "cache"),
+    GIT_CONFIG_GLOBAL: join(f.root, "gitconfig"), BUN_INSTALL_CACHE_DIR: join(f.root, "bun-cache"), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+    OPENCODEX_HOME: f.deps.configDir, CODEX_HOME: join(f.root, "codex"), CODEX_SQLITE_HOME: join(f.root, "codex"),
+    OCX_OWNER_REGISTRY_DIR: join(f.root, "ocx-homes"), CLAUDE_CONFIG_DIR: join(f.root, "claude"), GROK_HOME: join(f.root, "grok"),
+    OPENCODEX_ADMIN_AUTH_TOKEN: undefined, OPENCODEX_API_AUTH_TOKEN: undefined, OCX_API_TOKEN_FILE: undefined,
+    OCX_TEST_HOME_GUARD: "1", OCX_TEST_OWNED_ROOT: f.root, OCX_TEST_TEMP_PARENT: tempParent,
+    OCX_TEST_PROTECTED_HOME: protectedHomeForTests() };
+  // Register before spawning or awaiting. A failed or unsettled child retains its
+  // independently owned root; only a successful, drained child releases it.
+  const parentHome = process.env.OPENCODEX_HOME, parentAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+  const child = Bun.spawn([process.execPath, "--preload", helperPath("windows-plan-child-processes.ts"),
+    helperPath("windows-cli-plan-unsafe-case.ts")], {
+    cwd: f.root, env, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  ownedPlanChildren.set(f.root, child);
+  const errorsPromise = new Response(child.stderr).text();
+  const reader = child.stdout.getReader();
+  let readyChecked = false;
+  let readinessFailed = false, readinessError: unknown;
+  try {
+    const decoder = new TextDecoder();
+    let ready = "";
+    while (!ready.includes("\n")) {
+      const chunk = await reader.read();
+      if (planCleanupEpoch !== epoch) return;
+      if (chunk.done) throw new Error(`Windows plan child exited before readiness: ${await errorsPromise}`);
+      ready += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(ready).toBe("WINDOWS_CLI_PLAN_UNSAFE_CASE_READY\n");
+    // Exercise the actual teardown while the real child is held before its work.
+    const cleaned = await cleanupPlanFixture(f.root);
+    if (planCleanupEpoch !== epoch) return;
+    expect(cleaned).toBe(false);
+    expect(existsSync(f.root)).toBe(true);
+    expect(process.env.OPENCODEX_HOME).toBe(parentHome);
+    expect(process.env.OPENCODEX_ADMIN_AUTH_TOKEN).toBe(parentAdmin);
+    readyChecked = true;
+  } catch (error) {
+    readinessFailed = true; readinessError = error;
+  } finally {
+    try {
+      child.stdin.end();
+      if (!readyChecked) reader.releaseLock();
+    } catch (cleanupError) {
+      if (readinessFailed) throw new AggregateError([readinessError, cleanupError], "Windows plan readiness and cleanup failed");
+      throw cleanupError;
+    }
+  }
+  if (readinessFailed) throw readinessError;
+  const outputPromise = (async () => {
+    const decoder = new TextDecoder(); let output = "";
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) return output + decoder.decode();
+        output += decoder.decode(chunk.value, { stream: true });
+      }
+    } finally { reader.releaseLock(); }
+  })();
+  const [exit, output, errors] = await Promise.all([child.exited, outputPromise, errorsPromise]);
+  if (planCleanupEpoch !== epoch) {
+    console.error(`[test] timed-out Windows plan child exited with ${exit}; fixture retained`);
+    return;
+  }
+  if (exit !== 0) throw new Error(`Windows plan child failed: ${errors}`);
+  expect(output.trim()).toBe("WINDOWS_CLI_PLAN_UNSAFE_CASE_PASS");
+  ownedPlanChildren.delete(f.root);
+  liveWorkerRoots.delete(f.root);
+  } catch (error) {
+    if (planCleanupEpoch === epoch) throw error;
+    // Bun already failed the timed-out test. Preserve its independently owned
+    // root and report a late child error without throwing into the next test.
+    console.error(`[test] Windows plan fixture settled after cleanup: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}, SPAWN_BUDGET_MS);
 
 native("a published-size Windows npm backing binds; one past the shared finite limit refuses", async () => {
   const f = fixture();
@@ -320,11 +494,12 @@ native("a selected override changing during observation refuses the original pre
   expect((await inspectCodexCliInstall(f.deps)).managed).toBe(false);
 });
 
-native("npm toolchain drift after inspection refuses metadata without executing the replacement", async () => {
+test.skipIf(hostedWindowsQuarantine || process.platform !== "win32" || process.arch !== "x64")("npm toolchain drift after inspection refuses metadata without executing the replacement", async () => {
   for (const f of [fixture(), fixture(true)]) {
     let queries = 0;
     const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps, inspect: async deps => {
-      const report = await inspectCodexCliInstall(deps); expect(report.managed).toBe(true);
+      const report = await inspectCodexCliInstall(deps);
+      expect(report.managed, report.managed ? undefined : `Windows toolchain inspection refused (${f.prefix === f.toolchainPrefix ? "prefix-local" : "separate-PATH"}): ${JSON.stringify(windowsCodexCliPlanRefusalForTests(report))}`).toBe(true);
       writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"), "throw new Error('replacement');");
       return report;
     }, resolveTarget: () => { queries++; throw new Error("must not query changed toolchain"); } });

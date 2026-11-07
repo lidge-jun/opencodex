@@ -1,0 +1,735 @@
+/* ============================================================================
+   v1 -> v2 bridge
+   Repaints the v1 stylesheet with design system v2 while pages migrate to the
+   ui-v2 components. Lives in the `bridge` layer: above `legacy`, below
+   `components`/`utilities`, so a migrated component always wins.
+   Delete a rule here once nothing renders its v1 class any more.
+   ============================================================================ */
+
+/* ---- v1 tokens, re-pointed at the v2 palette ------------------------------ */
+:root {
+  --bg: var(--ocx-bg);
+  --rail: light-dark(#fafafa, #0c0c0e);
+  --surface: var(--ocx-raised);
+  --raised: var(--ocx-surface);
+  --raised-hover: var(--ocx-surface-2);
+  --border: var(--ocx-line-strong);
+  --border-soft: var(--ocx-line);
+  --hover: light-dark(rgb(9 9 11 / 0.035), rgb(255 255 255 / 0.04));
+  --text: var(--ocx-fg);
+  --muted: var(--ocx-fg-muted);
+  --faint: light-dark(#71717a, #8b8b94);
+
+  /* the accent is the inverse primary (white on dark); rings and links take the sky highlight */
+  --accent: var(--ocx-accent);
+  --accent-hover: light-dark(#3f3f46, #e4e4e7);
+  --accent-ink: var(--ocx-on-accent);
+  --accent-soft: light-dark(rgb(9 9 11 / 0.05), rgb(255 255 255 / 0.07));
+  --accent-ring: light-dark(rgb(2 132 199 / 0.6), rgb(56 189 248 / 0.65));
+
+  --green: var(--ocx-success);
+  --green-soft: var(--ocx-success-soft);
+  --red: var(--ocx-danger);
+  --red-soft: var(--ocx-danger-soft);
+  --amber: var(--ocx-warning);
+  --amber-soft: var(--ocx-warning-soft);
+  --blue: var(--ocx-highlight);
+  --blue-soft: var(--ocx-highlight-soft);
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 12px;
+
+  --font-ui: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-code: "Geist Mono Variable", "Wanted Sans Variable", ui-monospace, monospace;
+
+  --toggle-off-bg: light-dark(#d4d4d8, #52525b);
+  --toggle-on-bg: var(--ocx-accent);
+  --toggle-dot-color: light-dark(#ffffff, #09090b);
+
+  --shadow-sm: var(--ocx-shadow-sm);
+  --shadow: var(--ocx-shadow-md);
+  --glass-rail: light-dark(rgb(250 250 250 / 0.72), rgb(12 12 14 / 0.72));
+  --glass-panel: light-dark(rgb(255 255 255 / 0.86), rgb(24 24 27 / 0.86));
+}
+/* per-locale v1 stacks pinned OpenAI Sans first; v2 is one self-hosted stack */
+:root:lang(zh), :root:lang(zh-CN), :root:lang(zh-TW), :root:lang(ja), :root:lang(ko) {
+  --font-ui: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+/* ---- surfaces: borderless soft cards ------------------------------------- */
+.card,
+.panel {
+  border: 1px solid var(--ocx-line);
+  background: var(--ocx-surface);
+  border-radius: var(--radius-lg);
+}
+.panel-accent {
+  border-color: transparent;
+  background: var(--ocx-accent-soft);
+}
+
+/* ---- buttons: Aceternity primary, quiet neutrals ------------------------- */
+.btn {
+  border-radius: 0.625rem;
+  transition: background-color 0.2s, box-shadow 0.2s, color 0.2s, scale 0.15s;
+}
+.btn:active:not(:disabled) { scale: 0.97; }
+.btn-primary {
+  background: var(--ocx-accent);
+  color: var(--ocx-on-accent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ocx-accent) 88%, var(--ocx-bg));
+}
+
+/* ---- segmented controls: recessed track, raised selected pill ------------- */
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) {
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 0.625rem;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) > :is(button, .btn) {
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--ocx-fg-subtle);
+  font-weight: 500;
+  transition: color 0.2s, background-color 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s;
+}
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) > :is(button, .btn):hover {
+  color: var(--ocx-fg-muted);
+}
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) > :is(button, .btn):is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]) {
+  background: var(--ocx-raised);
+  color: var(--ocx-fg);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+
+/* The v2 SegmentedControl slides its thumb with motion. The v1 groups get the same
+   motion without a markup change: the checked option names itself the anchor, and one
+   pill per track follows whichever option holds the name. Without anchor positioning
+   the raised option above is the fallback. */
+@supports (anchor-name: --a) and (anchor-scope: --a) {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher) {
+    position: relative;
+    isolation: isolate;
+    anchor-scope: --ocx-seg;
+  }
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher)::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    position-anchor: --ocx-seg;
+    top: anchor(top);
+    bottom: anchor(bottom);
+    left: anchor(left);
+    right: anchor(right);
+    border-radius: 0.5rem;
+    background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+    box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+    transition: left 0.32s cubic-bezier(0.22, 1, 0.36, 1), right 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  /* no option checked: no anchor, so the pill must not paint at a stale place */
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher):not(:has(> :is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], [aria-current="page"])))::before {
+    display: none;
+  }
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg) > :is(button, .btn):is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]),
+  .section-switcher > .section-switcher-btn[aria-current="page"] {
+    anchor-name: --ocx-seg;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher)::before { transition: none; }
+}
+
+/* ---- page heads: the same title scale as the v2 hubs ---------------------- */
+.page-head > :is(h1, h2) {
+  font-size: 20px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+@media (max-width: 640px) {
+  .page-head > :is(h1, h2) { font-size: 18px; }
+}
+
+/* ---- page tabs: pill tabs instead of an underline ------------------------- */
+.page-tabs {
+  gap: 4px;
+  border-bottom: 0;
+  margin-bottom: 18px;
+}
+.page-tab {
+  border-bottom: 0;
+  margin-bottom: 0;
+  padding: 6px 12px;
+  border-radius: 0.625rem;
+  color: var(--ocx-fg-subtle);
+  transition: color 0.2s, background-color 0.2s;
+}
+.page-tab:hover { color: var(--ocx-fg); background: var(--ocx-surface); }
+.page-tab--active {
+  color: var(--ocx-fg);
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+
+/* ---- sidebar: a tool's navigation, not a stack of buttons ------------------------
+   Rows are 32px, 13px medium text in the muted ink with a 16px icon; hover and the
+   current page are a faint tone step, no raised plate, ring or shadow. Tier labels are
+   small and quiet, in sentence case. The foot shares the same row rhythm and sits
+   under a hairline (foundations.md, "Sidebar"). */
+.sidebar nav { gap: 1px; }
+.nav-item {
+  min-height: 32px;
+  padding: 0 8px;
+  gap: 10px;
+  border-radius: 6px;
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s, color 0.15s;
+}
+.nav-item svg { width: 16px; height: 16px; color: var(--ocx-fg-subtle); }
+.nav-item:hover { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
+.nav-item.active {
+  background: light-dark(rgb(9 9 11 / 0.07), rgb(255 255 255 / 0.08));
+  color: var(--ocx-fg);
+  font-weight: 500;
+  box-shadow: none;
+}
+.nav-item.active svg { color: var(--ocx-fg); }
+
+.nav-tier { display: flex; flex-direction: column; gap: 1px; }
+.nav-tier + .nav-tier { margin-top: 18px; }
+.nav-tier-label {
+  padding: 0 8px 4px;
+  color: var(--ocx-fg-subtle);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.app--nav-collapsed .nav-tier-label { visibility: hidden; }
+
+/* ---- menu search beside the Everyday heading ----------------------------- */
+.nav-tier-head { display: flex; align-items: center; justify-content: space-between; min-height: 24px; padding-bottom: 2px; }
+.nav-tier-head .nav-tier-label { padding-bottom: 0; }
+.nav-search-open {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 22px; padding: 0 4px 0 5px; margin-right: 2px;
+  border: 0; border-radius: 6px; background: none;
+  color: var(--ocx-fg-subtle); cursor: pointer;
+}
+.nav-search-open svg { width: 13px; height: 13px; }
+.nav-search-open:hover { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
+.nav-search-open:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.nav-search {
+  display: flex; align-items: center; gap: 6px;
+  height: 30px; margin: 0 0 4px; padding: 0 4px 0 9px;
+  border-radius: 8px; background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line-strong, var(--ocx-line));
+}
+.nav-search:focus-within { box-shadow: inset 0 0 0 1px var(--ocx-fg-subtle), 0 0 0 3px var(--accent-ring); }
+.nav-search > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--ocx-fg-subtle); }
+.nav-search .nav-search-input {
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  margin: 0; padding: 0;
+  border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent;
+  -webkit-appearance: none; appearance: none;
+  color: var(--ocx-fg); font: inherit; font-size: 13px;
+}
+.nav-search .nav-search-input:focus, .nav-search .nav-search-input:focus-visible { outline: 0; box-shadow: none; border: 0; }
+.nav-search-input::-webkit-search-cancel-button { display: none; }
+.nav-search-close {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto;
+  border: 0; border-radius: 6px; background: none; color: var(--ocx-fg-subtle); cursor: pointer;
+}
+.nav-search-close svg { width: 13px; height: 13px; }
+.nav-search-close:hover { color: var(--ocx-fg); background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); }
+.nav-search-results { display: flex; flex-direction: column; gap: 1px; }
+.nav-search-result.is-highlighted { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
+.nav-search-result .nav-item-label { flex-shrink: 0; max-width: 65%; }
+.nav-search-context { min-width: 0; margin-left: auto; padding-left: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--ocx-fg-subtle); white-space: nowrap; }
+.nav-search-empty { padding: 8px; font-size: 12.5px; color: var(--ocx-fg-subtle); }
+
+/* Row shortcuts stay out of sight until the row is hovered or focused: a quiet sidebar. */
+.nav-item-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-kbd {
+  margin-left: auto; padding: 0 4px;
+  font: 500 10.5px/16px var(--font-sans, inherit); font-variant-numeric: tabular-nums;
+  color: var(--ocx-fg-subtle); border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  opacity: 0; transition: opacity var(--motion-fast, 120ms);
+}
+.nav-item:hover .nav-kbd, .nav-item:focus-visible .nav-kbd { opacity: 1; }
+.nav-kbd--search { margin-left: 0; opacity: 1; box-shadow: none; padding: 0; }
+
+/* ---- Fine-tuning folds by default ---------------------------------------- */
+.nav-tier-toggle {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  border-radius: 6px;
+}
+.nav-tier-toggle .nav-tier-label { padding-bottom: 4px; }
+.nav-tier-toggle:hover .nav-tier-label { color: var(--ocx-fg-muted); }
+.nav-tier-toggle:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.nav-tier-chevron { width: 12px; height: 12px; margin-bottom: 4px; color: var(--ocx-fg-subtle); transition: transform var(--motion-fast, 120ms); }
+.nav-tier--folding.is-open .nav-tier-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .nav-kbd, .nav-tier-chevron { transition: none; } }
+
+/* ---- sidebar strip: wordmark with the collapse toggle beside it ----------- */
+.sidebar-top { justify-content: space-between; gap: 8px; }
+.sidebar-top .brand--strip {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 8px;
+  padding: 4px 6px 4px 2px;
+  border-radius: 0.5rem;
+}
+.sidebar-top .brand--strip .name {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.sidebar-top .brand--strip:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+/* collapsed: only the toggle floats over the main strip */
+.app--nav-collapsed .sidebar-top .brand--strip { display: none; }
+/* macOS: the traffic lights take the strip's lead, so the mark goes without its name */
+.app--macos .sidebar-top .brand--strip .name { display: none; }
+@media (min-width: 761px) {
+  /* the strip carries the brand on wide screens; the drawer head is the phone drawer's */
+  .sidebar .drawer-head { display: none; }
+  .sidebar { padding-top: calc(var(--titlebar-h, 40px) + 12px); }
+}
+
+/* ---- sidebar foot: proxy capsule, language + theme, GitHub + version ------ */
+.sidebar-foot {
+  gap: 0;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--ocx-line);
+}
+.sidebar-foot :is(.lang-toggle, .sidebar-github-link) { min-height: 32px; padding: 0 8px 0 10px; font-size: 13px; color: var(--ocx-fg-muted); }
+.sidebar-foot :is(.lang-toggle, .sidebar-github-link):hover { color: var(--ocx-fg); }
+.sidebar-foot :is(.lang-toggle, .sidebar-github-link) svg { width: 16px; height: 16px; }
+.sidebar-pref-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 10px;
+}
+/* A Codex reload, about to be fired by the proxy lever or already running: sky text with a light
+   sweep, so the one action that keeps the proxy up is noticed. Stills to plain sky for reduced motion. */
+.ocx-shine {
+  color: var(--ocx-highlight);
+  background: linear-gradient(100deg, var(--ocx-highlight) 40%, light-dark(#0ea5e9, color-mix(in oklab, var(--ocx-highlight) 35%, white)) 50%, var(--ocx-highlight) 60%) 0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ocx-shine 1.6s linear infinite;
+}
+@keyframes ocx-shine {
+  from { background-position: 100% 0; }
+  to { background-position: -150% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ocx-shine { animation: none; background: none; -webkit-text-fill-color: currentColor; }
+}
+/* Proxy lever motion. Stop is a train braking and the power going out: the row lurches forward
+   and rocks back (.ocx-halt), the status word slides in and pulls up (.ocx-brake), and the proxy's
+   light flickers out to an unlit ring (.ocx-lightout). Held at the bottom first, the light flickers
+   (.ocx-flicker) and the row dims and shudders (.ocx-dim, .ocx-tremble). Reload is a charge: a band
+   of sky light crosses the row (.ocx-sweep, looping while held) and the lever's slot glows while it
+   runs (.ocx-charge). */
+.ocx-halt { animation: ocx-halt 520ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes ocx-halt {
+  0% { transform: translateX(0); }
+  22% { transform: translateX(5px); }
+  52% { transform: translateX(-2px); }
+  78% { transform: translateX(0.75px); }
+  100% { transform: translateX(0); }
+}
+.ocx-brake { display: inline-block; animation: ocx-brake 1100ms cubic-bezier(0.12, 0.9, 0.25, 1) both; }
+@keyframes ocx-brake {
+  0% { transform: translateX(-28px); opacity: 0.15; filter: blur(2px); }
+  70% { transform: translateX(2px); opacity: 1; filter: blur(0); }
+  85% { transform: translateX(-0.75px); }
+  100% { transform: translateX(0); }
+}
+.ocx-flicker { animation: ocx-flicker 900ms steps(1, end) infinite; }
+@keyframes ocx-flicker {
+  0% { opacity: 1; }
+  12% { opacity: 0.35; }
+  18% { opacity: 1; }
+  46% { opacity: 0.2; }
+  52% { opacity: 0.85; }
+  58% { opacity: 0.4; }
+  64% { opacity: 1; }
+  100% { opacity: 1; }
+}
+.ocx-lightout { animation: ocx-lightout 1300ms linear forwards; }
+@keyframes ocx-lightout {
+  0% { opacity: 1; }
+  10% { opacity: 0.25; }
+  16% { opacity: 1; }
+  30% { opacity: 0.15; }
+  36% { opacity: 0.8; }
+  48% { opacity: 0.1; background-color: var(--ocx-danger); box-shadow: none; }
+  100% { opacity: 1; background-color: transparent; box-shadow: inset 0 0 0 1.5px var(--ocx-fg-subtle); }
+}
+.ocx-dim { opacity: 0.72; transition: opacity 240ms; }
+.ocx-sweep {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--ocx-highlight-soft) 35%, color-mix(in oklab, var(--ocx-highlight) 32%, transparent) 50%, var(--ocx-highlight-soft) 65%, transparent);
+  animation: ocx-sweep 700ms cubic-bezier(0.3, 0, 0.2, 1) forwards;
+}
+@keyframes ocx-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(240%); }
+}
+.ocx-sweep-loop { animation: ocx-sweep 1000ms cubic-bezier(0.3, 0, 0.2, 1) infinite; }
+.ocx-charge {
+  background: linear-gradient(0deg, var(--ocx-highlight-soft), color-mix(in oklab, var(--ocx-highlight) 55%, transparent) 50%, var(--ocx-highlight-soft)) 0 0 / 100% 250%;
+  animation: ocx-charge 1200ms linear infinite;
+}
+@keyframes ocx-charge {
+  from { background-position: 0 100%; }
+  to { background-position: 0 -150%; }
+}
+.ocx-tremble { animation: ocx-tremble 120ms linear infinite; }
+@keyframes ocx-tremble {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(1.1px, -0.4px); }
+  50% { transform: translate(-1px, 0.4px); }
+  75% { transform: translate(0.6px, 0.3px); }
+  100% { transform: translate(0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.ocx-halt, .ocx-brake, .ocx-flicker, .ocx-sweep, .ocx-charge, .ocx-tremble) { animation: none; }
+  /* The light still ends unlit, just without the flicker. */
+  .ocx-lightout { animation-duration: 1ms; }
+  .ocx-sweep { display: none; }
+}
+.sidebar-pref-row > .lang-toggle { flex: 1 1 auto; min-width: 0; }
+.sidebar-github-row > .sidebar-github-link { flex: 0 0 auto; padding-right: 3px; }
+/* one line beside "GitHub": a long prerelease id ellipsizes, and the tooltip holds it whole */
+.sidebar-version {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sidebar-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 28px;
+  padding: 2px 10px 0;
+}
+/* phone drawer: the drawer head already shows the full version */
+@media (max-width: 760px) {
+  .sidebar-version { display: none; }
+}
+
+/* ---- links: the sky highlight marks what is clickable ---------------------- */
+a:hover { text-decoration-color: var(--ocx-highlight); }
+.link-btn { color: var(--ocx-highlight); text-decoration-color: color-mix(in oklab, var(--ocx-highlight) 40%, transparent); }
+.link-btn:hover { text-decoration-color: var(--ocx-highlight); }
+
+/* ---- the strip is part of the rail: no own glass, no rule under it ---------
+   The strip floats over the sidebar's top padding, so with its own background
+   and border gone the rail shows through and the wordmark reads as the first
+   line of the sidebar. The nav scrolls in its own box below, never under it. */
+.sidebar-top {
+  border-bottom-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---- scrollbars: a slim pill that shows itself when you reach for it -------
+   No track. The thumb is faint at rest inside a hovered scroller, firms up
+   under the pointer, and takes the sky highlight while it is dragged. */
+@supports selector(::-webkit-scrollbar) {
+  *::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+  *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    min-height: 40px;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+  }
+  *:hover::-webkit-scrollbar-thumb { background-color: light-dark(rgb(9 9 11 / 0.16), rgb(255 255 255 / 0.14)); }
+  *::-webkit-scrollbar-thumb:hover { border-width: 2px; background-color: light-dark(rgb(9 9 11 / 0.32), rgb(255 255 255 / 0.3)); }
+  *::-webkit-scrollbar-thumb:active { border-width: 2px; background-color: var(--ocx-highlight); }
+}
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: light-dark(rgb(9 9 11 / 0.22), rgb(255 255 255 / 0.2)) transparent; }
+}
+
+/* ---- sidebar foot orbs: bare icons, a soft plate only on hover -------------
+   Theme, star, update and terminal sit in text rows, so at rest they are icons
+   like the globe and GitHub mark beside them. The phone top bar keeps its
+   bordered 44px targets (it is not in .sidebar-foot). */
+.sidebar-foot .sidebar-orb,
+.sidebar-foot .sidebar-orb--update {
+  border-color: transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+}
+.sidebar-foot .sidebar-orb:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--ocx-accent-soft);
+  color: var(--ocx-fg);
+  filter: none;
+}
+.sidebar-foot .sidebar-orb--update:hover:not(:disabled) { color: var(--blue); }
+.sidebar-foot .sidebar-orb svg { width: 15px; height: 15px; }
+
+/* ---- shadow-call source levers: the same switch as every other lever -------
+   Each source used to sit in its own green-outlined pill, and a disabled group
+   faded only the switch, so its track and knob turned grey and stopped looking
+   like the switches around it. Now a source is a bare switch + name; while the
+   master switch is off only the name dims and the switch keeps its usual look. */
+.shadow-source-toggle-list { gap: 6px 18px; }
+.shadow-source-toggle,
+.shadow-source-toggle.on {
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.shadow-source-toggle .switch:disabled { opacity: 1; cursor: not-allowed; }
+.shadow-source-toggle:has(> .switch:disabled) > :not(.switch) { opacity: 0.45; }
+.shadow-source-id { font-size: 12px; }
+
+
+/* ---- page chrome shared by every v1 page (React Bits application-UI form) -----
+   Controls are rounded rectangles like the proxy panel, not pills; the section
+   switcher is the same recessed track as the segmented controls, with the pill
+   sliding to the current page; empty states are a quiet framed card. */
+
+/* text fields, native selects and the custom select trigger (the sidebar language
+   picker is a bare text row by design, so it stays out) */
+:is(.input, .select-sm, .select-trigger):not(.lang-toggle *) {
+  border-radius: 10px;
+  border: 1px solid var(--ocx-line-strong);
+  background: light-dark(#ffffff, rgb(255 255 255 / 0.03));
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.12);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+:is(.input, .select-sm, .select-trigger):not(.lang-toggle *):hover:not(:disabled, :focus) {
+  border-color: light-dark(rgb(9 9 11 / 0.3), rgb(255 255 255 / 0.28));
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.12);
+}
+:is(.input, .select-sm, .select-trigger):not(.lang-toggle *):focus-visible,
+:is(.input, .select-sm):focus {
+  border-color: var(--ocx-highlight);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ocx-highlight-soft);
+}
+.input::placeholder { color: var(--ocx-fg-subtle); }
+
+/* section switcher: one recessed track, the current page raised */
+.section-switcher {
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.section-switcher-btn {
+  padding: 5px 14px;
+  border-radius: 8px;
+  color: var(--ocx-fg-subtle);
+  font-weight: 500;
+  transition: color 0.2s, background-color 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s;
+}
+.section-switcher-btn:hover { color: var(--ocx-fg-muted); }
+.section-switcher-btn[aria-current="page"] {
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  color: var(--ocx-fg);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+@supports (anchor-name: --a) and (anchor-scope: --a) {
+  .section-switcher > .section-switcher-btn[aria-current="page"] { background: transparent; box-shadow: none; }
+}
+
+/* page tabs: rounded rectangles to match */
+.page-tab { border-radius: 8px; }
+
+/* empty states: a quiet framed card, centred, no dashed outline */
+.empty {
+  padding: 48px 24px;
+  border: 1px solid var(--ocx-line);
+  border-radius: 12px;
+  background: light-dark(#ffffff, rgb(255 255 255 / 0.015));
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+.empty svg { width: 20px; height: 20px; margin-bottom: 12px; color: var(--ocx-fg-muted); }
+.empty .title { color: var(--ocx-fg); font-size: 15px; line-height: 20px; font-weight: 500; letter-spacing: -0.015em; }
+
+/* page intro under a title */
+.page-sub { color: var(--ocx-fg-muted); font-size: 13px; line-height: 1.55; }
+
+/* ---- sticky section strip: glass, not a painted band ------------------------
+   The strip stays reachable while the page scrolls, so it must hide the rows
+   that pass under it. An opaque --bg read as a dark band over the page's
+   gradient even at rest; a blur does the same job and lets the gradient through. */
+.section-tabs {
+  background: transparent;
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+
+/* ---- disclosure summaries: long text wraps cleanly, marker on line one -------
+   A summary is often a whole sentence. Centred in a flex row, the chevron
+   floated between two wrapped lines. Rule: the marker sits on the first line
+   and the text wraps evenly (text-wrap: pretty) whatever the summary's length. */
+details > summary { align-items: flex-start; text-wrap: pretty; }
+details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
+
+/* ---- vertical rhythm inside cards: nothing sits flush against the block above -
+   v1 zeroes every heading margin, so a heading or a section that follows a
+   form row or a button stuck to it. Inside a panel or card, a sub-section or a
+   heading that is not the first thing gets room above it. Header rows (flex)
+   carry their own spacing and are left alone. */
+:is(.panel, .card, section) > section:not(:first-child) { margin-top: 24px; }
+:is(.panel, .card, section) > :is(h2, h3, h4):not(:first-child) { margin-top: 24px; }
+:is(.panel, .card, section) > :is(h2, h3, h4) + :is(p, .muted) { margin-top: 6px; }
+
+/* ---- a .btn with no variant is a secondary button, not a bare label --------
+   It had no background or text colour of its own, so it inherited whatever the
+   platform gave a <button> and nearly vanished in dark mode once disabled. */
+.btn:not(.btn-primary, .btn-ghost, .btn-danger, .btn-icon, .btn-link) {
+  border-color: var(--ocx-line-strong);
+  background: light-dark(#ffffff, rgb(255 255 255 / 0.04));
+  color: var(--ocx-fg);
+}
+.btn:not(.btn-primary, .btn-ghost, .btn-danger, .btn-icon, .btn-link):hover:not(:disabled) {
+  border-color: light-dark(rgb(9 9 11 / 0.3), rgb(255 255 255 / 0.28));
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Native select popup safety net (see base.css): the opt-in has to outrank any v1 rule
+   that sets `appearance` on a select, so it lives here; the menu look stays in base. */
+@supports (appearance: base-select) {
+  select, select::picker(select) { appearance: base-select; }
+}
+
+/* ---- type: monospace is for machine text only --------------------------------
+   A monospace space is a full cell wide, so a Korean label in Geist Mono reads as
+   "네이티브   라우팅". Badges carry words (status, plan, role), so they use the UI
+   face; ids, commands and numbers keep monospace through .mono / <code>. */
+.badge { font-family: var(--font-ui); letter-spacing: 0; }
+
+/* ---- one switch ----------------------------------------------------------------
+   v1 grew three switch drawings (.switch with a knob span, .toggle with a
+   .toggle-knob or an input + .slider, and Remote Link's own ::after switch), each
+   with its own size and knob colour. All of them draw the .switch spec now:
+   34×20 track, 14px knob, raised track with a hairline when off, the primary
+   track with a contrasting knob when on. gui/tests/switch-rule.test.ts keeps new
+   switches on one of these three classes. */
+:is(.switch:where(:not(.switch-labeled)), .toggle, .remote-link-switch) {
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+}
+/* On and mixed states for every drawing. The spec above sits in the bridge layer, so it
+   outranks v1's own `.switch.on` fill: each state has to be restated here, or an "on"
+   switch keeps the off track (dark on dark). switch-rule.test.ts checks all three. */
+:is(.switch.on:where(:not(.switch-labeled)), .toggle.on, .remote-link-switch[aria-checked="true"]) { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
+.switch.mixed:where(:not(.switch-labeled)) { background: var(--amber-soft); border-color: var(--amber); }
+.toggle-knob { width: 14px; height: 14px; left: 2px; background: light-dark(#ffffff, #ececec); box-shadow: 0 0 0 1px rgb(16 24 40 / 0.08), 0 1px 1px rgb(16 24 40 / 0.18); }
+.toggle.on .toggle-knob { left: 16px; background: var(--toggle-dot-color); }
+.toggle:has(> input) { border: 0; background: transparent; }
+.toggle .slider { border: 1px solid var(--border); background: var(--raised); }
+.toggle .slider::after { left: 2px; width: 14px; height: 14px; background: light-dark(#ffffff, #ececec); }
+.toggle input:checked + .slider { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
+.toggle input:checked + .slider::after { transform: translate(14px, -50%); background: var(--toggle-dot-color); }
+.remote-link-switch { display: inline-flex; align-items: center; padding: 2px; }
+.remote-link-switch::after { width: 14px; height: 14px; background: light-dark(#ffffff, #ececec); box-shadow: 0 0 0 1px rgb(16 24 40 / 0.08), 0 1px 1px rgb(16 24 40 / 0.18); }
+.remote-link-switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--toggle-dot-color); }
+
+/* ---- control sizes: two heights, and neighbours match ------------------------
+   Every button, field, select and segmented track is 34px (md) or 28px (sm);
+   see foundations.md "Control sizes". v1 padded its controls to whatever their
+   text produced (31.5px selects, 26px small buttons, 35.5px buttons), so a select
+   and the button beside it never lined up. Heights are now set, padding-block is
+   zero and content centres. Pairing rule: a small button that shares a row with a
+   field or a select grows to md, because the row reads as one control. */
+:root { --control-md: var(--ocx-control-h); --control-sm: var(--ocx-control-h-sm); }
+.btn { min-height: var(--ocx-control-h); padding-block: 0; }
+.btn.btn-sm { min-height: var(--ocx-control-h-sm); }
+:is(.select-trigger, .input:not(textarea)):not(.lang-toggle *) { min-height: var(--ocx-control-h); padding-block: 0; }
+.select-sm { min-height: var(--ocx-control-h-sm); padding-block: 0; }
+:has(> :is(.custom-select, .input, select, input:not([type="checkbox"], [type="radio"]))) > .btn.btn-sm {
+  min-height: var(--ocx-control-h);
+}
+/* The same pairing for v2 (Tailwind-sized) buttons: the row's direct children get the md
+   height in a non-inheriting property, which Button's sm size reads before its own token.
+   Universal syntax on purpose: a typed syntax requires an initial-value, and any initial
+   value would stop Button's fallback (the sm token) from ever applying. */
+@property --ocx-row-control-h { syntax: "*"; inherits: false; }
+:has(> :is(.custom-select, .input, select, input:not([type="checkbox"], [type="radio"]))) > * {
+  --ocx-row-control-h: var(--ocx-control-h);
+}
+/* segmented tracks: 2px padding + (control - 4px) children = one control height */
+:is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher) > :is(button, .btn, .section-switcher-btn) {
+  min-height: calc(var(--ocx-control-h) - 4px);
+  padding-block: 0;
+}
+
+/* ---- flat canvas -------------------------------------------------------------
+   No ambient gradient wash behind the app (removed from styles.css): the page is
+   one flat --bg, and surfaces separate by a step in tone and a hairline, not by
+   colour blooms. With nothing to refract, the sidebar's glass becomes a solid
+   rail with a hairline edge. */
+body { background: var(--ocx-bg); }
+.sidebar {
+  background: var(--rail);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-right-color: var(--ocx-line);
+}
+
+/* ---- figures: tabular numerals in the UI face ----------------------------------
+   Stat values used Geist Mono, so "2.96.0" or "0시간 32분" read as code and their
+   width jumped between tiles. Figures are the UI face with tabular numerals; mono
+   stays for ids and commands (foundations.md, "Type"). */
+:is(.stat .value, .stat .value.mono, .stat-value) {
+  font-family: var(--font-ui);
+  font-size: 1.375rem; /* text-stat */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}

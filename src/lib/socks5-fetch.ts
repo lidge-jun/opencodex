@@ -256,9 +256,13 @@ class SocketReader {
     if (preserveBuffered && !this.ended && !this.socket.destroyed && this.buffer.byteLength > 0) {
       this.socket.unshift(this.buffer);
     }
+    // A read continuation may resume after cleanup; it must not enqueue a new waiter
+    // after the socket listeners that could settle it have been removed.
+    this.ended = true;
+    this.failure ??= new Socks5FetchError("SOCKS5 reader disposed");
     this.buffer = Buffer.alloc(0);
-    this.rejectExact(new Socks5FetchError("SOCKS5 reader disposed"));
-    this.rejectAny(new Socks5FetchError("SOCKS5 reader disposed"));
+    this.rejectExact(this.failure);
+    this.rejectAny(this.failure);
   }
 }
 
@@ -267,19 +271,21 @@ async function socks5Connect(proxy: string, target: URL, signal?: AbortSignal): 
   const credentials = socks5Credentials(parsedProxy);
   const proxyHost = parsedProxy.hostname.replace(/^\[|\]$/g, "");
   const socket = await connectSocket(proxyHost, Number(parsedProxy.port) || DEFAULT_SOCKS5_PORT, signal);
-  socket.setTimeout(SOCKS5_CONNECT_TIMEOUT_MS, () => {
+  const onHandshakeTimeout = () => {
     socket.destroy(new Socks5FetchError("SOCKS5 handshake timed out"));
-  });
+  };
+  socket.setTimeout(SOCKS5_CONNECT_TIMEOUT_MS, onHandshakeTimeout);
   const reader = new SocketReader(socket);
   try {
     await socks5Handshake(reader, { host: target.hostname, port: targetPort(target) }, credentials, signal);
-    socket.setTimeout(0);
     return socket;
   } catch (error) {
     socket.destroy();
     if (error instanceof Socks5HandshakeError) throw new Socks5FetchError(error.message);
     throw error;
   } finally {
+    socket.setTimeout(0);
+    socket.removeListener("timeout", onHandshakeTimeout);
     reader.dispose(true);
   }
 }
@@ -420,10 +426,12 @@ function responseBody(
   headers: Headers,
   status: number,
   method: string,
+  onResponseTimeout: () => void,
 ): ReadableStream<Uint8Array> | null {
   if (bodylessResponse(method, status)) {
     reader.dispose();
     socket.setTimeout(0);
+    socket.removeListener("timeout", onResponseTimeout);
     socket.destroy();
     return null;
   }
@@ -443,6 +451,7 @@ function responseBody(
     signal.removeEventListener("abort", onAbort);
     reader.dispose();
     socket.setTimeout(0);
+    socket.removeListener("timeout", onResponseTimeout);
     socket.destroy();
   };
   const onAbort = () => socket.destroy();
@@ -677,12 +686,13 @@ export async function socks5Fetch(
   // Pending reads carry the abort reason; destruction must not enqueue an
   // unhandled socket error after their listeners have been removed.
   const onAbort = () => socket.destroy();
+  const onResponseTimeout = () => {
+    socket.destroy(new Socks5FetchError("SOCKS5 upstream request timed out"));
+  };
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
     if (target.protocol === "https:") socket = await secureSocket(tunnel, target, request.signal);
-    socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, () => {
-      socket.destroy(new Socks5FetchError("SOCKS5 upstream request timed out"));
-    });
+    socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, onResponseTimeout);
     // Observe socket errors and early responses while uploading, not only after it.
     reader = new SocketReader(socket);
     const headers = requestHeaders(request, target);
@@ -706,7 +716,7 @@ export async function socks5Fetch(
     const codingFormat = bodylessResponse(request.method, responseHead.status)
       ? undefined
       : contentCodingFormat(responseHead.headers);
-    const body = responseBody(reader, socket, request.signal, responseHead.headers, responseHead.status, request.method);
+    const body = responseBody(reader, socket, request.signal, responseHead.headers, responseHead.status, request.method, onResponseTimeout);
     const responseHeaders = new Headers(responseHead.headers);
     if (codingFormat !== undefined) {
       responseHeaders.delete("content-encoding");
@@ -729,6 +739,8 @@ export async function socks5Fetch(
   } catch (error) {
     request.signal.removeEventListener("abort", onAbort);
     reader?.dispose();
+    socket.setTimeout(0);
+    socket.removeListener("timeout", onResponseTimeout);
     socket.destroy();
     // An aborted caller gets its own reason back. Several waiters inside this transport can win
     // the race that settles an abort, and they do not agree on what to do with a reason they

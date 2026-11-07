@@ -92,10 +92,12 @@ Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT
 
 OpenCodex bounds how much one task may fan out. A task is the root conversation, identified by the client's `x-codex-parent-thread-id` header, together with every subagent it starts. Three count ceilings apply to each task, and requests over any of them are refused locally with HTTP 429 and an `x-opencodex-local-refusal` header naming the ceiling (`workflow_concurrency_exhausted`, `workflow_sends_exhausted` or `workflow_children_exhausted`); no provider is contacted.
 
+If physical admission refuses a request after token reservation, its unstarted reservation is returned immediately. Started sends and other pending bookings remain accounted for. Native continuation refusals retain HTTP 429 in the request log as well as in the client error.
+
 | Field | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
 | `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
-| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, after which the task's new requests are refused for the rest of the 10-minute window. The count is checked when a request is admitted, so retries inside a request that was already admitted, and requests admitted concurrently, can take the total past the ceiling. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream send admissions, retries included, per 10-minute window. Every physical admission checks and claims a slot atomically, so concurrent requests and retries share the same ceiling. An unused dispatch permit consumes no slot; a claimed physical start remains counted even if it later fails. |
 | `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
 
 The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
@@ -110,6 +112,8 @@ The defaults suit most installs. Raise them when a workflow that legitimately ru
 ```
 
 The **Subagents** page of the dashboard shows the effective ceilings and edits them. `GET /api/workflow-budget/settings` returns the effective values with their defaults and allowed ranges; `PUT` with a partial object updates them, and JSON `null` restores the defaults. Dashboard/API changes apply to the next request without a restart and never reset what a task has already used; `POST /api/workflow-budget/clear` remains the way to forgive one task. A malformed file block is ignored with a warning and the built-in ceilings stay in force. Local `ocx config set/unset` edits require a restart to converge the running proxy. The 10-minute window, the reserved interactive slot and the 512 tracked tasks are not configurable.
+
+An idle task keeps its tracking slot while it has unexpired sends or child history, even if it has only partly used a limit. The proxy reuses only slots with no active turn, no remaining count history and no exhausted token budget. If all 512 slots must be retained, a new task receives local HTTP 429 with `workflow_tracking_exhausted` instead of resetting another task's allowance. Slots become reusable as their count windows expire; durable token ceilings remain independent. Count history is process-local and is not made persistent by this retention rule.
 
 ## Upstream transport recovery
 

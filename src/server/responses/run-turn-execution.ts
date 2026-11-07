@@ -132,6 +132,7 @@ export async function executeResponsesRunTurn(
     | "noteAdapterRecoveryWithheld"
     | "reserveCredentialHop"
     | "pendingHopPermit"
+    | "dispatchSidecarSend"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
@@ -858,6 +859,7 @@ export async function executeResponsesRunTurn(
       // iterations; terminal output keeps flowing through the same queue/bridge.
       if (wsPlan) {
         eventSource = runTurnWebSearchLoop(eventSource, {
+          dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
           parsed,
           plan: wsPlan,
           translatorBudget,
@@ -1009,6 +1011,7 @@ export async function executeResponsesRunTurn(
           {
             parsed,
             plan: wsPlan,
+            dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
             translatorBudget,
             emptyCompletionRetry: emptyCompletionGuardEnabled,
             forwardProvider: wsPlan.forwardSidecar?.provider,

@@ -58,6 +58,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <account-id|alias|main> [--json]
   ocx account resume <provider> <account-id|alias|main> [--json]
+  ocx account reset-affinity <anthropic|anthropic2> [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
@@ -487,6 +488,10 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     // dashboard-only capabilities.
     if (sub === "pause") return await cmdPause(rest, deps, true);
     if (sub === "resume") return await cmdPause(rest, deps, false);
+    if (sub === "reset-affinity") {
+      const { cmdResetAffinity } = await import("./account-affinity-reset");
+      return await cmdResetAffinity(rest, deps);
+    }
     if (sub === "pause-exhausted") return await cmdPauseExhausted(rest, deps);
     if (sub === "strategy") return await cmdStrategy(rest, deps);
     if (sub === "sticky") return await cmdSticky(rest, deps);
