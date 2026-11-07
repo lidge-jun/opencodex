@@ -82,7 +82,7 @@ describe.skipIf(process.platform !== "win32" || hostedWindowsQuarantine)("Window
   }, 20_000);
 });
 
-test("manifest and canonical executable facts are required without admitting another version", async () => {
+test("manifest and canonical executable facts are required while an official newer build verifies", async () => {
   const good = installed();
   for (const proof of [undefined,
     { ...good.proof!, manifestName: "Foreign.Codex" }, { ...good.proof!, manifestPublisher: "CN=Foreign" },
@@ -95,7 +95,16 @@ test("manifest and canonical executable facts are required without admitting ano
     expect(await probe.check()).toBe(false); expect(probe.binding().identity).toBeNull(); await probe.close();
   }
   const newer = createInstalledBuildProbe(async () => installed("26.1007.9446.0"));
-  expect(await newer.check()).toBe(false); await newer.close();
+  expect(await newer.check()).toBe(true);
+  const newerBinding = newer.binding();
+  expect(newerBinding.identity).not.toBeNull();
+  expect(newer.lastResult()).toMatchObject({ observedVersion: "26.1007.9446.0", verified: true });
+  await newer.close();
+  const baseline = createInstalledBuildProbe(async () => installed());
+  expect(await baseline.check()).toBe(true);
+  // The version stays inside the hashed package identity, so an update revokes a prior trial.
+  expect(baseline.binding().identity).not.toBe(newerBinding.identity);
+  await baseline.close();
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-AppxPackageManifest");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("ChatGPT.exe");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).not.toContain("Activate");
@@ -153,7 +162,7 @@ test("concurrent build checks share only the pending query and refresh after it 
   await Bun.sleep(0); expect(calls).toBe(1);
   release(installed()); expect(await first).toBe(true); expect(await second).toBe(true);
   const changed = probe.check(); await Bun.sleep(0); expect(calls).toBe(2);
-  release(installed("99.1.1.0")); expect(await changed).toBe(false);
+  release(installed("99.1.1.0")); expect(await changed).toBe(true);
   await probe.close();
 });
 
@@ -181,11 +190,11 @@ test("build assessment exposes only the last completed public package metadata",
   const probe = createInstalledBuildProbe(async () => (++calls, install));
   expect(probe.lastResult()).toBeNull();
   install = installed("26.1007.9446.0");
-  expect(await probe.check()).toBe(false);
-  const unverified = probe.lastResult();
-  expect(unverified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: "26.1007.9446.0", verified: false });
-  expect(unverified!.completedAt).toBeGreaterThan(0);
-  expect(JSON.stringify(unverified)).not.toContain("WindowsApps");
+  expect(await probe.check()).toBe(true);
+  const newerVerified = probe.lastResult();
+  expect(newerVerified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: "26.1007.9446.0", verified: true });
+  expect(newerVerified!.completedAt).toBeGreaterThan(0);
+  expect(JSON.stringify(newerVerified)).not.toContain("WindowsApps");
   install = installed();
   expect(await probe.check()).toBe(true);
   expect(probe.lastResult()).toMatchObject({ observedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, verified: true });

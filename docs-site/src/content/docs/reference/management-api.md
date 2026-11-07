@@ -948,7 +948,7 @@ code in the panel. Controls stay disabled until the new local session is verifie
 not itself change certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
-ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
+ChatGPT login and a proof-verified official Codex Windows package. It begins in Observe mode.
 HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
 identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
@@ -962,13 +962,13 @@ process's bound OpenCodex listener. Runtime status may expose `contextFailure` f
 or `build_unverified`. These states disable response correction without claiming an app repair.
 
 A status response can also carry `buildAssessment`, the public metadata of the last completed
-build check: `assessedVersion` (the exact package this runtime was assessed against),
+build check: `assessedVersion` (the baseline holding native acceptance evidence),
 `observedVersion`, `verified` and `completedAt`. It records a past observation, not a live
 install reading: a stopped runtime, an app update or a pending or interrupted check can leave it
 older than the installed package, and only a completed check replaces it. `observedVersion` is
-null unless discovery matched the assessed package family and entry point; an identified newer
-build keeps its own version with `verified` false, and `verified` always describes the package
-observed at `completedAt`, never whatever is installed later. The field is absent until the
+null unless discovery matched the assessed package family and entry point; an identified build
+keeps its own version, and `verified` reports whether its official package proof completed at
+`completedAt`, never whatever is installed later. The field is absent until the
 service creates its probe during start and `null` until that probe finishes a check; reading
 status never starts one.
 

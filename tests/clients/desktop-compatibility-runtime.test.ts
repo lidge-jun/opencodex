@@ -245,7 +245,7 @@ describe("optional native compatibility runtime", () => {
     }, 15_000);
   }
 
-  for (const failure of ["same-version-replacement", "unverifiable", "ABA"] as const) {
+  for (const failure of ["same-version-replacement", "unverifiable", "ABA", "version-update"] as const) {
     test(`${failure} revokes package-bound trial consent before another corrected response`, async () => {
       let current: DesktopAppInstall | null = assessedInstall();
       let probe!: ReturnType<typeof createInstalledBuildProbe>;
@@ -260,7 +260,10 @@ describe("optional native compatibility runtime", () => {
       expect((await read()).rate_limit.allowed).toBe(true);
       const generation = io.runtime.status().usage!.generation;
       current = failure === "unverifiable" ? null
+        : failure === "version-update" ? assessedInstall("26.1007.9446.0")
         : { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableIdentity: "1024:100:201" } };
+      // A newer proof-verified build admits but its changed identity still revokes the trial.
+      if (failure === "version-update") expect(await probe.check()).toBe(true);
       if (failure === "ABA") {
         expect(await probe.check()).toBe(true);
         current = assessedInstall(); expect(await probe.check()).toBe(true);
