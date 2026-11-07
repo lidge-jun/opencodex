@@ -223,6 +223,7 @@ export async function preflightAdapterEvents(
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let timeoutPromise: Promise<"timeout"> | undefined;
+  let retainedHeartbeats = 0;
   if (maxWaitMs !== undefined) {
     timeoutPromise = new Promise(resolve => {
       timeout = setTimeout(() => resolve("timeout"), maxWaitMs);
@@ -241,18 +242,47 @@ export async function preflightAdapterEvents(
         };
       }
       const next = raced;
-      if (next.done) return { stream: replay(buffered, iterator), empty: buffered.length === 0, replayUnsafe };
+      if (next.done) {
+        const hasMeaningful = buffered.some(event => event.type !== "heartbeat");
+        return { stream: replay(buffered, iterator), empty: !hasMeaningful, replayUnsafe };
+      }
       if (next.value.type === "heartbeat") {
         replayUnsafe ||= next.value.replayUnsafe === true;
         // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
         buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
+        retainedHeartbeats += 1;
+        if (replayUnsafe) {
+          for (let i = 0; i < buffered.length; i++) {
+            const ev = buffered[i];
+            if (ev.type === "heartbeat" && !ev.replayUnsafe) {
+              buffered[i] = { ...ev, replayUnsafe: true };
+            }
+          }
+        }
         if (next.value.preflightReady === true && options?.honorReady !== false) {
           return { stream: replay(buffered, iterator), empty: false, replayUnsafe, ready: true };
         }
-        if (buffered[0]?.type === "heartbeat" && buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
+        if (retainedHeartbeats > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) {
+          const firstHeartbeatIndex = buffered.findIndex(e => e.type === "heartbeat");
+          if (firstHeartbeatIndex !== -1) {
+            buffered.splice(firstHeartbeatIndex, 1);
+            retainedHeartbeats -= 1;
+          }
+        }
         continue;
       }
-      if (isReasoningEvent(next.value) || (options?.bufferCompaction && next.value.type === "text_delta")) {
+      const shouldBuffer = classifyFirstEvent !== undefined || options?.bufferCompaction === true;
+      const emptyDelta = next.value.type === "text_delta" && next.value.text.length === 0;
+      const isBufferingEvent = isReasoningEvent(next.value)
+        || next.value.type === "assistant_boundary"
+        || emptyDelta
+        || (options?.bufferCompaction === true && next.value.type === "text_delta");
+
+      if (isBufferingEvent) {
+        if (!shouldBuffer) {
+          buffered.push(next.value);
+          return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        }
         buffered.push(next.value);
         bufferedReasoningCodeUnits += retainedEventCodeUnits(next.value);
         if (buffered.length > DEFAULT_MAX_REASONING_EVENTS || bufferedReasoningCodeUnits > DEFAULT_MAX_EVENT_CODE_UNITS) {

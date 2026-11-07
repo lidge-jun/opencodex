@@ -1045,10 +1045,13 @@ export async function executeResponsesRunTurn(
         const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
         const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
         // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
-        // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
+        // already ran a local side effect, so an undeclared tool call or error after it keeps the bridge's
         // fail-closed refusal instead of becoming a hop that sends the turn to another target.
+        const terminalIndex = events.findIndex(event => event.type === "done" || event.type === "incomplete");
+        const firstContentIndex = events.findIndex(isContentEvent);
+        const preBoundaryIndex = firstContentIndex !== -1 ? firstContentIndex : (terminalIndex !== -1 ? terminalIndex : events.length);
         const replayUnsafe = events
-          .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
+          .slice(0, preBoundaryIndex)
           .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
         const sawContent = events.some(isContentEvent);
         const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");

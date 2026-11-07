@@ -802,4 +802,125 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(body).not.toContain("Incomplete response returned");
     expect(hits).toEqual(["m1", "m2"]);
   });
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} empty text_delta and assistant_boundary before max_output_tokens terminal fails over`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat" });
+          emit({ type: "assistant_boundary" });
+          emit({ type: "text_delta", text: "" });
+          emit({
+            type: "incomplete",
+            reason: "max_output_tokens",
+            usage: { inputTokens: 40, outputTokens: 0, totalTokens: 40 },
+          });
+          return;
+        }
+        emit({ type: "text_delta", text: "empty-delta backup answer" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const parent: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, parent);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain("empty-delta backup answer");
+      expect(hits).toEqual(["m1", "m2"]);
+    });
+  }
+
+  test("combo exhaustion on zero-output token limit preserves recorded usage across all attempts", async () => {
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      if (parsed.modelId === "m1") {
+        emit({ type: "heartbeat" });
+        emit({ type: "thinking_delta", thinking: "thinking target 1..." });
+        emit({
+          type: "incomplete",
+          reason: "max_output_tokens",
+          usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+        });
+        return;
+      }
+      emit({ type: "heartbeat" });
+      emit({ type: "thinking_delta", thinking: "thinking target 2..." });
+      emit({
+        type: "incomplete",
+        reason: "max_output_tokens",
+        usage: { inputTokens: 60, outputTokens: 120, totalTokens: 180 },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    }), config, parent);
+
+    expect(response.status).toBe(502);
+    expect(hits).toEqual(["m1", "m2"]);
+    expect(parent.attempts).toHaveLength(2);
+    expect(parent.attempts?.[0]).toMatchObject({
+      provider: "a",
+      model: "m1",
+      status: 502,
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    });
+    expect(parent.attempts?.[1]).toMatchObject({
+      provider: "b",
+      model: "m2",
+      status: 502,
+      usage: { inputTokens: 60, outputTokens: 120, totalTokens: 180 },
+    });
+  });
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} replay-unsafe heartbeat after reasoning prevents failover`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        emit({ type: "thinking_delta", thinking: "pondering..." });
+        emit({ type: "heartbeat", replayUnsafe: true });
+        emit({
+          type: "incomplete",
+          reason: "max_output_tokens",
+          usage: { inputTokens: 30, outputTokens: 10, totalTokens: 40 },
+        });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const parent: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, parent);
+
+      expect(response.status).toBe(200);
+      expect(hits).toEqual(["m1"]);
+      const body = await response.text();
+      expect(body).toContain("incomplete");
+      expect(hits).not.toContain("m2");
+    });
+  }
 });

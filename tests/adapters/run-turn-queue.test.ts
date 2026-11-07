@@ -523,6 +523,61 @@ describe("run-turn adapter event preflight", () => {
     );
     expect(preflight.error?.code).toBe("zero_output_token_limit");
   });
+
+  test("returns on first reasoning event promptly when no classifier or compaction is set", async () => {
+    let continuedAfterThinking = false;
+    async function* source(): AsyncGenerator<AdapterEvent> {
+      yield heartbeat;
+      yield { type: "thinking_delta", thinking: "pondering" };
+      continuedAfterThinking = true;
+      yield text("answer");
+      yield done;
+    }
+    const preflight = await preflightAdapterEvents(source());
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(continuedAfterThinking).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([
+      heartbeat,
+      { type: "thinking_delta", thinking: "pondering" },
+      text("answer"),
+      done,
+    ]);
+    expect(continuedAfterThinking).toBe(true);
+  });
+
+  test("retains at most PREFLIGHT_HEARTBEAT_RETAIN_LIMIT heartbeats when reasoning precedes many heartbeats, preserving replayUnsafe", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const unsafeHeartbeat: AdapterEvent = { type: "heartbeat", replayUnsafe: true };
+    const plainHeartbeats: AdapterEvent[] = Array.from({ length: 19 }, () => ({ type: "heartbeat" }));
+    const values = [thinking, unsafeHeartbeat, ...plainHeartbeats, done];
+
+    const preflight = await preflightAdapterEvents(events(values), classifyZeroOutputTokenLimit);
+    expect(preflight.replayUnsafe).toBe(true);
+    const collected = await collect(preflight.stream);
+    // 1 thinking + 16 retained heartbeats + 1 done = 18 total
+    expect(collected).toHaveLength(18);
+    expect(collected[0]).toEqual(thinking);
+    expect(collected.at(-1)).toEqual(done);
+    // Every retained heartbeat must have replayUnsafe: true latched
+    const heartbeats = collected.slice(1, -1);
+    expect(heartbeats).toHaveLength(16);
+    expect(heartbeats.every(h => h.type === "heartbeat" && h.replayUnsafe === true)).toBe(true);
+  });
+
+  test("heartbeat-only stream EOF is reported as empty: true, preserving replayUnsafe latch", async () => {
+    const unsafeHeartbeat: AdapterEvent = { type: "heartbeat", replayUnsafe: true };
+    const preflight = await preflightAdapterEvents(events([heartbeat, unsafeHeartbeat]));
+    expect(preflight.empty).toBe(true);
+    expect(preflight.replayUnsafe).toBe(true);
+  });
+
+  test("reasoning-only stream EOF is reported as empty: false", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const preflight = await preflightAdapterEvents(events([heartbeat, thinking]));
+    expect(preflight.empty).toBe(false);
+    expect(preflight.replayUnsafe).toBe(false);
+  });
 });
 
 describe("run-turn adapter event queue retained-payload budgets", () => {
