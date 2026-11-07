@@ -41,6 +41,60 @@ function button(label: string): HTMLButtonElement {
   return found;
 }
 
+test("a failed newer OAuth discovery does not discard an earlier success", async () => {
+  let loader!: ReturnType<typeof useProvidersFetch>;
+  let providers: string[] = [];
+  let finish!: (response: Response) => void;
+  let reads = 0;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    if (String(input).includes("/api/oauth/providers")) {
+      if (++reads === 1) return new Promise<Response>(resolve => { finish = resolve; });
+      return new Response("unavailable", { status: 503 });
+    }
+    return Response.json({ loggedIn: true });
+  } });
+  function Harness() {
+    const [state, setProviders] = useState<string[]>([]);
+    providers = state;
+    loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: setProviders,
+      setOauthStatus: () => {}, notify: () => {}, invalidateProviderQuotas: () => {} });
+    return null;
+  }
+  await render(<Harness />);
+  let first!: Promise<void>;
+  await act(async () => { first = loader.fetchOauth(); await Promise.resolve(); });
+  await act(async () => { await loader.fetchOauth(); });
+  await act(async () => { finish(Response.json({ providers: ["anthropic"] })); await first; });
+  expect(providers).toEqual(["anthropic"]);
+});
+
+test("a failed newer OAuth status does not replace an earlier success", async () => {
+  let loader!: ReturnType<typeof useProvidersFetch>;
+  let statuses: Record<string, OAuthStatus> = {};
+  let finish!: (response: Response) => void;
+  let started!: () => void;
+  const requested = new Promise<void>(resolve => { started = resolve; });
+  let reads = 0;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    if (String(input).includes("/api/oauth/providers")) return Response.json({ providers: ["anthropic"] });
+    if (++reads === 1) { started(); return new Promise<Response>(resolve => { finish = resolve; }); }
+    return new Response("unavailable", { status: 503 });
+  } });
+  function Harness() {
+    const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
+    statuses = state;
+    loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {},
+      setOauthStatus, notify: () => {}, invalidateProviderQuotas: () => {} });
+    return null;
+  }
+  await render(<Harness />);
+  let first!: Promise<void>;
+  await act(async () => { first = loader.fetchOauth(); await requested; });
+  await act(async () => { await loader.fetchOauth(); });
+  await act(async () => { finish(Response.json({ loggedIn: true })); await first; });
+  expect(statuses.anthropic).toEqual({ loggedIn: true });
+});
+
 test("an older OAuth refresh cannot overwrite a newer status", async () => {
   let loader!: ReturnType<typeof useProvidersFetch>;
   let statuses: Record<string, OAuthStatus> = {};

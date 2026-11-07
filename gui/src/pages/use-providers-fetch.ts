@@ -28,6 +28,7 @@ export function useProvidersFetch({
 }) {
   const configRequest = useRef(0);
   const oauthDiscovery = useRef(0);
+  const oauthDiscoveryPublished = useRef(0);
   const target = useMemo(() => ({ apiBase }), [apiBase]);
   const activeTarget = useRef<typeof target | null>(null);
   const oauthWrites = useRef(new Map<string, number>());
@@ -70,8 +71,10 @@ export function useProvidersFetch({
       // Codex openai status is owned by useCodexAccountPool — do not duplicate /accounts.
       const provRes = await fetch(`${apiBase}/api/oauth/providers`);
       const provData = await readJsonOrThrow<{ providers?: string[] }>(provRes);
-      const provs: string[] = provData?.providers ?? [];
-      if (activeTarget.current !== target || discovery !== oauthDiscovery.current) return;
+      if (!Array.isArray(provData?.providers) || !provData.providers.every(p => typeof p === "string")) return;
+      const provs = provData.providers;
+      if (activeTarget.current !== target || discovery < oauthDiscoveryPublished.current) return;
+      oauthDiscoveryPublished.current = discovery;
       oauthAdmitted.current = new Set(provs);
       setOauthProviders(provs);
       setOauthStatus(current => Object.fromEntries(Object.entries(current).filter(([provider]) => oauthAdmitted.current.has(provider) || !unchanged(provider))));
@@ -79,7 +82,8 @@ export function useProvidersFetch({
         const read = (oauthReads.current.get(p) ?? 0) + 1;
         oauthReads.current.set(p, read);
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(p)}`).catch(() => null);
-        const s = sRes ? (await readJsonIfOk<OAuthStatus>(sRes) ?? { loggedIn: false }) : { loggedIn: false };
+        const s = sRes ? await readJsonIfOk<OAuthStatus>(sRes) : null;
+        if (!s || typeof s.loggedIn !== "boolean") return;
         if (activeTarget.current !== target || !oauthAdmitted.current.has(p) || !unchanged(p) || read < (oauthPublished.current.get(p) ?? 0)) return;
         oauthPublished.current.set(p, read);
         setOauthStatus(current => activeTarget.current === target && oauthAdmitted.current.has(p) && unchanged(p)

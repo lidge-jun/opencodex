@@ -115,6 +115,19 @@ function Harness({ apiBase = "/quota-hook" }: { apiBase?: string }) {
   useLayoutEffect(() => { pools = currentPools; }, [currentPools]);
   return null;
 }
+
+test("a roster read during logout cannot verify the current account", async () => {
+  respond = async () => Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, quotaMode: "unsupported" }] });
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+  let finish!: () => void;
+  await act(async () => { finish = pools.beginAccountLogout("fixture")!; });
+  expect(pools.accountLoadStates.fixture).toBe("loading");
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  expect(pools.accountLoadStates.fixture).toBe("loading");
+  await act(async () => { finish(); await pools.fetchAccountSets(["fixture"]); });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+});
 beforeEach(async () => {
   previous = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof previous;
   win = new Window({ url: "http://localhost" });

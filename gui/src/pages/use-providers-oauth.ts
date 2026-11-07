@@ -21,6 +21,7 @@ export function useProvidersOAuth({
   setLoginInfo,
   setOauthStatus,
   invalidateOauthStatusReads,
+  beginAccountLogout,
   notify,
   fetchConfig,
   fetchOauth,
@@ -39,6 +40,7 @@ export function useProvidersOAuth({
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
   invalidateOauthStatusReads?: (provider: string) => boolean;
+  beginAccountLogout?: (provider: string) => (() => void) | null;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
@@ -260,21 +262,31 @@ export function useProvidersOAuth({
   };
 
   const logoutOAuth = async (provider: string) => {
+    const finishLogout = beginAccountLogout?.(provider);
+    if (beginAccountLogout && !finishLogout) return;
+    invalidateOauthStatusReads?.(provider);
     // Invalidate any in-flight login poll so a late completion cannot reseed accounts.
     bumpLoginGeneration(provider);
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
+    let success = false;
     try {
       const res = await fetch(`${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
       if (!res.ok) {
         notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
         return;
       }
+      success = true;
+    } catch {
+      notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
+    } finally {
+      finishLogout?.();
+      if (!success) void fetchAccountSets([provider]).catch(() => {});
+    }
+    if (!success) return;
+    try {
       await Promise.all([
-        fetchAccountSets([provider]),
-        fetchOauth(),
-        fetchConfig(),
-        fetchProviderQuotas(true),
+        fetchAccountSets([provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
       ]);
       bumpModelsRefresh();
       notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);

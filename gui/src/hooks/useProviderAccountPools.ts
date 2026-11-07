@@ -400,6 +400,19 @@ export function useProviderAccountPools(deps: {
     return key;
   };
 
+  const beginAccountLogout = (provider: string): (() => void) | null => {
+    const key = `oauth:${provider}`;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase || selectionMutationsRef.current.has(key)) return null;
+    invalidateSelectionReads(provider, "oauth");
+    const owner = Symbol();
+    selectionMutationsRef.current.set(key, owner);
+    return () => {
+      if (selectionMutationsRef.current.get(key) !== owner) return;
+      invalidateSelectionReads(provider, "oauth");
+      selectionMutationsRef.current.delete(key);
+    };
+  };
+
   const setAccountPoolThreshold = async (provider: string, threshold: number): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
     // Pool settings and roster reads describe one server value. Invalidate older reads before
@@ -884,7 +897,7 @@ export function useProviderAccountPools(deps: {
   return {
     accountSets, accountLoadStates: accountStateTarget === accountTarget ? accountLoadStates : {}, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
-    fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
+    fetchAccountSets, fetchKeyPools, refreshAccountRosters, beginAccountLogout, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,
   };
 }

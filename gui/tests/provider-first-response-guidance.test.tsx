@@ -330,6 +330,39 @@ describe("first-response progression states on ProviderOverview", () => {
 });
 
 describe("ProviderDetails raw ID disambiguation and Providers page integration", () => {
+  test("logout hides the current account until the roster is reconciled", async () => {
+    let finishLogout!: (response: Response) => void;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/api/oauth/logout") return new Promise<Response>(resolve => { finishLogout = resolve; });
+      if (path === "/api/config") return Response.json({ port: 0, defaultProvider: "anthropic", providers: {
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
+      } });
+      if (path === "/api/providers") return Response.json([{ name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" }]);
+      if (path === "/api/oauth/providers") return Response.json({ providers: ["anthropic"] });
+      if (path === "/api/oauth/status") return Response.json({ loggedIn: true });
+      if (path === "/api/oauth/accounts") return Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, alias: "Work" }] });
+      if (path === "/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/api/provider-presets") return Response.json({ providers: [] });
+      if (path === "/api/models") return Response.json([]);
+      if (path === "/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    await render(<Providers apiBase="" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    expect(host.textContent).toContain("Current accountWork");
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-accounts")!.click(); });
+    const logout = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Logout")!;
+    await act(async () => { logout.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-overview")!.click(); });
+    expect(host.textContent).not.toContain("Current accountWork");
+    await act(async () => { finishLogout(new Response(null, { status: 503 })); await Promise.resolve(); });
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    expect(host.textContent).toContain("Current accountWork");
+  });
   test("changing API targets does not unmount an unsaved Settings draft", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://localhost").pathname;
