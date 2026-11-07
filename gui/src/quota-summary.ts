@@ -81,6 +81,16 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       severity: quotaSeverity(credits.percent),
     });
   }
+  const workbuddy = quota.workbuddyCredits;
+  if (workbuddy && workbuddy.total > 0) {
+    const percent = Math.min(100, workbuddy.used / workbuddy.total * 100);
+    windows.push({
+      id: "quotaSummary.credits",
+      labelKey: "quotaSummary.credits",
+      percent,
+      severity: quotaSeverity(percent),
+    });
+  }
   // Credits are appended after provider windows, whose labels can equal any fixed id.
   const used = new Set<string>();
   return windows.map(window => {

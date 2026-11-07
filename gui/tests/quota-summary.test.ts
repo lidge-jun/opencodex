@@ -52,6 +52,24 @@ describe("quota summary", () => {
     ]);
   });
 
+  test("WorkBuddy credit usage appears in the summary without treating expiry as a reset", () => {
+    const balance = (total: number, used: number) => ({
+      total, used, remaining: Math.max(0, total - used), frozen: 0, groups: [],
+      expiring: { amount: 10, at: now + 3_600_000 },
+    });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 75) } },
+      { provider: "exhausted", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 125) } },
+      { provider: "zero-total", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0, 0) } },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => [row.provider, row.headline.labelKey, row.headline.percent, row.severity])).toEqual([
+      ["workbuddy-ai", "quotaSummary.credits", 75, "warn"],
+      ["exhausted", "quotaSummary.credits", 100, "critical"],
+    ]);
+    expect(rows[0]!.headline.resetAt).toBeUndefined();
+  });
+
   test("critical credits override a noncritical headline, but not a critical one", () => {
     const credits = (percent: number) => ({ used: percent, limit: 100, remaining: 100 - percent, percent });
     const reports = freshQuotaReportsFromResponse([
