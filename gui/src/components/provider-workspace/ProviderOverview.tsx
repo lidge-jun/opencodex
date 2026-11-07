@@ -37,7 +37,7 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
+  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, activeAccountLabel, oauth,
   apiBase, connectionIdentity, probeController, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
   modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenAccounts, onOpenModelsTab, onOpenModels, onOpenConnect,
   onEditSettings, onViewUsage, onUpdateProvider,
@@ -51,6 +51,12 @@ export default function ProviderOverview({
   currentQuotaReading?: AccountQuotaReading;
   onRefreshQuota?: () => Promise<boolean>;
   oauthEmail?: string;
+  /**
+   * Label of the active OAuth pool account, as its Accounts row shows it: alias, then the
+   * server-masked identity, then the ordinal. Claude pools name the account with this, because
+   * their login email stays hidden.
+   */
+  activeAccountLabel?: string;
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean; needsReauth?: boolean };
   apiBase?: string;
@@ -245,7 +251,9 @@ export default function ProviderOverview({
           : reverifyPending
             ? t("pws.firstResponse.probeReverify", { model: reverifyModel })
             : t("pws.firstResponse.probeUntested");
-  const displayEmail = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? undefined : oauthEmail;
+  const displayIdentity = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item)
+    ? activeAccountLabel
+    : oauthEmail;
   const openModelsAction = onOpenModelsTab ?? onOpenModels;
   const fixCredentialsAction = onOpenAccounts ?? onEditSettings;
 
@@ -272,7 +280,7 @@ export default function ProviderOverview({
           </div>
           <div className="pws-kv-row">
             <dt>{t("pws.cell.auth")}</dt>
-            <dd>{displayEmail ? `${authModeLabel(item, t)} · ${displayEmail}` : authModeLabel(item, t)}</dd>
+            <dd>{displayIdentity ? `${authModeLabel(item, t)} · ${displayIdentity}` : authModeLabel(item, t)}</dd>
           </div>
           <div className="pws-kv-row">
             <dt>{t("modal.defaultModel")}</dt>
@@ -446,8 +454,8 @@ export default function ProviderOverview({
               {item.authMode === "forward"
                 ? t("pws.passthrough")
                 : item.authMode === "oauth"
-                  ? (displayEmail
-                    ? t("pws.loggedInAs", { email: displayEmail })
+                  ? (displayIdentity
+                    ? t("pws.loggedInAs", { email: displayIdentity })
                     : oauth?.loggedIn
                       ? t("pws.loggedInTitle")
                       : t("pws.notLoggedIn"))
