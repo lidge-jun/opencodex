@@ -13,6 +13,9 @@ const TRANSITIONS = new WeakMap();
 const RELEASES = new WeakMap();
 const CANDIDATES = new WeakMap();
 const ARTIFACTS = new WeakMap();
+const RECEIPTS = new WeakMap();
+const TREES = new WeakMap();
+const CAPABILITIES = new WeakMap();
 
 function currentRoot(handle, nowMs) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("Invalid trust clock");
@@ -120,5 +123,98 @@ export function verifyArtifactEvidence(targetEvidence, bytes, basis, nowMs) {
   }
   const handle = Object.freeze(Object.create(null));
   ARTIFACTS.set(handle, { target: targetEvidence, basis, digest: target.artifact.sha256, size: snapshot.byteLength });
+  return handle;
+}
+
+function checkedBytes(bytes, expected, cap) {
+  if (expected.size > cap) throw new Error("Metadata size exceeds limit");
+  const snapshot = snapshotUpdateBytes(bytes, expected.size);
+  if (snapshot.byteLength !== expected.size || createHash("sha256").update(snapshot).digest("hex") !== expected.sha256) {
+    throw new Error("Metadata bytes do not match signed record");
+  }
+  return snapshot;
+}
+
+function requireAsset(receipt, name, expected) {
+  const matches = receipt.assets.filter((asset) => asset.name === name);
+  if (matches.length !== 1 || (expected && (matches[0].sha256 !== expected.sha256 || matches[0].size !== expected.size))) {
+    throw new Error("Receipt asset mismatch");
+  }
+  return matches[0];
+}
+
+/** Verify receipt, tree or capability evidence against one signed target and basis. */
+export function verifyExternalMetadataEvidence(targetEvidence, input, basis, nowMs) {
+  const state = currentRoot(basis, nowMs);
+  const candidate = CANDIDATES.get(targetEvidence);
+  if (!candidate || candidate.root !== basis) throw new Error("Invalid target evidence basis");
+  const releaseState = RELEASES.get(candidate.release);
+  if (!releaseState || releaseState.root !== basis || !input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Invalid metadata evidence input");
+  }
+  const release = releaseState.release;
+  const target = candidate.target;
+  const prefix = `ocx-update-${release.version}-${release.channel}-${target.id}`;
+  const treeName = `${prefix}.tree.json`;
+  const capabilityName = `${prefix}.capabilities.json`;
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const kind = descriptors.kind && Object.hasOwn(descriptors.kind, "value") ? descriptors.kind.value : undefined;
+  const fields = kind === "receipt" ? ["kind", "bytes"]
+    : kind === "tree" ? ["kind", "bytes", "signatureEnvelopeBytes", "receiptEvidence"]
+      : kind === "capability" ? ["kind", "bytes", "receiptEvidence"] : [];
+  if (!fields.length || Reflect.ownKeys(descriptors).length !== fields.length
+      || !fields.every((field) => Object.hasOwn(descriptors, field) && descriptors[field].enumerable
+        && Object.hasOwn(descriptors[field], "value"))) {
+    throw new Error("Invalid metadata evidence input");
+  }
+  const data = Object.fromEntries(fields.map((field) => [field, descriptors[field].value]));
+  if (kind === "receipt") {
+    const bytes = checkedBytes(data.bytes, release.receipt, 1048576);
+    const receipt = parseUpdateDocument(bytes, "ocx.update.verification/1");
+    if (receipt.version !== release.version || receipt.channel !== release.channel || receipt.sourceCommit !== release.sourceCommit) {
+      throw new Error("Receipt release mismatch");
+    }
+    requireAsset(receipt, target.assetName, target.artifact);
+    requireAsset(receipt, capabilityName, target.capabilities);
+    if (target.tree) {
+      requireAsset(receipt, treeName, target.tree);
+      requireAsset(receipt, `${treeName}.signatures.json`);
+    }
+    if (target.platform === "macos" && target.owner === "desktop" && target.artifactKind === "tauri" && target.bundleKind === "app-tar-gz") {
+      const proofs = receipt.universalProofs.filter((proof) => proof.assetName === target.assetName && proof.artifactSha256 === target.artifact.sha256);
+      if (proofs.length !== 1) throw new Error("Missing or ambiguous universal artifact proof");
+    } else if (target.platform === "macos") {
+      const proofs = receipt.architectureProofs.filter((proof) => proof.targetId === target.id && proof.assetName === target.assetName
+        && proof.artifactSha256 === target.artifact.sha256 && proof.arch === target.arch);
+      if (proofs.length !== 1) throw new Error("Missing or ambiguous architecture proof");
+    }
+    const handle = Object.freeze(Object.create(null));
+    RECEIPTS.set(handle, { receipt, target: targetEvidence, basis });
+    return handle;
+  }
+  const receiptState = RECEIPTS.get(data.receiptEvidence);
+  if (!receiptState || receiptState.target !== targetEvidence || receiptState.basis !== basis) throw new Error("Receipt evidence mismatch");
+  if (kind === "tree") {
+    if (!target.tree) throw new Error("Target has no tree metadata");
+    const treeBytes = checkedBytes(data.bytes, target.tree, 16777216);
+    const signatureEntry = requireAsset(receiptState.receipt, `${treeName}.signatures.json`);
+    const signatureBytes = checkedBytes(data.signatureEnvelopeBytes, signatureEntry, 65536);
+    const envelope = parseSignatureEnvelope(signatureBytes);
+    const keys = state.root.releaseKeys.filter((key) => key.channels.includes(release.channel) && key.roles.includes("tree"));
+    verifySignatureThreshold(treeBytes, envelope, keys, state.root.releaseThreshold);
+    const tree = parseUpdateDocument(treeBytes, "ocx.update.tree/1");
+    if (tree.version !== release.version || tree.target !== target.id) throw new Error("Tree target mismatch");
+    const handle = Object.freeze(Object.create(null));
+    TREES.set(handle, { tree, target: targetEvidence, basis, receipt: data.receiptEvidence });
+    return handle;
+  }
+  const bytes = checkedBytes(data.bytes, target.capabilities, 1048576);
+  const capability = parseUpdateDocument(bytes, "ocx.link-capabilities/1");
+  if (capability.version !== release.version || capability.channel !== release.channel
+      || capability.target !== target.id || capability.artifactSha256 !== target.artifact.sha256) {
+    throw new Error("Capability target mismatch");
+  }
+  const handle = Object.freeze(Object.create(null));
+  CAPABILITIES.set(handle, { capability, target: targetEvidence, basis, receipt: data.receiptEvidence });
   return handle;
 }
