@@ -74,3 +74,31 @@ test("reload action preserves focus across stale and fresh transitions without s
   await resolveRead(2, "stale");
   expect(win.document.activeElement === other as never).toBe(true);
 });
+
+test("a deliberate blur before the stale update commits is not reversed", async () => {
+  await render(0);
+  const original = header();
+  original.focus();
+  await act(async () => {
+    reads[0]!(Response.json({ state: "stale", runningCount: 1 }));
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    original.blur();
+    expect(win.document.activeElement === win.document.body).toBe(true);
+  });
+  expect(host.querySelector(".codex-stale-banner button")).toBeTruthy();
+  expect(win.document.activeElement === win.document.body).toBe(true);
+});
+
+test("a deliberate blur before the banner is replaced is not reversed", async () => {
+  await render(0);
+  await resolveRead(0, "stale");
+  const banner = host.querySelector<HTMLButtonElement>(".codex-stale-banner button")!;
+  banner.focus();
+  await act(async () => {
+    root.render(<LanguageProvider><Models apiBase="http://localhost" restartEpoch={1} reportRestart={() => {}} /></LanguageProvider>);
+    banner.blur();
+    expect(win.document.activeElement === win.document.body).toBe(true);
+  });
+  expect(header()).toBeTruthy();
+  expect(win.document.activeElement === win.document.body).toBe(true);
+});

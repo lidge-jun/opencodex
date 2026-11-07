@@ -37,5 +37,9 @@ try {
   await reads[2]("stale");
   await banner.waitFor();
   if (!await page.locator("#other").evaluate(el => el === document.activeElement)) throw new Error("Stale transition stole unrelated focus");
+  await page.locator("#probe-head").focus();
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-blur-before-commit")));
+  await page.locator("#probe-banner").waitFor();
+  if (!await page.evaluate(() => document.activeElement === document.body)) throw new Error("Deliberate pre-commit blur was overridden");
   console.log("PASS: WebKit preserves reload focus in both directions without stealing focus");
 } finally { await browser.close(); }

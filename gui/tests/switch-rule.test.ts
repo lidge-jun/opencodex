@@ -31,6 +31,8 @@ function wrappedToggle(tag: JsxTag): boolean {
   const type = attr(tag, "type")?.initializer;
   const parent = tag.parent;
   if (tag.tagName.getText() !== "input" || !type || !ts.isStringLiteral(type) || type.text !== "checkbox"
+      || tag.attributes.properties.some(property => !ts.isJsxAttribute(property)
+        || ["hidden", "aria-hidden", "style", "className"].includes(property.name.getText()))
       || !ts.isJsxElement(parent) || !staticClass(parent.openingElement, "toggle")) return false;
   const children = parent.children.filter(child => !ts.isJsxText(child) || child.text.trim() !== "");
   const next = children[children.indexOf(tag as ts.JsxChild) + 1];
@@ -88,6 +90,10 @@ test("only a checkbox inside a real toggle track with a slider can use the wrapp
     '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider" hidden /></span>',
     '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider hidden" /></span>',
     '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider" style={{ display: "none" }} /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" hidden /><span className="slider" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" aria-hidden="true" /><span className="slider" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" style={{display:"none"}} /><span className="slider" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" {...props} /><span className="slider" /></span>',
   ]) expect(scan(invalid, "invalid.tsx").offenders).toHaveLength(1);
 });
 

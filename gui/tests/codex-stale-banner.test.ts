@@ -125,7 +125,7 @@ describe("Models page wiring", () => {
   test("reads the state once on mount, not on a timer", () => {
     const effect = appServerReadEffect(src);
     const cancel = sourceSection(src, "const cancelAppServerRead = useCallback(", "}, []);");
-    const read = sourceSection(src, "const reloadAppServerState = useCallback(", "}, [apiBase, cancelAppServerRead, setAppServerState]);");
+    const read = sourceSection(src, "const reloadAppServerState = useCallback(", "}, [apiBase, cancelAppServerRead]);");
     expect(effect.match(/reloadAppServerState\(\)/g)).toHaveLength(1);
     expect(effect).toContain("return cancelAppServerRead;");
     expect(cancel).toContain("appServerReadGeneration.current++");
@@ -186,7 +186,7 @@ describe("cross-surface invalidation", () => {
     expect(effect).toContain("return cancelAppServerRead;");
     const dependencies = effect.slice(effect.lastIndexOf("}, [") + 4, effect.lastIndexOf("]"))
       .split(",").map(value => value.trim());
-    expect(dependencies).toEqual(["apiBase", "cancelAppServerRead", "reloadAppServerState", "restartEpoch", "setAppServerState"]);
+    expect(dependencies).toEqual(["apiBase", "cancelAppServerRead", "reloadAppServerState", "restartEpoch"]);
   });
 
   test("the epoch is the only cross-surface coupling, not a shared controller", () => {
