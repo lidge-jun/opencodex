@@ -64,7 +64,7 @@ export interface SettingsData {
     autostartEnabled: boolean;
     shimCoverage: "full" | "cli-only" | "none";
     diagnosticStale: boolean;
-    desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
+    desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown; running?: boolean; viable?: boolean };
   };
 }
 export type SidecarBackend = "openai" | "anthropic";

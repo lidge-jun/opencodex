@@ -240,11 +240,13 @@ test("verified disabled login without other protection requires action", async (
   expect(desktopBadge()).toBe("Running · Start at Login off");
 });
 
-test("#6963: a stopped Desktop and a stale reading stay unhealthy; a verified Desktop is ready", async () => {
+test("#6963: a stopped Desktop needs action, a stale reading is calm, and a verified Desktop is ready", async () => {
   desktop = true;
   desktopViable = false;
   await mount();
-  expect(desktopBadge()).toBe("Start at Login not verified");
+  expect(desktopBadge()).toBe("Installed but unhealthy");
+  expect(container.querySelector(".startup-status")?.textContent).toContain("Action required");
+  expect(container.querySelector(".startup-status")?.textContent).toContain("Reopen the desktop app");
   await act(async () => { root!.unmount(); });
   root = null;
   clearClientResourceStoresForTests();

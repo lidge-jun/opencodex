@@ -32,15 +32,17 @@ describe("startup health UI decisions", () => {
         installShim: "ocx codex-shim install", restoreNative: "ocx restore" },
     } as const;
     const t: TFn = key => DICTS.en[key];
-    const render = (loginState: "unknown" | "disabled" | "enabled") => {
+    const render = (loginState: "unknown" | "disabled" | "enabled", running = true) => {
       const enabled = loginState === "enabled";
       const data = { ...base, ...(enabled ? { status: "protected", rebootSafe: true, protection: "desktop" } : {}),
-        desktop: { owned: true, running: true, loginEnabled: enabled, loginState, viable: enabled } } as StartupHealthData;
+        desktop: { owned: true, running, loginEnabled: enabled, loginState, viable: enabled && running } } as StartupHealthData;
       return renderToStaticMarkup(createElement(I18nContext.Provider,
         { value: { locale: "en", setLocale: () => {}, t } },
         createElement(StartupHeroSection, { failed: false, data })));
     };
     expect(render("unknown")).not.toContain("Action required");
+    expect(render("unknown", false)).toContain("Action required");
+    expect(render("unknown", false)).toContain("Reopen the desktop app");
     expect(render("disabled")).toContain("Action required");
     expect(render("enabled")).not.toContain("Action required");
     const cold = renderToStaticMarkup(createElement(I18nContext.Provider,
@@ -71,6 +73,17 @@ describe("startup health UI decisions", () => {
     expect(mergeStartupProbe({ status: "protected", stale: false, desktopManaged: true }, false)).toEqual({ status: "protected", desktopManaged: true });
     expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local", desktop })).toBe("unverified");
     expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local" })).toBe("unverified");
+  });
+  test("fresh stopped Desktop supervision is actionable even when login is unknown", () => {
+    const desktop = { owned: true, loginState: "unknown", running: false, viable: false };
+    const health = { status: "at-risk", routingKind: "opencodex-local", diagnosticStale: false, desktop } as const;
+    expect(startupPresentation(health)).toBe("at-risk");
+    expect(mapStartupHealthProbe(health)).toBe("at-risk");
+    expect(seedStartupHealthFromSettings(null, health)).toBe("at-risk");
+    expect(startupChecklistDone({ ...health, protection: "none" })).toBe(false);
+    expect(startupPresentation({ ...health, diagnosticStale: true })).toBe("unverified");
+    expect(startupPresentation({ ...health, desktop: { ...desktop, running: true } })).toBe("unverified");
+    expect(startupPresentation({ ...health, status: "protected" })).toBe("protected");
   });
   test("selects the shared risk-detail message", () => {
     expect(startupRiskDetailKey({ routingKind: "custom-local", shimCoverage: "none" }))

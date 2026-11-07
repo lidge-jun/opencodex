@@ -12,15 +12,25 @@ export function desktopManagesStartup(health: Pick<StartupRiskDetail, "desktop">
   return health.desktop !== undefined && (health.desktop.owned || health.desktop.supervisor !== undefined);
 }
 
+type DesktopPresentation = { owned?: boolean; supervisor?: unknown; loginState?: unknown; running?: boolean; viable?: boolean };
+
+export function desktopSupervisionFailed(data: {
+  routingKind?: unknown; diagnosticStale?: unknown; desktop?: DesktopPresentation;
+}): boolean {
+  return data.diagnosticStale !== true && startupDesktopContext(data)
+    && data.desktop?.running === false && data.desktop.viable === false;
+}
+
 /** Presentation is distinct from conservative restart-protection credit. */
 export function startupPresentation(data: {
   status: "native" | "protected" | "at-risk";
   routingKind?: unknown;
   diagnosticStale?: unknown;
-  desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
+  desktop?: DesktopPresentation;
 }, failed = false): "native" | "protected" | "at-risk" | "unverified" | "error" {
   if (!failed && data.diagnosticStale !== true && (data.status === "native" || data.status === "protected")) return data.status;
   if (data.diagnosticStale === true && data.routingKind === "opencodex-local") return "unverified";
+  if (!failed && desktopSupervisionFailed(data)) return data.status;
   if (startupDesktopContext(data)
     && (failed || data.diagnosticStale === true
       || (data.desktop?.loginState !== "disabled" && data.desktop?.loginState !== "enabled"))) return "unverified";
@@ -31,7 +41,7 @@ export function startupChecklistDone(data: {
   status?: "native" | "protected" | "at-risk";
   routingKind?: unknown;
   diagnosticStale?: unknown;
-  desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
+  desktop?: DesktopPresentation;
   protection?: string;
   serviceInstalled?: boolean;
   shimInstalled?: boolean;
@@ -163,7 +173,7 @@ export function mapStartupHealthProbe(data: {
   status?: unknown;
   diagnosticStale?: unknown;
   routingKind?: unknown;
-  desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
+  desktop?: DesktopPresentation;
 }): StartupHealthStatus | null {
   const status = data.status;
   const valid = status === "native" || status === "protected" || status === "at-risk";
@@ -187,7 +197,7 @@ export function probeNeedsFastRetry(probe: StartupHealthProbe | undefined | null
  */
 export function seedStartupHealthFromSettings(
   previous: StartupHealthStatus | null,
-  seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean; routingKind?: unknown; desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown } } | null | undefined,
+  seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean; routingKind?: unknown; desktop?: DesktopPresentation } | null | undefined,
 ): StartupHealthStatus | null {
   if (!seeded) return previous;
   if (seeded.diagnosticStale) return seeded.routingKind === "opencodex-local" ? "unverified" : previous;

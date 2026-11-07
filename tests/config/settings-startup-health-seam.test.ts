@@ -64,6 +64,19 @@ test("settings and startup health retain the same Desktop login evidence", async
   }
 });
 
+test("settings and startup health preserve stopped Desktop supervision evidence", async () => {
+  const desktop = { owned: true, running: false, loginEnabled: false, loginState: "unknown" as const, viable: false };
+  const health = startupHealthFixture({ status: "at-risk", routingKind: "opencodex-local", desktop });
+  const deps: ManagementApiDeps = { getCachedStartupHealth: async () => health };
+  for (const path of ["/api/startup-health", "/api/settings"]) {
+    const req = new Request(`http://127.0.0.1:10100${path}`);
+    const response = await handleManagementAPI(req, new URL(req.url), baseConfig(), deps);
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { desktop?: typeof desktop; startupHealth?: { desktop?: typeof desktop } };
+    expect((path === "/api/settings" ? body.startupHealth : body)?.desktop).toEqual(desktop);
+  }
+});
+
 afterEach(() => invalidateStartupHealthCache());
 
 /** Leave a probe in flight that never settles until released, as a slow Windows service query does. */
