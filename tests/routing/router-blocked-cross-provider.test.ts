@@ -123,10 +123,12 @@ describe("blocked-model redirect compatibility and provider changes", () => {
 
   test("canonical Vertex forward mode is rejected before registry normalization", () => {
     const configured = keyedSourceConfig({});
-    configured.providers["google-vertex"] = {
-      adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "forward", models: ["gemini"],
-    };
-    expect(() => routeModel(configured, "google-vertex/gemini")).toThrow(/forward/i);
+    for (const adapter of ["google", "openai-chat"]) {
+      configured.providers["google-vertex"] = {
+        adapter, baseUrl: "https://aiplatform.googleapis.com", authMode: "forward", models: ["gemini"],
+      };
+      expect(() => routeModel(configured, "google-vertex/gemini")).toThrow(/forward/i);
+    }
   });
 
   test("policy rejects a same-provider substitute outside its eligible candidate list", () => {

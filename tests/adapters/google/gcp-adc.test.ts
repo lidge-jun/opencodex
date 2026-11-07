@@ -158,12 +158,14 @@ describe("gcp-adc resolver", () => {
     const config = { port: 0, defaultProvider: "ambient", providers: {
       ambient: { ...vertex }, marker: { ...vertex, apiKey: "gcp-sa:fixture-marker" },
       placeholder: { ...vertex, apiKey: "N/A" }, key: { ...vertex, apiKey: "fixture-key" },
+      "google-vertex": { adapter: "openai-chat", baseUrl: "https://legacy.example/v1", apiKey: "gcp-sa:fixture-marker" },
     } } as OcxConfig;
     const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
     expect(dto.providers.ambient?.vertexCredentialKind).toBe("ambient");
     expect(dto.providers.marker?.vertexCredentialKind).toBe("marker");
     expect(dto.providers.placeholder?.vertexCredentialKind).toBe("ambient");
     expect(dto.providers.key?.vertexCredentialKind).toBe("api-key");
+    expect(dto.providers["google-vertex"]?.vertexCredentialKind).toBe("marker");
     expect(JSON.stringify(dto)).not.toContain("fixture-marker");
     expect(JSON.stringify(dto)).not.toContain("fixture-key");
   });

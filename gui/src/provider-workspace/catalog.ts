@@ -166,8 +166,8 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
 
 /** A keyless Vertex row can use host credentials, but the dashboard has not verified them. */
 export function isVertexProvider(p: WorkspaceProvider | WorkspaceItem): boolean {
-  return p.adapter === "google" && (p.googleMode === "vertex" || (p.googleMode === undefined && "name" in p && p.name === "google-vertex"
-    && normalizedBaseUrl(p.baseUrl) === "https://aiplatform.googleapis.com"));
+  return ("name" in p && p.name === "google-vertex" && (p.googleMode === undefined || p.googleMode === "vertex"))
+    || (p.adapter === "google" && p.googleMode === "vertex");
 }
 
 export function usesUnverifiedVertexCredentials(p: WorkspaceProvider | WorkspaceItem): boolean {

@@ -198,7 +198,7 @@ export async function fetchProviderModelsWithAuth(
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   if (azureMetadata) await refreshAzureModelMetadata(prov.baseUrl, metadataConfigDir);
   const seedVertexDefault = prov.adapter === "google"
-    && effectiveGoogleMode(name, prov) === "vertex"
+    && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
   const seedStaticDefault = prov.liveModels === false

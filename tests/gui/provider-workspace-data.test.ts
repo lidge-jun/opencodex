@@ -84,6 +84,16 @@ describe("applyActiveAccountReauth", () => {
     expect(sections.needsSetup).toEqual([]);
     expect(sections.ready.map(p => p.name)).toEqual(["key"]);
   });
+  test("canonical legacy Vertex with a pinned old URL is still unverified", () => {
+    const sections = buildProviderWorkspace({ "google-vertex": {
+      adapter: "google", baseUrl: "https://legacy.example/v1", authMode: "key", hasApiKey: false,
+    } } as never);
+    expect(sections.unverified.map(p => p.name)).toEqual(["google-vertex"]);
+    const mismatchedAdapter = buildProviderWorkspace({ "google-vertex": {
+      adapter: "openai-chat", baseUrl: "https://legacy.example/v1", authMode: "key", hasApiKey: true, vertexCredentialKind: "marker",
+    } } as never);
+    expect(mismatchedAdapter.unverified.map(p => p.name)).toEqual(["google-vertex"]);
+  });
   test("tags ready provider when active account needs reauth without moving sections", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),

@@ -74,6 +74,14 @@ test("Vertex settings can update project and clear location", async () => {
   await act(async () => { container.unmount(); });
 });
 
+test("canonical Vertex with an old saved URL exposes project and location settings", async () => {
+  const item = { name: "google-vertex", adapter: "google", baseUrl: "https://legacy.example/v1", authMode: "key" } as WorkspaceItem;
+  const container = await renderSettings(item, async () => ({ ok: true }));
+  expect(container.textContent).toContain("Project ID");
+  expect(container.textContent).toContain("Location");
+  await act(async () => { container.unmount(); });
+});
+
 test("settings saves provider pacing and a slower model override", async () => {
   const item: WorkspaceItem = {
     name: "nvidia",

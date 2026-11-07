@@ -213,7 +213,7 @@ export default function ProviderSettings({
   const supportsReasoningReplay = !isCatalogProviderId(item.name)
     && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
   const reasoningReplayDirty = supportsReasoningReplay && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
-  const vertexSettings = isVertexProvider(item) && adapter.trim() === "google";
+  const vertexSettings = isVertexProvider(item) && (item.name === "google-vertex" || adapter.trim() === "google");
   const dirty = reasoningReplayDirty || adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || (vertexSettings && (project.trim() !== (item.project ?? "") || location.trim() !== (item.location ?? "")))

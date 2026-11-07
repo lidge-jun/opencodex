@@ -56,6 +56,15 @@ describe("Vertex catalog configuration", () => {
     expect(rows).toContainEqual(expect.objectContaining({ provider: "renamed-vertex", id: "gemini-discovered" }));
     expect(sends).toBeGreaterThan(0);
   });
+  test("an implicit canonical legacy Vertex row does not add an undiscovered default to a live catalog", async () => {
+    globalThis.fetch = (() => Promise.resolve(Response.json({ data: [{ id: "upstream-available" }] }))) as typeof fetch;
+    const config: OcxConfig = { providers: { "google-vertex": {
+      adapter: "google", baseUrl: "https://aiplatform.googleapis.com", apiKey: "test-key", defaultModel: "not-in-upstream",
+    } } };
+    const rows = await gatherRoutedModels(config);
+    expect(rows).toContainEqual(expect.objectContaining({ provider: "google-vertex", id: "upstream-available" }));
+    expect(rows.some(row => row.provider === "google-vertex" && row.id === "not-in-upstream")).toBe(false);
+  });
   test("defaultModel without models survives failed Vertex discovery", async () => {
     globalThis.fetch = (() => { throw new TypeError("offline"); }) as typeof fetch;
     const config: OcxConfig = {
