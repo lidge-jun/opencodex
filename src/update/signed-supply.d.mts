@@ -2,6 +2,7 @@ declare const rootEvidence: unique symbol;
 declare const rootTransition: unique symbol;
 declare const releaseEvidence: unique symbol;
 declare const targetEvidence: unique symbol;
+declare const artifactEvidence: unique symbol;
 
 /** In-process module-owned root handle; parsing a document does not create one. */
 export interface RootEvidence { readonly [rootEvidence]: never }
@@ -9,6 +10,7 @@ export interface VerifiedRootTransition { readonly [rootTransition]: never }
 export type RootBasis = RootEvidence | VerifiedRootTransition;
 export interface ReleaseEvidence { readonly [releaseEvidence]: never }
 export interface TargetEvidence { readonly [targetEvidence]: never; readonly candidateId: string }
+export interface ArtifactEvidence { readonly [artifactEvidence]: never }
 export interface TransitionSummary { readonly predecessorDigest: string; readonly predecessorRevision: number; readonly successorDigest: string; readonly successorRevision: number }
 export interface UpdateSelection {
   platform: "macos" | "linux" | "windows";
@@ -23,3 +25,4 @@ export function verifyRootTransition(predecessorBasis: RootBasis, bytes: Uint8Ar
 export function inspectTransition(transition: VerifiedRootTransition): TransitionSummary;
 export function verifyReleaseEvidence(bytes: Uint8Array, envelopeBytes: Uint8Array, rootBasis: RootBasis, expectedChannel: "latest" | "preview" | "nightly", nowMs: number): ReleaseEvidence;
 export function selectTargetEvidence(releaseEvidence: ReleaseEvidence, selection: UpdateSelection): TargetEvidence;
+export function verifyArtifactEvidence(target: TargetEvidence, bytes: Uint8Array, basis: RootBasis, nowMs: number): ArtifactEvidence;

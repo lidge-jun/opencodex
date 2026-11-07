@@ -4,12 +4,15 @@ import { EMBEDDED_ROOT_SHA256 } from "./update-trust-anchor.mjs";
 import { snapshotUpdateBytes } from "./update-bytes.mjs";
 import { verifySignatureThreshold } from "./update-signature-threshold.mjs";
 import { deriveCandidateId } from "./update-candidate-id.mjs";
+import { decodePublicKey, verifyMinisignBytes } from "./minisign.mjs";
+import { trustedCommentMatchesVersion } from "./update-signed-version.mjs";
 
 // Handles are module-owned and contain no caller-mutable trust data.
 const ROOTS = new WeakMap();
 const TRANSITIONS = new WeakMap();
 const RELEASES = new WeakMap();
 const CANDIDATES = new WeakMap();
+const ARTIFACTS = new WeakMap();
 
 function currentRoot(handle, nowMs) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("Invalid trust clock");
@@ -88,5 +91,34 @@ export function selectTargetEvidence(releaseEvidence, selection) {
   const candidateId = deriveCandidateId(state.digest, matches[0].id);
   const handle = Object.freeze({ candidateId });
   CANDIDATES.set(handle, { release: releaseEvidence, root: state.root, target: matches[0] });
+  return handle;
+}
+
+/** Verify artifact bytes as evidence; this grants no staging or install authority. */
+export function verifyArtifactEvidence(targetEvidence, bytes, basis, nowMs) {
+  const state = currentRoot(basis, nowMs);
+  const candidate = CANDIDATES.get(targetEvidence);
+  if (!candidate || candidate.root !== basis) throw new Error("Invalid target evidence basis");
+  const release = RELEASES.get(candidate.release);
+  if (!release || release.root !== basis) throw new Error("Invalid release evidence basis");
+  const target = candidate.target;
+  const roles = { tauri: "desktop-artifact", standalone: "standalone-artifact", guardian: "guardian-artifact", tree: "tree" };
+  const role = roles[target.artifactKind];
+  if (!role || state.root.releaseThreshold !== 1) throw new Error("Unsupported artifact signature threshold");
+  const key = state.root.releaseKeys.find((entry) => entry.keyId === target.artifact.signerFingerprint
+    && entry.channels.includes(release.release.channel) && entry.roles.includes(role));
+  if (!key) throw new Error("Artifact signer is not delegated");
+  const snapshot = snapshotUpdateBytes(bytes, target.artifact.size);
+  if (snapshot.byteLength !== target.artifact.size
+      || createHash("sha256").update(snapshot).digest("hex") !== target.artifact.sha256) {
+    throw new Error("Artifact bytes do not match signed target");
+  }
+  const publicBox = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.from(key.publicKey, "base64"));
+  const result = verifyMinisignBytes(snapshot, target.artifact.signatureBox, decodePublicKey(publicBox));
+  if (!trustedCommentMatchesVersion(result.trustedComment, release.release.version)) {
+    throw new Error("Signed artifact version mismatch");
+  }
+  const handle = Object.freeze(Object.create(null));
+  ARTIFACTS.set(handle, { target: targetEvidence, basis, digest: target.artifact.sha256, size: snapshot.byteLength });
   return handle;
 }

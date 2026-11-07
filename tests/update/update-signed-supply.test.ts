@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { repoPath } from "../helpers/repo-root";
-import { bootstrapEmbeddedRoot, selectTargetEvidence, verifyReleaseEvidence, verifyRootTransition } from "../../src/update/signed-supply.mjs";
+import { bootstrapEmbeddedRoot, selectTargetEvidence, verifyArtifactEvidence, verifyReleaseEvidence, verifyRootTransition } from "../../src/update/signed-supply.mjs";
 import { deriveCandidateId } from "../../src/update/update-candidate-id.mjs";
 
 describe("embedded update trust root", () => {
@@ -51,9 +51,8 @@ describe("verified release and candidate handles", () => {
       const anchor = createHash("sha256").update(root).digest("hex");
       writeFileSync(join(dir, "update-trust-anchor.mjs"), `export const EMBEDDED_ROOT_SHA256 = "${anchor}";\n`);
       const fixture = await import(pathToFileURL(join(dir, "signed-supply.mjs")).href);
-      const signBox = (bytes: Buffer, signingKey = privateKey, signingId = id) => {
+      const signBox = (bytes: Buffer, signingKey = privateKey, signingId = id, comment = "timestamp:1\tversion:1.2.3") => {
         const signature = sign(null, createHash("blake2b512").update(bytes).digest(), signingKey);
-        const comment = "timestamp:1\tversion:1.2.3";
         const global = sign(null, Buffer.concat([signature, Buffer.from(comment)]), signingKey);
         const packet = Buffer.concat([Buffer.from("ED"), signingId, signature]).toString("base64");
         return Buffer.from(`untrusted comment: fixture\n${packet}\ntrusted comment: ${comment}\n${global.toString("base64")}\n`).toString("base64");
@@ -77,6 +76,13 @@ describe("verified release and candidate handles", () => {
       const candidate = fixture.selectTargetEvidence(verified, selection);
       expect(candidate.candidateId).toBe(deriveCandidateId(createHash("sha256").update(release).digest("hex"), "macos-x64-desktop-tauri"));
       expect(Object.isFrozen(candidate)).toBe(true);
+      const artifactEvidence = fixture.verifyArtifactEvidence(candidate, artifact, rootHandle, now);
+      expect(Object.isFrozen(artifactEvidence)).toBe(true);
+      expect(Object.keys(artifactEvidence)).toEqual([]);
+      expect(() => fixture.verifyArtifactEvidence(candidate, Buffer.from("changed"), rootHandle, now)).toThrow();
+      expect(() => fixture.verifyArtifactEvidence({}, artifact, rootHandle, now)).toThrow();
+      expect(() => verifyArtifactEvidence(candidate, artifact, rootHandle, now)).toThrow();
+      expect(() => fixture.verifyArtifactEvidence(candidate, artifact, rootHandle, Date.parse("2030-01-01T00:00:00Z"))).toThrow();
       expect(() => fixture.verifyReleaseEvidence(release, envelope, {}, "latest", now)).toThrow();
       expect(() => fixture.verifyReleaseEvidence(Buffer.from("changed"), envelope, rootHandle, "latest", now)).toThrow();
       expect(() => fixture.verifyReleaseEvidence(release, envelope, rootHandle, "preview", now)).toThrow();
@@ -97,6 +103,7 @@ describe("verified release and candidate handles", () => {
       const newSignature = { keyFingerprint: successorFingerprint, signatureBox: signBox(successor, successorPair.privateKey, successorId) };
       const transitionEnvelope = (signatures: unknown[]) => Buffer.from(JSON.stringify({ schema: "ocx.update.signatures/1", signatures }));
       const transition = fixture.verifyRootTransition(rootHandle, successor, transitionEnvelope([oldSignature, newSignature]), now);
+      expect(() => fixture.verifyArtifactEvidence(candidate, artifact, transition, now)).toThrow();
       expect(fixture.inspectTransition(transition)).toEqual({ predecessorDigest: anchor, predecessorRevision: 1, successorDigest: createHash("sha256").update(successor).digest("hex"), successorRevision: 2 });
       expect(() => fixture.verifyRootTransition(rootHandle, successor, transitionEnvelope([oldSignature]), now)).toThrow();
       expect(() => fixture.verifyRootTransition(rootHandle, successor, transitionEnvelope([newSignature]), now)).toThrow();
@@ -111,8 +118,40 @@ describe("verified release and candidate handles", () => {
       const nextBytes = Buffer.from(JSON.stringify(nextRelease));
       const nextEnvelope = transitionEnvelope([{ keyFingerprint: successorFingerprint, signatureBox: signBox(nextBytes, successorPair.privateKey, successorId) }]);
       const nextEvidence = fixture.verifyReleaseEvidence(nextBytes, nextEnvelope, transition, "latest", now);
-      expect(fixture.selectTargetEvidence(nextEvidence, selection).candidateId).toMatch(/^[a-f0-9]{64}$/);
+      const nextCandidate = fixture.selectTargetEvidence(nextEvidence, selection);
+      expect(nextCandidate.candidateId).toMatch(/^[a-f0-9]{64}$/);
+      expect(() => fixture.verifyArtifactEvidence(nextCandidate, artifact, transition, now)).not.toThrow();
       expect(() => fixture.verifyReleaseEvidence(nextBytes, nextEnvelope, rootHandle, "latest", now)).toThrow();
+      for (const comment of ["timestamp:1", "version:1.2.4", "version:1.2.3\tversion:1.2.3"]) {
+        const altered = JSON.parse(release.toString());
+        altered.targets[0].artifact.signatureBox = signBox(artifact, privateKey, id, comment);
+        const alteredBytes = Buffer.from(JSON.stringify(altered));
+        const alteredEnvelope = transitionEnvelope([{ keyFingerprint: fingerprint, signatureBox: signBox(alteredBytes) }]);
+        const alteredRelease = fixture.verifyReleaseEvidence(alteredBytes, alteredEnvelope, rootHandle, "latest", now);
+        const alteredTarget = fixture.selectTargetEvidence(alteredRelease, selection);
+        expect(() => fixture.verifyArtifactEvidence(alteredTarget, artifact, rootHandle, now)).toThrow();
+      }
+      const wrongSigner = JSON.parse(release.toString());
+      wrongSigner.targets[0].artifact.signerFingerprint = successorFingerprint;
+      const wrongSignerBytes = Buffer.from(JSON.stringify(wrongSigner));
+      const wrongSignerEnvelope = transitionEnvelope([{ keyFingerprint: fingerprint, signatureBox: signBox(wrongSignerBytes) }]);
+      const wrongSignerRelease = fixture.verifyReleaseEvidence(wrongSignerBytes, wrongSignerEnvelope, rootHandle, "latest", now);
+      expect(() => fixture.verifyArtifactEvidence(fixture.selectTargetEvidence(wrongSignerRelease, selection), artifact, rootHandle, now)).toThrow();
+
+      const multiRoot = JSON.parse(successor.toString());
+      multiRoot.releaseKeys = [key, successorKey].map((entry) => ({ ...entry, channels: ["latest"], roles: ["release", "desktop-artifact"] }));
+      multiRoot.releaseThreshold = 2;
+      const multiRootBytes = Buffer.from(JSON.stringify(multiRoot));
+      const multiTransition = fixture.verifyRootTransition(rootHandle, multiRootBytes, transitionEnvelope([
+        { keyFingerprint: fingerprint, signatureBox: signBox(multiRootBytes) },
+        { keyFingerprint: successorFingerprint, signatureBox: signBox(multiRootBytes, successorPair.privateKey, successorId) },
+      ]), now);
+      const multiReleaseEnvelope = transitionEnvelope([
+        { keyFingerprint: fingerprint, signatureBox: signBox(nextBytes) },
+        { keyFingerprint: successorFingerprint, signatureBox: signBox(nextBytes, successorPair.privateKey, successorId) },
+      ]);
+      const multiRelease = fixture.verifyReleaseEvidence(nextBytes, multiReleaseEnvelope, multiTransition, "latest", now);
+      expect(() => fixture.verifyArtifactEvidence(fixture.selectTargetEvidence(multiRelease, selection), artifact, multiTransition, now)).toThrow();
       expect(() => bootstrapEmbeddedRoot(root, now)).toThrow();
       expect(() => verifyReleaseEvidence(release, envelope, rootHandle, "latest", now)).toThrow();
       expect(() => selectTargetEvidence(verified, selection)).toThrow();
