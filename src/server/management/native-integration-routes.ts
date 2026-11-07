@@ -299,13 +299,13 @@ function configFailureDiagnostic(error: unknown): NativeConfigDiagnostic {
 }
 
 /** ACL admission and Home apply exclusion precede this synchronous C section. */
-function commitNativeDecision(
+async function commitNativeDecision(
   ctx: NativeDecisionContext, clientId: NativeIntegrationClientId, enabled: boolean,
   persist: () => boolean | Response,
-): Response | null {
+): Promise<Response | null> {
   let published = false;
   try {
-    return withConfigMutationLockSync(() => {
+    return await settleConfigRoot(configRoot(), () => withConfigMutationLockSync(() => {
       initializeHomeRouteIntentDefaults(ctx.config, ctx.version);
       const result = persist();
       if (result instanceof Response) return result;
@@ -314,8 +314,13 @@ function commitNativeDecision(
       setRouteClientIntent(clientId, { enabled }, "home");
       if (ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
       return null;
-    });
+    }));
   } catch (error) {
+    if (error instanceof WindowsSecretAclSettleTimeoutError && !published) {
+      const firstParty = clientId === "claude-desktop" && resolveClaudeDesktopApplyMode(ctx.config, observeClaudeDesktopMode(ctx.config)) === "first-party";
+      return refusal(500, clientId, "write_failed", "Config ACL settlement timed out. Nothing was written; retry after it settles.",
+        firstParty ? { diagnostic: { stage: "ca", cause: "ETIMEDOUT" } } : {});
+    }
     if (error instanceof HomeAsideIntentDerivationError) return refusal(409, clientId, "metadata_unreadable",
       "Existing Aside ownership could not be resolved. Repair the Aside accounts.json manifest and stable userId selection, or choose an explicit Home Aside intent with ocx route to aside on or ocx route to aside off, then retry. Existing policy was preserved.");
     if (published || error instanceof ConfigWritePublishedError) {
@@ -414,7 +419,7 @@ async function handleCodexToggle(ctx: NativeDecisionContext): Promise<Response> 
      * lose is durability across a restart, and the envelope says so rather than
      * implying the switch failed.
      */
-    const decisionRefusal = commitNativeDecision(ctx, "codex", enabled, () => {
+    const decisionRefusal = await commitNativeDecision(ctx, "codex", enabled, () => {
       decisionResult = setCodexIntegrationEnabled(enabled);
       if (!decisionResult.ok && decisionResult.reason !== "missing") {
         return refusal(
@@ -553,7 +558,7 @@ async function handleGrokToggle(ctx: NativeDecisionContext): Promise<Response> {
      * on the envelope says. `conflict` and `invalid` are different: another
      * writer won, or the file is malformed and must not be overwritten.
      */
-    const decisionRefusal = commitNativeDecision(ctx, "grok", enabled, () => {
+    const decisionRefusal = await commitNativeDecision(ctx, "grok", enabled, () => {
       decisionResult = setGrokIntegrationEnabled(enabled);
       if (!decisionResult.ok && decisionResult.reason !== "missing") {
         return refusal(
@@ -784,7 +789,7 @@ async function handleClaudeDesktopToggle(ctx: NativeDecisionContext): Promise<Re
 
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
     const enabled = body.enabled;
-    const decisionRefusal = commitNativeDecision(ctx, "claude-desktop", enabled, () => {
+    const decisionRefusal = await commitNativeDecision(ctx, "claude-desktop", enabled, () => {
       const result = setIntegrationEnabled("claude-desktop", enabled);
       if (result.ok) {
         committedDesiredEnabled = enabled;
@@ -1013,7 +1018,7 @@ async function handleNativeIntegrationRoutesUnlocked(ctx: NativeDecisionContext)
 
     const enabled = body.enabled;
     const changed = claudeCodeEnabled(config) !== enabled;
-    const decisionRefusal = commitNativeDecision(ctx, "claude", enabled, () => {
+    const decisionRefusal = await commitNativeDecision(ctx, "claude", enabled, () => {
       if (!changed) return true;
 
       /*
