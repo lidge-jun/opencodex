@@ -18,7 +18,8 @@ const USAGE = `Usage:
   ocx config unset <dot.path> [--json]
   ocx config validate [path|-] [--json]
   ocx config export <path|-> [--json]
-  ocx config import <path|-> --yes [--json]`;
+  ocx config import <path|-> --yes [--json]
+Entering v2-plaintext requires: ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`;
 
 /**
  * Keys whose VALUE is a credential and must never be printed by display commands.
@@ -210,6 +211,12 @@ function validate(value: unknown): OcxConfig {
   return normalizeVisionConfig(result.config);
 }
 
+function requireDedicatedPlaintextTransition(current: OcxConfig, candidate: OcxConfig): void {
+  if (candidate.multiAgentMode === "v2-plaintext" && current.multiAgentMode !== "v2-plaintext") {
+    throw new CliUsageError("Entering v2-plaintext requires ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages. Task text may remain in history, provider requests and debug state. Complete that transition before restoring a config with this mode.");
+  }
+}
+
 export async function handleConfigCommand(argv: string[]): Promise<number> {
   let outcome = 0;
   const status = await runCliAction(async () => {
@@ -270,6 +277,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
         const candidate = structuredClone(fresh) as unknown as Record<string, unknown>;
         setPath(candidate, path, raw === undefined ? undefined : parseValue(raw), action === "unset");
         const config = validate(candidate);
+        requireDedicatedPlaintextTransition(fresh, config);
         savedValue = action === "unset" ? null : getPath(config, path);
         // Setting the order here is the operator restating it, exactly as through
         // `ocx account priority` or the management route, so it releases the manual pin
@@ -331,14 +339,19 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
+        // Reject invalid authority before lock preparation creates coordination files.
         readCliConfigForMutation();
         const imported = validate(loadInput(path));
+        // Do not hold the shared lock while reading stdin. Recheck the live mode and
+        // the active client connection, then save in the same synchronous transaction;
+        // saveConfig reuses this transaction.
         withConfigMutationLockSync(() => {
           const client = readClientConnectionState();
           if (client.kind === "connected" && (imported.runtimeRole !== "client"
             || JSON.stringify(imported.client) !== JSON.stringify(client.value))) {
             throw new Error("config import refused: disconnect the active client before replacing its connection");
           }
+          requireDedicatedPlaintextTransition(readCliConfigForMutation(), imported);
           saveConfig(imported);
         });
       });

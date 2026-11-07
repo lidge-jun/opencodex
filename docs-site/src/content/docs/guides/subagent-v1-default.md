@@ -7,9 +7,25 @@ OpenCodex installs with the sub-agent surface set to **v1**. The Dashboard, Mode
 pages all ask you to confirm before moving to **base** or **v2**, and this page is what that
 confirmation links to. The CLI does not prompt.
 
-The reason is narrow and specific: on v2, a task handed from a ChatGPT-native model to a routed
+The reason is narrow and specific: on the unchanged encrypted v2 path, a task handed from a ChatGPT-native model to a routed
 model cannot be read by the routed model. That is the single most common way people delegate —
-a GPT parent spawning a Grok, Claude or GLM child — and on v2 it fails every time.
+a GPT parent spawning a Grok, Claude or GLM child. An unreadable encrypted task fails at that boundary. The experimental opt-in below changes how new task messages are produced; it does not decrypt existing ones.
+
+## Optional V2 with plaintext task messages
+
+**V2 · plaintext tasks** (`v2-plaintext`) selects V2 for new chats while leaving the global V2 override off. It preserves V2 task names, hierarchy, follow-up messages, cancellation and concurrency, and reuses the experimental plaintext compiler for eligible canonical ChatGPT Responses requests. Existing chats retain their recorded selection. This is an additional explicit option; installing an update does not select it for you.
+
+Catalog pins apply to new sessions. The compiler follows the current setting on every eligible canonical ChatGPT request, including subsequent requests from existing V2 sessions. Keeping a session's recorded V2 selection does not exempt its later requests from compilation.
+
+Local response-ID continuations require the same admitted opencodex API-key identity and the request's own `thread-id`. A parent thread ID does not grant access to a child's retained task. Without either identity, after a proxy restart, or for older unbound cache entries, resend the full conversation without `previous_response_id`. Opting out still leaves independently retained copies on disk.
+
+The dashboard requires acknowledgment that task text can remain in Codex history, selected-provider requests and local response/debug state, including on-disk continuation snapshots or spills. HTTPS and authentication remain enabled. No recovery model call is added. Existing ciphertext is not decrypted and stored history is not rewritten. Disabling the compiler does not delete retained copies. Unsupported backend/client behavior can still fail. The ordinary v1 and mixed native-v1/routed-v2 modes remain available.
+
+```bash
+ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
+```
+
+Omit `--live` to configure the local target. Read `ocx v2 status --live --json` afterward; configured state and catalog convergence are distinct from a successful real delegation. To leave this mode, explicitly choose another mode. Independently set `plaintextV2AgentMessages` values are preserved.
 
 ## What you see when it happens
 

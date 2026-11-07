@@ -1,3 +1,4 @@
+import { handleOwnedResponses, expandOwnedResponseInput } from "../helpers/response-replay-owner";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,13 +134,12 @@ describe("Responses unforced store:false ephemeral function call state", () => {
           },
         }));
         try {
-          const { handleResponses } = await import("../../src/server/responses");
           // The configured provider id is NOT the adapter name: policy uses the serving adapter.
           const config = { port: 0, defaultProvider: "fixture", providers: {
             fixture: { adapter: name, baseUrl: "https://fixture.invalid", authMode: "key", apiKey: "fixture-key",
               models: ["fixture-model"], fetch: async () => { throw new Error("no provider I/O allowed"); } },
           } } as OcxConfig;
-          const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          const response = await handleOwnedResponses(new Request("http://localhost/v1/responses", {
             method: "POST", headers: { "content-type": "application/json", "x-codex-parent-thread-id": "qoder-task" },
             body: JSON.stringify({ model: "fixture/fixture-model", input: "use probe_echo", store: false, stream,
               tools: [custom ? { type: "custom", name: "exec", format: { type: "text" } }
@@ -157,7 +157,7 @@ describe("Responses unforced store:false ephemeral function call state", () => {
           const next = { model: "fixture-model", previous_response_id: result.id, input: [
             { type: custom ? "custom_tool_call_output" : "function_call_output", call_id: "qoder_native_execution", output: "OK" },
           ], store: false };
-          const expanded = expandPreviousResponseInput(next, "qoder-task");
+          const expanded = expandOwnedResponseInput(next);
           if (name === "qoder" && toolTurn) {
             expect(parseRequest(expanded).context.messages.at(-1)).toMatchObject({
               role: "toolResult", toolCallId: "qoder_native_execution", toolName, content: "OK",

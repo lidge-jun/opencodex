@@ -3,6 +3,12 @@ title: Pourquoi v1 est la surface de sous-agent par défaut
 description: Ce que bloque la limite des tâches chiffrées en v2, pourquoi OpenCodex livre désormais v1 et comment utiliser malgré tout v2.
 ---
 
+La sélection du catalogue concerne les nouvelles sessions, mais le compilateur activé traite aussi les requêtes ultérieures éligibles des sessions V2 existantes via la route ChatGPT canonique. Le désactiver ne supprime pas les copies déjà conservées et ne réécrit pas l’historique enregistré.
+
+**Option expérimentale : `v2-plaintext`.** Ce mode choisit V2 pour les nouvelles conversations sans activer la priorité V2 globale. Après accord explicite, les nouveaux messages de tâche éligibles sont transmis en clair au niveau applicatif ; HTTPS et l’authentification restent actifs. Le texte peut rester dans l’historique, les requêtes du fournisseur sélectionné et les données de débogage locales. Les tâches déjà chiffrées ne sont pas déchiffrées.
+
+La commande est `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`. Les limitations ci-dessous concernent le chemin V2 chiffré sans cette option ; les modes existants restent disponibles.
+
 OpenCodex s'installe avec la surface de sous-agent réglée sur **v1**. Les pages
 Dashboard, Models et Subagents demandent toutes confirmation avant de passer à
 **base** ou **v2** et renvoient vers cette page. La CLI ne demande rien.

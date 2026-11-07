@@ -3,13 +3,15 @@ title: 에이전트 설정
 description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 체인, 기본값 동기화, 노력 상한을 다룹니다.
 ---
 
+`multiAgentMode: "v2-plaintext"`는 새 채팅에 V2를 선택하면서 전역 V2 강제를 끄고, 조건에 맞는 공식 ChatGPT Responses 경로에 실험적 평문 작업 전달을 적용하는 명시적 선택입니다. 대시보드 확인 또는 `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`로 진입합니다. 작업 텍스트는 이력·선택한 제공자의 요청·로컬 디버그 상태에 남을 수 있지만 HTTPS와 인증은 유지됩니다. 기존 암호문을 복호화하지 않으며 기존 채팅 기록도 변경하지 않습니다. 별도 `plaintextV2AgentMessages` 설정은 다른 모드로 돌아갈 때도 보존됩니다. 컴파일러는 현재 설정을 따르므로 기존 V2 세션의 후속 적격 요청도 적용 대상입니다. 비활성화해도 이력·제공자 요청·로컬 응답·디버그 상태에 이미 보존된 사본은 삭제되지 않습니다.
+
 에이전트 설정은 어떤 Codex 협업 표면을 노출할지와, opencodex가 위임 작업을 어떻게 안내하고, 라우팅하고, 제한할지를 제어합니다.
 
 ## 에이전트 필드
 
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. 새 세션에 적용됩니다. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. `v2-plaintext`는 실험적 평문 작업 전달을 함께 켜고 전역 강제는 끕니다. 카탈로그 고정값은 새 세션에 적용되며, 활성화된 컴파일러는 기존 V2 세션의 후속 적격 요청에도 적용됩니다. |
 | `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에서 우선 표시합니다. Subagents 페이지는 bare native와 routed id만 제공하며 저장할 때 exact account-qualified 선택을 제외합니다. exact 선택은 `ocx agent subagents set`을 사용하거나 설정을 직접 편집하세요. [Astra 최초 업그레이드](/reference/configuration/agents/#astra-roster-upgrade) 이후에는 빈 목록도 그대로 보존됩니다. |
 | `injectionModel?` | `string` | — | 프록시가 작성한 v2 위임 안내에서 사용하는 선호 네이티브 또는 라우팅된 서브에이전트 모델입니다. |
 | `injectionEffort?` | `string` | — | 선호 노력(`low`부터 `ultra`까지)입니다. `injectionModel`이 있을 때만 의미가 있습니다. |
@@ -22,7 +24,7 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | `effortCap?` | `string` | — | 자격을 갖춘 v2 메인 턴과 표시된 생성 하위 턴에 대한 하드 상한입니다. `low`부터 `ultra`까지 허용합니다. |
 | `subagentEffortCap?` | `string` | — | 생성된 하위 턴에만 적용되는 추가 상한입니다. 두 상한이 모두 적용되면 더 낮은 값이 이깁니다. |
 
-이 표면은 대시보드나 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`로 관리합니다. 모드 변경은 새 세션에 적용됩니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ocx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
+이 표면은 대시보드나 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`로 관리합니다. `v2-plaintext` 진입에는 `--acknowledge-plaintext-agent-messages`가 필요합니다. 모드 변경은 새 세션에 적용됩니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ocx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
 
 관리 API는 `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`를 제공합니다. injection-model 업데이트는 부분 업데이트입니다. 사용자 지정 프롬프트는 이 API의 `prompt` 필드입니다.
 

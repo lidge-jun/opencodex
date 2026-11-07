@@ -3,6 +3,12 @@ title: v1 neden varsayılan alt ajan arayüzü?
 description: v2 şifreli görev sınırlamasının neyi bozduğu, OpenCodex'in neden artık v1 sunduğu ve yine de v2 istiyorsanız ne yapacağınız.
 ---
 
+Katalog seçimi yeni oturumlara uygulanır; ancak etkin derleyici mevcut V2 oturumlarının standart ChatGPT yolu üzerinden yaptığı sonraki uygun istekleri de işler. Devre dışı bırakmak saklanan kopyaları silmez veya kayıtlı geçmişi yeniden yazmaz.
+
+**Deneysel seçenek: `v2-plaintext`.** Genel V2 zorlamasını açmadan yeni sohbetler için V2 seçer. Açık onaydan sonra uygun yeni görev mesajları uygulama düzeyinde düz metin olarak aktarılır; HTTPS ve kimlik doğrulama korunur. Görev metni geçmişte, seçilen sağlayıcıya gönderilen isteklerde ve yerel hata ayıklama verilerinde kalabilir. Mevcut şifreli görevlerin şifresi çözülmez.
+
+Komut: `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`. Aşağıdaki sınırlamalar bu seçenek kullanılmadan yapılan şifreli V2 aktarımı içindir. Önceki modlar kullanılabilir.
+
 OpenCodex, alt ajan arayüzü **v1** olarak kurulur. Dashboard, Models ve Subagents
 sayfaları **base** veya **v2** moduna geçmeden önce onay ister; bu sayfa da o
 onayın bağlantı hedefidir. CLI onay istemez.

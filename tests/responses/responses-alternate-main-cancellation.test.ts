@@ -304,8 +304,8 @@ test.each([false, true])("caller-owned retry from Pool to main scrubs continuati
 test("regular Responses scrubs retained issuer on a manual main pin and on return to Pool", async () => {
   const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
   const { forgetRuntimeActiveCodexAccount, resetCodexRoutingForManualSelection } = await import("../../src/codex/routing/active-account");
-  const { handleResponses } = await import("../../src/server/responses");
-  const { rememberResponseState, clearResponseStateForTests } = await import("../../src/responses/state");
+  const { handleOwnedResponses: handleResponses, rememberOwnedResponseState } = await import("../helpers/response-replay-owner");
+  const { clearResponseStateForTests } = await import("../../src/responses/state");
   const bearer = fakeChatGptJwt("fixture-pin-caller", { exp: 4_000_000_000 });
   const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "session", "thread-id": "thread" });
   config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
@@ -322,7 +322,7 @@ test("regular Responses scrubs retained issuer on a manual main pin and on retur
     const sent: Record<string, unknown>[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>); return completedInference(); }) as typeof fetch;
     clearResponseStateForTests();
-    rememberResponseState({ model: "gpt-5.5", input: [{ role: "user", content: "earlier" }] }, { id: "opaque", status: "completed", output: [] }, undefined, { force: true });
+    rememberOwnedResponseState({ model: "gpt-5.5", input: [{ role: "user", content: "earlier" }] }, { id: "opaque", status: "completed", output: [] }, undefined, { force: true, clientThreadId: "thread" });
     const request = (input: unknown = [{ role: "user", content: "hello" }]) => new Request("http://localhost/v1/responses", { method: "POST", headers,
       body: JSON.stringify({ model: "gpt-5.5", previous_response_id: "opaque", input, stream: false }) });
     const refusal = await handleResponses(request([{ role: "user", file_id: "opaque" }]), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });

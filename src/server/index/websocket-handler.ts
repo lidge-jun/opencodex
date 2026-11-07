@@ -74,6 +74,7 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  isContextPrincipalCurrent,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -358,9 +359,15 @@ export function createWebsocketHandler(
             if (workflow?.admitted) turnAdmissionLease.attach(workflow.lease);
             ws.data.nativeControl = nativeControl;
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+            const retainedPrincipal = ws.data.replayPrincipal;
+            const replayPrincipal = retainedPrincipal && (isContextPrincipalCurrent(retainedPrincipal.clientPrincipalId, config)
+              ? retainedPrincipal : { clientPrincipalId: undefined });
             const response = await handleResponses(req, config, logCtx, {
               advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
+              // Keep an empty holder after revocation: a different forwarded bearer
+              // must not become this connection's retained replay owner.
+              ...(replayPrincipal ? { replayPrincipal } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               nativeControl,

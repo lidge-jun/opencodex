@@ -138,6 +138,7 @@ afterAll(() => {  // Put the real modules back for every later file in the same 
 });
 
 const { handleResponses } = await import("../../src/server/responses");
+const { handleOwnedResponses, rememberOwnedResponseState } = await import("../helpers/response-replay-owner");
 const { handleResponsesCompact } = await import("../../src/server/responses/compact");
 type HandleOptions = NonNullable<Parameters<typeof handleResponses>[3]>;
 
@@ -258,13 +259,18 @@ async function post(
   raw: Record<string, unknown> = {},
   options: HandleOptions = {},
   headers: Record<string, string> = {},
+  owned = false,
 ): Promise<Response> {
   takeSpendHome();
-  return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
+  return trackTurn(await (owned ? handleOwnedResponses : handleResponses)(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
   }), config, { model: "", provider: "" }, options));
+}
+
+function postOwned(config: OcxConfig, raw: Record<string, unknown> = {}, options: HandleOptions = {}, headers: Record<string, string> = {}) {
+  return post(config, raw, options, headers, true);
 }
 
 let loggedRequestSequence = 0;
@@ -2368,7 +2374,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
       imageInput: "disabled",
     });
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_missing_local_state",
       input: [{ role: "user", content: "continue" }],
     });
@@ -2378,8 +2384,7 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("disabled image input expands text-only previous_response_id exactly once before child dispatch", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    rememberOwnedResponseState(
       { model: "combo/free", input: [{ role: "user", content: "earlier text" }] },
       {
         id: "resp_combo_text_prev",
@@ -2395,7 +2400,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
       imageInput: "disabled",
     });
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_text_prev",
       input: [{ role: "user", content: "next turn" }],
     });
@@ -2410,8 +2415,8 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("combo continuation expansion respects the client task scope", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    const { rememberResponseState: legacyRememberResponseState } = await import("../../src/responses/state");
+    legacyRememberResponseState(
       { model: "combo/free", input: "legacy private history" },
       {
         id: "resp_combo_legacy_unscoped",
@@ -2419,7 +2424,7 @@ describe("server combo failover 030 activation matrix", () => {
         output: [{ type: "message", role: "assistant", content: "legacy reply" }],
       },
     );
-    rememberResponseState(
+    rememberOwnedResponseState(
       { model: "combo/free", input: "scoped private history" },
       {
         id: "resp_combo_scoped",
@@ -2435,16 +2440,16 @@ describe("server combo failover 030 activation matrix", () => {
       return chatSuccess("continued", "m1");
     });
     const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") });
-    const headers = { "x-codex-parent-thread-id": "combo-task" };
-    const legacyResponse = await post(config, {
+    const headers = { "x-codex-parent-thread-id": "combo-task", "thread-id": "combo-task" };
+    const legacyResponse = await postOwned(config, {
       previous_response_id: "resp_combo_legacy_unscoped",
       input: "fresh scoped input",
     }, {}, headers);
     const fullInput = [{ role: "user", content: "complete history" }, { role: "user", content: "current turn" }];
-    const fullMismatch = await post(config, {
+    const fullMismatch = await postOwned(config, {
       previous_response_id: "resp_combo_scoped",
       input: fullInput,
-    }, {}, { "x-codex-parent-thread-id": "other-task" });
+    }, {}, { "x-codex-parent-thread-id": "other-task", "thread-id": "other-task" });
     const genericError = {
       error: { message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
         type: "invalid_request_error", code: "previous_response_not_found" },
@@ -2454,22 +2459,21 @@ describe("server combo failover 030 activation matrix", () => {
     expect(fullMismatch.status).toBe(400);
     expect(await fullMismatch.json()).toEqual(genericError);
     expect(bodies).toHaveLength(0);
-    const retried = await post(config, { input: fullInput }, {}, { "x-codex-parent-thread-id": "other-task" });
-    const scopedResponse = await post(config, {
+    const retried = await postOwned(config, { input: fullInput }, {}, { "x-codex-parent-thread-id": "other-task", "thread-id": "other-task" });
+    const scopedResponse = await postOwned(config, {
       previous_response_id: "resp_combo_scoped",
       input: "continue scoped task",
     }, {}, headers);
-    const legacyUnscoped = await post(config, { previous_response_id: "resp_combo_legacy_unscoped",
+    const legacyUnscoped = await postOwned(config, { previous_response_id: "resp_combo_legacy_unscoped",
       input: "legacy continuation" });
-    expect([retried.status, scopedResponse.status, legacyUnscoped.status]).toEqual([200, 200, 200]);
-    expect(bodies).toHaveLength(3);
+    expect([retried.status, scopedResponse.status, legacyUnscoped.status]).toEqual([200, 200, 400]);
+    expect(bodies).toHaveLength(2);
     expect(JSON.stringify(bodies[0])).toContain("complete history");
     expect(JSON.stringify(bodies[1])).toContain("scoped private history");
-    expect(JSON.stringify(bodies[2])).toContain("legacy private history");
+    expect(JSON.stringify(bodies)).not.toContain("legacy private history");
   });
 
   test("combo child preserves replay provenance for compaction and generated guidance", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
     const { multiAgentGuidanceText, PROACTIVE_MULTI_AGENT_MODE_TEXT } = await import("../../src/server/responses/collaboration");
     const guidance = `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
     const tools = ["spawn_agent", "send_input"].map(name => ({
@@ -2479,7 +2483,7 @@ describe("server combo failover 030 activation matrix", () => {
       description: "Collaborate on work",
       parameters: { type: "object", properties: {} },
     }));
-    rememberResponseState(
+    rememberOwnedResponseState(
       {
         model: "combo/free",
         input: [
@@ -2544,12 +2548,12 @@ describe("server combo failover 030 activation matrix", () => {
       emit({ type: "done" });
     };
 
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_replay_provenance",
       input: [{ type: "message", role: "user", content: "current turn" }],
       reasoning: { effort: "max" },
       tools,
-    }, {}, { "x-codex-parent-thread-id": "combo-provenance-task" });
+    }, {}, { "x-codex-parent-thread-id": "combo-provenance-task", "thread-id": "combo-provenance-task" });
 
     expect(response.status).toBe(200);
     expect(observed).toEqual({
@@ -2562,8 +2566,8 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("combo failover dispatches the one parent-validated continuation snapshot", async () => {
-    const { clearResponseStateForTests, rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    const { clearResponseStateForTests } = await import("../../src/responses/state");
+    rememberOwnedResponseState(
       { model: "combo/free", input: [{ role: "user", content: "stable prior history" }] },
       {
         id: "resp_combo_stable_snapshot",
@@ -2594,7 +2598,7 @@ describe("server combo failover 030 activation matrix", () => {
       b: provider("test-run-turn", "https://b.test/v1", "key-b"),
     });
 
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_stable_snapshot",
       input: [{ role: "user", content: "stable current turn" }],
     });
@@ -2610,7 +2614,7 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("combo keeps an explicitly empty provider-state snapshot across failover", async () => {
-    const { previousResponseProviderState, rememberResponseState } = await import("../../src/responses/state");
+    const { previousResponseProviderState } = await import("../../src/responses/state");
     customRunTurn = async (_parsed, _incoming, emit) => {
       emit({ type: "text_delta", text: "seed" });
       emit({ type: "done", providerState: { kiro: { conversationId: "late-owned-state" } } });
@@ -2618,7 +2622,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({
       b: provider("test-owned", "https://provider-b.test/v1", "key-b"),
     }, [{ provider: "b", model: "m2" }]);
-    const seed = await post(config, { input: "seed owner" });
+    const seed = await postOwned(config, { input: "seed owner" });
     expect(seed.status).toBe(200);
     const seedJson = await seed.json() as { id: string };
     const ownedState = previousResponseProviderState(seedJson.id);
@@ -2632,7 +2636,7 @@ describe("server combo failover 030 activation matrix", () => {
     let backupObserved: string | undefined;
     customRunTurn = async (parsed, _incoming, emit) => {
       if (parsed.modelId === "m1") {
-        rememberResponseState(
+        rememberOwnedResponseState(
           { model: "combo/free", input: "late state" },
           {
             id: "resp_combo_late_provider_state",
@@ -2650,7 +2654,7 @@ describe("server combo failover 030 activation matrix", () => {
       emit({ type: "done" });
     };
 
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_late_provider_state",
       input: "continue",
     });
@@ -2698,10 +2702,10 @@ describe("server combo failover 030 activation matrix", () => {
       a: provider("test-owned", "https://provider-a.test/v1", "key-a"),
     }, [{ provider: "a", model: "m1" }]);
 
-    const first = await post(config, { input: "seed future provider state" });
+    const first = await postOwned(config, { input: "seed future provider state" });
     expect(first.status).toBe(200);
     const firstJson = await first.json() as { id: string };
-    const second = await post(config, {
+    const second = await postOwned(config, {
       previous_response_id: firstJson.id,
       input: "update future provider state",
     });
@@ -2724,8 +2728,7 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("combo child retains the local id without inheriting unbound provider state", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    rememberOwnedResponseState(
       { model: "combo/free", input: "prior target turn" },
       {
         id: "resp_combo_unbound_provider_state",
@@ -2755,7 +2758,7 @@ describe("server combo failover 030 activation matrix", () => {
       a: provider("test-run-turn", "https://a.test/v1", "key-a"),
     });
 
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_unbound_provider_state",
       input: [{ role: "user", content: "continue" }],
     });
@@ -2767,8 +2770,7 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("combo rejects malformed provider-continuation owner metadata", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    rememberOwnedResponseState(
       { model: "combo/free", input: "prior target turn" },
       {
         id: "resp_combo_malformed_provider_owner",
@@ -2797,7 +2799,7 @@ describe("server combo failover 030 activation matrix", () => {
       a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
     });
 
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_malformed_provider_owner",
       input: "continue",
     });
@@ -2821,10 +2823,10 @@ describe("server combo failover 030 activation matrix", () => {
       a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
     });
 
-    const first = await post(config, { store: false, input: "first" });
+    const first = await postOwned(config, { store: false, input: "first" });
     expect(first.status).toBe(200);
     const firstJson = await first.json() as { id: string };
-    const second = await post(config, {
+    const second = await postOwned(config, {
       store: false,
       previous_response_id: firstJson.id,
       input: "second",
@@ -2850,10 +2852,10 @@ describe("server combo failover 030 activation matrix", () => {
       [{ provider: "cursortest", model: "composer-2" }],
     );
 
-    const first = await post(config, { store: false, input: "first" });
+    const first = await postOwned(config, { store: false, input: "first" });
     expect(first.status).toBe(200);
     const firstJson = await first.json() as { id: string };
-    const second = await post(config, {
+    const second = await postOwned(config, {
       store: false,
       previous_response_id: firstJson.id,
       input: "second",
@@ -2875,7 +2877,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({
       a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
     });
-    const first = await post(config, { store: false, input: "first" });
+    const first = await postOwned(config, { store: false, input: "first" });
     expect(first.status).toBe(200);
     const firstJson = await first.json() as { id: string };
 
@@ -2895,7 +2897,7 @@ describe("server combo failover 030 activation matrix", () => {
       emit({ type: "done", providerState: { kiro: { conversationId: "provider-b" } } });
     };
 
-    const second = await post(config, {
+    const second = await postOwned(config, {
       store: false,
       previous_response_id: firstJson.id,
       input: "second",
@@ -2922,12 +2924,12 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({
       a: provider("test-kiro", "https://kiro-a.test/v1", "credential-one"),
     });
-    const first = await post(config, { store: false, input: "first" });
+    const first = await postOwned(config, { store: false, input: "first" });
     expect(first.status).toBe(200);
     const firstJson = await first.json() as { id: string };
 
     config.providers.a!.apiKey = "credential-two";
-    const second = await post(config, {
+    const second = await postOwned(config, {
       store: false,
       previous_response_id: firstJson.id,
       input: "second",
@@ -2953,7 +2955,7 @@ describe("server combo failover 030 activation matrix", () => {
       const config = comboConfig({
         a: provider("test-kiro", "https://kiro-a.test/v1", "credential-one"),
       });
-      const first = await post(config, { store: false, input: "first" });
+      const first = await postOwned(config, { store: false, input: "first" });
       expect(first.status).toBe(200);
       const firstJson = await first.json() as { id: string };
 
@@ -2969,7 +2971,7 @@ describe("server combo failover 030 activation matrix", () => {
       } else {
         config.combos!.free!.targets = [{ provider: "a", model: "m2" }];
       }
-      const second = await post(config, {
+      const second = await postOwned(config, {
         store: false,
         previous_response_id: firstJson.id,
         input: "second",
@@ -2981,8 +2983,7 @@ describe("server combo failover 030 activation matrix", () => {
   );
 
   test("disabled image input rejects an image restored from previous_response_id before dispatch", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    rememberOwnedResponseState(
       {
         model: "combo/free",
         input: [{
@@ -3004,7 +3005,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
       imageInput: "disabled",
     });
-    const response = await post(config, {
+    const response = await postOwned(config, {
       previous_response_id: "resp_combo_image_prev",
       input: [{ role: "user", content: "continue" }],
     });
@@ -3683,7 +3684,7 @@ describe("cursor conversation continuity across store:false chains", () => {
 
   async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
     takeSpendHome();
-    return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
+    return trackTurn(await handleOwnedResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ stream: false, store: false, ...raw }),
@@ -3703,8 +3704,7 @@ describe("cursor conversation continuity across store:false chains", () => {
   }
 
   test("ownerless legacy Cursor state fails closed before adapter dispatch", async () => {
-    const { rememberResponseState } = await import("../../src/responses/state");
-    rememberResponseState(
+    rememberOwnedResponseState(
       { model: "cursortest/composer-2", input: "legacy" },
       {
         id: "resp_cursor_ownerless_legacy",
