@@ -9,6 +9,16 @@ test("account display labels omit malformed identities and mask valid addresses"
   }
 });
 
+test("account label validation stays linear on adversarial domain labels", () => {
+  // Each "00." label had two ways to match, so a trailing invalid character backtracked 2^n.
+  const adversarial = "%@0." + "00.".repeat(26) + "!";
+  const started = performance.now();
+  expect(maskedAccountLabel(adversarial)).toBeUndefined();
+  expect(performance.now() - started).toBeLessThan(50);
+  expect(maskedAccountLabel("%@0." + "00.".repeat(80) + "!")).toBeUndefined();
+  expect(maskedAccountLabel("a@b-c.d0-e.f")).toBe("*@b-c.d0-e.f");
+});
+
 describe("maskAccountId", () => {
   test("redacts long account ids to account-…suffix", () => {
     expect(maskAccountId("acct_abcdefghijklmnopqrstuvwxyz")).toBe("account-…wxyz");
