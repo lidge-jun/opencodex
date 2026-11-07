@@ -82,11 +82,11 @@ try {
   writeFileSync(join(dir, "update-trust-anchor.mjs"), `export const EMBEDDED_ROOT_SHA256 = "${createHash("sha256").update(before).digest("hex")}";\n`);
   const supply = await import(pathToFileURL(join(dir, "signed-supply.mjs")).href);
   const basis = supply.bootstrapEmbeddedRoot(before, Date.parse("2027-01-01T00:00:00Z"));
-  const signEntry = (bytes, { pair, id, key }) => {
+  const signEntry = (bytes, { pair, id, key }, comment = "version:1.2.3", signedComment = comment, newline = "\n") => {
     const payload = sign(null, createHash("blake2b512").update(bytes).digest(), pair.privateKey);
-    const global = sign(null, Buffer.concat([payload, Buffer.from("version:1.2.3")]), pair.privateKey);
+    const global = sign(null, Buffer.concat([payload, Buffer.from(signedComment)]), pair.privateKey);
     const packet = Buffer.concat([Buffer.from("ED"), id, payload]).toString("base64");
-    const box = Buffer.from(`untrusted comment: fixture\n${packet}\ntrusted comment: version:1.2.3\n${global.toString("base64")}\n`).toString("base64");
+    const box = Buffer.from(["untrusted comment: fixture", packet, `trusted comment: ${comment}`, global.toString("base64"), ""].join(newline)).toString("base64");
     return { keyFingerprint: key.keyId, signatureBox: box };
   };
   const signed = keys.map(key => signEntry(after, key));
@@ -152,6 +152,25 @@ try {
   assert.throws(() => supply.verifyArtifactEvidence(candidate, Buffer.from("wrong"), successor, now));
   assert.throws(() => supply.verifyExternalMetadataEvidence(candidate, { kind: "tree", bytes: tree, signatureEnvelopeBytes: metadataEnvelope(Buffer.from("wrong")), receiptEvidence }, successor, now));
   assert.throws(() => supply.verifyReleaseEvidence(release, metadataEnvelope(release), successor, "preview", now));
+  const commentCases = [
+    { version: "1.2.3", comment: "version:v1.2.3", allowed: true, newline: "\n" },
+    { version: "1.2.3+one", comment: "version:1.2.3+one", allowed: true, newline: "\r\n" },
+    { version: "1.2.3+one", comment: "version:1.2.3+two", allowed: false, newline: "\n" },
+    { version: "1.2.3", comment: "timestamp:1", allowed: false, newline: "\n" },
+    { version: "1.2.3", comment: "version:1.2.3\tversion:1.2.3", allowed: false, newline: "\n" },
+    { version: "1.2.3", comment: "  timestamp:1\tversion:1.2.3\t", allowed: true, newline: "\r\n" },
+    { version: "1.2.3", comment: "  timestamp:1\tversion:1.2.3\t", signedComment: "timestamp:1\tversion:1.2.3", allowed: false, newline: "\n" },
+  ];
+  for (const item of commentCases) {
+    const value = JSON.parse(release.toString());
+    value.version = item.version;
+    value.targets[0].assetName = `ocx-update-${item.version}-latest-${target}.tar.gz`;
+    value.targets[0].artifact.signatureBox = signEntry(artifact, keys[2], item.comment, item.signedComment ?? item.comment, item.newline).signatureBox;
+    const bytes = Buffer.from(JSON.stringify(value));
+    const selected = supply.selectTargetEvidence(supply.verifyReleaseEvidence(bytes, metadataEnvelope(bytes), successor, "latest", now), { platform: "linux", arch: "x64", owner: "npm", artifactKind: "tree", bundleKind: "tar-gz" });
+    const verify = () => supply.verifyArtifactEvidence(selected, artifact, successor, now);
+    if (item.allowed) assert.ok(Object.isFrozen(verify())); else assert.throws(verify);
+  }
 
   const token = Buffer.alloc(32, 9).toString("base64url");
   const operationId = "12345678-1234-1234-1234-123456789abc";
