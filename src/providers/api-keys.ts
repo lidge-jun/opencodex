@@ -282,7 +282,7 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
         });
         if (committed.status === "committed") {
           for (const entry of stored) clearPassiveKeyAccount(name, entry.id);
-          invalidateResolvedProviderKeyCache();
+          invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
           return { id: committed.value };
         }
         cleanupRemovedGcpCredentials(created);
@@ -361,6 +361,6 @@ export function removeProviderApiKey(config: OcxConfig, name: string, id: string
   if (committed.status !== "committed" || !committed.value) return false;
   clearPassiveKeyAccount(name, id);
   if (removed?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) cleanupRemovedGcpCredentials([removed]);
-  invalidateResolvedProviderKeyCache();
+  invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
   return true;
 }

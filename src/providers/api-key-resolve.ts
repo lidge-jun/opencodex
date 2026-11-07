@@ -45,6 +45,29 @@ let entryFactory: ProviderKeychainEntryFactory = defaultEntryFactory;
 const resolvedCache = new Map<string, string>();
 const warnedAccounts = new Set<string>();
 let resolutionGeneration = 0;
+// A digest and incarnation token retain passive ownership without retaining another secret copy.
+// Only a routing read can establish this proof; passive paths never read or populate the keychain.
+const passiveProofs = new Map<string, { digest: string; generation: number }>();
+let nextPassiveGeneration = 0;
+const MAX_PASSIVE_PROOFS = 512;
+
+function credentialDigest(value: string): string {
+  return new Bun.CryptoHasher("sha256").update(value).digest("hex");
+}
+
+/** Return the observed account incarnation, optionally requiring a match to the wire key. */
+export function passiveKeychainGeneration(reference: string, key?: string): number | undefined {
+  if (!isKeychainReference(reference)) return undefined;
+  const proof = passiveProofs.get(keychainAccount(reference));
+  return proof && (key === undefined || proof.digest === credentialDigest(key)) ? proof.generation : undefined;
+}
+
+function rememberPassiveProof(account: string, value: string): void {
+  const digest = credentialDigest(value), previous = passiveProofs.get(account);
+  passiveProofs.delete(account);
+  passiveProofs.set(account, previous?.digest === digest ? previous : { digest, generation: ++nextPassiveGeneration });
+  if (passiveProofs.size > MAX_PASSIVE_PROOFS) passiveProofs.delete(passiveProofs.keys().next().value!);
+}
 
 /** Advances whenever cached secrets may have changed, so derived snapshots can rebuild. */
 export function providerKeyResolutionGeneration(): number {
@@ -61,14 +84,16 @@ export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychai
   entryFactory = factory ?? defaultEntryFactory;
   invalidateDecisionKeyQuotas();
   resolvedCache.clear();
+  passiveProofs.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
 }
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
-export function invalidateResolvedProviderKeyCache(): void {
+export function invalidateResolvedProviderKeyCache(options?: { preservePassiveKeychainProofs: true }): void {
   invalidateDecisionKeyQuotas();
   resolvedCache.clear();
+  if (!options?.preservePassiveKeychainProofs) passiveProofs.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
 }
@@ -100,11 +125,11 @@ export function providerKeychainEntry(account: string): ProviderKeychainEntry {
   };
   return {
     getPassword: () => entry.getPassword(),
-    setPassword: password => publishCredentialSync(() => entry.setPassword(password), {
+    setPassword: password => publishCredentialSync(() => { passiveProofs.delete(account); entry.setPassword(password); }, {
       accounts: [account], absent: completed => completed ? [] : absent(),
     }),
     // Registered before the attempt, so a deletion that fails keeps the secret counted.
-    deletePassword: () => publishCredentialSync(() => entry.deletePassword(), { accounts: [account], absent }),
+    deletePassword: () => publishCredentialSync(() => { passiveProofs.delete(account); return entry.deletePassword(); }, { accounts: [account], absent }),
   };
 }
 
@@ -119,7 +144,7 @@ function readKeychain(account: string, quiet = false, useCache = true): string |
   }
   if (typeof value === "string" && value.trim()) {
     if (isGcpCredentialMaterial(value)) throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
-    if (useCache) resolvedCache.set(account, value);
+    if (useCache) { resolvedCache.set(account, value); rememberPassiveProof(account, value); }
     return value;
   }
   if (!quiet && !warnedAccounts.has(account)) {
