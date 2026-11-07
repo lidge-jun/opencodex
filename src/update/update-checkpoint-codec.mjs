@@ -17,12 +17,13 @@ const fail = () => { throw new Error("Invalid checkpoint payload"); };
 
 function record(value, keys) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) fail();
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const names = Reflect.ownKeys(descriptors);
+  // JavaScript must enumerate own keys to reject extras; executable proxies can
+  // still make that enumeration expensive. Do not materialize extra descriptors.
+  const names = Reflect.ownKeys(value);
   if (names.length !== keys.length || names.some((key) => typeof key !== "string" || !keys.includes(key))) fail();
   const result = Object.create(null);
   for (const key of keys) {
-    const descriptor = descriptors[key];
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor || !("value" in descriptor)) fail();
     result[key] = descriptor.value;
   }
@@ -32,11 +33,11 @@ function list(value, max) {
   if (!Array.isArray(value)) fail();
   const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
   if (!Number.isSafeInteger(length) || length < 0 || length > max) fail();
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (descriptors.length?.value !== length || Reflect.ownKeys(descriptors).length !== length + 1) fail();
+  const names = Reflect.ownKeys(value);
+  if (names.length !== length + 1 || names.some((key) => key !== "length" && (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length))) fail();
   const result = [];
   for (let i = 0; i < length; i++) {
-    const descriptor = descriptors[String(i)];
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
     if (!descriptor || !("value" in descriptor)) fail();
     result.push(descriptor.value);
   }

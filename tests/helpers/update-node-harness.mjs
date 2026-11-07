@@ -395,6 +395,18 @@ const checkpointAgain = decodeCheckpointPayload(Buffer.from(checkpointCorpus.val
 const checkpointBuffers = [checkpointData.namespaceDigest, checkpointData.principalDigest, checkpointData.identityBytes, checkpointData.rootDigest, checkpointData.rootBytes, checkpointAgain.rootDigest];
 assert.equal(new Set(checkpointBuffers.map((value) => value.buffer)).size, checkpointBuffers.length);
 assert.throws(() => encodeCheckpointPayload({ ...checkpointData, get generation() { throw new Error("accessor invoked"); } }), /Invalid checkpoint payload/);
+const oversizedRecord = { ...checkpointData }, oversizedArray = [];
+for (let i = 0; i < 1000; i++) {
+  Object.defineProperty(oversizedRecord, `extra${i}`, { value: i });
+  Object.defineProperty(oversizedArray, `extra${i}`, { value: i });
+}
+let recordDescriptorReads = 0, arrayDescriptorReads = 0;
+const trappedRecord = new Proxy(oversizedRecord, { getOwnPropertyDescriptor(target, key) { recordDescriptorReads++; return Reflect.getOwnPropertyDescriptor(target, key); } });
+const trappedArray = new Proxy(oversizedArray, { getOwnPropertyDescriptor(target, key) { arrayDescriptorReads++; return Reflect.getOwnPropertyDescriptor(target, key); } });
+assert.throws(() => encodeCheckpointPayload(trappedRecord));
+assert.throws(() => encodeCheckpointPayload({ ...checkpointData, history: trappedArray }));
+assert.equal(recordDescriptorReads, 0);
+assert.equal(arrayDescriptorReads, 1);
 const expiry = Date.parse("2028-11-07T00:00:00Z");
 assert.ok(Object.isFrozen(bootstrapEmbeddedRoot(root, expiry - 1)));
 assert.throws(() => bootstrapEmbeddedRoot(root, expiry));

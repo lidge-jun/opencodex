@@ -81,6 +81,23 @@ describe("unverified checkpoint payload codec", () => {
     expect(checkpointPayloadDigest(shadowed)).toBe("9b2d3f7c39c2456cf3f28439de1f80be8af006c4705d5e621ea9abb723077546");
   });
 
+  test("rejects extra properties before fetching every descriptor", () => {
+    const original = decodeCheckpointPayload(golden);
+    const record = { ...original } as Record<string, unknown>;
+    const array: unknown[] = [];
+    for (let i = 0; i < 1000; i++) {
+      Object.defineProperty(record, `extra${i}`, { value: i });
+      Object.defineProperty(array, `extra${i}`, { value: i });
+    }
+    let recordLookups = 0, arrayLookups = 0;
+    const recordProxy = new Proxy(record, { getOwnPropertyDescriptor(target, key) { recordLookups++; return Reflect.getOwnPropertyDescriptor(target, key); } });
+    const arrayProxy = new Proxy(array, { getOwnPropertyDescriptor(target, key) { arrayLookups++; return Reflect.getOwnPropertyDescriptor(target, key); } });
+    expect(() => encodeCheckpointPayload(recordProxy as unknown as CheckpointPayload)).toThrow();
+    expect(() => encodeCheckpointPayload({ ...original, history: arrayProxy as CheckpointPayload["history"] })).toThrow();
+    expect(recordLookups).toBe(0);
+    expect(arrayLookups).toBe(1); // The bounded array length is captured before checking its keys.
+  });
+
   test("checks raw-byte cap before structural decoding", () => {
     const atLimit = new Uint8Array(64 * 1024 * 1024);
     const tooLarge = new Uint8Array(atLimit.length + 1);
