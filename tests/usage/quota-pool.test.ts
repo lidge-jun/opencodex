@@ -23,7 +23,7 @@ import {
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearAccountQuotaCache, fetchProviderQuotaReports, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
-import { getProviderQuotaReportCache, keyReport, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
+import { bindProviderReportProbe, getProviderQuotaReportCache, keyReport, report, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import { clearCachedProviderQuotas, getCachedProviderQuota, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
 import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
@@ -85,10 +85,9 @@ beforeEach(async () => {
       customWindows: [{ label: "Opus", percent: 100, resetAt: NOW + 72 * HOUR, scope: "model" }],
     },
   }));
-  setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-    provider: "openrouter", label: "OpenRouter", source: "fixture", updatedAt: NOW - 120_000,
-    quota: { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 },
-  }] } });
+  const openrouter = config().providers.openrouter!;
+  const held = keyReport("openrouter", "fixture", { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 }, openrouter, "fixture-openrouter-key")!;
+  setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
 });
 
 afterEach(() => {
@@ -381,10 +380,9 @@ describe("ocx.quota-pool/1 producer", () => {
   test("a held report never stands in for the account rows of a tracked provider", async () => {
     ensureQuotaPoolIdentity();
     // A report claiming a newer, emptier pool than the rows it would have been computed from.
-    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW,
-      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW },
-    }] } });
+    const held = report("xai", "fixture", { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW })!;
+    await bindProviderReportProbe(Promise.resolve(held), "xai", config().providers.xai!);
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
     const result = await read();
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
@@ -394,12 +392,10 @@ describe("ocx.quota-pool/1 producer", () => {
 
   test("a per-account provider configured with an API key keeps its key's report as the pool", async () => {
     ensureQuotaPoolIdentity();
-    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW - 120_000,
-      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 },
-    }] } });
     const keyed = config();
     keyed.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
+    const held = keyReport("xai", "fixture", { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 }, keyed.providers.xai, "fixture-xai-key")!;
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [held] } });
     const result = await readQuotaPool(keyed, { now: () => NOW, claudeUsageStatePath: admissionPath });
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;

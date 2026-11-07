@@ -24,13 +24,25 @@ export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boole
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
 /** Credential identity captured by the probe; never serialized with the report. */
 export const keyReportCredentialIds = new WeakMap<ProviderQuotaReport, string>();
-const keyReportDestinations = new WeakMap<ProviderQuotaReport, { adapter: string; baseUrl: string }>();
-export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
+type ProviderReportBinding = { name: string; authMode: string; adapter: string; baseUrl: string };
+const providerReportBindings = new WeakMap<ProviderQuotaReport, ProviderReportBinding>();
+function providerReportBinding(name: string, provider: OcxProviderConfig): ProviderReportBinding {
+  return { name, authMode: provider.authMode ?? "key", adapter: provider.adapter, baseUrl: provider.baseUrl };
+}
+/** Bind a provider-level probe before it awaits, without changing account-level report DTOs. */
+export async function bindProviderReportProbe<T extends ProviderQuotaProbeResult>(result: Promise<T>, name: string, provider: OcxProviderConfig): Promise<T> {
+  const binding = providerReportBinding(name, provider);
+  const value = await result;
+  if (value && typeof value !== "symbol" && !providerReportBindings.has(value)) providerReportBindings.set(value, binding);
+  return value;
+}
+export function providerReportCurrentForConfig(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
+  const binding = providerReportBindings.get(value);
+  if (!provider || provider.disabled || !binding || binding.name !== value.provider || binding.authMode !== (provider.authMode ?? "key")
+    || binding.adapter !== provider.adapter || binding.baseUrl !== provider.baseUrl) return false;
   const captured = keyReportCredentialIds.get(value);
   if (!captured) return true;
-  if (!provider || provider.disabled || (provider.authMode ?? "key") !== "key") return false;
-  const destination = keyReportDestinations.get(value);
-  if (!destination || destination.adapter !== provider.adapter || destination.baseUrl !== provider.baseUrl) return false;
+  if ((provider.authMode ?? "key") !== "key") return false;
   // A passive reader cannot prove a keychain secret is still current without accessing the OS
   // store. The normal resolver also publishes routing observations even for literal/env keys.
   if (passive && isKeychainReference(provider.apiKey)) return false;
@@ -42,7 +54,7 @@ export function validateJoinedReports(response: ProviderQuotaResponse, config: O
   return { ...response, reports: response.reports.filter(item => {
     const provider = config.providers[item.provider];
     return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
-      && keyReportCredentialCurrent(item, provider);
+      && providerReportCurrentForConfig(item, provider);
   }) };
 }
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
@@ -348,9 +360,9 @@ export function keyReport(
 ): ProviderQuotaReport | null {
   const result = report(provider, source, quota);
   if (!result) return result;
+  providerReportBindings.set(result, providerReportBinding(provider, config));
   if (config.authMode !== "oauth" && config.authMode !== "forward") {
     keyReportCredentialIds.set(result, createHash("sha256").update(probedCredential).digest("hex"));
-    keyReportDestinations.set(result, { adapter: config.adapter, baseUrl: config.baseUrl });
   }
   if (!inferenceQuota) return result;
   const binding = providerQuotaRoutingBinding(provider, config, probedCredential);
@@ -400,7 +412,11 @@ export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], co
   const oauth: AntigravityQuotaObservation[] = [];
   for (const report of reports) {
     const provider = config.providers[report.provider];
-    if (!provider || !isProviderQuotaReportCurrent(report)) continue;
+    if (!provider || !isProviderQuotaReportCurrent(report) || !providerReportCurrentForConfig(report, provider)) {
+      // A rejected receipt must not regain publication authority if the old config returns.
+      antigravityEvidence.delete(report);
+      continue;
+    }
     const observation = antigravityEvidence.get(report);
     if (observation) oauth.push({ name: report.provider, provider, ...observation });
     const evidence = routingEvidence.get(report);
@@ -422,7 +438,7 @@ export function heldProviderQuotaReports(config: OcxConfig): ProviderQuotaRespon
     reports: (held?.reports ?? []).filter(item => {
       const provider = config.providers[item.provider];
       return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
-        && keyReportCredentialCurrent(item, provider, true);
+        && providerReportCurrentForConfig(item, provider, true);
     }),
   };
 }
