@@ -4,7 +4,7 @@ import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
 import ModelSettingsDialog from "../components/ModelSettingsDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
-import type { AppServerStateOutcome } from "../codex-app-server-state";
+import { useModelsReloadFocus } from "./use-models-reload-focus";
 import { useCodexRestart } from "../use-codex-restart";
 import { confirmAction } from "../action-dialogs";
 import { editModelAlias, editProviderAlias } from "./models-alias-editing";
@@ -136,7 +136,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   // model-catalog resource state, which is an unrelated concept. (Spelling the
   // catalog route here would register a phantom endpoint with the CLI parity
   // sweep, which reads GUI sources for api paths.)
-  const [appServerState, setAppServerState] = useState<AppServerStateOutcome["state"]>(null);
+  const [appServerState, setAppServerState, reloadHeadRef, reloadBannerRef] = useModelsReloadFocus();
   // A restart request outlives a navigation away from this page, so its completion
   // callback must not set state after unmount.
   const appServerMounted = useRef(true);
@@ -172,7 +172,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       bounded.clear();
       if (appServerRead.current === bounded) appServerRead.current = null;
     }
-  }, [apiBase, cancelAppServerRead]);
+  }, [apiBase, cancelAppServerRead, setAppServerState]);
 
   // onSettled, not a per-button callback: the sidebar control knows nothing about
   // this page, and a restart succeeding there must still clear the banner here.
@@ -190,7 +190,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     setAppServerState(null);
     void reloadAppServerState();
     return cancelAppServerRead;
-  }, [apiBase, cancelAppServerRead, reloadAppServerState, restartEpoch]);
+  }, [apiBase, cancelAppServerRead, reloadAppServerState, restartEpoch, setAppServerState]);
 
 
 
@@ -2585,14 +2585,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           {SUBTITLE_TKEY[tab][1] && <ModelsAbout key={tab} text={t(SUBTITLE_TKEY[tab][1])}>
             {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
           </ModelsAbout>}
-          {appServerState !== "stale" && <Button variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
+          {appServerState !== "stale" && <Button ref={reloadHeadRef} variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
             <span className={codexRestarting ? "inline-flex animate-spin" : "inline-flex"}><IconRefresh aria-hidden="true" /></span>
             {codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
           </Button>}
         </div>
       </div>
       <CodexStaleBanner
-        state={appServerState}
+        state={appServerState} actionRef={reloadBannerRef}
         controller={{ restarting: codexRestarting, restart: handleCodexRestart }}
       />
       <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />

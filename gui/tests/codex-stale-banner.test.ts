@@ -8,7 +8,6 @@
 import { describe, expect, test } from "bun:test";
 import { fetchCodexAppServerState } from "../src/codex-app-server-state";
 
-const BANNER_SRC = await Bun.file(new URL("../src/components/codex-stale-banner.tsx", import.meta.url)).text();
 const MODELS_SRC = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 const APP_TSX_SRC = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 
@@ -126,7 +125,7 @@ describe("Models page wiring", () => {
   test("reads the state once on mount, not on a timer", () => {
     const effect = appServerReadEffect(src);
     const cancel = sourceSection(src, "const cancelAppServerRead = useCallback(", "}, []);");
-    const read = sourceSection(src, "const reloadAppServerState = useCallback(", "}, [apiBase, cancelAppServerRead]);");
+    const read = sourceSection(src, "const reloadAppServerState = useCallback(", "}, [apiBase, cancelAppServerRead, setAppServerState]);");
     expect(effect.match(/reloadAppServerState\(\)/g)).toHaveLength(1);
     expect(effect).toContain("return cancelAppServerRead;");
     expect(cancel).toContain("appServerReadGeneration.current++");
@@ -187,7 +186,7 @@ describe("cross-surface invalidation", () => {
     expect(effect).toContain("return cancelAppServerRead;");
     const dependencies = effect.slice(effect.lastIndexOf("}, [") + 4, effect.lastIndexOf("]"))
       .split(",").map(value => value.trim());
-    expect(dependencies).toEqual(["apiBase", "cancelAppServerRead", "reloadAppServerState", "restartEpoch"]);
+    expect(dependencies).toEqual(["apiBase", "cancelAppServerRead", "reloadAppServerState", "restartEpoch", "setAppServerState"]);
   });
 
   test("the epoch is the only cross-surface coupling, not a shared controller", () => {

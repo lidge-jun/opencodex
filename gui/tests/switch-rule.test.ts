@@ -21,6 +21,12 @@ function staticClass(tag: JsxTag, name: string): boolean {
   const value = attr(tag, "className")?.initializer;
   return !!value && ts.isStringLiteral(value) && value.text.split(/\s+/).includes(name);
 }
+function renderableSlider(tag: JsxTag): boolean {
+  const className = attr(tag, "className")?.initializer;
+  return tag.tagName.getText() === "span" && !!className && ts.isStringLiteral(className)
+    && className.text === "slider" && tag.attributes.properties.every(property => ts.isJsxAttribute(property)
+      && ["className", "aria-hidden"].includes(property.name.getText()));
+}
 function wrappedToggle(tag: JsxTag): boolean {
   const type = attr(tag, "type")?.initializer;
   const parent = tag.parent;
@@ -28,8 +34,8 @@ function wrappedToggle(tag: JsxTag): boolean {
       || !ts.isJsxElement(parent) || !staticClass(parent.openingElement, "toggle")) return false;
   const children = parent.children.filter(child => !ts.isJsxText(child) || child.text.trim() !== "");
   const next = children[children.indexOf(tag as ts.JsxChild) + 1];
-  return !!next && (ts.isJsxElement(next) && staticClass(next.openingElement, "slider")
-    || ts.isJsxSelfClosingElement(next) && staticClass(next, "slider"));
+  return !!next && (ts.isJsxElement(next) && renderableSlider(next.openingElement)
+    || ts.isJsxSelfClosingElement(next) && renderableSlider(next));
 }
 function scan(source: string, file: string): { offenders: string[]; seen: number } {
   const root = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -77,6 +83,11 @@ test("only a checkbox inside a real toggle track with a slider can use the wrapp
     '<span className="toggle"><span><input type="checkbox" role="switch" /></span><span className="slider" /></span>',
     '<span className="toggle"><span className="slider" /><input type="checkbox" role="switch" /></span>',
     '<span className="toggle"><input type="checkbox" role="switch" /><i /><span className="slider" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" /><input className="slider" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" /><CustomSlider className="slider" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider" hidden /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider hidden" /></span>',
+    '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider" style={{ display: "none" }} /></span>',
   ]) expect(scan(invalid, "invalid.tsx").offenders).toHaveLength(1);
 });
 
