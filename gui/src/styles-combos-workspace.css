@@ -673,8 +673,10 @@
 }
 
 .cwi-strategy-seg {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
   border-radius: var(--radius-pill);
   background: var(--surface-soft, var(--raised));
   padding: 3px;
@@ -683,7 +685,11 @@
 
 .cwi-strategy-seg .btn {
   border-radius: var(--radius-pill);
+  flex: 0 0 auto;
   min-width: 88px;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
   padding: 5px 12px;
   border: none;
 }
