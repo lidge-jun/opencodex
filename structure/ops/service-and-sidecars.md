@@ -55,7 +55,7 @@ without running handlers is not covered by this forwarding mechanism.
 
 ## Guarded CLI update restart
 
-`src/cli/system-restart-client.ts` freezes the newer-CLI candidate's runtime identity and physical homes. `src/cli/update-restart-home.ts` captures the service-record digest from
+`src/cli/system-restart-client.ts` freezes the newer-CLI candidate's runtime identity, physical homes and diagnosed hostname, which later reads must match exactly. An omitted hostname corresponds to the default loopback bind; a present empty or whitespace-only runtime hostname refuses before stop with fixed, sanitized owner-specific recovery guidance. For a detached standalone proxy, the guidance conditions `ocx stop` on independent ownership and bind verification and acceptance of possible forced termination, requires independent exit, supervision and port checks before `ocx start`, and directs uncertain cases to the owner or administrator. The serialized child handoff is validated before stop; replacement checks compare bind scope while retaining exact record rereads and attestation. `src/cli/update-restart-home.ts` captures the service-record digest from
 `src/cli/update-restart-service-record.ts`: all ordered `serviceStatePaths()` candidates, including confirmed absences and the authoritative position, plus the launchd plist or
 systemd unit. State and ownership resolve from those captured bytes. Each present regular file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
 mode, uid and gid. The opened descriptor must be regular and match device/inode before any read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
@@ -179,8 +179,7 @@ records the same single resolution in the service definition and service state. 
 construction (`buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
 fallback, keeping diagnostics and tests independent of the host PATH. Launchd always uses the
 package-local Bun and CLI pair selected by the trusted install or repair invocation; it never hands
-credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an
-older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
+credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an older install is reported stale so `ocx service repair` re-bakes trusted package paths. Launchd and systemd repeat shell-quoted resolved homes after login-profile initialization; Task Scheduler embeds absolute homes instead of runtime profile-variable references; WinSW uses the canonical default-home resolver so `~/.codex` junctions match service state. The systemd ExecStart word also writes `$` as `$$` and `%` as `%%`, because systemd expands variables and specifiers before `/bin/sh` applies its quotes; Environment= escapes only specifiers. Every launchd live-job comparison uses the complete command including the home assignments, so a job loaded from an older plist without them reads as stale and repair reloads it. Outside an install, the expected assignments come from the installed plist's `CODEX_HOME`/`OPENCODEX_HOME`, then from install state, and only then from the current environment, so `status` or `start` from a shell that exports other homes still recognises a job matching the plist on disk. `src/service/plist-xml.ts` writes CR, LF and tab in plist strings as character references, because a conforming XML parser reads a literal CR as LF, and refuses characters XML 1.0 cannot represent, naming the field but never echoing its value. Task Scheduler `set "NAME=value"` lines double only `%`: a caret or `!` inside the quotes is literal under DisableDelayedExpansion (`tests/service/service-definition-escaping.test.ts`).
 
 Service launchers reject recorded and newly discovered paths inside shell-local `fnm`, `nvm`,
 `mise`, `asdf`, or `volta` multishell directories. Systemd, launchd, Windows Task Scheduler,
@@ -501,8 +500,8 @@ so an override can never shorten the budgets that prevent a duplicate proxy, and
 `src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
 constants in child processes.
 
-The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe
-`src/update/proxy-liveness-probe.mjs`, decided by
+In Bun installs (`src/update/index.ts`), `runConfigPreflight` opens `config.json` and checks the same descriptor's bytes using passive diagnostics before stopping the proxy. Imported-text diagnostics suppress configuration-derived sanitizer warnings for this check; normal diagnostics and loading retain their warnings. The check writes no recovery backups. An unreadable entry (including a dangling symlink), descriptor close failure, or configuration requiring diagnostics fallback or salvage aborts with code 1 before tray handoff or `ocx stop`. Recovery guidance distinguishes unreadable paths from readable invalid files and explains that validation does not edit the file. Reparable configs and readable symlinks to regular files pass; a genuinely missing config is allowed. The check does not prevent later edits. npm/pnpm flows (`bin/ocx.mjs`) keep their existing stop sequence.
+The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe `src/update/proxy-liveness-probe.mjs`, decided by
 `src/update/stop-decision.mjs`. A refused dial is `dead`. A dial that is only dropped or times
 out, which is what a listener bound to a tailnet address produces once it is gone, falls back to
 one transient exclusive bind of the same host and port, only when the host is a literal IP address

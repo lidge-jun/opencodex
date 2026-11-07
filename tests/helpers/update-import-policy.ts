@@ -68,6 +68,11 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   ],
   "src/update/check-types.ts": [],
   "src/update/codex-cli-update-launch-policy.mjs": [],
+  "src/update/config-preflight.ts": [
+    // Read-only config descriptor inspection and passive raw diagnostics; warnings are discarded, no backup is written.
+    'import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";',
+    'import { configDiagnosticsFromRaw } from "../config/diagnostics";'
+  ],
   "src/update/desktop-badge.ts": [
     "import { defaultUpdateTag } from \"./index\";"
   ],
@@ -106,7 +111,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { existsSync, readFileSync, readdirSync } from \"node:fs\";",
     "import { fileURLToPath } from \"node:url\";",
     "import { dirname, join, resolve } from \"node:path\";",
-    "import { getConfigDir, loadConfig } from \"../config\";",
+    "import { getConfigDir, getConfigPath, loadConfig } from \"../config\";",
+    'import { runConfigPreflight } from "./config-preflight";',
     "import { readPid, readRuntimePort, getRuntimePortPath } from \"../config/process-state\";",
     "import { pendingTeardownOutstanding } from \"../config/pending-teardown\";",
     "import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from \"./runtime-ownership.mjs\";",

@@ -84,8 +84,8 @@ rl.on("line", line => {
       if(!searching && mode === "reply-wait-failure" && reads>=2) return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
       if(!searching && mode === "reply-wait-hang-second" && reads>=2) return;
     }
-    const frame={id:2,result:{data,nextCursor}};
-    return mode === "reply-delay" ? setTimeout(()=>emit(frame),200) : emit(frame);
+    if(!searching && mode === "reply-deadline-barrier") return;
+    return emit({id:2,result:{data,nextCursor}});
   }
   if(f.method === "thread/list") {
     const result = {data:[{id:${JSON.stringify(QUEUE_MCP_TARGET)},name:"fixture",preview:"PRIVATE_PREVIEW",cwd:"PRIVATE_CWD",turns:["PRIVATE_TURN"]}],nextCursor:"next-page"};

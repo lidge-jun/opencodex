@@ -168,6 +168,13 @@ test("committed Home catalog fans out after the Home step; refused refresh does 
     expect(events).toEqual(["home", "status", "child"]);
     expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "synced", reason: null });
     events.length = 0; output.length = 0;
+    child.mockResolvedValue({ code: 121, stdout: "", stderr: "ocx-fanout:child-ocx-lacks-expect-link\n" });
+    expect(await runSyncCommand(deps)).toBe(6);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ alias: "fake", state: "skipped", reason: "child-ocx-lacks-expect-link", hint: expect.stringContaining("2.93.0") });
+    output.length = 0;
+    expect(await runSyncCommand({ ...deps, args: ["sync"] })).toBe(6);
+    expect(output.some(line => line.includes("fake") && line.includes("Check for Updates"))).toBe(true);
+    events.length = 0; output.length = 0;
     sync.mockImplementation(async () => { events.push("home"); return { ...base, refreshOutcome: "refused" }; });
     expect(await runSyncCommand(deps)).toBe(0);
     expect(events).toEqual(["home"]);

@@ -56,7 +56,8 @@ for (const fixture of cases) {
       expect(response.headers.get("x-upstream-private")).toBeNull();
       expect(response.headers.get("content-type")).toBe(fixture.type);
       if (!fixture.stream) expect(response.headers.get("retry-after")).toBe("30");
-      expect(receivedBody).toBe(fixture.body);
+      if (fixture.status === 429) expect(JSON.parse(receivedBody)).toEqual({ type: "error", error: { type: "rate_limit_error", message: "The provider rate limit was reached; retry later." } });
+      else expect(receivedBody).toBe(fixture.body);
     } finally {
       await upstream.stop(true);
     }

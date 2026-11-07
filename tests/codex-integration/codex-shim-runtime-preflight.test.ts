@@ -66,11 +66,17 @@ describe("Windows shim selected-runtime preflight", () => {
   }
 
   test("fresh install refuses before moving the native launcher or creating state", () => fixture(paths => {
-    // No valid prior installation: explicit install must still admit before its first move.
+    // An unreadable record is refused outright, before admission and before any move.
     writeFileSync(paths.state, "{}");
     const before = snapshot(paths);
-    expect(() => installCodexShim({ selectRuntime: () => runtime, assertRuntimeWritable: () => { throw new RuntimePreflightError("create"); } })).toThrow(RuntimePreflightError);
+    expect(installCodexShim({ selectRuntime: () => runtime, assertRuntimeWritable: () => { throw new RuntimePreflightError("create"); } })).toMatchObject({ installed: false, refused: true });
     expect(snapshot(paths)).toEqual(before);
+    // No prior installation: explicit install must still admit before its first move.
+    unlinkSync(paths.state);
+    const launchers = () => ({ wrapper: readFileSync(paths.wrapper, "utf8"), backup: readFileSync(paths.backup, "utf8"), entries: readdirSync(paths.home) });
+    const fresh = launchers();
+    expect(() => installCodexShim({ selectRuntime: () => runtime, assertRuntimeWritable: () => { throw new RuntimePreflightError("create"); } })).toThrow(RuntimePreflightError);
+    expect(launchers()).toEqual(fresh);
   }));
 
   test("fresh install admits once before the first move and freezes all wrapper rendering", () => fixture(paths => {

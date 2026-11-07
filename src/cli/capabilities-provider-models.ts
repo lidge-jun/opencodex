@@ -87,10 +87,10 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     details: ["Projects values only from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models); source and embedded-config bytes are read transiently while secret fields, free-text names, and TOML comments are skipped at the byte level and never decoded into strings, written, or logged, and transient byte buffers are zeroed in finally.", "Only import from a trusted local CC-Switch source: apply prints every imported ID, model, and destination URL before writing, refuses SQLite hard links (nlink > 1) and non-empty -wal/-journal sidecars until CC-Switch is closed, and opens sources read-only with O_NOFOLLOW|O_NONBLOCK descriptor checks; restore inspects auth.json read-only at the byte level and retains any provider that was edited, selected as defaultProvider, or referenced by routing, combos, fallback policy, OAuth accounts, or API keys."],
   },
   {
-    command: ["models", "list"], summary: "List static configured models locally.",
+    command: ["models", "list"], summary: "List local configured and router-known models.",
     usage: "ocx models list [--provider <name>] [--json]", routes: [], mutates: false, json: "envelope",
-    flags: [{ name: "--provider", value: "string", summary: "Limit to a configured provider." }, { name: "--json", value: "boolean", summary: "Emit models and the static-catalog note." }],
-    details: ["A bare models invocation is equivalent. Reads local config, never the live catalog; use models live for runtime discovery."],
+    flags: [{ name: "--provider", value: "string", summary: "Limit to a configured provider." }, { name: "--json", value: "boolean", summary: "Emit models and the local-catalog note." }],
+    details: ["A bare models invocation is equivalent. Includes saved IDs, registry seeds, custom models and this process's discovery cache; use models live for the running catalog."],
   },
   {
     command: ["models","add"],

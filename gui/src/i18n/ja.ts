@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +130,15 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saveFailed": "ワークフロー上限を保存できませんでした。",
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
+  ...shellV2Copy("ja"),
+  ...modelsV2Copy("ja"),
+  ...accountsV2Copy("ja"),
+  ...subagentsV2Copy("ja"),
+  ...usageV2Copy("ja"),
+  ...logsV2Copy("ja"),
+  ...connectV2Copy("ja"),
+  ...startupV2Copy("ja"),
+  ...proxyV2Copy("ja"),
   "claude.tierDefaults.unset": "未指定（既存のClaude設定を維持）",
   "claude.tierDefaults.recovery": "適用が停止し、自動復元に失敗しました。再試行する前に以下のバックアップを確認してください。",
   "claude.tierDefaults.title": "CLIのティア既定モデル",
@@ -2022,7 +2040,7 @@ export const ja: Record<TKey, string> = {
   "modal.useOauthLogin": "← OAuth ログインを使用",
 "nav.codexAuth": "Codex 認証",
   "nav.codexSet": "Codex",
-  "nav.connect": "接続",
+  "nav.connect": "ルート",
   "nav.usageLogs": "使用量とログ",
   "nav.sectionNavigation": "セクションのページ",
   "codexSet.tab.multiauth": "マルチ認証",
@@ -3844,6 +3862,7 @@ export const ja: Record<TKey, string> = {
   "models.aliasStale": "古い",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "この Child に保存された Remote Link 接続が見つからないか、別の所有者またはリンクを指しているため、実行中の Child と一致しません。再リンクする前に、この Child を停止または再起動し、接続を確認してください。",
   "connection.linkManaged": "Remote Link ({linkId}) 経由で Home {home} が管理しています。このダッシュボードは Home の設定とクォータを読み取り専用で表示します。変更は Home で行ってください。",
   "connection.linkManagedUnnamed": "Remote Link ({linkId}) 経由で Home が管理しています。このダッシュボードは Home の設定とクォータを読み取り専用で表示します。変更は Home で行ってください。",
   "connection.disconnect": "Disconnect from hub",

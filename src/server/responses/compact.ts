@@ -1,3 +1,4 @@
+import { clientFacingModelLabel, type ClientFacingModelLabel } from "../../lib/error-destination";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
@@ -15,7 +16,7 @@ import { join } from "node:path";
 import { rmSync } from "node:fs";
 import { previewXaiOauthWireModel } from "./core-normalize";
 import {
-  admissionModelDeniedResponse,
+  admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
@@ -115,7 +116,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
-  SendBudgetExhaustedError,
+  SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
 } from "../../lib/upstream-retry";
@@ -326,6 +327,7 @@ function compactHandoffRoute(
 }
 
 export interface HandleResponsesCompactOptions {
+  clientModelLabel?: ClientFacingModelLabel;
   advisorAdmissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   compactionRoutingOverride?: CompactionRoutingOverride | null;
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
@@ -686,6 +688,8 @@ export async function handleResponsesCompact(
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
+  const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(options.compactionRoutingOverride?.sourceModel ?? (body as { model?: unknown }).model);
+  options = { ...options, clientModelLabel };
   // Compaction forwards client history upstream too; keep local artifact paths out of it.
   redactHostedImageDisplayPaths(body);
   if (!options.compactionRoutingOverride) {
@@ -739,14 +743,14 @@ export async function handleResponsesCompact(
     // Routed xAI OAuth compaction must preview its Fast wire model here;
     // native compact keeps checking the destination it dispatches directly.
     const callerTier = (raw as Record<string, unknown>).service_tier;
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), compactRequestedModel, {
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), clientModelLabel, {
       providerName: route.providerName,
       modelId: previewXaiOauthWireModel({ options: {
         serviceTier: compactFastRow ? "priority" : typeof callerTier === "string" ? callerTier : undefined,
       } }, route, config, "responses"),
     });
   } catch (err) {
-    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so a failed compact policy request stays
@@ -1141,7 +1145,7 @@ export async function handleResponsesCompact(
           identityId: logCtx.accountLogLabel }));
         let started = false;
         try {
-          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
           started = true;
           return await (report.execute ? report.execute(doFetch) : doFetch());
         } finally {
@@ -1153,11 +1157,11 @@ export async function handleResponsesCompact(
         sendClass: "auth-recovery",
         targetKey: compactTargetKey,
       });
-      if (!decision.allowed) return Promise.reject(new SendBudgetExhaustedError(safeHostLabel(compactUrl)));
+      if (!decision.allowed) return Promise.reject(new SendBudgetExhaustedError(errorDestinationLabel(compactUrl)));
       const dispatch = () => {
         if (!decision.permit.use()) {
           decision.permit.release();
-          throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+          throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
         }
         return doFetch();
       };
@@ -1182,6 +1186,9 @@ export async function handleResponsesCompact(
         });
         const requireSendPlaintextReasoning = !isOpenAiOperatedResponsesDestination(sendProvider)
           && requiresPlaintextReasoningReplay(sendProvider);
+        // #8042: `ocx1:`/`ocx2:` are OpenCodex's own transparent envelopes, which no upstream can
+        // decode, so canonical and official sends must lower them like ordinary turns do. `false`
+        // leaves native blobs to the account-change scrub that already owns them on this path.
         let replayBody = gatewayReplayParsed ? sanitizeReasoningInputContent(scrubOcxCompactionItems(
           compactBody, destinationDecodesNativeCompactionBlob(sendProvider),
           gatewayReplayParsed._stripReasoningEncryptedContent === true,
@@ -1192,7 +1199,7 @@ export async function handleResponsesCompact(
           stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true || requireSendPlaintextReasoning,
           dropForeignItemId: gatewayReplayParsed._dropForeignReasoningItemIds === true,
           requirePlaintextReasoning: requireSendPlaintextReasoning,
-        }) : compactBody;
+        }) : scrubOcxCompactionItems(compactBody, destinationDecodesNativeCompactionBlob(sendProvider), false) as typeof compactBody;
         if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.dropResponsesReasoningItems === true) {
           replayBody = dropResponsesReasoningInputItems(replayBody) as typeof replayBody;
         }
@@ -1258,7 +1265,7 @@ export async function handleResponsesCompact(
               if (req.signal.aborted) throw req.signal.reason;
               stampApiKeyAccountLabel(logCtx, route.providerName, sendProvider);
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
-                identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
+                identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                 distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), String(input),
@@ -1282,7 +1289,7 @@ export async function handleResponsesCompact(
         ? sendSingleCompactAttempt(doFetch)
         : fetchWithTransientRetry(doFetch, {
           abortSignal: req.signal,
-          label: safeHostLabel(compactUrl),
+          label: safeHostLabel(compactUrl), destination: errorDestinationLabel(compactUrl),
           // Key-auth policy is a logical-request total; canonical forward keeps its default
           // ladder. Both intersect the same shared base remainder as ordinary Responses.
           attempts: sendBudget.remainingBaseSends(transientSendCapFor(
@@ -1786,7 +1793,7 @@ export async function handleResponsesCompact(
     // fallback spend four more.
     // internalReq keeps only FORWARD_HEADERS, so the caller principal is resolved from req.
     const replayPrincipal = { clientPrincipalId: resolveContextPrincipal(req, config, admission) };
-    const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, ...(admission ? { admission } : {}) });
+    const response = await handleResponses(internalReq, config, logCtx, { clientModelLabel: options.clientModelLabel, abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, ...(admission ? { admission } : {}) });
     if (req.signal.aborted) {
       void response.body?.cancel(req.signal.reason).catch(() => undefined);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");

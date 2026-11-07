@@ -397,18 +397,19 @@ ocx account main recover [--rollback --yes] [--json]
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает модели, статически
-засеянные в настроенных провайдерах. `--provider` фильтрует один провайдер, а `--json` возвращает
+`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает сохранённые и известные маршрутизатору ID моделей, включая записи реестра, пользовательские модели и кэш обнаружения этого процесса CLI. Кэш нового процесса может быть пустым и не является каталогом работающего прокси. Некоторые старые пресеты с ключом сохраняют записи реестра после смены адреса. `--provider` фильтрует один провайдер, а `--json` возвращает
 метаданные моделей. `live` читает работающий каталог; `add`, `edit`, `remove` и `list-custom`
 управляют ручными записями каталога; `enable`, `disable` и `provider` управляют видимостью;
 `selected` управляет allowlist'ом провайдера; `context` — provider context cap'ами; `shadow`
 управляет intercept'ом background shadow-call'ов.
 
+Поле `reasoningEfforts` отображается только с `--json`. Значение `null` означает, что список неизвестен или не запрашивался, в том числе когда для проверки пришлось бы открыть системное хранилище ключей. Пустой массив `[]` означает явно пустой список либо отключённый для модели уровень рассуждения, например через `noReasoningModels`. Каталог работающего прокси доступен через `ocx models live`.
+
 `add` и `remove` по умолчанию сохраняют локально; `--live` меняет работающий прокси. Без прокси локальное сохранение с `--json` возвращает `sync.status: "not-attempted"`, `needsSync: true` и код 0. Неудачная попытка синхронизации сохраняет запись и возвращает ненулевой код. `list-custom` читает локальный список. `display-name` использует исходный upstream ID, а `order` — публичные ID picker. Полная перестановка, префикс featured и сброс native-порядка описаны в [английской инструкции](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
+| `list` (default) | `--provider <name>`, `--json` | Показать локально сохранённые и известные маршрутизатору модели. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Регистрирует custom-модель локально или на работающем прокси с `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |

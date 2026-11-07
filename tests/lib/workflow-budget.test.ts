@@ -489,7 +489,7 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     // The admission refusal goes through the decision-carrying wrapper, which forwards the
     // denial's own scope and ceiling. Forwarding `reason` alone would answer a token-ceiling
     // refusal with a 429 that names no ceiling. A native ingress may reshape it (map) but not drop it.
-    expect(source).toMatch(/withCors\((?:map\()?workflowDecisionRefusalResponse\(/);
+    expect(source).toMatch(/withCors\(await normalizeMessagesProxyRefusal\(req, map\(workflowDecisionRefusalResponse\(/);
   });
 
   test("every refusal lands on the record with the counts that caused it", () => {

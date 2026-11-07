@@ -777,6 +777,7 @@ export function httpStatusFromTerminalError(error: {
   if (message && isClientClosedMessage(message)) return 499;
   if (error.type === "invalid_request_error") return 400;
   if (error.type === "proxy_error") return 500;
+  if (error.code === "upstream_stall_timeout") return 504;
   // A structured server class must not be downgraded to a CLIENT error by message wording.
   // classifyError assigns `server_error` + `upstream_server_error` to every 5xx it sees, so
   // the class is authoritative about blame: the upstream failed, the caller did not send a

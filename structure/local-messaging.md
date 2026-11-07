@@ -241,7 +241,10 @@ MCP output. Legacy stores have no unbounded includeTurns fallback.
 
 `tests/codex-integration/messaging-mcp-replies.test.ts` covers correlation, projection,
 position scoping/revalidation, late finalization, missing/ambiguous inputs, page and
-UTF-8 limits, inherited budget/cancellation and failure privacy. The actual CLI
+UTF-8 limits, inherited budget/cancellation and failure privacy. The deadline regression
+waits for the second helper request barrier before firing the captured outer timer;
+helper startup speed does not determine its result. Cursor repetition coverage
+rejects immediate repeats, not arbitrary multi-page cycles. The actual CLI
 opt-in handshake is exercised by `tests/cli/cli-message-mcp.test.ts`; existing inert
 activation and default-tool tests remain in force. Offline helpers prove protocol
 contracts, not native app processing, goal behavior or cross-client registration.

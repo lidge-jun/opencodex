@@ -23,7 +23,7 @@ function entries(data: unknown, limit: number, turnId?: string): Entry[] {
   return data as Entry[];
 }
 
-/** A repeated or oversized continuation fails closed instead of restarting history or looping. */
+/** An immediately repeated or oversized continuation fails closed; longer cycles remain caller-owned. */
 function nextCursor(result: Record<string, unknown>, previous: string | null): string | null {
   const next = result.nextCursor;
   if (next !== null && (typeof next !== "string" || !next || next.length > 8192 || /[\x00-\x1f]/.test(next) || next === previous)) throw new Error("invalid cursor");

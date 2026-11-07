@@ -116,7 +116,9 @@ describe("startup health UI decisions", () => {
         const guidance = diagnosticStale ? "startup.desktopReopenRecovery" : "startup.desktopSupervisedRecovery";
         const localized = t(guidance);
         expect(typeof localized).toBe("string");
-        expect(markup).toContain(renderToStaticMarkup(createElement("p", null, localized)));
+        // The guidance is the hero's own paragraph, whatever classes the paragraph carries.
+        const escaped = renderToStaticMarkup(createElement("p", null, localized)).slice("<p>".length, -"</p>".length);
+        expect(markup).toMatch(new RegExp(`<p[^>]*>${escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</p>`));
         expect(markup).not.toContain(data.recommendedAction!);
       }
     }

@@ -79,6 +79,23 @@ missing credential — the proxy did not recognise the request as loopback. Open
 the address the proxy prints on startup (usually `http://127.0.0.1:<port>`), and prefer that exact
 host and port over a LAN IP or an alias.
 
+## Classic dashboard
+
+The dashboard was redesigned: its sidebar now groups pages into **Everyday**, **Set up** and
+**Fine-tuning**, and it opens on a Home page. The previous design stays available as the
+**classic dashboard** at `/classic/` on the same proxy, for example `http://127.0.0.1:10100/classic/`.
+
+- To switch, select the clock icon (**Classic dashboard**) beside the theme switch at the foot of
+  the sidebar. The classic sidebar has **New dashboard** at the top of its foot to come back.
+- The choice is remembered per browser, so opening `/` later lands on the dashboard you picked.
+  The desktop app follows the same choice. The tray popover always uses the new design.
+- The classic dashboard is a snapshot of the previous design. It talks to the same proxy and
+  changes the same settings, but pages and settings added after the redesign appear only in the
+  new dashboard.
+
+The sidebar rows described under [Dashboard layout](#dashboard-layout) are the classic
+dashboard's.
+
 ## Dashboard layout
 
 The sidebar has eight rows, in order: **Dashboard**, **Connect**, **Codex**, **Providers**, **Models**, **Subagents**, **Usage & Logs**, and **Remote Link**. **Connect** opens the page headed **Connect**, with its tab strip ordered **Codex**, **Claude**, **Claude Desktop**, **Grok Build**, then the remaining integrations. Claude has no sub-tabs; it shows the Claude Code settings directly. Claude Desktop is a separate Connect tab at `#claude/desktop`. Connect has no section switcher. **Subagents** opens Subagents and groups Subagents and Advisor (`#advisor`) with a pill-shaped section switcher. **Usage & Logs** opens Usage and groups Usage, Logs & Debug, and Storage with a pill-shaped section switcher. The last row, **Remote Link**, groups Remote Link (`#remote`) and Remote Workspace (`#remote-workspace`, when available) with the same switcher. **Codex** is the renamed **Codex Set** row; the preserved URLs include `#codex-set`, `#claude`, `#claude/code`, and `#claude/desktop`; the former `#claude/settings` bookmark opens Code. The former `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Startup (`#startup`) stays outside the sidebar.
@@ -102,6 +119,8 @@ is visible) and never forces an upstream refresh.
 
 - Each chip shows the preferred reported window: weekly first, then monthly, then 5-hour, then a
   provider-named window or prepaid credits.
+- Critical prepaid credits (90% or more used) take the headline when the preferred regular window
+  is not critical. If that window is also critical, it remains the headline.
 - A chip turns amber at 70% used and red at 90% used.
 - Hover or keyboard-focus a chip to see every reported window with its reset time and the time the
   reading was taken. The details stay open as the pointer moves from the chip into the popover,
@@ -300,6 +319,14 @@ they have been synchronized. See
 ## Remote Hub sessions, keys, and usage
 
 In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
+
+### Applying a Codex CLI update over HTTP
+
+The CLI-update HTTP API has no dashboard job UI. Its apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action.
+
+For standalone local pairing, open the dashboard at its configured literal `http://127.0.0.1:<port>` or `http://[::1]:<port>` origin. Use the existing local pairing form in **Connect → API Keys** or Remote Link setup: run the displayed `ocx gui pair --origin "<browser-origin>"` command locally, then redeem its one-time code in that form. Pairing does not apply an update; a subsequent confirmed API request is still required. A server configured with hostname `localhost`, a wildcard bind, or a connected-client role cannot issue this local pairing authority. Remote pairing does not remove the apply route's trusted-loopback requirement.
+
+Without an eligible HTTP pairing path, use `ocx system codex-cli-update plan` followed by `ocx system codex-cli-update apply --plan-id <32-hex> --yes` locally. This uses the same durable job owner without a GUI session. Pairing proves authority to write the protected configuration home, not human identity or protection from unrestricted same-user processes.
 
 ### Reading an existing API key
 

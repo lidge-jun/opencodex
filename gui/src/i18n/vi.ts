@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -123,6 +132,15 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Không thể lưu giới hạn quy trình.",
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
+  ...shellV2Copy("vi"),
+  ...modelsV2Copy("vi"),
+  ...accountsV2Copy("vi"),
+  ...subagentsV2Copy("vi"),
+  ...usageV2Copy("vi"),
+  ...logsV2Copy("vi"),
+  ...connectV2Copy("vi"),
+  ...startupV2Copy("vi"),
+  ...proxyV2Copy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",
@@ -2122,7 +2140,7 @@ export const vi: Record<TKey, string> = {
   "modal.adding": "Đang thêm…",
   "modal.useOauthLogin": "← Sử dụng đăng nhập OAuth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Kết nối",
+  "nav.connect": "Định tuyến",
   "nav.usageLogs": "Mức dùng & nhật ký",
   "nav.sectionNavigation": "Trang trong mục",
   "codexSet.tab.multiauth": "Đa xác thực",
@@ -3819,6 +3837,7 @@ export const vi: Record<TKey, string> = {
   "models.aliasStale": "cũ (stale)",
   "connection.discovering": "Đang khám phá các mục tiêu cục bộ (local) và được chia sẻ…",
   "connection.machineUnavailable": "Mặt phẳng máy cục bộ (local machine plane) không khả dụng. Các yêu cầu chia sẻ đã không được chuyển hướng cục bộ.",
+  "connection.clientStateChanged": "Kết nối Remote Link đã lưu của Child này bị thiếu hoặc nay trỏ đến chủ sở hữu hoặc liên kết khác, nên không còn khớp với Child đang chạy. Hãy dừng hoặc khởi động lại Child này và kiểm tra kết nối trước khi liên kết lại.",
   "connection.linkManaged": "Được quản lý bởi Home {home} qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.linkManagedUnnamed": "Được quản lý bởi Home của nó qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.disconnect": "Ngắt kết nối khỏi hub",

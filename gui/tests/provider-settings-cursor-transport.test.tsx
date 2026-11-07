@@ -6,6 +6,7 @@ import ProviderSettings from "../src/components/provider-workspace/ProviderSetti
 import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
+import { chooseOption, selectOptions, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -69,16 +70,14 @@ async function mountSettings(item: WorkspaceItem): Promise<{
   return { root, container, patches };
 }
 
-function transportSelect(container: HTMLElement): HTMLSelectElement | null {
-  return Array.from(container.querySelectorAll<HTMLSelectElement>("select.input"))
-    .find(select => Array.from(select.options).some(option => option.value === "http1.1")) ?? null;
+/** The transport picker (the app's Select), recognised by holding a transport value. */
+function transportSelect(container: HTMLElement): HTMLButtonElement | null {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>("[role=combobox]"))
+    .find(select => selectValue(select) === "http2" || selectValue(select) === "http1.1") ?? null;
 }
 
-async function choose(select: HTMLSelectElement, value: "http2" | "http1.1"): Promise<void> {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!.set!.call(select, value);
-    select.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+async function choose(select: HTMLButtonElement, value: "http2" | "http1.1"): Promise<void> {
+  await chooseOption(select, value);
 }
 
 async function save(container: HTMLElement): Promise<void> {
@@ -94,8 +93,11 @@ test("Cursor settings expose HTTP/2 as the default without materializing a confi
   const { root, container, patches } = await mountSettings(cursor());
   const select = transportSelect(container);
 
-  expect(select?.value).toBe("http2");
-  expect(select?.options[0]?.textContent).toContain("default");
+  expect(select).not.toBeNull();
+  expect(selectValue(select!)).toBe("http2");
+  const options = await selectOptions(select!);
+  expect(options.map(option => option.value)).toEqual(["http2", "http1.1"]);
+  expect(options[0]?.label).toContain("default");
   expect(container.textContent).toContain("proxy cannot reliably carry");
   expect(container.querySelector(".pwi-settings-sticky-bar")).toBeNull();
   expect(patches).toEqual([]);
@@ -127,7 +129,7 @@ test("selecting HTTP/1.1 persists the compatibility transport", async () => {
 test("selecting the default HTTP/2 clears an existing HTTP/1.1 pin", async () => {
   const { root, container, patches } = await mountSettings(cursor("h1"));
   const select = transportSelect(container)!;
-  expect(select.value).toBe("http1.1");
+  expect(selectValue(select)).toBe("http1.1");
 
   await choose(select, "http2");
   await save(container);

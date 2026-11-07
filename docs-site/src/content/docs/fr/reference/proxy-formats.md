@@ -225,6 +225,15 @@ La sortie sans streaming a `object: "chat.completion"`. La sortie streaming util
 `data: [DONE]`. Les informations d'appel d'outil et d'utilisation sont traduites là où les événements source sont transportés.
 eux.
 
+Les réponses d'erreur et les trames d'erreur en streaming de ce point de terminaison utilisent des
+messages rédigés par le proxy. Le proxy classe l'échec du fournisseur dans une condition fixe, par
+exemple limite de débit atteinte, quota ou crédits épuisés, fenêtre de contexte dépassée, modèle
+indisponible, emplacement non pris en charge ou vérification du compte requise, et renvoie le message
+fixe de cette condition. Les refus de politique, les refus de rejeu et les limites du proxy ont leurs
+propres messages fixes. Le statut HTTP, `error.type`, `error.code` et `Retry-After` gardent leur
+signification : les clients qui s'appuient sur des codes comme `context_length_exceeded`,
+`insufficient_quota` ou `rate_limit_exceeded` se comportent comme avant.
+
 Étant donné que le chemin d'exécution interne est basé sur les réponses, un adaptateur de fournisseur peut imposer un chemin d'exécution plus étroit.
 ensemble de fonctionnalités. Par exemple, une fonctionnalité de demande qui ne peut pas être représentée par l'adaptateur sélectionné est
 renvoyé comme une erreur au lieu de changer silencieusement sa signification.
