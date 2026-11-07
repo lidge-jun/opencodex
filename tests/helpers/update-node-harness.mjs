@@ -13,6 +13,7 @@ import { deriveCandidateId } from "../../src/update/update-candidate-id.mjs";
 import { sameSignedVersion, trustedCommentMatchesVersion } from "../../src/update/update-signed-version.mjs";
 import { bootstrapEmbeddedRoot } from "../../src/update/signed-supply.mjs";
 import { parseSignatureEnvelope, parseUpdateDocument } from "../../src/update/update-contracts.mjs";
+import { checkpointPayloadDigest, decodeCheckpointPayload, encodeCheckpointPayload } from "../../src/update/update-checkpoint-codec.mjs";
 
 const args = process.argv.slice(2);
 assert.ok(args.length === 0 || (args.length === 1 && args[0] === "--require-node18"), "unsupported arguments");
@@ -365,6 +366,35 @@ try {
 }
 
 const root = readFileSync(fileURLToPath(new URL("../../src/update/trust-root.json", import.meta.url)));
+const checkpointCorpus = JSON.parse(readFileSync(fileURLToPath(new URL("../fixtures/update-checkpoint/corpus.json", import.meta.url)), "utf8"));
+for (const [name, base64] of Object.entries(checkpointCorpus.valid)) {
+  const payload = Buffer.from(base64, "base64"), copy = Buffer.from(payload);
+  const decoded = decodeCheckpointPayload(payload);
+  assert.deepEqual(Buffer.from(encodeCheckpointPayload(decoded)), copy, name);
+  assert.equal(checkpointPayloadDigest(payload), createHash("sha256").update(copy).digest("hex"), name);
+  payload.fill(0);
+  assert.deepEqual(Buffer.from(encodeCheckpointPayload(decoded)), copy, name);
+}
+for (const [name, base64] of Object.entries(checkpointCorpus.invalid)) {
+  const payload = Buffer.from(base64, "base64");
+  assert.throws(() => decodeCheckpointPayload(payload), name);
+  assert.throws(() => checkpointPayloadDigest(payload), name);
+}
+const checkpointLimits = JSON.parse(readFileSync(fileURLToPath(new URL("../fixtures/update-checkpoint/history-limits.json", import.meta.url)), "utf8"));
+const limitPayload = Buffer.from(checkpointLimits.proposed_valid_history_128.base64, "base64");
+assert.equal(decodeCheckpointPayload(limitPayload).history.length, 128);
+assert.equal(checkpointPayloadDigest(limitPayload), checkpointLimits.proposed_valid_history_128.sha256);
+assert.throws(() => decodeCheckpointPayload(Buffer.from(checkpointLimits.proposed_invalid_history_129.base64, "base64")));
+const checkpointData = decodeCheckpointPayload(Buffer.from(checkpointCorpus.valid.empty, "base64"));
+const maximumObservations = decodeCheckpointPayload(Buffer.from(checkpointCorpus.valid["observations-limit"], "base64"));
+maximumObservations.firstSeen.preview = maximumObservations.firstSeen.latest.slice();
+maximumObservations.firstSeen.nightly = maximumObservations.firstSeen.latest.slice();
+const maximumRoundtrip = decodeCheckpointPayload(encodeCheckpointPayload(maximumObservations));
+assert.deepEqual(Object.values(maximumRoundtrip.firstSeen).map((value) => value.length), [4096, 4096, 4096]);
+const checkpointAgain = decodeCheckpointPayload(Buffer.from(checkpointCorpus.valid.empty, "base64"));
+const checkpointBuffers = [checkpointData.namespaceDigest, checkpointData.principalDigest, checkpointData.identityBytes, checkpointData.rootDigest, checkpointData.rootBytes, checkpointAgain.rootDigest];
+assert.equal(new Set(checkpointBuffers.map((value) => value.buffer)).size, checkpointBuffers.length);
+assert.throws(() => encodeCheckpointPayload({ ...checkpointData, get generation() { throw new Error("accessor invoked"); } }), /Invalid checkpoint payload/);
 const expiry = Date.parse("2028-11-07T00:00:00Z");
 assert.ok(Object.isFrozen(bootstrapEmbeddedRoot(root, expiry - 1)));
 assert.throws(() => bootstrapEmbeddedRoot(root, expiry));
