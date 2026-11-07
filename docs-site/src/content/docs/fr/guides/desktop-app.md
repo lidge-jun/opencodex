@@ -15,6 +15,17 @@ Téléchargez `OpenCodex-<version>-macos.dmg` depuis la [dernière version](http
 
 Les versions publiées de `OpenCodex.app` sont signées avec un Developer ID et notariées par Apple. Au premier lancement, macOS ne demande normalement que la confirmation habituelle pour une application téléchargée. S’il la bloque tout de même, utilisez **System Settings → Privacy & Security → Open Anyway**.
 
+#### Homebrew (application de bureau)
+
+Vous pouvez également installer l’application de bureau via Homebrew Cask :
+
+```bash
+brew install --cask opencodex
+```
+
+- **Mises à jour intégrées (`auto_updates`)** : L’application de bureau intègre son propre système de mise à jour. Le Cask utilise `auto_updates true` afin que les mises à jour intégrées et `brew upgrade` fonctionnent ensemble sans conflit.
+- **CLI et service d’arrière-plan** : Le Cask installe uniquement `OpenCodex.app`, qui intègre son propre CLI et son environnement d’exécution proxy. Si vous souhaitez un CLI autonome ou un démon sans interface, vous pouvez installer `ocx` séparément (via npm ou les archives de publication) et exécuter `ocx service install` ; les deux partagent la configuration dans `~/.opencodex`.
+
 ### Windows
 
 Téléchargez `OpenCodex-<version>-windows-x64.msi` et lancez l’installation. Windows SmartScreen peut afficher un avertissement, car l’installateur n’est pas encore signé ; choisissez **More info → Run anyway** après avoir vérifié que le téléchargement provient de la page des versions.
