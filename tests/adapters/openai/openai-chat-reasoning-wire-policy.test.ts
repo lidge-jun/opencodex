@@ -350,6 +350,22 @@ describe("toggle-only Chat reasoning capability", () => {
     }
   });
 
+  test.each([undefined, "gateway-object"] as const)("disabled toggle omits aliased ultra on %s", reasoningWireFormat => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: false, supportsReasoningEffort: true } },
+      modelReasoningEfforts: { [toggleModel]: ["low", "high"] },
+      modelReasoningEffortMap: { [toggleModel]: { max: "__omit__" } },
+    };
+    for (const thinkingEnabled of [undefined, false, true]) {
+      for (const body of Object.values(finalToggleBodies(request("ultra"), target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toBeUndefined();
+        expect(body.reasoning_effort).toBeUndefined();
+        expect(body.reasoning).toBeUndefined();
+      }
+    }
+  });
+
   test("native dual-axis wire preserves explicitly supported ultra despite the max omission alias", () => {
     const target: OcxProviderConfig = {
       ...toggleProvider,
