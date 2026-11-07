@@ -92,6 +92,13 @@ test("display labels cannot inject terminal lines into CLI quota output", () => 
   expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 1, customWindows: [{ label: "x", percent: 1, displayLabel: 4 }] } })]), "mistral")).toThrow("Malformed");
 });
 
+test("stable labels without a display label are safe in account refresh", () => {
+  const quota = { updatedAt: 1, customWindows: [{ label: "budget\u001b[31m\nunsafe", percent: 10 }] };
+  const text = providerQuotaLine("mistral", { provider: "mistral", quota });
+  expect(text).not.toContain("\u001b");
+  expect(text).not.toContain("\n");
+});
+
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   const deps: AccountDeps = { ...depsFor(body()), loadConfigImpl: () => config("team/key +"),
