@@ -12,6 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use ocx_child::daemon::pick_ephemeral_link_port;
+#[cfg(unix)]
+use ocx_child::daemon::stop_owned_daemon;
 use ocx_child::http_wire::{
     read_bounded_body, read_request_head, validate_and_sanitize_request_headers,
 };
@@ -21,6 +23,8 @@ use ocx_child::relay_auth::{
     compute_connection_proof, compute_relay_proof, relay_proof_matches, token_fingerprint_hex,
 };
 use ocx_child::state::ChildPaths;
+#[cfg(unix)]
+use ocx_child::state::{CHILD_STATE_SCHEMA, ChildStateV1};
 
 struct MockHomeState {
     spoof_listener_proof: AtomicBool,
@@ -316,6 +320,221 @@ fn raw_http_exchange(port: u16, raw_req: &str) -> String {
 }
 
 #[test]
+fn detached_foreground_serve_refuses_to_start() {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-detached-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    fs::create_dir_all(&scratch).unwrap();
+    let listen_port = pick_ephemeral_link_port().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .args([
+            "serve",
+            "--foreground",
+            "--listen-port",
+            &listen_port.to_string(),
+        ])
+        .env("OPENCODEX_HOME", scratch.join("opencodex"))
+        .env("CODEX_HOME", scratch.join("codex"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut exited = false;
+    for _ in 0..100 {
+        if child.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !exited {
+        child.kill().unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(exited, "detached foreground server did not refuse startup");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("detached"));
+    assert!(TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], listen_port))).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn untrusted_health_pid_never_authorizes_signalling_an_unrelated_process() {
+    use std::io::Read;
+
+    let mut unrelated = Command::new("/bin/sleep")
+        .arg("60")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let leaked = Arc::new(AtomicBool::new(false));
+    let thread_leaked = Arc::clone(&leaked);
+    let sent_after_bad_proof = Arc::new(AtomicBool::new(false));
+    let thread_sent_after_bad_proof = Arc::clone(&sent_after_bad_proof);
+    let claimed_pid = unrelated.id();
+    let server = thread::spawn(move || {
+        while !thread_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    let _ = socket.set_read_timeout(Some(Duration::from_millis(50)));
+                    let mut bytes = [0u8; 2048];
+                    let count = socket.read(&mut bytes).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&bytes[..count]);
+                    if request.contains(&"a".repeat(48)) {
+                        thread_leaked.store(true, Ordering::SeqCst);
+                    }
+                    if request.starts_with("GET /healthz ") {
+                        let body = format!(
+                            r#"{{"service":"opencodex","role":"client","ephemeralChild":true,"pid":{claimed_pid},"port":{port}}}"#
+                        );
+                        let _ = write!(
+                            socket,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                    } else if request.starts_with("POST ") {
+                        let response = format!(
+                            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nx-ocx-child-shutdown-proof: {}\r\nConnection: keep-alive\r\n\r\n",
+                            "0".repeat(64),
+                        );
+                        let _ = socket.write_all(response.as_bytes());
+                        let count = socket.read(&mut bytes).unwrap_or(0);
+                        if count > 0 {
+                            thread_sent_after_bad_proof.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("fixture listener failed: {e}"),
+            }
+        }
+    });
+    let state = ChildStateV1 {
+        schema: CHILD_STATE_SCHEMA.to_owned(),
+        link_id: "lnk_0123456789abcdef".to_owned(),
+        api_key_id: "link:t".to_owned(),
+        token_fingerprint: "fingerprint".to_owned(),
+        tunnel_port: 12345,
+        listen_port: port,
+        connected_at: String::new(),
+        catalog_fingerprint: String::new(),
+        catalog_synced_at: String::new(),
+        daemon_pid: Some(unrelated.id()),
+        daemon_started_at_ms: None,
+        shutdown_secret: "a".repeat(48),
+        parity_sequence: 0,
+        pending_operation: None,
+        applied_settings: None,
+    };
+
+    let result = stop_owned_daemon(&state);
+    let survived = unrelated.try_wait().unwrap().is_none();
+    stop.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    if survived {
+        unrelated.kill().unwrap();
+    }
+    let _ = unrelated.wait();
+    assert!(
+        result.is_err(),
+        "unattested listener must not be treated as stopped"
+    );
+    assert!(
+        survived,
+        "an unauthenticated health response authorized a signal"
+    );
+    assert!(
+        !leaked.load(Ordering::SeqCst),
+        "untrusted listener received the shutdown secret"
+    );
+    assert!(
+        !sent_after_bad_proof.load(Ordering::SeqCst),
+        "caller sent authorization after an invalid listener proof"
+    );
+}
+
+#[test]
+fn native_attach_starts_authorized_daemon_and_clears_rollback_snapshot() {
+    struct Cleanup {
+        root: std::path::PathBuf,
+        ocx: std::path::PathBuf,
+        codex: std::path::PathBuf,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let result = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+                .arg("detach")
+                .env("OPENCODEX_HOME", &self.ocx)
+                .env("CODEX_HOME", &self.codex)
+                .output();
+            if result.is_ok_and(|output| output.status.success()) {
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+    }
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-attach-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let ocx_home = scratch.join("opencodex");
+    let codex_home = scratch.join("codex");
+    fs::create_dir_all(&ocx_home).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    let _cleanup = Cleanup {
+        root: scratch.clone(),
+        ocx: ocx_home.clone(),
+        codex: codex_home.clone(),
+    };
+    let port = pick_ephemeral_link_port().unwrap();
+    let raw_token = format!("ocx_data_{}", "a".repeat(40));
+    let key_id = "link:rust-test";
+    let link_id = "lnk_0123456789abcdef";
+    let mut home = MockHomeServer::start(&raw_token, key_id, link_id);
+    let creds = format!(r#"{{"apiKeyId":"{key_id}","key":"{raw_token}"}}"#);
+    let (code, _, stderr) = run_bin(
+        &ocx_home,
+        &codex_home,
+        port,
+        &[
+            "attach",
+            "--key-stdin",
+            "--tunnel-port",
+            &home.port.to_string(),
+            "--link-id",
+            link_id,
+            "--listen-port",
+            &port.to_string(),
+        ],
+        Some(creds.as_bytes()),
+    );
+    assert_eq!(code, 0, "native attach failed: {stderr}");
+    assert!(!ocx_home.join("child").join("attach-rollback.json").exists());
+    assert!(
+        raw_http_exchange(
+            port,
+            &format!("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+        )
+        .contains("200 OK")
+    );
+    let (detach_code, _, detach_error) = run_bin(&ocx_home, &codex_home, port, &["detach"], None);
+    assert_eq!(detach_code, 0, "detach failed: {detach_error}");
+    home.shutdown();
+}
+
+#[test]
 fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detach() {
     let scratch = std::env::temp_dir().join(format!("ocx-child-e2e-rust-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
@@ -380,6 +599,79 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     assert_eq!(rc_conn, 0, "connect stderr: {err_conn}");
     assert!(codex_home.join("models_cache.json").exists());
 
+    let rollback_path = ocx_home.join("child").join("attach-rollback.json");
+    fs::write(&rollback_path, b"{}").unwrap();
+    let mut untrusted = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .args([
+            "serve",
+            "--foreground",
+            "--listen-port",
+            &listen_port.to_string(),
+        ])
+        .env("OPENCODEX_HOME", &ocx_home)
+        .env("CODEX_HOME", &codex_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut exited = false;
+    for _ in 0..100 {
+        if untrusted.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !exited {
+        untrusted.kill().unwrap();
+    }
+    let status = untrusted.wait().unwrap();
+    fs::remove_file(&rollback_path).unwrap();
+    assert!(
+        exited && !status.success(),
+        "incomplete attach must refuse untrusted startup"
+    );
+
+    let state_path = ocx_home.join("child").join("state.json");
+    let state_bytes = fs::read(&state_path).unwrap();
+    let mut damaged: serde_json::Value = serde_json::from_slice(&state_bytes).unwrap();
+    damaged["shutdownSecret"] = serde_json::Value::String(String::new());
+    fs::write(&state_path, serde_json::to_vec(&damaged).unwrap()).unwrap();
+    fs::write(&rollback_path, b"{}").unwrap();
+    let mut malformed = Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .args([
+            "serve",
+            "--foreground",
+            "--listen-port",
+            &listen_port.to_string(),
+        ])
+        .env("OPENCODEX_HOME", &ocx_home)
+        .env("CODEX_HOME", &codex_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut exited = false;
+    for _ in 0..100 {
+        if malformed.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !exited {
+        malformed.kill().unwrap();
+    }
+    let status = malformed.wait().unwrap();
+    fs::remove_file(&rollback_path).unwrap();
+    fs::write(&state_path, state_bytes).unwrap();
+    assert!(
+        exited && !status.success(),
+        "empty lifecycle secret must refuse startup"
+    );
+
     let (rc_rest, _, err_rest) = run_bin(&ocx_home, &codex_home, listen_port, &["restart"], None);
     assert_eq!(rc_rest, 0, "restart stderr: {err_rest}");
 
@@ -391,11 +683,57 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     assert!(health_resp.contains("200 OK"));
     assert!(health_resp.contains("\"ephemeralChild\":true"));
     assert!(!health_resp.contains("restartCapability"));
+    let state_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(ocx_home.join("child").join("state.json")).unwrap())
+            .unwrap();
+    let secret = state_json["shutdownSecret"].as_str().unwrap();
+    let direct_shutdown = raw_http_exchange(
+        listen_port,
+        &format!(
+            "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{listen_port}\r\nx-ocx-child-shutdown: {secret}\r\nContent-Length: 0\r\n\r\n"
+        ),
+    );
+    assert!(direct_shutdown.contains("404 Not Found"));
+    let origin_shutdown = raw_http_exchange(
+        listen_port,
+        &format!(
+            "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{listen_port}\r\nOrigin: https://example.invalid\r\nx-ocx-child-shutdown-challenge: {}\r\nContent-Length: 0\r\n\r\n",
+            "a".repeat(64)
+        ),
+    );
+    assert!(origin_shutdown.contains("404 Not Found"));
+    assert!(!origin_shutdown.contains("x-ocx-child-shutdown-proof"));
     let first_pid: u32 =
         serde_json::from_str::<serde_json::Value>(health_resp.split("\r\n\r\n").nth(1).unwrap())
             .unwrap()["pid"]
             .as_u64()
             .unwrap() as u32;
+
+    let wrong_codex_home = scratch.join("different-codex");
+    fs::create_dir_all(&wrong_codex_home).unwrap();
+    let paths = ChildPaths::new(ocx_home.clone(), codex_home.clone());
+    let state_before = fs::read(&paths.state_file).unwrap();
+    let journal_before = fs::read(&paths.journal_file).unwrap();
+    let (wrong_rc, _, _) = run_bin(&ocx_home, &wrong_codex_home, listen_port, &["detach"], None);
+    assert_ne!(
+        wrong_rc, 0,
+        "detach with a different Codex home must refuse"
+    );
+    assert!(
+        fs::read(&paths.state_file).unwrap() == state_before,
+        "child state changed"
+    );
+    assert!(
+        fs::read(&paths.journal_file).unwrap() == journal_before,
+        "journal changed"
+    );
+    assert!(
+        raw_http_exchange(
+            listen_port,
+            &format!("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{listen_port}\r\n\r\n"),
+        )
+        .contains("200 OK")
+    );
 
     let ready_resp = raw_http_exchange(
         listen_port,

@@ -7,7 +7,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
 use crate::codex_settings::HomeCodexSettings;
-use crate::platform::{reject_symlink, sha256_hex, write_private_atomic, write_regular_atomic};
+use crate::platform::{
+    ensure_private_dir, reject_symlink, sha256_hex, write_private_atomic, write_regular_atomic,
+};
 use crate::state::ChildPaths;
 use crate::toml_surgeon::{
     ChildInjectedLedger, apply_design_b_config, detect_unowned_root_routing_conflict,
@@ -87,6 +89,40 @@ pub fn write_journal(path: &Path, journal: &ChildJournalV1) -> Result<(), String
         .map_err(|e| format!("failed serializing journal: {e}"))?;
     bytes.push(b'\n');
     write_private_atomic(path, &bytes)
+}
+
+fn validate_journal_paths(paths: &ChildPaths, journal: &ChildJournalV1) -> Result<(), String> {
+    let current_ocx = fs::canonicalize(&paths.opencodex_home)
+        .map_err(|e| format!("cannot resolve current OpenCodex home: {e}"))?;
+    let recorded_ocx = fs::canonicalize(&journal.opencodex_home)
+        .map_err(|e| format!("cannot resolve recorded OpenCodex home: {e}"))?;
+    let current_codex = fs::canonicalize(&paths.codex_home)
+        .map_err(|e| format!("cannot resolve current Codex home: {e}"))?;
+    let recorded_codex = fs::canonicalize(&journal.codex_home)
+        .map_err(|e| format!("cannot resolve recorded Codex home: {e}"))?;
+    let catalog = Path::new(&journal.catalog_path);
+    let catalog_parent = catalog.parent().ok_or("journal catalog has no parent")?;
+    let recorded_catalog_parent = fs::canonicalize(catalog_parent)
+        .map_err(|e| format!("cannot resolve journal catalog parent: {e}"))?;
+    if current_ocx != recorded_ocx
+        || current_codex != recorded_codex
+        || current_codex != recorded_catalog_parent
+        || catalog.file_name() != Some(std::ffi::OsStr::new("opencodex-catalog.json"))
+    {
+        return Err("child journal belongs to a different home or catalog path".to_owned());
+    }
+    Ok(())
+}
+
+/// Verify an existing journal before any lifecycle operation changes state or stops a daemon.
+pub fn validate_existing_journal_paths(paths: &ChildPaths) -> Result<bool, String> {
+    match read_journal(&paths.journal_file)? {
+        Some(journal) => {
+            validate_journal_paths(paths, &journal)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// Fail-closed check ensuring full `ocx` does not own `$OPENCODEX_HOME` or `$CODEX_HOME`.
@@ -256,6 +292,9 @@ pub fn apply_attach_or_sync_with_fault(
     reject_symlink(&cache_path)?;
 
     let existing_journal = read_journal(&paths.journal_file)?;
+    if let Some(journal) = &existing_journal {
+        validate_journal_paths(paths, journal)?;
+    }
     let current_cfg_bytes = match fs::read(&config_path) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -420,6 +459,10 @@ pub fn apply_attach_or_sync_with_fault(
         previous_models_cache_sha256: prev_cache_sha,
         ledger: next_ledger,
     };
+    // Create homes before the journal so later validation can resolve their identities.
+    ensure_private_dir(&paths.child_dir)?;
+    fs::create_dir_all(&paths.codex_home)
+        .map_err(|e| format!("failed to create Codex home: {e}"))?;
     // Persist recovery journal BEFORE mutating any file in $CODEX_HOME (write-ahead durability).
     write_journal(&paths.journal_file, &journal)?;
     if fault == Some(JournalWriteFault::AfterJournalWrite) {
@@ -445,9 +488,47 @@ pub fn offline_detach(
     paths: &ChildPaths,
     keep_catalog: bool,
 ) -> Result<DetachOutcome, DetachError> {
+    offline_detach_inner(paths, keep_catalog, false)
+}
+
+/// Restore client files while retaining recovery records until lifecycle cleanup succeeds.
+pub fn offline_detach_deferred(
+    paths: &ChildPaths,
+    keep_catalog: bool,
+) -> Result<DetachOutcome, DetachError> {
+    offline_detach_inner(paths, keep_catalog, true)
+}
+
+pub fn remove_optional_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            #[cfg(unix)]
+            {
+                let parent = path.parent().ok_or("removed file has no parent")?;
+                crate::platform::sync_parent_directory(parent)?;
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("file");
+            Err(format!("failed removing {name}: {e}"))
+        }
+    }
+}
+
+fn offline_detach_inner(
+    paths: &ChildPaths,
+    keep_catalog: bool,
+    defer_cleanup: bool,
+) -> Result<DetachOutcome, DetachError> {
     let Some(journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
         return Ok(DetachOutcome::NotAttached);
     };
+    validate_journal_paths(paths, &journal).map_err(DetachError::Conflict)?;
     let config_path = paths.codex_config_path();
     let catalog_path = Path::new(&journal.catalog_path);
     let cache_path = paths.codex_models_cache_path();
@@ -558,7 +639,7 @@ pub fn offline_detach(
                         })?;
                     write_regular_atomic(&config_path, &orig).map_err(DetachError::Io)?;
                 } else {
-                    let _ = fs::remove_file(&config_path);
+                    remove_optional_file(&config_path).map_err(DetachError::Io)?;
                 }
                 DetachOutcome::ExactRestore
             } else {
@@ -572,7 +653,7 @@ pub fn offline_detach(
                             .map_err(DetachError::Io)?;
                     }
                     None => {
-                        let _ = fs::remove_file(&config_path);
+                        remove_optional_file(&config_path).map_err(DetachError::Io)?;
                     }
                 }
                 DetachOutcome::SurgicalRestore
@@ -588,7 +669,7 @@ pub fn offline_detach(
                 write_regular_atomic(catalog_path, &prior_bytes).map_err(DetachError::Io)?;
             }
         } else {
-            let _ = fs::remove_file(catalog_path);
+            remove_optional_file(catalog_path).map_err(DetachError::Io)?;
         }
     }
 
@@ -608,8 +689,10 @@ pub fn offline_detach(
         }
     }
 
-    let _ = fs::remove_file(&paths.catalog_backup_file);
-    let _ = fs::remove_file(&paths.journal_file);
+    if !defer_cleanup {
+        remove_optional_file(&paths.catalog_backup_file).map_err(DetachError::Io)?;
+        remove_optional_file(&paths.journal_file).map_err(DetachError::Io)?;
+    }
     Ok(outcome)
 }
 

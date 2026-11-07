@@ -18,6 +18,7 @@ pub struct ChildPaths {
     pub state_file: PathBuf,
     pub key_file: PathBuf,
     pub journal_file: PathBuf,
+    pub rollback_file: PathBuf,
     pub catalog_backup_file: PathBuf,
 }
 
@@ -29,6 +30,7 @@ impl ChildPaths {
             state_file: child_dir.join("state.json"),
             key_file: child_dir.join("link-key"),
             journal_file: child_dir.join("codex-journal.json"),
+            rollback_file: child_dir.join("attach-rollback.json"),
             catalog_backup_file: child_dir.join("last-catalog.json"),
             opencodex_home,
             codex_home,
@@ -97,8 +99,19 @@ pub fn read_child_state(path: &Path) -> StateReadOutcome {
         Err(e) => return StateReadOutcome::Invalid(format!("unreadable state.json: {e}")),
     };
     match serde_json::from_slice::<ChildStateV1>(&bytes) {
-        Ok(st) if st.schema == CHILD_STATE_SCHEMA => StateReadOutcome::Valid(Box::new(st)),
-        Ok(st) => StateReadOutcome::Invalid(format!("unsupported schema: {}", st.schema)),
+        Ok(st) if st.schema != CHILD_STATE_SCHEMA => {
+            StateReadOutcome::Invalid(format!("unsupported schema: {}", st.schema))
+        }
+        Ok(st)
+            if st.shutdown_secret.len() == 48
+                && st
+                    .shutdown_secret
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+        {
+            StateReadOutcome::Valid(Box::new(st))
+        }
+        Ok(_) => StateReadOutcome::Invalid("invalid child shutdown secret".to_owned()),
         Err(e) => StateReadOutcome::Invalid(format!("malformed state.json: {e}")),
     }
 }

@@ -7,8 +7,9 @@ use serde::Deserialize;
 
 use crate::http_wire::{read_bounded_body, read_response_head, response_framing};
 use crate::platform::{
-    force_terminate_pid, now_epoch_ms, process_is_alive, random_hex, spawn_detached_serve,
+    constant_time_eq, now_epoch_ms, process_is_alive, random_hex, spawn_detached_serve,
 };
+use crate::relay_auth::compute_child_shutdown_proof;
 use crate::state::{ChildPaths, ChildStateV1, write_child_state};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -91,9 +92,15 @@ pub fn ensure_port_available_for_attach(port: u16, owned_pid: Option<u32>) -> Re
 }
 
 fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
-    if shutdown_secret.is_empty() {
+    let Ok(nonce) = random_hex(32) else {
         return false;
-    }
+    };
+    let Some(expected) = compute_child_shutdown_proof(shutdown_secret, "listener", &nonce) else {
+        return false;
+    };
+    let Some(caller) = compute_child_shutdown_proof(shutdown_secret, "caller", &nonce) else {
+        return false;
+    };
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
         return false;
@@ -101,12 +108,48 @@ fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
     let req = format!(
-        "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nx-ocx-child-shutdown: {shutdown_secret}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nx-ocx-child-shutdown-challenge: {nonce}\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
     );
     if stream.write_all(req.as_bytes()).is_err() || stream.flush().is_err() {
         return false;
     }
-    let mut reader = BufReader::new(stream);
+    let Ok(read_stream) = stream.try_clone() else {
+        return false;
+    };
+    let mut reader = BufReader::new(read_stream);
+    let Ok(head) = read_response_head(&mut reader) else {
+        return false;
+    };
+    let proof_count = head
+        .headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("x-ocx-child-shutdown-proof"))
+        .count();
+    let lengths: Vec<&str> = head
+        .headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if head.status != 204
+        || proof_count != 1
+        || lengths != ["0"]
+        || head
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("transfer-encoding"))
+        || !head
+            .header("x-ocx-child-shutdown-proof")
+            .is_some_and(|proof| constant_time_eq(proof.as_bytes(), expected.as_bytes()))
+    {
+        return false;
+    }
+    let req = format!(
+        "POST /__ocx_child/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nx-ocx-child-shutdown-proof: {caller}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(req.as_bytes()).is_err() || stream.flush().is_err() {
+        return false;
+    }
     read_response_head(&mut reader).is_ok_and(|h| h.status == 200)
 }
 
@@ -122,11 +165,13 @@ pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
             Some(h.pid)
         }
         (Some(pid), None) if !is_port_bound(port) && !process_is_alive(pid) => return Ok(()),
-        (None, None) => return Ok(()),
-        _ => None,
+        (None, None) if !is_port_bound(port) => return Ok(()),
+        _ => return Err("cannot establish that the child daemon has stopped".to_owned()),
     };
 
-    let _ = send_attested_shutdown(port, &state.shutdown_secret);
+    if !send_attested_shutdown(port, &state.shutdown_secret) {
+        return Err("child daemon did not accept the authenticated shutdown".to_owned());
+    }
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         let port_down = !is_port_bound(port);
@@ -137,35 +182,9 @@ pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
         thread::sleep(Duration::from_millis(40));
     }
 
-    if let Some(pid) = verified_pid {
-        force_terminate_pid(pid, false);
-        let term_deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < term_deadline {
-            if !process_is_alive(pid) && !is_port_bound(port) {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(40));
-        }
-        force_terminate_pid(pid, true);
-        let kill_deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < kill_deadline {
-            if !process_is_alive(pid) && !is_port_bound(port) {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(40));
-        }
-        if process_is_alive(pid) {
-            return Err(format!(
-                "owned ocx-child daemon (pid {pid}) did not terminate"
-            ));
-        }
-    }
-    if is_port_bound(port) {
-        return Err(format!(
-            "listener on 127.0.0.1:{port} remained bound; refusing unverified shutdown"
-        ));
-    }
-    Ok(())
+    Err(format!(
+        "child daemon on 127.0.0.1:{port} did not stop; refusing unverified termination"
+    ))
 }
 
 pub fn start_or_rollover_daemon(
@@ -183,15 +202,28 @@ pub fn start_or_rollover_daemon(
     ensure_port_available_for_attach(state.listen_port, None)?;
     let exe = std::env::current_exe()
         .map_err(|e| format!("failed to resolve current executable: {e}"))?;
-    let spawned_pid = spawn_detached_serve(
+    let pending_attach = match std::fs::symlink_metadata(&paths.rollback_file) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(format!("cannot inspect rollback snapshot: {e}")),
+    };
+    let mut spawned = spawn_detached_serve(
         &exe,
         &paths.opencodex_home,
         &paths.codex_home,
         state.listen_port,
+        pending_attach.then_some(state.shutdown_secret.as_str()),
     )?;
+    let spawned_pid = spawned.id();
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
+        if let Some(status) = spawned
+            .try_wait()
+            .map_err(|e| format!("failed to observe spawned child: {e}"))?
+        {
+            return Err(format!("ocx-child serve exited before readiness: {status}"));
+        }
         if let Some(h) = probe_local_healthz(state.listen_port, Duration::from_millis(400))
             && h.service == "opencodex"
             && h.role.as_deref() == Some("client")
@@ -201,12 +233,28 @@ pub fn start_or_rollover_daemon(
             let started_ms = now_epoch_ms().max(min_started_at_ms.unwrap_or(0));
             state.daemon_pid = Some(spawned_pid);
             state.daemon_started_at_ms = Some(started_ms);
-            write_child_state(&paths.state_file, state)?;
+            if let Err(e) = write_child_state(&paths.state_file, state) {
+                let cleanup = spawned.kill().and_then(|()| spawned.wait().map(|_| ()));
+                return Err(format!(
+                    "failed to record spawned child: {e}; cleanup: {cleanup:?}"
+                ));
+            }
             return Ok((spawned_pid, started_ms));
         }
         thread::sleep(Duration::from_millis(50));
     }
-    force_terminate_pid(spawned_pid, true);
+    if spawned
+        .try_wait()
+        .map_err(|e| format!("failed to observe spawned child: {e}"))?
+        .is_none()
+    {
+        spawned
+            .kill()
+            .map_err(|e| format!("failed to terminate spawned child: {e}"))?;
+        spawned
+            .wait()
+            .map_err(|e| format!("failed to reap spawned child: {e}"))?;
+    }
     Err(format!(
         "ocx-child serve failed to answer /healthz on 127.0.0.1:{}",
         state.listen_port

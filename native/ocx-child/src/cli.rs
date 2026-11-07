@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::codex_settings::{
     HomeCodexSettings, HomeCodexSettingsDocument, HomeIdentity, codex_settings_digest,
@@ -12,11 +12,15 @@ use crate::daemon::{
     ensure_port_available_for_attach, pick_ephemeral_link_port, probe_local_healthz,
     start_or_rollover_daemon, stop_owned_daemon,
 };
-use crate::journal::{DetachError, apply_attach_or_sync, offline_detach};
+use crate::journal::{
+    DetachError, apply_attach_or_sync, offline_detach_deferred, remove_optional_file,
+    validate_existing_journal_paths,
+};
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
-    FileLock, LockAcquireError, SecretBytes, format_iso8601_utc, now_epoch_ms, random_hex,
-    resolve_codex_home, resolve_opencodex_home, write_private_atomic, write_regular_atomic,
+    FileLock, LockAcquireError, SecretBytes, constant_time_eq, ensure_private_dir,
+    format_iso8601_utc, now_epoch_ms, random_hex, reject_symlink, resolve_codex_home,
+    resolve_opencodex_home, volatile_zero_bytes, write_private_atomic, write_regular_atomic,
 };
 use crate::relay::{
     RelayCredentials, fetch_home_authenticated, post_child_parity_report, serve_foreground,
@@ -202,6 +206,95 @@ pub struct AttachRollbackSnapshot {
     state_bytes: Option<Vec<u8>>,
 }
 
+const MAX_ROLLBACK_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachRollbackRecordRef<'a> {
+    schema: &'static str,
+    opencodex_home: String,
+    codex_home: String,
+    prior_state: &'a Option<ChildStateV1>,
+    prior_was_serving: bool,
+    journal: Option<&'a [u8]>,
+    config: Option<&'a [u8]>,
+    catalog: Option<&'a [u8]>,
+    catalog_backup: Option<&'a [u8]>,
+    models_cache: Option<&'a [u8]>,
+    key: Option<&'a [u8]>,
+    state_bytes: Option<&'a [u8]>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttachRollbackRecord {
+    schema: String,
+    opencodex_home: String,
+    codex_home: String,
+    prior_state: Option<ChildStateV1>,
+    prior_was_serving: bool,
+    journal: Option<Vec<u8>>,
+    config: Option<Vec<u8>>,
+    catalog: Option<Vec<u8>>,
+    catalog_backup: Option<Vec<u8>>,
+    models_cache: Option<Vec<u8>>,
+    key: Option<Vec<u8>>,
+    state_bytes: Option<Vec<u8>>,
+}
+
+impl Drop for AttachRollbackRecord {
+    fn drop(&mut self) {
+        if let Some(state) = &mut self.prior_state {
+            let mut secret = std::mem::take(&mut state.shutdown_secret).into_bytes();
+            volatile_zero_bytes(&mut secret);
+        }
+        for bytes in [
+            &mut self.journal,
+            &mut self.config,
+            &mut self.catalog,
+            &mut self.catalog_backup,
+            &mut self.models_cache,
+            &mut self.key,
+            &mut self.state_bytes,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            volatile_zero_bytes(bytes);
+        }
+    }
+}
+
+fn rollback_pending(paths: &ChildPaths) -> Result<bool, String> {
+    match fs::symlink_metadata(&paths.rollback_file) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("cannot inspect rollback snapshot: {e}")),
+    }
+}
+
+impl Drop for AttachRollbackSnapshot {
+    fn drop(&mut self) {
+        if let Some(state) = &mut self.prior_state {
+            let mut secret = std::mem::take(&mut state.shutdown_secret).into_bytes();
+            volatile_zero_bytes(&mut secret);
+        }
+        for bytes in [
+            &mut self.journal,
+            &mut self.config,
+            &mut self.catalog,
+            &mut self.catalog_backup,
+            &mut self.models_cache,
+            &mut self.state_bytes,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            volatile_zero_bytes(bytes);
+        }
+    }
+}
+
 impl AttachRollbackSnapshot {
     fn read_optional(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
         match fs::read(path) {
@@ -215,7 +308,7 @@ impl AttachRollbackSnapshot {
         let prior_was_serving = prior_state.as_ref().is_some_and(|st| {
             probe_local_healthz(st.listen_port, Duration::from_millis(300)).is_some()
         });
-        Ok(Self {
+        let snapshot = Self {
             prior_state,
             prior_was_serving,
             journal: Self::read_optional(&paths.journal_file)?,
@@ -225,7 +318,112 @@ impl AttachRollbackSnapshot {
             models_cache: Self::read_optional(&paths.codex_models_cache_path())?,
             key: Self::read_optional(&paths.key_file)?.map(SecretBytes::new),
             state_bytes: Self::read_optional(&paths.state_file)?,
-        })
+        };
+        snapshot.persist(paths)?;
+        Ok(snapshot)
+    }
+
+    fn canonical_homes(paths: &ChildPaths) -> Result<(String, String), String> {
+        let ocx = fs::canonicalize(&paths.opencodex_home)
+            .map_err(|e| format!("cannot resolve OpenCodex home for rollback: {e}"))?;
+        let codex = fs::canonicalize(&paths.codex_home)
+            .map_err(|e| format!("cannot resolve Codex home for rollback: {e}"))?;
+        let ocx = ocx.to_str().ok_or("OpenCodex home is not UTF-8")?;
+        let codex = codex.to_str().ok_or("Codex home is not UTF-8")?;
+        Ok((ocx.to_owned(), codex.to_owned()))
+    }
+
+    fn persist(&self, paths: &ChildPaths) -> Result<(), String> {
+        ensure_private_dir(&paths.child_dir)?;
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&paths.codex_home)
+            .map_err(|e| format!("cannot create Codex home for rollback: {e}"))?;
+        reject_symlink(&paths.rollback_file)?;
+        match fs::symlink_metadata(&paths.rollback_file) {
+            Ok(_) => return Err("attach refused: unresolved rollback snapshot exists".to_owned()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("cannot inspect rollback snapshot: {e}")),
+        }
+        let (opencodex_home, codex_home) = Self::canonical_homes(paths)?;
+        let record = AttachRollbackRecordRef {
+            schema: "ocx.child.attach-rollback/1",
+            opencodex_home,
+            codex_home,
+            prior_state: &self.prior_state,
+            prior_was_serving: self.prior_was_serving,
+            journal: self.journal.as_deref(),
+            config: self.config.as_deref(),
+            catalog: self.catalog.as_deref(),
+            catalog_backup: self.catalog_backup.as_deref(),
+            models_cache: self.models_cache.as_deref(),
+            key: self.key.as_ref().map(SecretBytes::as_slice),
+            state_bytes: self.state_bytes.as_deref(),
+        };
+        let mut bytes = serde_json::to_vec(&record)
+            .map_err(|e| format!("cannot serialize rollback snapshot: {e}"))?;
+        if bytes.len() as u64 > MAX_ROLLBACK_BYTES {
+            volatile_zero_bytes(&mut bytes);
+            return Err("rollback snapshot exceeds size limit".to_owned());
+        }
+        let result = write_private_atomic(&paths.rollback_file, &bytes);
+        volatile_zero_bytes(&mut bytes);
+        result
+    }
+
+    fn recover(paths: &ChildPaths) -> Result<bool, String> {
+        reject_symlink(&paths.rollback_file)?;
+        let file = match fs::File::open(&paths.rollback_file) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(format!("cannot open rollback snapshot: {e}")),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_ROLLBACK_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("cannot read rollback snapshot: {e}"))?;
+        if bytes.len() as u64 > MAX_ROLLBACK_BYTES {
+            volatile_zero_bytes(&mut bytes);
+            return Err("rollback snapshot exceeds size limit".to_owned());
+        }
+        let parsed = serde_json::from_slice::<AttachRollbackRecord>(&bytes);
+        volatile_zero_bytes(&mut bytes);
+        let mut record = parsed.map_err(|e| format!("invalid rollback snapshot: {e}"))?;
+        let (ocx, codex) = Self::canonical_homes(paths)?;
+        if record.schema != "ocx.child.attach-rollback/1"
+            || record.opencodex_home != ocx
+            || record.codex_home != codex
+        {
+            return Err("rollback snapshot belongs to a different home".to_owned());
+        }
+        match read_child_state(&paths.state_file) {
+            StateReadOutcome::Valid(state) => stop_owned_daemon(&state)?,
+            StateReadOutcome::Absent => {}
+            StateReadOutcome::Invalid(_) => {
+                return Err("cannot recover rollback with invalid child state".to_owned());
+            }
+        }
+        let snapshot = Self {
+            prior_state: record.prior_state.take(),
+            // A recovery requested by detach restores files without starting a daemon.
+            prior_was_serving: false,
+            journal: record.journal.take(),
+            config: record.config.take(),
+            catalog: record.catalog.take(),
+            catalog_backup: record.catalog_backup.take(),
+            models_cache: record.models_cache.take(),
+            key: record.key.take().map(SecretBytes::new),
+            state_bytes: record.state_bytes.take(),
+        };
+        let _ = record.prior_was_serving;
+        snapshot.restore(paths)?;
+        Ok(true)
     }
 
     fn restore_path(
@@ -245,22 +443,16 @@ impl AttachRollbackSnapshot {
                     errors.push(format!("restore {}: {e}", path.display()));
                 }
             }
-            None => match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => errors.push(format!("remove {}: {e}", path.display())),
-            },
+            None => {
+                if let Err(e) = remove_optional_file(path) {
+                    errors.push(e);
+                }
+            }
         }
     }
 
     pub fn restore(&self, paths: &ChildPaths) -> Result<(), String> {
         let mut errors = Vec::new();
-        Self::restore_path(
-            &paths.journal_file,
-            self.journal.as_deref(),
-            true,
-            &mut errors,
-        );
         Self::restore_path(
             &paths.codex_config_path(),
             self.config.as_deref(),
@@ -274,31 +466,42 @@ impl AttachRollbackSnapshot {
             &mut errors,
         );
         Self::restore_path(
-            &paths.catalog_backup_file,
-            self.catalog_backup.as_deref(),
-            true,
-            &mut errors,
-        );
-        Self::restore_path(
             &paths.codex_models_cache_path(),
             self.models_cache.as_deref(),
             false,
             &mut errors,
         );
-        Self::restore_path(
-            &paths.key_file,
-            self.key.as_ref().map(SecretBytes::as_slice),
-            true,
-            &mut errors,
-        );
-        Self::restore_path(
-            &paths.state_file,
-            self.state_bytes.as_deref(),
-            true,
-            &mut errors,
-        );
+        if errors.is_empty() {
+            Self::restore_path(
+                &paths.catalog_backup_file,
+                self.catalog_backup.as_deref(),
+                true,
+                &mut errors,
+            );
+            Self::restore_path(
+                &paths.key_file,
+                self.key.as_ref().map(SecretBytes::as_slice),
+                true,
+                &mut errors,
+            );
+            Self::restore_path(
+                &paths.state_file,
+                self.state_bytes.as_deref(),
+                true,
+                &mut errors,
+            );
+        }
+        if errors.is_empty() {
+            Self::restore_path(
+                &paths.journal_file,
+                self.journal.as_deref(),
+                true,
+                &mut errors,
+            );
+        }
         if let Some(mut prev) = self.prior_state.clone()
             && self.prior_was_serving
+            && errors.is_empty()
             && probe_local_healthz(prev.listen_port, Duration::from_millis(250)).is_none()
         {
             let state_key_consistent = match read_child_state(&paths.state_file) {
@@ -327,6 +530,7 @@ impl AttachRollbackSnapshot {
             }
         }
         if errors.is_empty() {
+            remove_optional_file(&paths.rollback_file)?;
             Ok(())
         } else {
             Err(format!("attach rollback incomplete: {}", errors.join("; ")))
@@ -406,6 +610,10 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
+    if !matches!(rollback_pending(&paths), Ok(false)) {
+        eprintln!("attach refused: incomplete attach requires detach recovery");
+        return 1;
+    }
     let prior_state = match read_child_state(&paths.state_file) {
         StateReadOutcome::Valid(st) => Some(*st),
         _ => None,
@@ -587,6 +795,10 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     }
 
+    if let Err(e) = remove_optional_file(&paths.rollback_file) {
+        eprintln!("attach failed to clear rollback snapshot: {e}");
+        return 1;
+    }
     println!("Connected to http://127.0.0.1:{tunnel_port} as key {api_key_id}.");
     println!("Local Codex CLI: ready (ephemeral ocx-child Design B attached).");
     0
@@ -611,10 +823,51 @@ fn cmd_serve(args: &[String]) -> u8 {
     }
     let paths = current_paths();
     if foreground {
-        let port = listen_port.unwrap_or_else(|| match read_child_state(&paths.state_file) {
-            StateReadOutcome::Valid(st) => st.listen_port,
-            _ => default_listen_port(),
-        });
+        let state = match read_child_state(&paths.state_file) {
+            StateReadOutcome::Valid(st) if st.pending_operation.is_none() => st,
+            StateReadOutcome::Absent => {
+                eprintln!("serve refused: ocx-child is detached (no active link)");
+                return 1;
+            }
+            _ => {
+                eprintln!("serve refused: child state is invalid or pending teardown");
+                return 1;
+            }
+        };
+        if !matches!(validate_existing_journal_paths(&paths), Ok(true)) {
+            eprintln!(
+                "serve refused: child recovery journal is missing or belongs to another home"
+            );
+            return 1;
+        }
+        match rollback_pending(&paths) {
+            Ok(true) => {
+                let mut supplied = Vec::new();
+                let read = io::stdin().take(129).read_to_end(&mut supplied);
+                let authorized = read.is_ok()
+                    && supplied.len() <= 128
+                    && constant_time_eq(&supplied, state.shutdown_secret.as_bytes());
+                volatile_zero_bytes(&mut supplied);
+                if !authorized {
+                    eprintln!("serve refused: incomplete attach requires lifecycle authorization");
+                    return 1;
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("serve refused: {e}");
+                return 1;
+            }
+        }
+        if let Err(e) = read_verified_link_key(&paths.key_file, &state.token_fingerprint) {
+            eprintln!("serve refused: {e}");
+            return 1;
+        }
+        let port = listen_port.unwrap_or(state.listen_port);
+        if port != state.listen_port {
+            eprintln!("serve refused: listen port does not match child state");
+            return 1;
+        }
         return match serve_foreground(paths, port) {
             Ok(()) => 0,
             Err(e) => {
@@ -635,6 +888,10 @@ fn cmd_restart() -> u8 {
             return 1;
         }
     };
+    if !matches!(rollback_pending(&paths), Ok(false)) {
+        eprintln!("restart refused: incomplete attach requires detach recovery");
+        return 1;
+    }
     let mut state = match read_child_state(&paths.state_file) {
         StateReadOutcome::Valid(st) if st.pending_operation.is_none() => *st,
         StateReadOutcome::Absent => {
@@ -646,6 +903,10 @@ fn cmd_restart() -> u8 {
             return 1;
         }
     };
+    if !matches!(validate_existing_journal_paths(&paths), Ok(true)) {
+        eprintln!("restart refused: child recovery journal is missing or belongs to another home");
+        return 1;
+    }
     let floor_ms = state.applied_settings.as_ref().map(|a| a.applied_at_ms);
     let (pid, started_ms) = match start_or_rollover_daemon(&paths, &mut state, floor_ms) {
         Ok(v) => v,
@@ -801,6 +1062,16 @@ fn cmd_sync(args: &[String]) -> u8 {
         }
         StateReadOutcome::Valid(st) => *st,
     };
+    if !matches!(rollback_pending(&paths), Ok(false)) {
+        if expect_link.is_some() {
+            return emit_expectation_mismatch("child_link_mismatch", "invalid_state");
+        }
+        if expect_hub_key.is_some() {
+            return emit_expectation_mismatch("hub_client_mismatch", "invalid_state");
+        }
+        eprintln!("sync refused: incomplete attach requires detach recovery");
+        return 1;
+    }
 
     if let Some(op) = &state.pending_operation {
         let reason = if op == "disconnect" {
@@ -824,6 +1095,13 @@ fn cmd_sync(args: &[String]) -> u8 {
         && state.link_id != *expected_id
     {
         return emit_expectation_mismatch("child_link_mismatch", "other_link");
+    }
+    if !matches!(validate_existing_journal_paths(&paths), Ok(true)) {
+        if expect_link.is_some() {
+            return emit_expectation_mismatch("child_link_mismatch", "invalid_state");
+        }
+        eprintln!("sync refused: child recovery journal is missing or belongs to another home");
+        return 1;
     }
 
     let raw_token = match read_verified_link_key(&paths.key_file, &state.token_fingerprint) {
@@ -981,15 +1259,52 @@ fn cmd_detach(args: &[String]) -> u8 {
             return 1;
         }
     };
-    if let StateReadOutcome::Valid(mut st) = read_child_state(&paths.state_file) {
+    if let Err(e) = AttachRollbackSnapshot::recover(&paths) {
+        eprintln!("detach recovery failed: {e}");
+        return 1;
+    }
+    let journal_exists = match validate_existing_journal_paths(&paths) {
+        Ok(exists) => exists,
+        Err(e) => {
+            eprintln!("detach refused: {e}");
+            return 1;
+        }
+    };
+    let state = match read_child_state(&paths.state_file) {
+        StateReadOutcome::Valid(st) if journal_exists => Some(st),
+        StateReadOutcome::Absent => None,
+        _ => {
+            eprintln!("detach refused: child state or recovery journal is invalid");
+            return 1;
+        }
+    };
+    if !journal_exists {
+        for path in [&paths.key_file, &paths.catalog_backup_file] {
+            match fs::symlink_metadata(path) {
+                Ok(_) => {
+                    eprintln!("detach refused: orphaned child recovery material exists");
+                    return 1;
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    eprintln!("detach refused: cannot inspect child recovery material: {e}");
+                    return 1;
+                }
+            }
+        }
+    }
+    if let Some(mut st) = state {
         st.pending_operation = Some("disconnect".to_owned());
-        let _ = write_child_state(&paths.state_file, &st);
+        if let Err(e) = write_child_state(&paths.state_file, &st) {
+            eprintln!("detach refused: failed to record pending operation: {e}");
+            return 1;
+        }
         if let Err(e) = stop_owned_daemon(&st) {
             eprintln!("{e}");
             return 1;
         }
     }
-    let outcome = match offline_detach(&paths, keep_catalog) {
+    let outcome = match offline_detach_deferred(&paths, keep_catalog) {
         Ok(o) => o,
         Err(DetachError::Conflict(msg)) => {
             eprintln!("detach conflict: {msg}");
@@ -1000,8 +1315,17 @@ fn cmd_detach(args: &[String]) -> u8 {
             return 1;
         }
     };
-    let _ = fs::remove_file(&paths.key_file);
-    let _ = fs::remove_file(&paths.state_file);
+    for path in [
+        &paths.key_file,
+        &paths.state_file,
+        &paths.catalog_backup_file,
+        &paths.journal_file,
+    ] {
+        if let Err(e) = remove_optional_file(path) {
+            eprintln!("detach cleanup failed: {e}");
+            return 1;
+        }
+    }
     if json_mode {
         println!("{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false}}");
     } else {

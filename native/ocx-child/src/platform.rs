@@ -1,5 +1,7 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{Ordering, compiler_fence};
@@ -159,7 +161,6 @@ unsafe extern "system" {
         inherit_handle: i32,
         process_id: u32,
     ) -> *mut std::ffi::c_void;
-    fn TerminateProcess(process: *mut std::ffi::c_void, exit_code: u32) -> i32;
     fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
     fn CloseHandle(object: *mut std::ffi::c_void) -> i32;
 }
@@ -234,7 +235,9 @@ pub fn reject_symlink(path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 mod windows_private_acl {
     use std::ffi::c_void;
+    use std::fs::File;
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::ptr;
 
@@ -261,6 +264,24 @@ mod windows_private_acl {
         kind: u8,
         flags: u8,
         size: u16,
+    }
+
+    #[repr(C)]
+    struct SecurityDescriptor {
+        revision: u8,
+        reserved: u8,
+        control: u16,
+        owner: Ptr,
+        group: Ptr,
+        sacl: Ptr,
+        dacl: Ptr,
+    }
+
+    #[repr(C)]
+    struct SecurityAttributes {
+        length: u32,
+        descriptor: Ptr,
+        inherit_handle: i32,
     }
 
     #[link(name = "advapi32")]
@@ -317,6 +338,14 @@ mod windows_private_acl {
         fn IsValidAcl(acl: *mut Acl) -> i32;
         fn GetAce(acl: *mut Acl, index: u32, ace: *mut Ptr) -> i32;
         fn GetLengthSid(sid: Ptr) -> u32;
+        fn InitializeSecurityDescriptor(descriptor: Ptr, revision: u32) -> i32;
+        fn SetSecurityDescriptorDacl(
+            descriptor: Ptr,
+            present: i32,
+            dacl: *mut Acl,
+            defaulted: i32,
+        ) -> i32;
+        fn SetSecurityDescriptorControl(descriptor: Ptr, mask: u16, control: u16) -> i32;
     }
 
     #[link(name = "kernel32")]
@@ -324,6 +353,15 @@ mod windows_private_acl {
         fn GetCurrentProcess() -> Ptr;
         fn CloseHandle(handle: Ptr) -> i32;
         fn LocalFree(memory: Ptr) -> Ptr;
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            attributes: *mut SecurityAttributes,
+            disposition: u32,
+            flags: u32,
+            template: Ptr,
+        ) -> Ptr;
     }
 
     struct Local(Ptr);
@@ -397,15 +435,21 @@ mod windows_private_acl {
         Ok(sid)
     }
 
-    pub fn harden_and_verify(path: &Path, directory: bool) -> Result<(), String> {
+    fn private_acl(
+        directory: bool,
+    ) -> Result<(Vec<usize>, [u32; 17], [u32; 17], Vec<u32>), String> {
         let user = current_user_sid()?;
         let mut system = well_known_sid(22)?;
         let mut admins = well_known_sid(26)?;
-        let sids: [Ptr; 3] = [
-            user[0] as Ptr,
-            system.as_mut_ptr().cast(),
-            admins.as_mut_ptr().cast(),
-        ];
+        let sids: Vec<Ptr> = if directory {
+            vec![
+                user[0] as Ptr,
+                system.as_mut_ptr().cast(),
+                admins.as_mut_ptr().cast(),
+            ]
+        } else {
+            vec![user[0] as Ptr]
+        };
         // SAFETY: All 3 SIDs were validated by `IsValidSid` / `CreateWellKnownSid`.
         let acl_bytes = std::mem::size_of::<Acl>() as u32
             + sids
@@ -431,6 +475,12 @@ mod windows_private_acl {
                 return Err("private-acl-unsafe: AddAccessAllowedAceEx failed".to_owned());
             }
         }
+        Ok((user, system, admins, acl_buf))
+    }
+
+    pub fn harden_and_verify(path: &Path, directory: bool) -> Result<(), String> {
+        let (user, mut system, mut admins, mut acl_buf) = private_acl(directory)?;
+        let acl_ptr = acl_buf.as_mut_ptr().cast::<Acl>();
         let mut wname = wide_nul(path)?;
         // SAFETY: Applies protected DACL to `wname`.
         if unsafe {
@@ -451,6 +501,58 @@ mod windows_private_acl {
             ));
         }
         verify(path, directory, &user, &mut system, &mut admins)
+    }
+
+    /// Create an exclusive file with its protected DACL installed by the kernel at creation.
+    pub fn create_private_file(path: &Path) -> Result<File, String> {
+        let (user, mut system, mut admins, mut acl_buf) = private_acl(false)?;
+        let mut descriptor = SecurityDescriptor {
+            revision: 0,
+            reserved: 0,
+            control: 0,
+            owner: ptr::null_mut(),
+            group: ptr::null_mut(),
+            sacl: ptr::null_mut(),
+            dacl: ptr::null_mut(),
+        };
+        let descriptor_ptr = (&mut descriptor as *mut SecurityDescriptor).cast::<c_void>();
+        // SAFETY: The descriptor and ACL are initialized, aligned and live through CreateFileW.
+        if unsafe { InitializeSecurityDescriptor(descriptor_ptr, 1) } == 0
+            || unsafe {
+                SetSecurityDescriptorDacl(descriptor_ptr, 1, acl_buf.as_mut_ptr().cast(), 0)
+            } == 0
+            || unsafe { SetSecurityDescriptorControl(descriptor_ptr, 0x1000, 0x1000) } == 0
+        {
+            return Err("private-acl-unsafe: security descriptor initialization failed".to_owned());
+        }
+        let mut attributes = SecurityAttributes {
+            length: std::mem::size_of::<SecurityAttributes>() as u32,
+            descriptor: descriptor_ptr,
+            inherit_handle: 0,
+        };
+        let wname = wide_nul(path)?;
+        // SAFETY: The path and security attributes stay live for the call; CREATE_NEW cannot replace a file.
+        let handle = unsafe {
+            CreateFileW(
+                wname.as_ptr(),
+                0x40000000,
+                0x00000007,
+                &mut attributes,
+                1,
+                0x00000080,
+                ptr::null_mut(),
+            )
+        };
+        if handle == (-1isize as Ptr) {
+            return Err(format!(
+                "private-acl-unsafe: create failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: CreateFileW returned a newly owned file handle.
+        let file = unsafe { File::from_raw_handle(handle) };
+        verify(path, false, &user, &mut system, &mut admins)?;
+        Ok(file)
     }
 
     fn verify(
@@ -495,7 +597,7 @@ mod windows_private_acl {
                 && IsValidSid(owner) != 0
                 && (EqualSid(owner, user[0] as Ptr) != 0
                     || EqualSid(owner, admins.as_mut_ptr().cast()) != 0)
-                && (!root || control & 0x1000 != 0)
+                && control & 0x1000 != 0
         };
         if !ok {
             return Err("private-acl-unsafe: DACL header/owner verification failed".to_owned());
@@ -538,6 +640,57 @@ mod windows_private_acl {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::fs;
+        use std::io::Write;
+        use std::process::Command;
+
+        #[test]
+        fn regular_replacement_is_private_under_a_permissive_parent() {
+            struct Scratch(std::path::PathBuf);
+            impl Drop for Scratch {
+                fn drop(&mut self) {
+                    let _ = fs::remove_dir_all(&self.0);
+                }
+            }
+
+            let root = std::env::temp_dir().join(format!(
+                "ocx-child-acl-{}-{}",
+                std::process::id(),
+                crate::platform::random_hex(6).unwrap()
+            ));
+            fs::create_dir(&root).unwrap();
+            let _scratch = Scratch(root.clone());
+            let grant = Command::new("icacls")
+                .arg(&root)
+                .args(["/grant", "*S-1-1-0:(OI)(CI)F"])
+                .output()
+                .unwrap();
+            assert!(
+                grant.status.success(),
+                "could not make fixture parent permissive"
+            );
+            let config = root.join("config.toml");
+            fs::write(&config, b"original").unwrap();
+            harden_and_verify(&config, false).unwrap();
+
+            let temp = root.join("new-private.tmp");
+            let mut created = create_private_file(&temp).unwrap();
+            let user = current_user_sid().unwrap();
+            let mut system = well_known_sid(22).unwrap();
+            let mut admins = well_known_sid(26).unwrap();
+            verify(&temp, false, &user, &mut system, &mut admins).unwrap();
+            created.write_all(b"fixture").unwrap();
+            drop(created);
+
+            crate::platform::write_regular_atomic(&config, b"replacement").unwrap();
+            verify(&config, false, &user, &mut system, &mut admins).unwrap();
+            assert_eq!(fs::read(config).unwrap(), b"replacement");
+        }
+    }
 }
 
 pub fn ensure_private_dir(dir: &Path) -> Result<(), String> {
@@ -570,6 +723,15 @@ pub fn ensure_private_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub(crate) fn sync_parent_directory(parent: &Path) -> Result<(), String> {
+    let directory =
+        File::open(parent).map_err(|e| format!("failed to open parent directory: {e}"))?;
+    directory
+        .sync_all()
+        .map_err(|e| format!("failed to sync parent directory: {e}"))
+}
+
 pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
@@ -579,22 +741,20 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let nonce = random_hex(8)?;
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("state");
     let tmp = parent.join(format!(".{file_name}.tmp.{}.{nonce}", std::process::id()));
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts
-        .open(&tmp)
-        .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?;
     #[cfg(windows)]
-    if let Err(e) = windows_private_acl::harden_and_verify(&tmp, false) {
-        drop(f);
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
+    let mut f = windows_private_acl::create_private_file(&tmp)?;
+    #[cfg(not(windows))]
+    let mut f = {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&tmp)
+            .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?
+    };
     if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
         let _ = fs::remove_file(&tmp);
         return Err(format!("failed writing {}: {e}", tmp.display()));
@@ -608,6 +768,8 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
+    #[cfg(unix)]
+    sync_parent_directory(parent)?;
     Ok(())
 }
 
@@ -629,16 +791,20 @@ pub fn write_regular_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         ".{file_name}.ocx-child.tmp.{}.{nonce}",
         std::process::id()
     ));
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(preserved_mode.unwrap_or(0o600));
-    }
-    let mut f = opts
-        .open(&tmp)
-        .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?;
+    #[cfg(windows)]
+    let mut f = windows_private_acl::create_private_file(&tmp)?;
+    #[cfg(not(windows))]
+    let mut f = {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(preserved_mode.unwrap_or(0o600));
+        }
+        opts.open(&tmp)
+            .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?
+    };
     if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
         let _ = fs::remove_file(&tmp);
         return Err(format!("failed writing {}: {e}", tmp.display()));
@@ -652,6 +818,8 @@ pub fn write_regular_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
+    #[cfg(unix)]
+    sync_parent_directory(parent)?;
     Ok(())
 }
 
@@ -762,7 +930,8 @@ pub fn spawn_detached_serve(
     opencodex_home: &Path,
     codex_home: &Path,
     listen_port: u16,
-) -> Result<u32, String> {
+    lifecycle_secret: Option<&str>,
+) -> Result<std::process::Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg("serve")
         .arg("--foreground")
@@ -770,7 +939,11 @@ pub fn spawn_detached_serve(
         .arg(listen_port.to_string())
         .env("OPENCODEX_HOME", opencodex_home)
         .env("CODEX_HOME", codex_home)
-        .stdin(Stdio::null())
+        .stdin(if lifecycle_secret.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
@@ -794,10 +967,22 @@ pub fn spawn_detached_serve(
         cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn detached ocx-child serve: {e}"))?;
-    Ok(child.id())
+    if let Some(secret) = lifecycle_secret {
+        let write_result = match child.stdin.take() {
+            Some(mut stdin) => stdin.write_all(secret.as_bytes()),
+            None => Err(std::io::Error::other("missing child stdin")),
+        };
+        if let Err(e) = write_result {
+            let cleanup = child.kill().and_then(|()| child.wait().map(|_| ()));
+            return Err(format!(
+                "failed to authorize spawned child: {e}; cleanup: {cleanup:?}"
+            ));
+        }
+    }
+    Ok(child)
 }
 
 pub fn process_is_alive(pid: u32) -> bool {
@@ -826,31 +1011,6 @@ pub fn process_is_alive(pid: u32) -> bool {
             let state = WaitForSingleObject(h, 0);
             CloseHandle(h);
             state == WAIT_TIMEOUT
-        }
-    }
-}
-
-pub fn force_terminate_pid(pid: u32, hard_kill: bool) {
-    if pid == 0 {
-        return;
-    }
-    #[cfg(unix)]
-    {
-        let sig = if hard_kill { 9 } else { 15 };
-        // SAFETY: Caller verified PID ownership via `/healthz` before invoking termination.
-        let _ = unsafe { kill(pid as i32, sig) };
-    }
-    #[cfg(windows)]
-    {
-        let _ = hard_kill;
-        const PROCESS_TERMINATE: u32 = 0x0001;
-        // SAFETY: Caller verified PID ownership before invoking TerminateProcess.
-        unsafe {
-            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !h.is_null() {
-                let _ = TerminateProcess(h, 1);
-                CloseHandle(h);
-            }
         }
     }
 }

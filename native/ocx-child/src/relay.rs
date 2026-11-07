@@ -19,8 +19,8 @@ use crate::platform::{
 use crate::relay_auth::{
     LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
     LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_PROOF_HEADER,
-    LINK_RELAY_SESSION_HEADER, compute_connection_proof, create_relay_challenge,
-    is_valid_connection_generation, relay_proof_matches,
+    LINK_RELAY_SESSION_HEADER, compute_child_shutdown_proof, compute_connection_proof,
+    create_relay_challenge, is_valid_connection_generation, relay_proof_matches,
 };
 use crate::routes::{RelayAuthKind, RouteDecision, classify_child_ingress};
 use crate::state::{ChildPaths, StateReadOutcome, read_child_state, read_verified_link_key};
@@ -448,10 +448,56 @@ fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> st
 
     match decision {
         RouteDecision::LocalShutdown => {
-            let supplied = req.header("x-ocx-child-shutdown").unwrap_or("");
-            if let StateReadOutcome::Valid(st) = read_child_state(&shared.paths.state_file)
-                && !st.shutdown_secret.is_empty()
-                && constant_time_eq(supplied.as_bytes(), st.shutdown_secret.as_bytes())
+            let valid_frame = |frame: &HttpRequestHead| {
+                frame.method == "POST"
+                    && frame.path == "/__ocx_child/shutdown"
+                    && frame.query.is_empty()
+                    && frame.header("origin").is_none()
+                    && frame.header("upgrade").is_none()
+                    && frame.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("host")).count() == 1
+                    && frame.header("host") == Some(format!("127.0.0.1:{}", shared.listen_port).as_str())
+                    && validate_and_sanitize_request_headers(&frame.headers)
+                        .is_ok_and(|h| h.framing == BodyFraming::ContentLength(0))
+            };
+            let challenge_count = req.headers.iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("x-ocx-child-shutdown-challenge"))
+                .count();
+            let Some(nonce) = req.header("x-ocx-child-shutdown-challenge") else {
+                return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
+            };
+            let StateReadOutcome::Valid(state) = read_child_state(&shared.paths.state_file) else {
+                return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
+            };
+            let Some(listener_proof) = compute_child_shutdown_proof(&state.shutdown_secret, "listener", nonce) else {
+                return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
+            };
+            let Some(caller_proof) = compute_child_shutdown_proof(&state.shutdown_secret, "caller", nonce) else {
+                return Ok(());
+            };
+            if !valid_frame(&req) || challenge_count != 1 {
+                return write_json_response(&mut writer, 404, "Not Found", &[], br#"{"error":"not_found"}"#);
+            }
+            write!(
+                writer,
+                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nx-ocx-child-shutdown-proof: {listener_proof}\r\nConnection: keep-alive\r\n\r\n"
+            )?;
+            writer.flush()?;
+            let Ok(next) = read_request_head(&mut reader) else { return Ok(()) };
+            let proof_count = next.headers.iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("x-ocx-child-shutdown-proof"))
+                .count();
+            let still_current = match read_child_state(&shared.paths.state_file) {
+                StateReadOutcome::Valid(current) => constant_time_eq(
+                    current.shutdown_secret.as_bytes(),
+                    state.shutdown_secret.as_bytes(),
+                ),
+                _ => false,
+            };
+            if valid_frame(&next)
+                && proof_count == 1
+                && still_current
+                && next.header("x-ocx-child-shutdown-proof")
+                    .is_some_and(|proof| constant_time_eq(proof.as_bytes(), caller_proof.as_bytes()))
             {
                 let _ = write_json_response(&mut writer, 200, "OK", &[], br#"{"ok":true}"#);
                 shared.signal_shutdown();

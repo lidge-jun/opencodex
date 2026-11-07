@@ -492,6 +492,278 @@ impl Drop for ScratchGuard {
     }
 }
 
+fn homes_fixture() -> (ScratchGuard, ChildPaths, ChildPaths, HomeCodexSettings) {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-homes-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let guard = ScratchGuard(scratch.clone());
+    let original = ChildPaths::new(scratch.join("ocx"), scratch.join("codex-a"));
+    let other = ChildPaths::new(scratch.join("ocx"), scratch.join("codex-b"));
+    fs::create_dir_all(&original.opencodex_home).unwrap();
+    fs::create_dir_all(&original.codex_home).unwrap();
+    fs::create_dir_all(&other.codex_home).unwrap();
+    let settings = HomeCodexSettings {
+        fast_mode: None,
+        multi_agent_mode: None,
+        web_search_sidecar_enabled: true,
+        subagent_defaults: None,
+    };
+    (guard, original, other, settings)
+}
+
+#[test]
+fn detach_refuses_a_different_codex_home_before_mutating_the_original() {
+    let (_guard, original, other, settings) = homes_fixture();
+    fs::write(
+        original.codex_config_path(),
+        b"approval_policy = 'on-request'\n",
+    )
+    .unwrap();
+    apply_attach_or_sync(
+        &original,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let config_before = fs::read(original.codex_config_path()).unwrap();
+    let catalog_before = fs::read(original.codex_catalog_path()).unwrap();
+    let journal_before = fs::read(&original.journal_file).unwrap();
+
+    assert!(matches!(
+        offline_detach(&other, false),
+        Err(DetachError::Conflict(_))
+    ));
+    assert_eq!(
+        fs::read(original.codex_config_path()).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        fs::read(original.codex_catalog_path()).unwrap(),
+        catalog_before
+    );
+    assert_eq!(fs::read(&original.journal_file).unwrap(), journal_before);
+    assert!(!other.codex_config_path().exists());
+}
+
+#[test]
+fn sync_refuses_a_different_codex_home_without_rewriting_the_journal() {
+    let (_guard, original, other, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &original,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let journal_before = fs::read(&original.journal_file).unwrap();
+    assert!(
+        apply_attach_or_sync(
+            &other,
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            br#"{"models":[{"slug":"home-next"}]}"#,
+            &settings,
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(&original.journal_file).unwrap(), journal_before);
+    assert!(!other.codex_config_path().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn detach_accepts_an_alias_of_the_same_canonical_codex_home() {
+    use std::os::unix::fs::symlink;
+
+    let (guard, original, _other, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &original,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let alias = guard.0.join("codex-alias");
+    symlink(&original.codex_home, &alias).unwrap();
+    let equivalent = ChildPaths::new(original.opencodex_home.clone(), alias);
+    assert_eq!(
+        offline_detach(&equivalent, false).unwrap(),
+        DetachOutcome::ExactRestore
+    );
+}
+
+#[test]
+fn detach_refuses_a_journal_with_a_foreign_catalog_target() {
+    let (_guard, original, other, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &original,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let foreign = other.codex_catalog_path();
+    fs::write(&foreign, b"foreign").unwrap();
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(&original.journal_file).unwrap()).unwrap();
+    journal["catalogPath"] = serde_json::Value::String(foreign.to_string_lossy().into_owned());
+    fs::write(
+        &original.journal_file,
+        serde_json::to_vec(&journal).unwrap(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        offline_detach(&original, false),
+        Err(DetachError::Conflict(_))
+    ));
+    assert_eq!(fs::read(foreign).unwrap(), b"foreign");
+    assert!(original.journal_file.exists());
+}
+
+#[test]
+fn failed_first_attach_rollback_keeps_the_recovery_journal() {
+    let (_guard, paths, _other, settings) = homes_fixture();
+    fs::create_dir_all(&paths.child_dir).unwrap();
+    fs::write(&paths.key_file, b"previous-fixture-key").unwrap();
+    fs::write(&paths.state_file, b"previous-fixture-state").unwrap();
+    let snapshot = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    fs::write(&paths.key_file, b"replacement-fixture-key").unwrap();
+    fs::remove_file(paths.codex_config_path()).unwrap();
+    fs::create_dir(paths.codex_config_path()).unwrap();
+
+    assert!(snapshot.restore(&paths).is_err());
+    assert!(
+        paths.journal_file.is_file(),
+        "recovery journal must survive an incomplete rollback"
+    );
+    let rollback = fs::read(paths.child_dir.join("attach-rollback.json"))
+        .expect("durable rollback snapshot must survive an incomplete rollback");
+    let decoded: serde_json::Value = serde_json::from_slice(&rollback).unwrap();
+    let expected: Vec<u8> = b"previous-fixture-key".to_vec();
+    assert!(
+        decoded["key"] == serde_json::json!(expected),
+        "prior key was not preserved"
+    );
+}
+
+#[test]
+fn detach_recovers_a_durable_incomplete_attach_snapshot() {
+    let (_guard, paths, other, settings) = homes_fixture();
+    let snapshot = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    fs::remove_file(paths.codex_config_path()).unwrap();
+    fs::create_dir(paths.codex_config_path()).unwrap();
+    assert!(snapshot.restore(&paths).is_err());
+    assert!(paths.rollback_file.is_file());
+    let wrong_home = std::process::Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .arg("detach")
+        .env("OPENCODEX_HOME", &other.opencodex_home)
+        .env("CODEX_HOME", &other.codex_home)
+        .output()
+        .unwrap();
+    assert!(!wrong_home.status.success());
+    assert!(paths.rollback_file.is_file());
+    assert!(paths.codex_config_path().is_dir());
+    fs::remove_dir(paths.codex_config_path()).unwrap();
+
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .arg("detach")
+        .env("OPENCODEX_HOME", &paths.opencodex_home)
+        .env("CODEX_HOME", &paths.codex_home)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "detach recovery failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!paths.rollback_file.exists());
+    assert!(!paths.journal_file.exists());
+    assert!(!paths.codex_config_path().exists());
+}
+
+#[test]
+fn detach_preserves_orphaned_key_when_the_journal_is_missing() {
+    let (_guard, paths, _other, _settings) = homes_fixture();
+    fs::create_dir_all(&paths.child_dir).unwrap();
+    fs::write(&paths.key_file, b"fixture-key").unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .arg("detach")
+        .env("OPENCODEX_HOME", &paths.opencodex_home)
+        .env("CODEX_HOME", &paths.codex_home)
+        .output()
+        .unwrap();
+    assert!(
+        !result.status.success(),
+        "orphaned key must require recovery"
+    );
+    assert!(fs::read(&paths.key_file).unwrap() == b"fixture-key");
+}
+
+#[cfg(unix)]
+#[test]
+fn detach_keeps_recovery_journal_when_required_file_removal_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestoreMode(PathBuf);
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    let (_guard, paths, _other, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &paths,
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    fs::remove_file(paths.codex_models_cache_path()).unwrap();
+    let _restore_mode = RestoreMode(paths.codex_home.clone());
+    fs::set_permissions(&paths.codex_home, fs::Permissions::from_mode(0o500)).unwrap();
+
+    assert!(matches!(
+        offline_detach(&paths, false),
+        Err(DetachError::Io(_))
+    ));
+    assert!(paths.journal_file.is_file());
+    assert!(paths.codex_config_path().is_file());
+}
+
 #[test]
 fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     let scratch = std::env::temp_dir().join(format!("ocx-child-wal-{}", std::process::id()));
