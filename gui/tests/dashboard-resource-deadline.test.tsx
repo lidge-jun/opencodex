@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { LanguageProvider } from "../src/i18n/provider";
 import { useDashboardData } from "../src/pages/use-dashboard-data";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
@@ -37,8 +37,9 @@ test("a controlled overview deadline marks retained dashboard data stale", async
   clearClientResourceStoresForTests();
   let data: ReturnType<typeof useDashboardData> | undefined;
   function Probe() {
-    data = useDashboardData("/deadline");
-    return <span>{data.error ? "stale" : "fresh"}:{data.health?.version}</span>;
+    const snapshot = useDashboardData("/deadline");
+    useEffect(() => { data = snapshot; }, [snapshot]);
+    return <span>{snapshot.error ? "stale" : "fresh"}:{snapshot.health?.version}</span>;
   }
   const { createRoot } = await import("react-dom/client");
   const host = win.document.createElement("div");
@@ -93,8 +94,9 @@ test("switching proxy targets cannot carry Desktop context into a failed new tar
   clearClientResourceStoresForTests();
   let data: ReturnType<typeof useDashboardData> | undefined;
   function Probe({ target }: { target: string }) {
-    data = useDashboardData(target);
-    return <span>{data.startupHealth ?? "pending"}</span>;
+    const snapshot = useDashboardData(target);
+    useEffect(() => { data = snapshot; }, [snapshot]);
+    return <span>{snapshot.startupHealth ?? "pending"}</span>;
   }
   const { createRoot } = await import("react-dom/client");
   const host = win.document.createElement("div");
