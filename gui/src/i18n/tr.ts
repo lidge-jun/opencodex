@@ -509,7 +509,7 @@ export const tr: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "Çalışıyor · oturum açılışında başlatma doğrulanmadı",
   "startup.loginUnverifiedTitle": "Oturum açılışında başlatma doğrulanmadı",
   "startup.unverified": "Doğrulanmadı",
-  "startup.loginUnverifiedAction": "OpenCodex menüsünde oturum açılışında başlatmayı kontrol edin.",
+  "startup.loginUnverifiedAction": "OpenCodex menüsünde oturum açılışında başlatmayı kontrol edin. Sistem tepsisi olmayan Linux’ta ~/.config/autostart/OpenCodex.desktop dosyasını kontrol edin.",
   "startup.loginDisabled": "Çalışıyor · oturum açılışında başlatma kapalı",
   "startup.desktopRunning": "Bu proxy’yi OpenCodex Desktop çalıştırıyor.",
   "startup.conflict": "Servis çakışması",

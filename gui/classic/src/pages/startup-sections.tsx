@@ -50,7 +50,7 @@ export function StartupHeroSection({
             {t(unverified ? "startup.unverified" : failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
           </span>
           <h3>{t(unverified ? desktopManagesStartup(data) ? "startup.loginUnverifiedTitle" : "startup.unverified" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
-          <p>{unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : (data.status === "at-risk" && desktopManagesStartup(data) && !desktopSupervisionFailed(data))
+          <p>{unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : (data.status === "at-risk" && data.routingKind === "opencodex-local" && desktopManagesStartup(data) && !desktopSupervisionFailed(data))
             ? t("startup.loginUnverifiedAction") : failed
             ? t("startup.staleData")
             : data.status === "at-risk"

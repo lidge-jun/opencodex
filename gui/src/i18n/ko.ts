@@ -503,7 +503,7 @@ export const ko: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "실행 중 · 로그인 시 시작 미확인",
   "startup.loginUnverifiedTitle": "로그인 시 시작 미확인",
   "startup.unverified": "미확인",
-  "startup.loginUnverifiedAction": "OpenCodex 메뉴에서 로그인 시 시작을 확인하세요.",
+  "startup.loginUnverifiedAction": "OpenCodex 메뉴에서 로그인 시 시작을 확인하세요. Linux에서 트레이가 없다면 ~/.config/autostart/OpenCodex.desktop 파일을 확인하세요.",
   "startup.loginDisabled": "실행 중 · 로그인 시 시작 꺼짐",
   "startup.desktopRunning": "OpenCodex 데스크톱 앱이 이 프록시를 실행 중입니다.",
   "startup.conflict": "서비스 충돌",

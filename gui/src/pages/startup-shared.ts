@@ -10,6 +10,7 @@ export interface StartupHealthData {
     loginEnabled: boolean;
     loginState?: "enabled" | "disabled" | "unknown";
     running: boolean;
+    supervisionUnknown?: boolean;
     viable: boolean;
     supervisor?: { supervisorPid: number; runtimePid: number; app: string };
   };

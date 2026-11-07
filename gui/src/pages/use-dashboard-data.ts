@@ -263,6 +263,7 @@ const [maBusy, setMaBusy] = useState(false);
   }, []);
 
   const startupHealthRef = useRef<StartupHealthStatus | null>(cachedStartup?.status ?? null);
+  const startupProbeAuthoritativeRef = useRef(false);
   const startupDesktopRef = useRef(cachedStartup?.desktopManaged === true);
   const startupTargetRef = useRef(apiBase);
   /** Bumped whenever the dedicated startup-health poll commits; core polls ignore older generations. */
@@ -288,6 +289,7 @@ const [maBusy, setMaBusy] = useState(false);
     startupTargetRef.current = apiBase;
     startupHealthGenerationRef.current += 1;
     startupHealthRef.current = cachedStartup?.status ?? null;
+    startupProbeAuthoritativeRef.current = false;
     startupDesktopRef.current = cachedStartup?.desktopManaged === true;
     setStartupHealth(startupHealthRef.current);
   }, [apiBase, cachedStartup]);
@@ -386,6 +388,7 @@ const [maBusy, setMaBusy] = useState(false);
       const mapped = mergeStartupProbe(probe, startupDesktopRef.current);
       setStartupHealth(mapped.status);
       startupHealthRef.current = mapped.status;
+      startupProbeAuthoritativeRef.current = probe.status !== "error";
       startupDesktopRef.current = mapped.desktopManaged;
       // Never persist hard errors — a cold SWR miss used to poison revisits.
       // A stale answer is a placeholder too: caching it makes the next visit start from
@@ -464,11 +467,11 @@ const [maBusy, setMaBusy] = useState(false);
       && data.startupHealthGeneration === startupHealthGenerationRef.current
     ) {
       const previous = startupHealthRef.current;
-      const merged = seedStartupHealthFromSettings(previous, data.startupHealthSeed);
+      const merged = seedStartupHealthFromSettings(previous, data.startupHealthSeed, startupProbeAuthoritativeRef.current);
       setStartupHealth(merged);
       startupHealthRef.current = merged;
-      if (data.startupHealthSeed && (previous === null || previous === "error" || merged !== previous)) startupDesktopRef.current = startupDesktopContext(data.startupHealthSeed);
-      if (merged && merged !== "at-risk" && merged !== "error") writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, { status: merged, desktopManaged: startupDesktopRef.current });
+      if (data.startupHealthSeed && !startupProbeAuthoritativeRef.current && (!data.startupHealthSeed.diagnosticStale || data.startupHealthSeed.routingKind === "opencodex-local")) startupDesktopRef.current = startupDesktopContext(data.startupHealthSeed);
+      if (merged && merged !== "at-risk" && merged !== "error" && !data.startupHealthSeed?.diagnosticStale) writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, { status: merged, desktopManaged: startupDesktopRef.current });
       else if (merged === "at-risk" || merged === "error") clearSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`);
     }
   }, [settingsPoll.data, apiBase]);

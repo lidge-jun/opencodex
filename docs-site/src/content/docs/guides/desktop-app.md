@@ -190,7 +190,9 @@ cannot verify that relationship and does not credit AppImage protection.
 A missing or stale check does not earn restart-protection credit. If Desktop owns or
 supervises the proxy, the page shows an informational note and asks you to check
 **Start at Login** in the OpenCodex menu. Service installation or repair stays disabled
-while that ownership remains; the launcher shim can still be installed, and
+while that ownership remains. The launcher shim can still be installed when diagnostics are fresh;
+its Install button is disabled while diagnostics are stale. On Linux without a tray, inspect
+`~/.config/autostart/OpenCodex.desktop` and the conditions described above. The command
 `ocx restore` is still available to undo Codex routing.
 
 Normal desktop updates replace the bundled CLI with the fixed startup probe. No local

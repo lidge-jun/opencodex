@@ -67,7 +67,7 @@ export function DashboardOverviewHead({
               <span className="min-w-0 flex-1 truncate">
                 {t(startupHealth === "error"
                   ? "startup.error"
-                  : startupHealth === "unverified" ? "startup.loginUnverifiedTitle"
+                  : startupHealth === "unverified" ? "startup.unverified"
                   : startupHealth === "at-risk"
                     ? "startup.summary.atRisk"
                     : startupHealth === "protected"

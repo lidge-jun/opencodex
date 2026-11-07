@@ -501,7 +501,7 @@ export const de: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "Läuft · Start beim Anmelden nicht bestätigt",
   "startup.loginUnverifiedTitle": "Start beim Anmelden nicht bestätigt",
   "startup.unverified": "Nicht bestätigt",
-  "startup.loginUnverifiedAction": "Prüfe im OpenCodex-Menü den Start beim Anmelden.",
+  "startup.loginUnverifiedAction": "Prüfe im OpenCodex-Menü den Start beim Anmelden. Prüfe unter Linux ohne Infobereich ~/.config/autostart/OpenCodex.desktop.",
   "startup.loginDisabled": "Läuft · Start beim Anmelden aus",
   "startup.desktopRunning": "OpenCodex Desktop betreibt diesen Proxy.",
   "startup.conflict": "Dienstkonflikt",

@@ -390,7 +390,7 @@ export const zhTW: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "執行中 · 未確認登入時啟動",
   "startup.loginUnverifiedTitle": "未確認登入時啟動",
   "startup.unverified": "未確認",
-  "startup.loginUnverifiedAction": "請在 OpenCodex 選單中檢查登入時啟動。",
+  "startup.loginUnverifiedAction": "請在 OpenCodex 選單中檢查登入時啟動。 在沒有系統匣的 Linux 上，請檢查 ~/.config/autostart/OpenCodex.desktop。",
   "startup.loginDisabled": "執行中 · 登入時啟動已關閉",
   "startup.desktopRunning": "OpenCodex 桌面應用程式正在執行此代理。",
   "startup.conflict": "服務衝突",

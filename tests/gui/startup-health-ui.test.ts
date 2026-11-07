@@ -3,6 +3,7 @@ import { createElement } from "../../gui/node_modules/react";
 import { renderToStaticMarkup } from "../../gui/node_modules/react-dom/server";
 import { DICTS, I18nContext, type TFn } from "../../gui/src/i18n/shared";
 import { StartupHeroSection } from "../../gui/src/pages/startup-sections";
+import { DashboardOverviewHead } from "../../gui/src/pages/dashboard-overview-head";
 import type { StartupHealthData } from "../../gui/src/pages/startup-shared";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
@@ -83,7 +84,26 @@ describe("startup health UI decisions", () => {
     expect(startupChecklistDone({ ...health, protection: "none" })).toBe(false);
     expect(startupPresentation({ ...health, diagnosticStale: true })).toBe("unverified");
     expect(startupPresentation({ ...health, desktop: { ...desktop, running: true } })).toBe("unverified");
+    expect(startupPresentation({ ...health, desktop: { ...desktop, supervisionUnknown: true } })).toBe("unverified");
+    expect(startupPresentation({ ...health, desktop: { ...desktop, loginState: "enabled", supervisionUnknown: true } })).toBe("unverified");
+    expect(startupPresentation({ ...health, desktop: { ...desktop, loginState: "disabled", supervisionUnknown: true } })).toBe("at-risk");
     expect(startupPresentation({ ...health, status: "protected" })).toBe("protected");
+  });
+  test("settings seeds recover from stale data without replacing a dedicated probe", () => {
+    const stale = { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local" } as const;
+    const fresh = { status: "protected", diagnosticStale: false, routingKind: "opencodex-local" } as const;
+    expect(seedStartupHealthFromSettings("protected", stale, true)).toBe("protected");
+    expect(seedStartupHealthFromSettings("unverified", fresh, false)).toBe("protected");
+    expect(seedStartupHealthFromSettings("unverified", fresh, true)).toBe("unverified");
+  });
+  test("dashboard uses a generic unverified label when Desktop context is absent", () => {
+    const t: TFn = key => DICTS.en[key];
+    const markup = renderToStaticMarkup(createElement(I18nContext.Provider,
+      { value: { locale: "en", setLocale: () => {}, t } },
+      createElement(DashboardOverviewHead, { locale: "en", health: null, providers: [], usage30d: null,
+        usageLoading: false, healthLoading: false, startupHealth: "unverified", projectConfigWarnings: [] })));
+    expect(markup).toContain(DICTS.en["startup.unverified"]);
+    expect(markup).not.toContain(DICTS.en["startup.loginUnverifiedTitle"]);
   });
   test("selects the shared risk-detail message", () => {
     expect(startupRiskDetailKey({ routingKind: "custom-local", shimCoverage: "none" }))
@@ -190,6 +210,18 @@ describe("startup health UI decisions", () => {
         expect(markup).toMatch(new RegExp(`<p[^>]*>${escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</p>`));
         expect(markup).not.toContain(data.recommendedAction!);
       }
+    }
+  });
+
+  test("custom local routing retains its own guidance when Desktop owns the proxy", () => {
+    const data = { status: "at-risk", routingKind: "custom-local", desktop: { owned: true, running: true, viable: false },
+      protection: "none", shimCoverage: "none", autostartEnabled: false } as StartupHealthData;
+    const t: TFn = key => DICTS.en[key];
+    for (const Hero of [StartupHeroSection]) {
+      const markup = renderToStaticMarkup(createElement(I18nContext.Provider,
+        { value: { locale: "en", setLocale: () => {}, t } }, createElement(Hero, { failed: false, data })));
+      expect(markup).toContain("Codex points to a custom local gateway.");
+      expect(markup).not.toContain(DICTS.en["startup.loginUnverifiedAction"]);
     }
   });
 

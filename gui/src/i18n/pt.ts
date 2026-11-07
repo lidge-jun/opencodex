@@ -528,7 +528,7 @@ export const pt: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "Em execução · Iniciar no login não verificado",
   "startup.loginUnverifiedTitle": "Iniciar no login não verificado",
   "startup.unverified": "Não verificado",
-  "startup.loginUnverifiedAction": "Confira Iniciar no login no menu do OpenCodex.",
+  "startup.loginUnverifiedAction": "Confira Iniciar no login no menu do OpenCodex. No Linux sem bandeja, verifique ~/.config/autostart/OpenCodex.desktop.",
   "startup.loginDisabled": "Em execução · Iniciar no login desativado",
   "startup.desktopRunning": "O OpenCodex Desktop executa este proxy.",
   "startup.conflict": "Conflito de serviço",

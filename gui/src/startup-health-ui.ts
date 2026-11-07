@@ -12,13 +12,13 @@ export function desktopManagesStartup(health: Pick<StartupRiskDetail, "desktop">
   return health.desktop !== undefined && (health.desktop.owned || health.desktop.supervisor !== undefined);
 }
 
-type DesktopPresentation = { owned?: boolean; supervisor?: unknown; loginState?: unknown; running?: boolean; viable?: boolean };
+type DesktopPresentation = { owned?: boolean; supervisor?: unknown; loginState?: unknown; running?: boolean; viable?: boolean; supervisionUnknown?: boolean };
 
 export function desktopSupervisionFailed(data: {
   routingKind?: unknown; diagnosticStale?: unknown; desktop?: DesktopPresentation;
 }): boolean {
   return data.diagnosticStale !== true && startupDesktopContext(data)
-    && data.desktop?.running === false && data.desktop.viable === false;
+    && data.desktop?.running === false && data.desktop.viable === false && data.desktop.supervisionUnknown !== true;
 }
 
 /** Presentation is distinct from conservative restart-protection credit. */
@@ -33,6 +33,7 @@ export function startupPresentation(data: {
   if (!failed && desktopSupervisionFailed(data)) return data.status;
   if (startupDesktopContext(data)
     && (failed || data.diagnosticStale === true
+      || (data.desktop?.supervisionUnknown === true && data.desktop.loginState !== "disabled")
       || (data.desktop?.loginState !== "disabled" && data.desktop?.loginState !== "enabled"))) return "unverified";
   return failed ? "error" : data.status;
 }
@@ -198,12 +199,11 @@ export function probeNeedsFastRetry(probe: StartupHealthProbe | undefined | null
 export function seedStartupHealthFromSettings(
   previous: StartupHealthStatus | null,
   seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean; routingKind?: unknown; desktop?: DesktopPresentation } | null | undefined,
+  authoritative = previous !== null && previous !== "error",
 ): StartupHealthStatus | null {
   if (!seeded) return previous;
+  if (authoritative) return previous;
   if (seeded.diagnosticStale) return seeded.routingKind === "opencodex-local" ? "unverified" : previous;
-  // A prior hard "error" (or unknown) may be replaced by a settings seed; a real
-  // status from the dedicated probe must not be overwritten.
-  if (previous !== null && previous !== "error") return previous;
   return startupPresentation(seeded);
 }
 

@@ -503,7 +503,7 @@ export const vi: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "Đang chạy · chưa xác minh khởi động khi đăng nhập",
   "startup.loginUnverifiedTitle": "Chưa xác minh khởi động khi đăng nhập",
   "startup.unverified": "Chưa xác minh",
-  "startup.loginUnverifiedAction": "Kiểm tra khởi động khi đăng nhập trong menu OpenCodex.",
+  "startup.loginUnverifiedAction": "Kiểm tra khởi động khi đăng nhập trong menu OpenCodex. Trên Linux không có khay hệ thống, hãy kiểm tra ~/.config/autostart/OpenCodex.desktop.",
   "startup.loginDisabled": "Đang chạy · tắt khởi động khi đăng nhập",
   "startup.desktopRunning": "OpenCodex Desktop đang chạy proxy này.",
   "startup.conflict": "Xung đột service",

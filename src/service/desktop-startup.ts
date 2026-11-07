@@ -15,6 +15,8 @@ export interface DesktopStartupDiagnostic {
   /** Verified enabled macOS registration; absence means registration is not credited. */
   loginRegistration?: "loaded" | "registered-not-loaded";
   running: boolean;
+  /** The supervision check did not complete; false running alone is not evidence of failure. */
+  supervisionUnknown?: boolean;
   viable: boolean;
   /**
    * Proven live parentage; never converts supervision into ownership. macOS and Linux report it
@@ -196,7 +198,7 @@ function macRegistrationAbsent(deps: DesktopStartupDeps): boolean {
 function diagnoseAbsentMacRegistration(deps: DesktopStartupDeps, owner: ServiceOwnershipResolution): DesktopStartupDiagnostic | undefined {
   if (owner.kind === "unknown") return undefined;
   const owned = owner.kind === "owned" && owner.ownership.owner === "desktop";
-  const fallback = owned ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : undefined;
+  const fallback = owned ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false, supervisionUnknown: true }) : undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   try {
     const installIdPath = join(deps.home ?? homedir(), "Library", "Application Support", "com.opencodex.desktop", "install-id");
@@ -232,12 +234,12 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
   try {
     const home = deps.home ?? homedir();
     const id = readFileSync(join(home, "Library", "Application Support", "com.opencodex.desktop", "install-id"), "utf8").trim();
-    if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
+    if (id !== owner.ownership.installId) return deriveDesktopStartup({ ...facts, supervisionUnknown: true });
     const pid = pidReader();
     const child = pid !== null ? processIdentity(pid, execute) : null;
     const parent = child && child.parent > 1 ? processIdentity(child.parent, execute) : null;
     const login = macLoginRegistration(deps);
-    if (!login) return deriveDesktopStartup(facts);
+    if (!login) return deriveDesktopStartup({ ...facts, supervisionUnknown: true });
     const { app, proxy } = login;
     facts.loginEnabled = login.loginEnabled;
     facts.loginState = login.loginState;
@@ -258,7 +260,7 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
     return deriveDesktopStartup(facts);
   } catch {
     // Unreadable launchd/process evidence never grants protection or releases the claim.
-    return deriveDesktopStartup({ ...facts, loginEnabled: false, loginState: "unknown", running: false });
+    return deriveDesktopStartup({ ...facts, loginEnabled: false, loginState: "unknown", running: false, supervisionUnknown: true });
   }
 }
 

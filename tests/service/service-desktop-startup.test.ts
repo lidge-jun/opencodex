@@ -55,6 +55,14 @@ test("matching install, loaded login item and exact supervisor paths grant deskt
   expect(diagnoseMacDesktopStartup(deps)).toEqual({ owned: true, loginEnabled: true, loginState: "enabled", loginRegistration: "loaded", running: true, viable: true });
 });
 
+test("an unreadable login registration does not prove supervision failed", () => {
+  const f = fixture();
+  f.state.fail = "/usr/bin/plutil";
+  expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({
+    owned: true, running: false, viable: false, loginState: "unknown", supervisionUnknown: true,
+  });
+});
+
 test("login state reports verified enabled and disabled separately from ambiguous evidence", () => {
   const enabled = fixture();
   expect(diagnoseMacDesktopStartup(enabled.deps)).toMatchObject({ loginState: "enabled", viable: true });

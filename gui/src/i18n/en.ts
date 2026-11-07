@@ -510,7 +510,7 @@ export const en = {
   "startup.desktopLoginUnverified": "Running · Start at Login not verified",
   "startup.loginUnverifiedTitle": "Start at Login not verified",
   "startup.unverified": "Not verified",
-  "startup.loginUnverifiedAction": "Check Start at Login in the OpenCodex menu.",
+  "startup.loginUnverifiedAction": "Check Start at Login in the OpenCodex menu. On Linux without a tray, inspect ~/.config/autostart/OpenCodex.desktop.",
   "startup.loginDisabled": "Running · Start at Login off",
   "startup.desktopRunning": "OpenCodex Desktop runs this proxy.",
   "startup.conflict": "Service conflict",

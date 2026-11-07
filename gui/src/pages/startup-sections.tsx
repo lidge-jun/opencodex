@@ -72,7 +72,7 @@ export function StartupHeroSection({
           <span className="mt-0.5"><HelpButton open={help.open} controls={help.id} name={t("startup.title")} onToggle={help.toggle} /></span>
         </div>
         <p className="m-0 max-w-[72ch] text-[14px] leading-[21px] text-fg-muted">
-          {unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : data.status === "at-risk" && desktopManagesStartup(data) && !desktopSupervisionFailed(data) ? t("startup.loginUnverifiedAction") : failed ? t("startup.staleData") : data.status === "at-risk" ? t(startupRiskDetailKey(data)) : t("startup.safeDetail")}
+          {unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : data.status === "at-risk" && data.routingKind === "opencodex-local" && desktopManagesStartup(data) && !desktopSupervisionFailed(data) ? t("startup.loginUnverifiedAction") : failed ? t("startup.staleData") : data.status === "at-risk" ? t(startupRiskDetailKey(data)) : t("startup.safeDetail")}
         </p>
         <p className="startup-status-line m-0 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5">
           {facts.map(([label, value], index) => (

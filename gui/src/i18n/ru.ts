@@ -508,7 +508,7 @@ export const ru: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "Работает · запуск при входе не подтверждён",
   "startup.loginUnverifiedTitle": "Запуск при входе не подтверждён",
   "startup.unverified": "Не подтверждено",
-  "startup.loginUnverifiedAction": "Проверьте запуск при входе в меню OpenCodex.",
+  "startup.loginUnverifiedAction": "Проверьте запуск при входе в меню OpenCodex. В Linux без системного трея проверьте ~/.config/autostart/OpenCodex.desktop.",
   "startup.loginDisabled": "Работает · запуск при входе выключен",
   "startup.desktopRunning": "OpenCodex Desktop запускает этот прокси.",
   "startup.conflict": "Конфликт служб",

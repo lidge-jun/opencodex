@@ -98,7 +98,7 @@ export function DashboardOverviewHead({
               <span className="startup-health-bar__summary">
                 {t(startupHealth === "error"
                   ? "startup.error"
-                  : startupHealth === "unverified" ? "startup.loginUnverifiedTitle"
+                  : startupHealth === "unverified" ? "startup.unverified"
                   : startupHealth === "at-risk"
                     ? "startup.summary.atRisk"
                     : startupHealth === "protected"

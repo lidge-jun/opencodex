@@ -64,7 +64,7 @@ export function parseAccounts(value: unknown, kind?: TraySwitchKind | null, ordi
     const email = kind === 'oauth' ? undefined : typeof row.email === 'string' ? maskEmail(row.email) : undefined;
     const label = kind === 'oauth'
       ? [row.alias, row.maskedLabel].find(item => typeof item === 'string' && item.trim()) as string | undefined
-      : [row.alias, row.label, email, row.logLabel, row.id].find(item => typeof item === 'string' && item.length) as string;
+      : [row.alias, row.label, email, row.logLabel, row.id].find(item => typeof item === 'string' && item.trim()) as string;
     const displayLabel = label?.trim() || (kind === 'oauth' ? ordinal?.(index + 1) : undefined);
     if (!displayLabel) throw new Error('Missing account label');
     const quota = row.quotaUnavailable === true || row.quotaMode === 'unsupported' || !row.quota ? null : object(row.quota) as unknown as AccountQuota;

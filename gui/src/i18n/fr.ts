@@ -503,7 +503,7 @@ export const fr: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "En cours · démarrage à la connexion non vérifié",
   "startup.loginUnverifiedTitle": "Démarrage à la connexion non vérifié",
   "startup.unverified": "Non vérifié",
-  "startup.loginUnverifiedAction": "Vérifiez le démarrage à la connexion dans le menu OpenCodex.",
+  "startup.loginUnverifiedAction": "Vérifiez le démarrage à la connexion dans le menu OpenCodex. Sous Linux sans zone de notification, examinez ~/.config/autostart/OpenCodex.desktop.",
   "startup.loginDisabled": "En cours · démarrage à la connexion désactivé",
   "startup.desktopRunning": "OpenCodex Desktop exécute ce proxy.",
   "startup.conflict": "Conflit de service",

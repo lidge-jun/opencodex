@@ -508,7 +508,7 @@ export const ja: Record<TKey, string> = {
   "startup.desktopLoginUnverified": "実行中 · ログイン時の起動を未確認",
   "startup.loginUnverifiedTitle": "ログイン時の起動を未確認",
   "startup.unverified": "未確認",
-  "startup.loginUnverifiedAction": "OpenCodex メニューでログイン時の起動を確認してください。",
+  "startup.loginUnverifiedAction": "OpenCodex メニューでログイン時の起動を確認してください。 トレイのない Linux では ~/.config/autostart/OpenCodex.desktop を確認してください。",
   "startup.loginDisabled": "実行中 · ログイン時の起動はオフ",
   "startup.desktopRunning": "OpenCodex Desktop がこのプロキシを実行しています。",
   "startup.conflict": "サービス競合",

@@ -109,7 +109,7 @@ for (const c of cases) {
     const result = judge(c);
     expect(result.loginEnabled).toBe(loginEnabled);
     expect(result.loginRegistration).toBe(loginRegistration);
-    if (result.loginState !== undefined) {
+    if (c.expect.tray === "disabled-by-system" || result.loginState !== undefined) {
       expect(result.loginState).toBe(c.expect.tray === "disabled-by-system" ? "disabled" : "unknown");
     }
   });
