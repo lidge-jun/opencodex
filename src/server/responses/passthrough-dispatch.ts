@@ -1922,7 +1922,12 @@ export async function preparePassthroughExchange(
               return type.includes("text/event-stream") || (!type && upstreamRequestsStream);
             },
           },
-        ),
+        ).then(replacement => {
+          // Only an accepted replacement owns subsequent payloads; the original receipt
+          // stays tied to the original response if recovery declines the candidate.
+          if (replacement) observePassiveQuota = transportState.createPassiveQuotaObserver();
+          return replacement;
+        }),
         { allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream },
       );
     }

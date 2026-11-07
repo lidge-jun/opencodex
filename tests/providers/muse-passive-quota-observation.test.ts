@@ -190,6 +190,147 @@ describe("Muse subscription usage observed on the SSE seam", () => {
       release(); globalThis.fetch = original; setQuotaResetSink(null); resetQuotaResetStoreForTests();
     }
   });
+  test.each([false, true])("deferred pre-output reset binds quota to the delivering send (reset=%s)", async reset => {
+    writeTwoAccounts();
+    const config = museConfig();
+    config.providers["meta-muse"]!.retryOnReset = {};
+    const original = globalThis.fetch;
+    let sends = 0;
+    let failFirst!: () => void;
+    const trigger = new Promise<void>(resolve => { failFirst = resolve; });
+    globalThis.fetch = (async (_input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer a");
+      sends++;
+      if (reset && sends === 1) return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await trigger;
+          controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+      return new Response(usageFrame(90, 20) + 'data: {"type":"response.completed","response":{"id":"resp-recovery","status":"completed","output":[]}}\n\ndata: [DONE]\n\n',
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, store: false, input: "hello" }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      failFirst();
+      expect(await response.text()).toContain("resp-recovery");
+      expect(sends).toBe(reset ? 2 : 1);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(90);
+      expect(getCachedProviderAccountQuota("meta-muse", "account-b")).toBeNull();
+    } finally { failFirst(); release(); globalThis.fetch = original; }
+  });
+  test.each(["selection", "authorization", "destination"])("deferred replacement preserves the %s ownership fence", async mutation => {
+    writeTwoAccounts();
+    const config = museConfig();
+    config.providers["meta-muse"]!.retryOnReset = {};
+    const original = globalThis.fetch;
+    let sends = 0;
+    let failFirst!: () => void;
+    const trigger = new Promise<void>(resolve => { failFirst = resolve; });
+    const unregister = registerUpstreamRewriter("muse-recovery-fence-test", target => {
+      if (sends === 0) return;
+      if (mutation === "authorization") target.headers.set("authorization", "Bearer synthetic-override");
+      if (mutation === "destination") target.url = "https://other.example/v1/responses";
+    });
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await trigger;
+          controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+      return new Response(usageFrame(90, 20) + 'data: {"type":"response.completed","response":{"id":"resp-recovery","status":"completed","output":[]}}\n\ndata: [DONE]\n\n',
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, store: false, input: "hello" }),
+      }), config, { model: "", provider: "" });
+      if (mutation === "selection") expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+      failFirst();
+      const text = await response.text();
+      expect(sends).toBe(mutation === "selection" ? 1 : 2);
+      expect(text).toContain(mutation === "selection" ? "response.failed" : "resp-recovery");
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      expect(getCachedProviderAccountQuota("meta-muse", "account-b")).toBeNull();
+    } finally { failFirst(); unregister(); release(); globalThis.fetch = original; }
+  });
+  test("selection changed after the replacement send cannot publish its quota", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    config.providers["meta-muse"]!.retryOnReset = {};
+    const original = globalThis.fetch;
+    let sends = 0;
+    let failFirst!: () => void, releaseReplacement!: () => void, replacementSent!: () => void;
+    const trigger = new Promise<void>(resolve => { failFirst = resolve; });
+    const gate = new Promise<void>(resolve => { releaseReplacement = resolve; });
+    const sent = new Promise<void>(resolve => { replacementSent = resolve; });
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await trigger;
+          controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+      replacementSent();
+      await gate;
+      return new Response(usageFrame(90, 20) + 'data: {"type":"response.completed","response":{"id":"resp-recovery","status":"completed","output":[]}}\n\ndata: [DONE]\n\n',
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, store: false, input: "hello" }),
+      }), config, { model: "", provider: "" });
+      const body = response.text();
+      failFirst();
+      await sent;
+      expect(await setActiveAccount("meta-muse", "account-b")).toBe(true);
+      releaseReplacement();
+      expect(await body).toContain("resp-recovery");
+      expect(sends).toBe(2);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      expect(getCachedProviderAccountQuota("meta-muse", "account-b")).toBeNull();
+    } finally { failFirst(); releaseReplacement(); release(); globalThis.fetch = original; }
+  });
+  test("a quota frame on the original stream commits it before a reset", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    config.providers["meta-muse"]!.retryOnReset = {};
+    const original = globalThis.fetch;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      let emitted = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!emitted) { emitted = true; controller.enqueue(new TextEncoder().encode(usageFrame(40, 20))); }
+          else controller.error(Object.assign(new Error("fixture post-frame reset"), { code: "ECONNRESET" }));
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, store: false, input: "hello" }),
+      }), config, { model: "", provider: "" });
+      expect(await response.text()).toContain("response.failed");
+      expect(sends).toBe(1);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+      expect(getCachedProviderAccountQuota("meta-muse", "account-b")).toBeNull();
+    } finally { release(); globalThis.fetch = original; }
+  });
   test("affinity failover attributes the successful physical response to its serving account", async () => {
     writeTwoAccounts();
     clearGenericFailoverHealth();
