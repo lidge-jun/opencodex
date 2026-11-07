@@ -8,7 +8,7 @@ import { IconSearch } from "../../icons";
 import { cn } from "@/lib/utils";
 import {
   cacheHitRateTitle, formatOptionalPct, formatOptionalTokens, formatPct, hasThroughput, throughputTitle,
-  type UsageModel, type UsageProvider, type UsageSummaryTotals,
+  type UsageApp, type UsageModel, type UsageProvider, type UsageSummaryTotals,
 } from "./usage-model";
 
 /*
@@ -207,6 +207,42 @@ export function UsageModelsTable({
         </table>
       </div>
       <p id={listPriceDisclaimerId} className="m-0 text-xs text-fg-subtle">{t("usage.cost.disclaimer")}</p>
+    </UsageWorkspaceSection>
+  );
+}
+
+export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale: Locale; t: TFn }) {
+  const names: Record<UsageApp["client"], string> = {
+    codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude Desktop", grok: "Grok", opencode: "OpenCode", aside: "Aside",
+    other: t("usageV2.other"), unknown: t("usageV2.unknown"), unclassified: t("usageV2.unclassified"),
+  };
+  const disclaimerId = "usage-apps-list-price-disclaimer";
+  return (
+    <UsageWorkspaceSection title={t("usageV2.apps")} titleId="usage-apps-title" meta={apps ? String(apps.length) : undefined}>
+      {!apps || apps.length === 0 ? (
+        <p className="m-0 text-[13px] text-fg-muted" role="status">{t(apps ? "usageV2.appsEmpty" : "usageV2.appsUnavailable")}</p>
+      ) : <>
+        <div className="tbl-wrap usage-v2-tbl">
+          <table className="tbl">
+            <thead><tr>
+              <th>{t("usageV2.app")}</th><th>{t("usage.col.share")}</th>
+              <th className="num">{t("usage.col.tokens")}</th>
+              <th className="num" aria-describedby={disclaimerId}>{t("usage.col.apiListPrice")}</th>
+              <th className="num">{t("usage.col.requests")}</th><th className="num">{t("usage.col.measured")}</th>
+            </tr></thead>
+            <tbody>{apps.toSorted((a, b) => b.totalTokens - a.totalTokens).map(app => (
+              <tr key={app.client}>
+                <td className="font-medium text-fg">{names[app.client]}</td>
+                <td><ShareBar ratio={app.shareRatio} /></td>
+                <td className="num mono">{formatTokens(app.totalTokens, locale)}</td>
+                <td className="num"><UsageListPrice row={app} locale={locale} t={t} /></td>
+                <td className="num">{app.requests}</td><td className="num">{app.measuredRequests}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+        <p id={disclaimerId} className="m-0 text-xs text-fg-subtle">{t("usage.cost.disclaimer")}</p>
+      </>}
     </UsageWorkspaceSection>
   );
 }

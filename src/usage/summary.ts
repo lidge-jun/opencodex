@@ -1,6 +1,7 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
+import { usageApp, type UsageApp, type UsageAppSummary } from "./app-breakdown";
 import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
@@ -210,6 +211,7 @@ export interface UsageSummary {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  apps: UsageAppSummary[];
   accounts: UsageAccount[];
   sourceFilter?: UsageSourceFilter;
   legacyUnclassifiedRequests?: number;
@@ -779,6 +781,7 @@ interface UsagePartition {
   oldestTimestamp: number | null;
   legacyUnclassifiedRequests: number;
   totals: UsageSummaryTotals;
+  apps: Map<UsageApp, UsageSummaryTotals>;
   models: Map<string, UsageModelAccumulator>;
   providers?: Map<string, UsageModelAccumulator>;
   accounts: Map<string, UsageAccountAccumulator>;
@@ -827,6 +830,12 @@ function statusFromRequestFacts(facts: number): UsageStatus {
   if ((statuses & (REQUEST_UNREPORTED | REQUEST_UNSUPPORTED)) !== 0) return "unreported";
   if ((statuses & REQUEST_ESTIMATED) !== 0) return "estimated";
   return (statuses & REQUEST_REPORTED) !== 0 ? "reported" : "unreported";
+}
+
+/** A usage-less local or unsent attempt cannot make a request's usage unknown. */
+function attemptStatusFact(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number]): number {
+  return attempt.usage || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true)
+    ? requestStatusFact(attempt.usageStatus) : 0;
 }
 
 function blankRequestCounts(): UsageRequestCounts {
@@ -1086,6 +1095,7 @@ function projectedEntryForFilter(
     return filterMatchesAttribution(filter, attempt.provider, identity.model);
   });
   if (attempts.length === 0) return null;
+  const projectedStatus = attempts.length !== entry.attempts.length;
   const { usage: _parentUsage, totalTokens: _parentTotalTokens, spend: parentSpend, ...withoutParentUsage } = entry;
   return {
     entry: {
@@ -1095,6 +1105,7 @@ function projectedEntryForFilter(
       // reporting a full-request send count against a partial row.
       ...(parentSpend && attempts.length === entry.attempts.length ? { spend: parentSpend } : {}),
       attempts,
+      ...(projectedStatus ? { usageStatus: statusFromRequestFacts(attempts.reduce((facts, attempt) => facts | attemptStatusFact(attempt), 0)) } : {}),
       ...projectedComboUsage(attempts),
     },
     comboOverlap: entry.attempts.length > 1,
@@ -1367,6 +1378,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       cloned.partitions.set(key, {
         ...partition,
         totals: { ...partition.totals },
+        apps: new Map([...partition.apps].map(([client, totals]) => [client, { ...totals }])),
         models,
         ...(providers ? { providers } : {}),
         accounts,
@@ -1402,6 +1414,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         oldestTimestamp: null,
         legacyUnclassifiedRequests: 0,
         totals: blankTotals(),
+        apps: new Map(),
         models: new Map(),
         ...(this.mode === "row-unique" ? { providers: new Map() } : {}),
         accounts: new Map(),
@@ -1606,6 +1619,16 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     addCacheProvenanceTotals(partition.totals, entry);
     addThroughputTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
+    const client = usageApp(entry.client);
+    let app = partition.apps.get(client);
+    if (!app) {
+      app = blankTotals();
+      partition.apps.set(client, app);
+      this.estimatedRetainedBytes += ESTIMATED_BREAKDOWN_BYTES;
+    }
+    bumpStatus(app, entry.usageStatus);
+    addTokens(app, entry);
+    addEstimatedCost(app, entry, costInfo);
 
     const requestKey = this.mode === "exact" ? this.requestKey(entry.requestId) : null;
     const attributions = usageAttributions(entry);
@@ -1618,7 +1641,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         ? costInfo.attemptEstimates?.[index] ?? null
         : costInfo.estimate;
       const ordinal = this.nextOrdinal++;
-      const facts = requestStatusFact(attribution.usageStatus)
+      const facts = (entry.attempts?.length ? attemptStatusFact(entry.attempts[index]!) : requestStatusFact(attribution.usageStatus))
         | (estimate ? REQUEST_PRICED : spentNothing(entry.attempts?.[index]) ? 0 : REQUEST_UNPRICED);
       const modelKey = this.addModelAttribution(partition, attribution, estimate, ordinal);
       modelFacts.set(modelKey, (modelFacts.get(modelKey) ?? 0) | facts);
@@ -1666,6 +1689,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     const totals = blankTotals();
     const models = new Map<string, UsageModelAccumulator>();
     const providers = new Map<string, UsageModelAccumulator>();
+    const apps = new Map<UsageApp, UsageSummaryTotals>();
     const accounts = new Map<string, UsageAccountAccumulator>();
     const dayAccumulators = new Map<string, UsageDayAccumulator>();
     const modelOverlaps: UsageModelOverlap[] = [];
@@ -1677,6 +1701,11 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       if (!this.window && since !== null && partition.dayStart < since) continue;
       legacyUnclassifiedRequests += partition.legacyUnclassifiedRequests;
       mergeTotals(totals, partition.totals);
+      for (const [client, app] of partition.apps) {
+        const combined = apps.get(client) ?? blankTotals();
+        mergeTotals(combined, app);
+        apps.set(client, combined);
+      }
       mergeModelMaps(models, partition.models);
       if (partition.providers) mergeModelMaps(providers, partition.providers);
       modelOverlaps.push(...partition.modelOverlaps.values());
@@ -1750,6 +1779,9 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       days,
       models: buildUsageModels(models, totals.totalTokens, modelOverlaps),
       providers: buildUsageProviders(this.mode === "row-unique" ? providers : models, totals.totalTokens),
+      apps: [...apps].map(([client, app]) => ({ client, requests: app.requests, measuredRequests: app.measuredRequests,
+        totalTokens: app.totalTokens, ...(app.pricedRequests ? { estimatedCostUsd: app.estimatedCostUsd } : {}), pricedRequests: app.pricedRequests,
+        unpricedRequests: app.unpricedRequests + app.unmeteredRequests, shareRatio: totals.totalTokens === 0 ? 0 : Math.min(1, app.totalTokens / totals.totalTokens) })),
       accounts: buildUsageAccounts(accounts),
       ...(this.filter?.sourceFilter ? { sourceFilter: { client: this.filter.sourceFilter.client,
         device: { ...this.filter.sourceFilter.device } }, legacyUnclassifiedRequests } : {}),
@@ -1851,6 +1883,7 @@ export function projectUsageSummary<T extends UsageSummary>(
     days: projected.days,
     models: projected.models,
     providers: projected.providers,
+    apps: projected.apps,
     accounts: projected.accounts,
     ...(projected.sourceFilter ? { sourceFilter: projected.sourceFilter, legacyUnclassifiedRequests: projected.legacyUnclassifiedRequests } : {}),
     filter: projected.filter,

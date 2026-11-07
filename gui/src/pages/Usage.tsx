@@ -16,7 +16,7 @@ import {
 } from "../components/v2-usage/usage-model";
 import { UsageSummaryCards } from "../components/v2-usage/usage-metrics";
 import { UsageHeatmapPanel } from "../components/v2-usage/usage-activity";
-import { UsageCoveragePanel, UsageModelsTable, UsageProvidersTable } from "../components/v2-usage/usage-breakdown";
+import { UsageAppsTable, UsageCoveragePanel, UsageModelsTable, UsageProvidersTable } from "../components/v2-usage/usage-breakdown";
 import {
   UsageAppliedWindow, UsageFilters, UsageRangePanel, UsageRangeToggle, UsageScopeControl, UsageToolbarRow,
 } from "../components/v2-usage/usage-toolbar";
@@ -57,6 +57,7 @@ function UsageWorkspaceBody({
   modelQuery,
   onModelQuery,
   sortedProviders,
+  allApps,
   filtered,
   locale,
   t,
@@ -70,6 +71,7 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
+  allApps: boolean;
   filtered: boolean;
   locale: Locale;
   t: TFn;
@@ -95,6 +97,7 @@ function UsageWorkspaceBody({
       body: <UsageModelsTable models={filteredModels} totalModels={data.models.length} modelQuery={modelQuery} onModelQuery={onModelQuery} locale={locale} t={t} />,
     },
     { id: "providers", body: <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} /> },
+    ...(allApps ? [{ id: "apps", body: <UsageAppsTable apps={data.apps} locale={locale} t={t} /> }] : []),
     { id: "coverage", body: <UsageCoveragePanel summary={data.summary} locale={locale} t={t} /> },
   ];
   return (
@@ -121,7 +124,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId, topology =
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   const [range, setRange] = useState<Range>("30d");
-  const [client, setClient] = useState<SourceClient>("codex");
+  const [client, setClient] = useState<SourceClient>("all");
   const [device, setDevice] = useState<SourceDevice>({ kind: "all" });
   const [scope, setScope] = useState<UsageScope>("machine");
   const [modelQuery, setModelQuery] = useState("");
@@ -297,6 +300,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId, topology =
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
+            allApps={client === "all"}
             filtered={client !== "all" || effectiveDevice?.kind !== "all" || range !== "all" || customWindow !== null}
             locale={locale}
             t={t}
