@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import budget from "../fixtures/mistral-budget.json";
 import subscription from "../fixtures/mistral-subscription.json";
-import { clearProviderQuotaCache, fetchProviderApiKeyQuotas, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { clearProviderQuotaCache, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
 import { providerApiKeyQuotaMode } from "../../src/providers/quota/vendor-probes-key";
 import { classifyUpstreamCondition } from "../../src/lib/upstream-condition";
 import type { OcxConfig } from "../../src/types";
@@ -26,7 +26,7 @@ beforeEach(() => {
     return Response.json(url.endsWith("/subscription") ? subscription : budget);
   }) as typeof fetch;
 });
-afterEach(() => { globalThis.fetch = originalFetch; clearProviderQuotaCache(); });
+afterEach(() => { globalThis.fetch = originalFetch; setProviderQuotaBeforePublishForTests(null); clearProviderQuotaCache(); });
 
 test("successive Mistral budget payloads retain reset identities across usage and plan changes", async () => {
   const now = Date.parse("2026-12-01T00:01:00Z");
@@ -153,6 +153,50 @@ test("a transient rejection does not reject the aggregated report or hide anothe
     expect(row?.unavailable).toBe(true);
     expect(row?.quota?.customWindows).toHaveLength(2);
   }
+});
+
+test.each(["success", "unavailable"] as const)("a colliding replacement key never receives the previous key's cached budget (%s)", async result => {
+  const first = "fixture-collision-76466", second = "fixture-collision-176773";
+  const mutable = { ...provider, apiKey: first };
+  const cfg = { defaultProvider: "mistral", providers: { mistral: mutable } } as OcxConfig;
+  let calls = 0;
+  globalThis.fetch = (async (input, init) => {
+    calls++;
+    const key = new Headers(init?.headers).get("authorization");
+    if (key === `Bearer ${second}` && result === "unavailable") throw new Error("fixture transport failure");
+    return Response.json(String(input).endsWith("/subscription") ? subscription : {
+      ...budget, api_budget: { ...budget.api_budget, usage_percentage: key === `Bearer ${first}` ? 80 : 20 },
+    });
+  }) as typeof fetch;
+  expect((await fetchProviderQuotaReports(cfg, false)).reports[0]?.quota.customWindows?.[0]?.percent).toBe(80);
+  mutable.apiKey = second;
+  const next = await fetchProviderQuotaReports(cfg, false);
+  expect(calls).toBe(4);
+  if (result === "success") expect(next.reports[0]?.quota.customWindows?.[0]?.percent).toBe(20);
+  else expect(next.reports).toEqual([]);
+});
+
+test("a transient refresh does not return a cached budget after its credential changes before publication", async () => {
+  const mutable = { ...provider };
+  const cfg = { defaultProvider: "mistral", providers: { mistral: mutable } } as OcxConfig;
+  await fetchProviderQuotaReports(cfg, true);
+  globalThis.fetch = (async () => { throw new Error("fixture transport failure"); }) as typeof fetch;
+  setProviderQuotaBeforePublishForTests(() => { mutable.apiKey = "replacement-key"; });
+  expect((await fetchProviderQuotaReports(cfg, true)).reports).toEqual([]);
+});
+
+test("a removed provider's denial does not suppress a different provider's retained quota", async () => {
+  const other = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "test-deepseek-key" } as const;
+  const cfg = { ...config, providers: { mistral: { ...provider }, deepseek: other } } as OcxConfig;
+  globalThis.fetch = (async input => Response.json(String(input).includes("deepseek.com")
+    ? { is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] }
+    : String(input).endsWith("/subscription") ? subscription : budget)) as typeof fetch;
+  expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(2);
+  globalThis.fetch = (async input => {
+    if (String(input).includes("mistral.ai")) { delete cfg.providers.mistral; return new Response(null, { status: 403 }); }
+    return new Response(null, { status: 500 });
+  }) as typeof fetch;
+  expect((await fetchProviderQuotaReports(cfg, true)).reports.map(row => row.provider)).toEqual(["deepseek"]);
 });
 
 test("display-only API and Vibe budgets do not rank keys in the quota strategy", async () => {
