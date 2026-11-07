@@ -50,8 +50,11 @@ through the disk reader. A row keeps:
 For schema-validation 4xx responses, native Chat and the translated adapter dispatch capture
 `failureDetail.validation` before client formatting. `src/lib/upstream-validation-detail.ts` projects
 only closed field identities and validation types from structured `detail[].loc/type`, inspecting at
-most 64 issues and retaining at most eight distinct pairs. Message locations collapse to `messages`
-or `messages.role`; arbitrary keys, indexes, messages, inputs, contexts and unknown types are dropped.
+most 64 issues and retaining at most eight distinct pairs. Known nested locations retain closed paths such as `messages.role` or `messages.content`; other nested
+locations become a closed root plus `.*`. Arbitrary keys, indexes, messages, inputs, contexts and unknown
+types are dropped. The optional error type must be an allowlisted upstream type; absent/unknown types
+are omitted. Existing 64 KiB upstream error-body retention limits remain authoritative: over-limit or
+partial bodies produce status-only diagnostics.
 `boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
 GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
 label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.

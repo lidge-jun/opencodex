@@ -90,7 +90,7 @@ transport; it does not infer subscription attribution from the inbound protocol.
   Unsupported or malformed array blocks return an upstream error. Other hosts
   keep their existing behavior. This does not add Mistral signature replay.
 - Canonical key-auth Mistral Chat (`https://api.mistral.ai/v1`) maps `max_completion_tokens` to
-  `max_tokens` while keeping an explicit `max_tokens`, and drops `user`, `store`, `thinking`,
+  `max_tokens` while keeping an explicit non-null `max_tokens`, and drops `user`, `store`, `thinking`,
   `include_reasoning`, `reasoning` and `top_k`. Its preset folds developer messages to system by
   default; an explicit `foldDeveloperRoleToSystem: false` overrides this. Native Chat also follows
   the configured model effort ladder: an unsupported `medium` becomes `low` for the bundled

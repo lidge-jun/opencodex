@@ -10,7 +10,7 @@ import { knownModelIdentity } from "../lib/model-identity";
  * upstreamError, which internal classifiers and status heuristics read and which never reaches a row.
  * Only proxy-composed text may be passed here.
  */
-import type { FailureDetail, FailureDetailCode } from "../lib/failure-detail";
+import { boundedFailureDetail, type FailureDetail, type FailureDetailCode } from "../lib/failure-detail";
 
 export type { FailureDetail };
 
@@ -89,5 +89,9 @@ export function recordUpstreamValidationDetail(logCtx: { failureDetail?: Failure
     try { parsed = JSON.parse(payload); } catch { return; }
   }
   const validation = upstreamValidationIssues(parsed);
-  if (validation) logCtx.failureDetail = { code: "provider_error", type: "invalid_request_error", validation };
+  if (!validation) return;
+  const record = parsed as Record<string, unknown>;
+  const nested = record.error !== null && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown> : undefined;
+  logCtx.failureDetail = boundedFailureDetail({ code: "provider_error", type: nested?.type ?? record.type, validation });
 }

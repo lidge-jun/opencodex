@@ -150,7 +150,7 @@ describe("schema rejections preserve only closed operator diagnostics", () => {
       clearComboSelectionState("schema");
       clearComboTargetCooldowns("schema");
       status = 422;
-      validationBody = { detail: [
+      validationBody = { type: "invalid_request_error", detail: [
         { type: "extra_forbidden", loc: ["body", "max_completion_tokens"], msg: PROVIDER_KEY, input: "private fixture prompt", ctx: { key: PROVIDER_KEY } },
         { type: "union_tag_invalid", loc: ["body", "messages", 0, "role"], msg: "private fixture prompt", input: PROVIDER_KEY },
         { type: "extra_forbidden", loc: ["body", PROVIDER_KEY], input: PROVIDER_KEY },
@@ -174,4 +174,15 @@ describe("schema rejections preserve only closed operator diagnostics", () => {
       } finally { validationBody = undefined; }
     });
   }
+});
+
+test("translated validation bodies above the existing retention cap remain status-only", async () => {
+  saveProviders(false);
+  status = 422;
+  validationBody = { detail: [{ type: "extra_forbidden", loc: ["body", "store"], input: "x".repeat(70 * 1024) }] };
+  try {
+    const result = await exchange("/v1/responses", { model: "fxc/m1", input: "hi" });
+    expect(result.status).toBe(422);
+    expect(result.rows[0]!.failureDetail?.validation).toBeUndefined();
+  } finally { validationBody = undefined; }
 });

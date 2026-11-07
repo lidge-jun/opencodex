@@ -2,7 +2,7 @@
 
 `src/adapters/openai-chat/destination-policy.ts` uses `isCanonicalMistralChat` for key-auth
 `https://api.mistral.ai/v1` destinations, including custom provider names. Both Chat builders rename
-`max_completion_tokens` to `max_tokens` without overwriting an existing limit, and omit `user`, `store`,
+`max_completion_tokens` to `max_tokens` without overwriting an existing non-null limit, and omit `user`, `store`,
 `thinking`, `include_reasoning`, `reasoning` and `top_k`. Native effort follows the declared model ladder
 using the shared at-or-below resolver: DeepSeek/GLM `medium` becomes `low`, supported rungs and `none`
 remain, and an operator ladder wins. Other destinations retain native caller controls. The Mistral

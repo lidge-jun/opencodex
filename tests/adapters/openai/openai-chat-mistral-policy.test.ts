@@ -29,6 +29,7 @@ describe("canonical Mistral Chat wire policy", () => {
     expect(native({ max_completion_tokens: 123 })).not.toHaveProperty("max_completion_tokens");
     expect(native({ max_completion_tokens: 123, max_tokens: 45 })).toMatchObject({ max_tokens: 45 });
     expect(native({ max_completion_tokens: 123, max_tokens: 0 })).toMatchObject({ max_tokens: 0 });
+    expect(native({ max_completion_tokens: 123, max_tokens: null })).toMatchObject({ max_tokens: 123 });
   });
   for (const [field, value] of Object.entries({ user: "synthetic-user", store: false, thinking: { type: "enabled" }, include_reasoning: true, reasoning: { enabled: true }, top_k: 10 })) {
     test(`omits rejected ${field}`, () => {

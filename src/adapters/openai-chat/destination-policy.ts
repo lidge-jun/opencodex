@@ -11,7 +11,7 @@ const MISTRAL_CHAT_POLICY = {
 export function applyChatDestinationPolicy(body: Record<string, unknown>, provider: OcxProviderConfig): void {
   if (!isCanonicalMistralChat(provider)) return;
   for (const [source, target] of Object.entries(MISTRAL_CHAT_POLICY.rename)) {
-    if (body[target] === undefined && body[source] !== undefined) body[target] = body[source];
+    if ((body[target] === undefined || body[target] === null) && body[source] !== undefined) body[target] = body[source];
     delete body[source];
   }
   for (const field of MISTRAL_CHAT_POLICY.omit) delete body[field];

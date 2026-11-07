@@ -286,3 +286,32 @@ test("validation capture requires a 4xx and bounds unique pairs", () => {
   expect(ctx.failureDetail?.validation).toHaveLength(8);
   expect(JSON.stringify(ctx.failureDetail)).not.toContain(PROVIDER_KEY);
 });
+
+test("validation capture distinguishes nested locations without arbitrary keys", () => {
+  const ctx: RequestLogContext = {};
+  recordUpstreamValidationDetail(ctx, 422, { detail: [
+    { loc: ["body", "messages"], type: "extra_forbidden" },
+    { loc: ["body", "messages", 0, "content"], type: "extra_forbidden" },
+    { loc: ["body", "messages", 0, PROVIDER_KEY], type: "extra_forbidden" },
+    { loc: ["body", "tools", 0, "function", "parameters", PROVIDER_KEY], type: "extra_forbidden" },
+  ] });
+  expect(ctx.failureDetail?.validation).toEqual([
+    { field: "messages", type: "extra_forbidden" }, { field: "messages.content", type: "extra_forbidden" },
+    { field: "messages.*", type: "extra_forbidden" }, { field: "tools.*", type: "extra_forbidden" },
+  ]);
+  expect(JSON.stringify(ctx.failureDetail)).not.toContain(PROVIDER_KEY);
+});
+
+test("validation capture preserves only an allowlisted upstream error type", () => {
+  const detail = [{ loc: ["body", "store"], type: "extra_forbidden" }];
+  for (const [payload, expected] of [
+    [{ detail, type: "permission_error" }, "permission_error"],
+    [{ detail, error: { type: "authentication_error" } }, "authentication_error"],
+    [{ detail, type: PROVIDER_KEY }, undefined], [{ detail }, undefined],
+  ] as const) {
+    const ctx: RequestLogContext = {};
+    recordUpstreamValidationDetail(ctx, 422, payload);
+    expect(ctx.failureDetail?.type).toBe(expected);
+    expect(ctx.failureDetail?.validation).toEqual([{ field: "store", type: "extra_forbidden" }]);
+  }
+});
