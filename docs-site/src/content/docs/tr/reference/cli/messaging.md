@@ -283,3 +283,13 @@ trafik onun denetiminde değildir.
 
 Mesh, pano/önbellek denetimleri, yalıtım, Claude mesajlaşması, yönetilen beceriler
 ve boşta bildirimleri bu katkının kapsamı dışındadır.
+
+
+## Açık oturum devam ettirme
+
+`--allow-resume --resume-socket /absolute/path/to/existing.sock` birlikte verilirse
+`codex_resume_thread` aracı açılır. Aynı Codex home'u bildiren mevcut, güvenilir yerel
+Unix sunucusu gerekir. Kuyruklama otomatik devam ettirmez; bu çağrı model kullanımı
+başlatabilir. `resumed` tamamlanma kanıtı değildir; `unknown` otomatik yinelenmez.
+Sunucu başlatılmaz, izinler değiştirilmez ve onay istekleri yanıtlanmaz. Ayrıntılar
+için [İngilizce başvuruya](../../../../reference/cli/messaging/#explicit-existing-server-resume) bakın.
