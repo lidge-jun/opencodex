@@ -3870,6 +3870,7 @@ export const ko: Record<TKey, string> = {
   "models.aliasStale": "오래됨",
   "connection.discovering": "로컬 및 공유 대상을 확인하는 중…",
   "connection.machineUnavailable": "로컬 머신 연결을 사용할 수 없습니다. 공유 요청을 로컬로 우회하지 않았습니다.",
+  "connection.clientStateChanged": "이 Child에 저장된 Remote Link 연결이 없거나 다른 소유자 또는 링크를 가리키고 있어, 실행 중인 Child와 더 이상 일치하지 않습니다. 다시 연결하기 전에 이 Child를 중지하거나 재시작하고 연결 상태를 확인하세요.",
   "connection.linkManaged": "Remote Link({linkId})를 통해 Home {home}이(가) 관리합니다. 이 대시보드는 Home의 설정과 할당량을 읽기 전용으로 보여 줍니다. 변경은 Home에서 하세요.",
   "connection.linkManagedUnnamed": "Remote Link({linkId})를 통해 Home이 관리합니다. 이 대시보드는 Home의 설정과 할당량을 읽기 전용으로 보여 줍니다. 변경은 Home에서 하세요.",
   "connection.disconnect": "허브 연결 해제",

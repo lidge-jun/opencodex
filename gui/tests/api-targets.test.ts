@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
   apiBaseForPlane,
+  ClientStateChangedError,
   discoverApiTargets,
   relayUrlForPath,
   standaloneApiTargets,
@@ -144,5 +145,14 @@ describe("two-plane API targets", () => {
     globalThis.fetch = (async () => { calls += 1; return new Response(null, { status: 404 }); }) as typeof fetch;
     await discoverApiTargets("");
     expect(calls).toBe(1);
+  });
+
+  test("a Child whose saved connection diverged reports client_state_changed instead of a generic refusal", async () => {
+    globalThis.fetch = (async () => Response.json({ error: "client_state_changed" }, { status: 503 })) as typeof fetch;
+    await expect(discoverApiTargets("")).rejects.toBeInstanceOf(ClientStateChangedError);
+    globalThis.fetch = (async () => Response.json({ error: "busy" }, { status: 503 })) as typeof fetch;
+    const generic = discoverApiTargets("");
+    await expect(generic).rejects.toThrow("local machine plane refused discovery (503)");
+    await expect(generic).rejects.not.toBeInstanceOf(ClientStateChangedError);
   });
 });

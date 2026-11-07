@@ -3837,6 +3837,7 @@ export const fr: Record<TKey, string> = {
   "models.aliasStale": "obsolète",
   "connection.discovering": "Détection des cibles locale et partagée…",
   "connection.machineUnavailable": "Le plan machine local est indisponible. Les requêtes partagées n'ont pas été redirigées localement.",
+  "connection.clientStateChanged": "La connexion Remote Link enregistrée de ce Child est absente ou désigne désormais un autre propriétaire ou lien, et ne correspond plus au Child en cours d'exécution. Arrêtez ou redémarrez ce Child et vérifiez sa connexion avant de le lier à nouveau.",
   "connection.linkManaged": "Géré par le Home {home} via Remote Link ({linkId}). Ce tableau de bord affiche les paramètres et le quota du Home en lecture seule ; effectuez les modifications sur le Home.",
   "connection.linkManagedUnnamed": "Géré par son Home via Remote Link ({linkId}). Ce tableau de bord affiche les paramètres et le quota du Home en lecture seule ; effectuez les modifications sur le Home.",
   "connection.disconnect": "Déconnecter du hub",

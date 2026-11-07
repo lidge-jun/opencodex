@@ -3845,6 +3845,7 @@ export const vi: Record<TKey, string> = {
   "models.aliasStale": "cũ (stale)",
   "connection.discovering": "Đang khám phá các mục tiêu cục bộ (local) và được chia sẻ…",
   "connection.machineUnavailable": "Mặt phẳng máy cục bộ (local machine plane) không khả dụng. Các yêu cầu chia sẻ đã không được chuyển hướng cục bộ.",
+  "connection.clientStateChanged": "Kết nối Remote Link đã lưu của Child này bị thiếu hoặc nay trỏ đến chủ sở hữu hoặc liên kết khác, nên không còn khớp với Child đang chạy. Hãy dừng hoặc khởi động lại Child này và kiểm tra kết nối trước khi liên kết lại.",
   "connection.linkManaged": "Được quản lý bởi Home {home} qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.linkManagedUnnamed": "Được quản lý bởi Home của nó qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.disconnect": "Ngắt kết nối khỏi hub",

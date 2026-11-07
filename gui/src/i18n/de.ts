@@ -3848,6 +3848,7 @@ export const de: Record<TKey, string> = {
   "models.aliasStale": "veraltet",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "Die gespeicherte Remote-Link-Verbindung dieses Child fehlt oder verweist jetzt auf einen anderen Besitzer oder Link und passt nicht mehr zum laufenden Child. Stoppe oder starte dieses Child neu und prüfe seine Verbindung, bevor du es erneut verknüpfst.",
   "connection.linkManaged": "Verwaltet von Home {home} über Remote Link ({linkId}). Dieses Dashboard zeigt die Einstellungen und das Kontingent des Home nur lesend an; Änderungen erfolgen auf dem Home.",
   "connection.linkManagedUnnamed": "Verwaltet von seinem Home über Remote Link ({linkId}). Dieses Dashboard zeigt die Einstellungen und das Kontingent des Home nur lesend an; Änderungen erfolgen auf dem Home.",
   "connection.disconnect": "Disconnect from hub",
