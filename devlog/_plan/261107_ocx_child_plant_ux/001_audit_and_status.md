@@ -19,8 +19,8 @@
 | Work Phase | Status | Summary & Verification Receipt |
 |---|---|---|
 | `wp0` | DONE | Docs-first roadmap (`000_roadmap.md`, `001_audit_and_status.md`, `010..040`) completed, audited (`VERDICT: PASS`), and verified with `privacy:scan` + `structure:check` (`exit 0`); zero production files modified |
-| `wp1` | PENDING | Rust `native/ocx-child` `--purge` & conflict prefixes + `src/link/` foundations |
-| `wp2` | PENDING | Home Management API `confirm-host`, `apply` plant/rollback, `status`, and `DELETE --purge` |
-| `wp3` | PENDING | CLI (`--plant`, `--purge`) & `#remote` GUI + 11 locales |
-| `wp4` | PENDING | SoT docs, `origin/pr-assets` screenshots, full gates, stacked PR, CI watch & `pr-record` |
+| `wp1` | DONE | Rust `native/ocx-child` `--purge` & conflict prefixes + `src/link/` foundations (`9/9` Cargo tests, `51/51` Bun foundation & layout tests) |
+| `wp2` | DONE | Home Management API `confirm-host`, `apply` plant/rollback, `status`, and `DELETE --purge` (`90/90` server, projection, and real-binary E2E tests) |
+| `wp3` | DONE | CLI (`--plant`, `--purge`) & `#remote` GUI + 11 locales (`82/82` CLI link tests, `3738/3738` GUI tests, `lint:i18n`, `lint`, `build:gui`) |
+| `wp4` | IN_PROGRESS | SoT docs (`structure/remote-link.md`, `docs-site/`), `origin/pr-assets` screenshots (`4d57c948b78bc66f2fb06b01cd9eb947766f1a60`), `35729/35729` `test:changed` pass, stacked PR & CI watch |
 

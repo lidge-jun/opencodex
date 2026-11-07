@@ -37,3 +37,12 @@
      - If `MERGED`: rebase cleanly onto `origin/dev`, re-verify gates, push, and open PR with `--base dev`.
    - Call `goat_pull_request_link`, watch via `goat_pull_request_watch` until required exact-head checks and automated reviews complete, address any valid findings, record `cxc loop pr-record --session 01a1b2d6-b6ca-76c3-8e6c-e00f7449b965 --pr <url>`, run `cxc loop validate`, call `goat_pull_request_unwatch`, and leave PR unmerged.
 
+## 3. `wp4` P-Phase Continuity & Architect Reflection Amendments (`01a1b33c-63c3-7410-9ced-7be53251867e`)
+
+- **Continuity from `wp3` D**: Resumed from `wp3` D conclusion ("Next cycle wp4 syncs structure/ + docs-site/, captures #remote screenshots to origin/pr-assets, opens the stacked PR, watches CI/reviews, and records pr-record").
+- **Architect `01a1b33c-63c3-7410-9ced-7be53251867e` verdict**: `ALIGNED` on `W4-ARCH-01..W4-ARCH-03`.
+- **Folded guards**:
+  1. Edit `structure/remote-link.md` `## Ephemeral Rust Child (ocx-child)` in-place (replacing `409 child_restart_unsupported` with `409 child_port_busy`, documenting `409 child_external_provider_conflict`, `src/link/child-binary-source.ts`, `src/link/remote-plant.ts`, `--purge`, and `LinkRecord.childKind`, and keeping total line count comfortably below `manifest.json` cap).
+  2. Include `bun run skill:surface:check` and `tests/ci-workflows/docs-link-targets.test.ts` in the `wp4` verification floor.
+  3. Update `docs-site/src/content/docs/guides/remote-link.md` and `docs-site/src/content/docs/ko/guides/remote-link.md` (plus check locale pages for non-contradiction).
+
