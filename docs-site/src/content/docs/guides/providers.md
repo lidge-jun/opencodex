@@ -162,6 +162,27 @@ disables shared pacing. If Mistral's
 retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
 than replaying early. Context windows and per-model compaction preferences remain independent.
 
+Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
+rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry
+`modelReasoningEfforts` rows, so the Codex catalog clamps to them and client exports such as
+`ocx export --client opencode` offer only these variants:
+
+| Model | Efforts |
+|---|---|
+| `zai-glm-5-3`, `zai-glm-5-3-flash` | `low`, `high`, `max` |
+| `mistral-large-4`, `mistral-large-4-0` | `low`, `medium`, `high` |
+| `deepseek-v4-1-flash-1017` | `low`, `high`, `xhigh`, `max` |
+
+The GLM and Large 4 rows follow [Mistral's reasoning guide](https://docs.mistral.ai/capabilities/reasoning).
+Mistral documents no values for DeepSeek V4.1 Flash 1017, so its row is the set measured to
+answer HTTP 200 in November 2026 and may change. A `modelReasoningEfforts` entry of your own
+for a model replaces its row.
+
+On native Chat Completions, a caller's `ultra` is sent as `max`, or as the model's highest
+declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
+unless the model's declared ladder lists `ultra` itself. A `reasoningEffortMap` alias for `max`
+applies to the folded value, and `__omit__` drops the field. Other caller values are forwarded as sent.
+
 When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This applies to native Chat, Messages, Responses and compact. Waiting for replacement-key capacity does not consume the upstream response-header timeout. Per-key pacing and round-robin use guarded HTTP/SSE even when upstream WebSockets are enabled; WebSocket-only steering and injection require a route without those key policies. This does not change the saved active key. An established upstream turn keeps its credential; later sends are refused if that key cools. Pre-output key rejection can recover to a healthy key within the existing request limit. Direct Images and compact requests record genuine 401/429 cooldowns without replaying that paid POST.
 
 ### Anthropic API-key credit exhaustion
