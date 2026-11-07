@@ -13,6 +13,40 @@ export type JournalConfigFields = Record<string, string | null>;
 /** Only injection-owned fields are captured; hooks, projects and paths never enter this map. */
 function fields(content: string): Map<string, Field> {
   const { lines, rootEnd } = rootSourceLines(content);
+  // Inline/dotted tables have no independently replaceable owned block. Detect
+  // them before restoring any root key; leaving them behind would lose recovery
+  // evidence while the injected provider still exists. Decode key paths as TOML,
+  // including quoted keys, without parsing unrelated (possibly wide) integers.
+  let header = "";
+  const keyToken = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')`;
+  const assignment = new RegExp(`^\\s*(${keyToken}(?:\\s*\\.\\s*${keyToken})*)\\s*=`);
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at]!;
+    if (!line.structural) continue;
+    if (/^\s*\[/.test(line.text)) { header = line.text; continue; }
+    const prefix = assignment.exec(line.text)?.[1];
+    if (!prefix) continue;
+    const context = Bun.TOML.parse(header) as Record<string, unknown>;
+    // Explicit owned blocks are handled losslessly by the block scan below.
+    if (["model_providers", "profiles"].some(key => {
+      const table = context[key];
+      return table && typeof table === "object" && Object.hasOwn(table, "opencodex");
+    })) continue;
+    const shape = Bun.TOML.parse(`${header}\n${prefix} = {}`) as Record<string, unknown>;
+    for (const key of ["model_providers", "profiles"]) {
+      const table = shape[key];
+      if (!table || typeof table !== "object") continue;
+      if (Object.hasOwn(table, "opencodex")) throw new Error("unsupported dotted owned Codex table");
+      if (Object.keys(table).length) continue; // an unrelated provider/profile path
+      let end = at + 1;
+      while (end < lines.length && !lines[end]!.structural) end++;
+      const value = Bun.TOML.parse(`${header}\n${sourceText(lines.slice(at, end))}`) as Record<string, unknown>;
+      const actual = value[key];
+      if (actual && typeof actual === "object" && Object.hasOwn(actual, "opencodex")) {
+        throw new Error("unsupported inline or dotted owned Codex table");
+      }
+    }
+  }
   const found = new Map<string, Field>();
   const put = (key: string, value: Field) => {
     if (found.has(key)) throw new Error("duplicate owned Codex field");

@@ -338,14 +338,15 @@ export function recordHomeCodexSettings(
 
 /**
  * Tell the Home what this Child last applied and when its runtime started (OCX-6). Resolves to
- * `"accepted"`, `"unsupported"` for a Home that predates the route, or `"failed"`.
+ * `"accepted"`, `"unsupported"` for a Home that predates the route, `"schema-rejected"`
+ * for a payload/schema refusal, or `"failed"` for every other refusal/transport failure.
  */
 export async function sendLinkChildParityReport(
   connection: LinkHomeConnection,
   admissionKey: string,
   report: LinkChildParityReport,
   deps: LinkHomeDeps = {},
-): Promise<"accepted" | "unsupported" | "failed"> {
+): Promise<"accepted" | "unsupported" | "schema-rejected" | "failed"> {
   let response: Response;
   try {
     const target = linkTarget(connection, admissionKey);
@@ -371,6 +372,7 @@ export async function sendLinkChildParityReport(
   }
   try { await response.body?.cancel(); } catch { /* best effort */ }
   if (response.status === 404) return "unsupported";
+  if ([400, 413, 422].includes(response.status)) return "schema-rejected";
   return response.status === 204 ? "accepted" : "failed";
 }
 

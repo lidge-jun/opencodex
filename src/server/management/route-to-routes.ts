@@ -9,9 +9,11 @@ import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
 import { ROUTE_CLIENT_IDS, parseRouteClientIntent, projectHomeRouteIntent, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
 import { clearRouteClientIntent, setRouteClientIntent } from "../../routing/route-intent-state";
-import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState } from "../../routing/home-route-intent";
+import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { routeToDeviceStatus, type RouteToStatus } from "../../routing/route-to-status";
 import { refreshRouteNativeSettings } from "../../routing/route-to-live-settings";
+import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
+import { withConfigMutationLockSync } from "../../config/mutation-lock";
 
 export interface RouteToRouteDeps {
   applyHome?: (ctx: ManagementContext, overwriteConflict: boolean, overwriteClient?: RouteClientId) => Promise<RouteClientOutcome[]>;
@@ -28,9 +30,12 @@ function devices(ctx: ManagementContext): LinkRecord[] {
 function resolveDevice(value: string | undefined, links: LinkRecord[]): string | undefined {
   if (value === undefined) return undefined;
   if (value === "home" || value === "this") return "home";
-  const match = links.find(link => link.id === value || link.alias === value);
-  if (!match) throw new Error("unknown_device");
-  return match.id;
+  const exact = links.find(link => link.id === value);
+  if (exact) return exact.id;
+  const matches = links.filter(link => link.alias === value);
+  if (matches.length > 1) throw new Error("ambiguous_device");
+  if (!matches.length) throw new Error("unknown_device");
+  return matches[0]!.id;
 }
 
 async function view(ctx: ManagementContext, selected?: string): Promise<RouteToStatus> {
@@ -50,11 +55,13 @@ async function view(ctx: ManagementContext, selected?: string): Promise<RouteToS
   return { schema: "ocx.route-to/1", devices: rows };
 }
 
-async function applyHome(ctx: ManagementContext, overwriteConflict: boolean, deps: RouteToRouteDeps, overwriteClient?: RouteClientId): Promise<RouteClientOutcome[]> {
-  if (deps.applyHome) return deps.applyHome(ctx, overwriteConflict, overwriteClient);
-  const syncHomeRouteTo = deps.materializeHome ?? (await import("../../routing/route-to-local")).syncHomeRouteTo;
+async function applyHome(ctx: ManagementContext, overwriteConflict: boolean, deps: RouteToRouteDeps, overwriteClient?: RouteClientId, commit?: () => void): Promise<RouteClientOutcome[]> {
+  if (deps.applyHome) return withLinkApply(async () => { commit?.(); return deps.applyHome!(ctx, overwriteConflict, overwriteClient); });
+  const { syncHomeRouteTo } = await import("../../routing/route-to-local");
   const local = { ...ctx.config, port: managementInferencePort(ctx) };
-  const outcomes = await syncHomeRouteTo(local, ctx.version, overwriteConflict, overwriteClient);
+  const outcomes = deps.materializeHome
+    ? await withLinkApply(async () => { commit?.(); return deps.materializeHome!(local, ctx.version, overwriteConflict, overwriteClient); })
+    : await syncHomeRouteTo(local, ctx.version, overwriteConflict, overwriteClient, commit);
   refreshRouteNativeSettings(ctx.config);
   return outcomes;
 }
@@ -89,6 +96,7 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     return response;
   };
   if (config.runtimeRole === "client") return reply({ error: "Route-to decisions are owned by the Home", code: "link_child_read_only" }, 403);
+  let desiredCommitted = false;
   try {
     if (url.pathname === "/api/route-to" && req.method === "GET") {
       if ([...url.searchParams.keys()].some(key => key !== "device") || url.searchParams.getAll("device").length > 1) return reply({ error: "invalid_request" }, 400);
@@ -122,14 +130,19 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     const write = parseWrite(body);
     if (!write) return reply({ error: "invalid_request" }, 400);
     const selected = resolveDevice(write.device, devices(ctx));
-    initializeHomeRouteIntentDefaults(ctx.config, ctx.version, selected === undefined ? write.client : undefined);
-    if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
-    else setRouteClientIntent(write.client, write.intent, selected === "home" ? "home" : selected);
-    // Notify only after the desired state committed, before any slower local materialization.
-    if (selected === undefined) for (const link of devices(ctx)) homeRouteIntentWatch.notify(link.id);
-    else if (selected !== "home") homeRouteIntentWatch.notify(selected);
+    const commit = () => withConfigMutationLockSync(() => {
+      reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
+      initializeHomeRouteIntentDefaults(ctx.config, ctx.version, selected === undefined ? write.client : undefined);
+      if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
+      else setRouteClientIntent(write.client, write.intent, selected);
+      desiredCommitted = true;
+      // Desired state remains committed if subsequent reconciliation fails.
+      if (selected === undefined) for (const link of devices(ctx)) homeRouteIntentWatch.notify(link.id);
+      else if (selected !== "home") homeRouteIntentWatch.notify(selected);
+    });
     // A default is also the Home's desired state. A device write waits for that Child's tick.
-    if (selected === undefined || selected === "home") await applyHome(ctx, write.overwriteConflict, deps, write.client);
+    if (selected === undefined || selected === "home") await applyHome(ctx, write.overwriteConflict, deps, write.client, commit);
+    else commit();
     if (selected && selected !== "home" && write.overwriteConflict) {
       const link = devices(ctx).find(row => row.id === selected)!;
       const run = deps.syncChild ?? (await import("../../routing/route-to-sync-child")).syncRouteToChild;
@@ -138,6 +151,10 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     }
     return reply(await view(ctx, write.device));
   } catch (error) {
+    if (error instanceof LinkApplyBusyError) return reply({ error: desiredCommitted
+      ? "Route policy was committed, but local apply is busy; retry sync"
+      : "Another Home apply is running; no route policy was written", code: "route_apply_busy", desiredCommitted }, 409);
+    if (error instanceof Error && error.message === "ambiguous_device") return reply({ error: "ambiguous device alias: use an exact link id", code: "ambiguous_device" }, 409);
     if (error instanceof Error && error.message === "unknown_device") return reply({ error: "unknown device: use home, this, or a link id or alias from ocx link status", code: "unknown_device" }, 404);
     // Do not project paths, config bytes, or transport credentials from a local exception.
     return reply({ error: "Route-to state could not be read or applied; inspect the local integration status and retry", code: "route_to_failed" }, 500);

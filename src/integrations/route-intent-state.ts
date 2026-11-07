@@ -79,7 +79,7 @@ export function setLocalRouteIntentOff(client: RouteClientId, off: boolean, stat
   assertNotRealHomeUnderTest(statePath);
   mkdirSync(statePath, { recursive: true, mode: 0o700 });
   // Invalidate before publishing the override: failure cannot leave an old success claim.
-  const receipt = readRouteIntentReceipt(statePath);
+  const receipt = readRouteIntentReceiptStrict(statePath);
   if (receipt) writeRouteIntentReceipt({ ...receipt, appliedRouteIntentDigest: null,
     outcomes: receipt.outcomes.map(row => row.client === client ? { ...row, outcome: "stale" } : row) }, statePath);
   atomicWriteFileNoFollow(join(statePath, "local-off.json"), JSON.stringify({ version: 1, clients: [...clients].sort() }));

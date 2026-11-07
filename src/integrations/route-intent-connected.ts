@@ -106,9 +106,9 @@ export async function applyConnectedRouteIntent(
   options: LocalRouteIntentOptions, deps: LinkHomeDeps = {},
 ): Promise<RouteIntentReceipt | undefined> {
   if (!connection.link) return undefined;
-  const localOff = readLocalRouteIntentOff();
+  const localOff = readLocalRouteIntentOff(options.statePath);
   if (!prepared && localOff.length > 0) {
-    const previous = readRouteIntentReceipt();
+    const previous = readRouteIntentReceipt(options.statePath);
     const document: HomeRouteIntentDocument = previous?.document ?? { version: 1, home: { name: "Home", version: "unavailable" },
       clients: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, { enabled: connection.selectedClients.includes(id) }])) as HomeRouteIntentDocument["clients"],
       sources: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, "builtin"])) as HomeRouteIntentDocument["sources"] };
@@ -123,13 +123,16 @@ export async function applyConnectedRouteIntent(
   const previousModels = readRouteIntentReceipt(options.statePath)?.models ?? [];
   const local = loadConfig();
   const config = { ...local, hostname: "127.0.0.1", unauthenticatedLoopbackListener: undefined };
+  const previousHomeRecord = readHomeRouteIntentRecord(linkId);
+  // A failed materialization must not leave the separately reportable Home proof current.
+  withClientLifecycleSync(() => { guard(); clearHomeRouteIntentRecord(); }, options.lifecycleLockDeps);
   const persist = (receipt: RouteIntentReceipt) => {
     receipt.outcomes = receipt.outcomes.map(initialRouteOutcomeMetadata(linkId, intent.document));
     withClientLifecycleSync(() => {
       guard();
       writeRouteIntentReceipt(receipt, options.statePath);
       if (intent.localOnly) { clearHomeRouteIntentRecord(); return; }
-      const record = homeRouteIntentReceipt(linkId, intent.document, intent.fetchedAt, receipt.appliedAt, receipt.outcomes);
+      const record = homeRouteIntentReceipt(linkId, intent.document, intent.fetchedAt, receipt.appliedAt, receipt.outcomes, previousHomeRecord);
       try { writeHomeRouteIntentRecord(record); }
       catch (error) { clearHomeRouteIntentRecord(); throw error; }
     }, options.lifecycleLockDeps);

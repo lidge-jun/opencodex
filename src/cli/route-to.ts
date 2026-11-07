@@ -86,6 +86,7 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
   // Detect Child before runtimeRequest: these operations must never enter its Home relay.
   const child = (deps.readChildContext ?? readLinkChildContext)();
   let result: unknown;
+  let requestFailure: RuntimeApiError | undefined;
   if (child) {
     if (device !== undefined && device !== "this" && device !== child.linkId) {
       throw new CliUsageError("A Child can target only --device this or its own link id", ROUTE_TO_USAGE);
@@ -105,13 +106,20 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
     if (local) throw new CliUsageError("--local requires a Remote Link Child", ROUTE_TO_USAGE);
     const body = { ...(device === undefined ? {} : { device }),
       ...(overwriteConflict ? { overwriteConflict: true } : {}) };
-    result = read ? await runtimeRequest(`/api/route-to${device === undefined ? "" : `?device=${encodeURIComponent(device)}`}`, { redirect: "error" }, deps)
+    try {
+      result = read ? await runtimeRequest(`/api/route-to${device === undefined ? "" : `?device=${encodeURIComponent(device)}`}`, { redirect: "error" }, deps)
       : await runtimeRequest(sync ? "/api/route-to/sync" : "/api/route-to", {
         method: sync ? "POST" : "PUT", redirect: "error",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(sync ? body : { client, action, ...body,
           ...(accounts === undefined ? {} : { accounts }), ...(modelNames === undefined ? {} : { modelNames }) }),
       }, deps);
+    } catch (error) {
+      if (!(error instanceof RuntimeApiError) || !error.body || typeof error.body !== "object"
+        || !("schema" in error.body) || error.body.schema !== "ocx.route-to/1") throw error;
+      requestFailure = error;
+      result = error.body;
+    }
   }
   const status = result as RouteToStatus;
   if (!status || status.schema !== "ocx.route-to/1" || !Array.isArray(status.devices) || status.devices.length === 0
@@ -128,7 +136,19 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
         || (client.target !== undefined && typeof client.target !== "string")))) {
     throw new RuntimeApiError("Invalid route-to status response; outcome is unverified. Read status before retrying.", 502, null);
   }
+  if (!read) {
+    const requested = child?.linkId ?? (device === undefined || device === "this" ? "home" : device);
+    const matching = status.devices.filter(row => row.id === requested || row.alias === requested);
+    if ((requested !== "all" && matching.length !== 1)
+      || (client !== undefined && !matching[0]?.clients.some(row => row.client === client))) {
+      throw new RuntimeApiError("Invalid route-to status response; requested device/client is unverified. Read status before retrying.", 502, null);
+    }
+  }
   printData(status, json, routeToStatusLines(status));
+  if (requestFailure) throw requestFailure;
+  if (status.syncs?.some(row => row.state === "failed")) {
+    throw new RuntimeApiError("Route sync failed for one or more devices. Read status before retrying.", 502, null);
+  }
   if (sync && status.deferred) {
     throw new RuntimeApiError("Local route sync is deferred; not all client configurations were reconciled. Retry when the Home and Child catalog are available.", 503, null);
   }

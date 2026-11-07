@@ -87,7 +87,7 @@ export function setRouteClientIntent(client: RouteClientId, intent: RouteClientI
   if (!isRouteClientId(client) || !parsed || (deviceId !== undefined && !deviceIdAllowed(deviceId))) throw new Error("invalid route intent selection");
   return updateRouteIntentState(state => {
     const map = deviceId === undefined ? state.defaults : (state.devices[deviceId] ??= {});
-    map[client] = parsed;
+    map[client] = { ...map[client], ...parsed };
     if (deviceId !== undefined) advanceRevision(state, deviceId, client);
     return state;
   });

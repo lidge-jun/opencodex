@@ -7,6 +7,9 @@ const connection = { transport: "link", apiKeyId: "key-id", link: { linkId: id, 
 const at = "2026-11-07T00:00:00.000Z";
 const doc = projectHomeRouteIntent({} as never, "test");
 const receipt = homeRouteIntentReceipt(id, doc, at, at, ROUTE_CLIENT_IDS.map(client => ({ client, outcome: "current", ...(client === "aside" ? { source: "local", target: "u0,u1", message: "sensitive" } : {}) })) as never, null);
+const readCommonReceipt = () => ({ version: 1 as const, linkId: id, document: doc, clients: doc.clients, sources: doc.sources,
+  selectedClients: ROUTE_CLIENT_IDS.filter(client => doc.clients[client].enabled), outcomes: receipt.routeClientOutcomes,
+  appliedRouteIntentDigest: receipt.appliedRouteIntentDigest, appliedAt: at });
 test("report carries receipt digest, local opt-out and only safe slot targets", async () => {
   const report = linkChildParityReport(connection, at, null, 1, receipt);
   expect(report?.appliedRouteIntentDigest).toBe(routeIntentDigest(doc));
@@ -26,6 +29,7 @@ test("runtime reporter reads route receipt and ignores a receipt for another lin
   let sent: unknown;
   const reporter = createLinkParityReporter({ connection, runtimeStartedAt: at, linkKey: () => "key", readRecord: () => null,
     readRouteRecord: () => receipt,
+    readCommonReceipt, readLocalOff: () => [],
     send: async (_connection, _key, report) => { sent = report; return "accepted"; },
     setTimer: callback => { pending = callback; return 1; }, clearTimer: () => {},
   });
@@ -41,6 +45,7 @@ test("an immediate report queues behind an in-flight send and never overlaps", a
   const sequences: number[] = [];
   const reporter = createLinkParityReporter({ connection, runtimeStartedAt: at, linkKey: () => "key", readRecord: () => null,
     readRouteRecord: () => receipt,
+    readCommonReceipt, readLocalOff: () => [],
     send: async (_connection, _key, report) => {
       sequences.push(report.sequence);
       return await new Promise<"accepted">(resolve => completions.push(resolve));

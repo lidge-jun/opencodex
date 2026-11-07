@@ -619,6 +619,7 @@ async function connectClientUnlocked(
   let injectionCommitted = false;
   let restoreCodexIntent: (() => void) | undefined;
   let committed = false;
+  let initialSelectionWritten = false;
   // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
   // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
@@ -819,10 +820,13 @@ async function connectClientUnlocked(
     };
     withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertActiveConnectingState(persisted.fingerprint);
+      if (linkMetadata && options.selectedClientsExplicit) {
+        recordInitialRouteIntent(linkMetadata.linkId, routeIntent?.document, options.selectedClients);
+        initialSelectionWritten = true;
+      }
       clearClientConnectPending(persisted.fingerprint);
       commitClientConnection(connection);
       committed = true;
-      if (linkMetadata && options.selectedClientsExplicit) recordInitialRouteIntent(linkMetadata.linkId, routeIntent?.document, options.selectedClients);
     }), deps.lifecycleLockDeps);
     // Recorded only when the injection that applied it ran (not with --no-sync). The connection is
     // already committed, so a failed record write must not reach the rollback below: it is a
@@ -861,6 +865,10 @@ async function connectClientUnlocked(
     try {
       withClientLifecycleSync(() => withConfigMutationLockSync(() => {
         assertNoClientDisconnectPending();
+        if (initialSelectionWritten && !committed && linkMetadata) {
+          try { clearInitialRouteIntent(linkMetadata.linkId); }
+          catch { rollbackFailures.push("initial route selection rollback unavailable"); }
+        }
         if (restoreCodexIntent) {
           try { restoreCodexIntent(); }
           catch { rollbackFailures.push("Codex intent rollback ownership unavailable"); }

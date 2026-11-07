@@ -8,7 +8,7 @@ import { readIntegrationState } from "./state";
 import { createIntegrationStateStore } from "./store";
 import { applyIntegrationCoordinated, disableIntegrationCoordinated, overwriteIntegrationCoordinated, refreshIntegrationCoordinated,
   type IntegrationWriteInput, type WriteOutcome } from "./writer";
-import { createAsideProfileContext, asideProfileScope, asideWriteInput } from "./aside-profile-context";
+import { createAsideProfileContext, asideProfileScope, asideWriteInput, asideRootStore, listAsideProfileStores } from "./aside-profile-context";
 import { asideHomeDir } from "../clients/config-export";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import type { RouteClientOutcome, RouteIntentApplyInput, RouteIntentReceipt } from "./route-intent-contract";
@@ -52,9 +52,28 @@ function manifestText(root: string): string {
 
 async function applyAside(input: RouteIntentApplyInput, intent: RouteClientIntent): Promise<RouteClientOutcome> {
   const root = asideHomeDir(input.env ?? process.env, input.home ?? homedir());
-  if (!existsSync(root)) return { client: "aside", outcome: intent.enabled ? "not_installed" : "current" };
+  const ownershipInput = { ...input, port: input.config.port };
+  const rootStore = asideRootStore(ownershipInput);
+  const legacy = rootStore.readRecordsStrict().aside;
+  const owners = listAsideProfileStores(rootStore).flatMap(child => {
+    const records = child.store.readRecordsStrict();
+    if (Object.keys(records).some(id => id !== "aside")) throw new Error("Aside profile storage names another client");
+    return records.aside ? [{ profileId: child.profileId, record: records.aside }] : [];
+  });
+  const owned = Boolean(legacy) || owners.length > 0;
+  // No owned route means off is already proved, even without a usable account manifest.
+  if (!intent.enabled && !owned) return { client: "aside", outcome: "current" };
+  if (!existsSync(root)) {
+    if (owned) throw new Error("Aside installation is missing with retained route ownership");
+    return { client: "aside", outcome: "not_installed" };
+  }
   const manifest = manifestText(root);
-  const ctx = createAsideProfileContext({ ...input, port: input.config.port });
+  const ctx = createAsideProfileContext(ownershipInput);
+  // A removed manifest entry is not evidence that its owned file was cleaned up.
+  if ((legacy && !ctx.profiles.some(profile => profile.configPath === legacy.configPath))
+    || owners.some(owner => !ctx.profiles.some(profile => profile.id === owner.profileId && profile.configPath === owner.record.configPath))) {
+    throw new Error("Aside route ownership names a profile outside the account manifest");
+  }
   if (manifestText(root) !== manifest) throw new Error("Aside account manifest changed during enumeration");
   const raw: unknown = JSON.parse(manifest);
   // Enumeration intentionally hides userIds. Prove that its entire profile roster was

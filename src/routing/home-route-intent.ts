@@ -63,7 +63,8 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
 }
 
 /** Provisioning runs under Home authority, before the read-only Child starts. */
-export function seedRouteDeviceClients(config: OcxConfig, version: string, deviceId: string, selected: readonly RouteClientId[] = ["codex", "claude"]): void {
+export function seedRouteDeviceClients(config: OcxConfig, version: string, deviceId: string, selected: readonly RouteClientId[] = ["codex", "claude"], activeDeviceIds?: readonly string[]): void {
+  if (activeDeviceIds) reconcileHomeRouteDevices(activeDeviceIds);
   initializeHomeRouteIntentDefaults(config, version);
   updateRouteIntentState(state => {
     const overrides = (state.devices[deviceId] ??= {});
@@ -72,6 +73,17 @@ export function seedRouteDeviceClients(config: OcxConfig, version: string, devic
       if (client !== "codex" && client !== "claude" && !selected.includes(client)) continue;
       overrides[client] = { ...(overrides[client] ?? {}), enabled: selected.includes(client) };
       revisions[client] = (revisions[client] ?? 0) + 1;
+    }
+    return state;
+  });
+}
+
+/** Trust retirement also retires policy/revisions; Home and live peers retain their state. */
+export function reconcileHomeRouteDevices(activeDeviceIds: readonly string[]): void {
+  const live = new Set(["home", ...activeDeviceIds]);
+  updateRouteIntentState(state => {
+    for (const map of [state.devices, state.revisions]) {
+      for (const id of Object.keys(map ?? {})) if (!live.has(id)) delete map![id];
     }
     return state;
   });

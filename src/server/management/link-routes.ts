@@ -1,5 +1,5 @@
 import { isRouteClientId, ROUTE_CLIENT_IDS } from "../../link/route-intent";
-import { seedRouteDeviceClients } from "../../routing/home-route-intent";
+import { seedRouteDeviceClients, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { probe, confirmHost, apply } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
@@ -108,7 +108,7 @@ async function issue(ctx: ManagementContext): Promise<Response> {
       const compensation = await compensateNewLink(ctx, state, record);
       return compensation ?? fail("link_exists", "A link for this alias already exists.", 409);
     }
-    seedRouteDeviceClients(ctx.config, ctx.version, id, selection as import("../../link/route-intent").RouteClientId[] | undefined);
+    withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, selection as import("../../link/route-intent").RouteClientId[] | undefined, readStoreFor(ctx).links.map(link => link.id)));
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") {
       failureCode = "listener_unavailable";
@@ -243,6 +243,7 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         const latest = readStoreFor(ctx);
         const filtered = { ...latest, links: latest.links.filter(link => link.id !== id) };
         if (filtered.links.length !== latest.links.length) writeStoreFor(ctx, filtered);
+        reconcileHomeRouteDevices(filtered.links.map(link => link.id));
         return filtered;
       });
       clearCompensationFailed(id, compensationPath());

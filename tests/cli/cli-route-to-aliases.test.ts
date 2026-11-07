@@ -18,7 +18,7 @@ function fixture(response?: unknown) {
     baseUrl: "http://route-to.invalid",
     fetchImpl: (async (url, init) => {
       calls.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body)) });
-      return Response.json(response ?? { schema: "ocx.route-to/1", devices: [{ id: "home", clients: [{ client: "hermes", intent: "on", source: "default", applied: "current" }] }] });
+      return Response.json(response ?? { schema: "ocx.route-to/1", devices: [{ id: "home", clients: ["hermes", "codex", "aside"].map(client => ({ client, intent: "on", source: "default", applied: "current" })) }] });
     }) as typeof fetch,
   } };
 }

@@ -28,6 +28,7 @@ function fixture(read: () => string) {
     readSchedulerXml: () => {observations.push("read"); return read();}, resolveExpectedUserId: () => sid, schedulerLauncher: launcher,
     prepareDisconnectedClientRestart: async () => { observations.push("settle-client"); effects.push("settle-client"); },
     stopScheduler: () => {effects.push("stop");}, writeSchedulerAssets: () => {effects.push("assets");},
+    killServiceWrappers: () => {}, schedulerProxyStillLive: async () => null,
     startScheduler: () => {effects.push("start");}, writeSchedulerState: () => {effects.push("state");},
     reregisterScheduler: async () => {throw new Error("fixture must not reregister");}, settleSchedulerRead: () => {},
   };

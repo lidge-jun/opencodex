@@ -13,7 +13,7 @@ import type { LaunchdInstallOutcome } from "./launchd";
 import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
 import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
-import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml } from "./windows-ops";
+import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, killWindowsServiceWrapperProcesses } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
@@ -37,6 +37,10 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   assertAuth?: () => void;
   writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
   stopScheduler?: () => void;
+  /** Same installation-scoped wrapper cleanup used by service stop/install. */
+  killServiceWrappers?: () => void;
+  /** Bounded post-stop respawn verification; null proves no proxy answered. */
+  schedulerProxyStillLive?: () => Promise<{ port: number } | null>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
   writeNativeState?: (runtime: DurableBunRuntime) => void;
@@ -201,6 +205,15 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     const current = (deps.readOwnership ?? resolveServiceOwnership)();
     if (!Bun.deepEquals(current, ownership, true)) throw new Error("Service ownership changed during restart.");
   };
+  let schedulerStopped = false;
+  const stopSchedulerForRestart = (beforeStop: () => void) => {
+    if (schedulerStopped) return;
+    beforeStop();
+    (deps.stopScheduler ?? stopWindows)();
+    beforeStop();
+    (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
+    schedulerStopped = true;
+  };
   // Defer cleanup until the selected backend's registration has been verified.
   const prepareDisconnectedRestart = async (verifyRegistration?: () => void) => {
     if (deps.verb !== "restart") return;
@@ -214,11 +227,11 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
         if (!ops) throw new Error("Service manager is unavailable; restart stopped.");
         // The import yields; repeat ownership and registration proof immediately before stop.
         beforeStop();
-        ops.stop();
         if (platform === "win32" && diag.backend !== "native") {
-          const { killWindowsServiceWrapperProcesses } = await import("./windows-ops");
-          killWindowsServiceWrapperProcesses();
+          stopSchedulerForRestart(beforeStop);
+          return;
         }
+        ops.stop();
       },
     })))();
   };
@@ -299,8 +312,17 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       await prepareDisconnectedRestart(verifyRegistrationBeforeStop);
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
+      stopSchedulerForRestart(() => { assertRestartOwnership(); verifyRegistrationBeforeStop(); });
+      const live = await (deps.schedulerProxyStillLive ?? (async () => {
+        const { proxyStillLiveAfterStop } = await import("./orchestration");
+        return proxyStillLiveAfterStop({ canRespawn: true });
+      }))();
+      if (live) throw new Error("The scheduler proxy is still running after wrapper cleanup; restart stopped.");
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+    } else {
+      try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     }
-    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it

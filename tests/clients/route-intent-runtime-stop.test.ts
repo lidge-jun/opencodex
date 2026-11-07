@@ -63,7 +63,7 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
     const child = spawnSync(process.execPath, ["test", "--preload", repoPath("tests/preload.ts"), fixture], {
       cwd: repoRoot(), timeout: SPAWN_BUDGET_MS - 5_000, encoding: "utf8",
       env: { ...process.env, HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.root, CODEX_HOME: home.codexHome,
-        OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(home.root, "desktop"), OCX_SERVICE: "", OPENCODEX_DESKTOP_SUPERVISED: "" },
+        OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(home.root, "desktop"), OCX_SERVICE: "", OCX_DESKTOP_SUPERVISED: "" },
     });
     expect({ status: child.status, stderr: child.stderr, error: child.error?.message }).toMatchObject({ status: 0 });
   } finally { home.remove(); }

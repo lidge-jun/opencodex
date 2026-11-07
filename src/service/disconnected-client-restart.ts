@@ -28,7 +28,15 @@ export async function prepareDisconnectedClientServiceRestart(deps: Disconnected
   const pid = live.pid;
   if (!pid || !Number.isSafeInteger(pid) || pid <= 0) throw new Error("Disconnected client PID is unverified; rerun 'ocx service restart'.");
   const alive = deps.alive ?? isProcessAlive;
-  const verify = deps.verify ?? (candidate => readRuntimePort(candidate)?.pid === candidate ? verifyPidIdentity(candidate) : null);
+  let homeVerified = false;
+  const verify = deps.verify ?? (candidate => {
+    const runtime = readRuntimePort();
+    if (runtime && runtime.pid !== candidate) return null;
+    if (runtime?.pid === candidate) homeVerified = true;
+    // Shutdown removes its record before it necessarily exits. The pre-stop
+    // home binding still applies, but process identity must be proved again.
+    return homeVerified ? verifyPidIdentity(candidate) : null;
+  });
   if (verify(pid) !== pid || !disconnected()) throw new Error("Disconnected client ownership changed; rerun 'ocx disconnect', then 'ocx service restart'.");
   deps.beforeStop?.();
   await deps.stopManager();

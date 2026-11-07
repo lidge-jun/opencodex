@@ -6,6 +6,7 @@ import { resolveHelpPath } from "../../src/cli/help-catalog";
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
 import { parseCliHead } from "../../src/cli/root";
 import { CAPABILITIES } from "../../src/cli/capabilities";
+import { ROUTE_CLIENT_IDS } from "../../src/link/route-intent";
 
 let home: TempHome;
 let out: ReturnType<typeof spyOn>, err: ReturnType<typeof spyOn>, network: ReturnType<typeof spyOn>;
@@ -18,8 +19,8 @@ beforeEach(() => {
 afterEach(() => { network.mockRestore(); out.mockRestore(); err.mockRestore(); home.remove(); });
 
 const status = { schema: "ocx.route-to/1", devices: [
-  { id: "home", alias: "home", clients: [{ client: "aside", intent: "on", source: "default", applied: "current", target: "u0,u1" }] },
-  { id: "lnk_0123456789abcdef", alias: "child-test", clients: [{ client: "grok", intent: "off", source: "device", applied: "not_installed" }] },
+  { id: "home", alias: "home", clients: ROUTE_CLIENT_IDS.map(client => ({ client, intent: "on", source: "default", applied: "current", ...(client === "aside" ? { target: "u0,u1" } : {}) })) },
+  { id: "lnk_0123456789abcdef", alias: "child-test", clients: ROUTE_CLIENT_IDS.map(client => ({ client, intent: client === "grok" ? "off" : "on", source: "device", applied: client === "grok" ? "not_installed" : "current" })) },
 ] };
 const child = { linkId: "lnk_0123456789abcdef", homePhrase: "Home 'home-test'", connection: {} } as LinkChildContext;
 

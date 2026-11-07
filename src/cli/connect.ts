@@ -391,6 +391,9 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   if (!serverUrl || serverUrl.startsWith("--")) throw new CliUsageError("hub URL is required", CONNECT_USAGE);
   const managementUrl = takeOption(args, "--management-url");
   const clients = parseClients(takeOption(args, "--clients"));
+  if (clients.some(client => client !== "codex" && client !== "claude")) {
+    throw new CliUsageError("Hub connections support only codex and claude; use Link for other clients", CONNECT_USAGE);
+  }
   const catalogTimeoutSeconds = takeIntegerOption(args, "--catalog-timeout", { min: 1 });
   if (catalogTimeoutSeconds !== undefined && catalogTimeoutSeconds > 120) {
     throw new CliUsageError("--catalog-timeout must be an integer between 1 and 120", CONNECT_USAGE);
@@ -432,9 +435,9 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   // only the first half is what #4207 was filed for, so the catalog now on disk is checked
   // against the Codex CLI that will read it.
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
-  const report = connectCompletionReport(connection, clients, readiness);
+  const report = connectCompletionReport(connection, connection.selectedClients, readiness);
   for (const line of report.lines) console.log(line);
-  printCodexShimReadiness(clients);
+  printCodexShimReadiness(connection.selectedClients);
   if (report.failure) throw new Error(report.failure);
 }
 
@@ -484,9 +487,9 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
     throw terminalSafeError(error);
   });
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
-  const report = connectCompletionReport(connection, clients, readiness);
+  const report = connectCompletionReport(connection, connection.selectedClients, readiness);
   for (const line of report.lines) console.log(line);
-  printCodexShimReadiness(clients);
+  printCodexShimReadiness(connection.selectedClients);
   if (report.failure) throw new Error(report.failure);
 }
 

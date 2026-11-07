@@ -8,7 +8,9 @@
  * predates the route (404) is not asked again. Timers are unref'd and never keep the process alive.
  */
 import { codexSettingsDigest } from "../link/codex-settings";
-import { routeClientOutcomesForPeer } from "../link/route-intent";
+import { routeClientOutcomesForPeer, routeIntentDigest, type RouteClientId } from "../link/route-intent";
+import type { RouteIntentReceipt } from "../integrations/route-intent-contract";
+import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceiptStrict } from "../integrations/route-intent-state";
 import type { LinkChildParityReport } from "../link/child-parity";
 import type { OcxClientConnectionConfig } from "../types";
 import { readHomeCodexSettingsRecord, readHomeRouteIntentRecord, sendLinkChildParityReport, type HomeCodexSettingsRecord, type HomeRouteIntentRecord } from "./link-home";
@@ -36,6 +38,8 @@ export interface LinkParityReporterDeps {
   runtimeStartedAt: string;
   readRecord?: (linkId: string) => HomeCodexSettingsRecord | null;
   readRouteRecord?: (linkId: string) => HomeRouteIntentRecord | null;
+  readCommonReceipt?: () => RouteIntentReceipt | null;
+  readLocalOff?: () => RouteClientId[];
   send?: typeof sendLinkChildParityReport;
   setTimer?: (callback: () => void, ms: number) => unknown;
   clearTimer?: (timer: unknown) => void;
@@ -63,6 +67,8 @@ export function linkChildParityReport(
 export function createLinkParityReporter(deps: LinkParityReporterDeps): LinkParityReporter {
   const readRecord = deps.readRecord ?? readHomeCodexSettingsRecord;
   const readRouteRecord = deps.readRouteRecord ?? readHomeRouteIntentRecord;
+  const readCommonReceipt = deps.readCommonReceipt ?? readRouteIntentReceiptStrict;
+  const readLocalOff = deps.readLocalOff ?? readLocalRouteIntentOff;
   const send = deps.send ?? sendLinkChildParityReport;
   const setTimer = deps.setTimer ?? ((callback: () => void, ms: number) => {
     const timer = setTimeout(callback, ms);
@@ -93,9 +99,26 @@ export function createLinkParityReporter(deps: LinkParityReporterDeps): LinkPari
     let record: HomeCodexSettingsRecord | null = null;
     try { record = linkId ? readRecord(linkId) : null; } catch { record = null; }
     let routeRecord: HomeRouteIntentRecord | null = null;
-    try { routeRecord = linkId ? readRouteRecord(linkId) : null; } catch { routeRecord = null; }
-    const report = linkChildParityReport(deps.connection, deps.runtimeStartedAt, record, nextReportSequence(), routeRecord);
-    const outcome = key && report ? await send(deps.connection, key, report).catch(() => "failed" as const) : "failed";
+    try {
+      routeRecord = linkId ? readRouteRecord(linkId) : null;
+      const common = readCommonReceipt();
+      const effective = common ? effectiveRouteIntent(common.document, undefined, readLocalOff()) : null;
+      if (!routeRecord || routeRecord.linkId !== linkId || !common || common.linkId !== linkId || common.catalogPending
+        || routeIntentDigest(common.document) !== routeIntentDigest(routeRecord.document)
+        || common.appliedRouteIntentDigest !== routeRecord.appliedRouteIntentDigest
+        || !Bun.deepEquals(common.clients, effective?.clients, true) || !Bun.deepEquals(common.sources, effective?.sources, true)
+        || !Bun.deepEquals(routeClientOutcomesForPeer(common.outcomes), routeClientOutcomesForPeer(routeRecord.routeClientOutcomes), true)) {
+        routeRecord = null;
+      }
+    } catch { routeRecord = null; }
+    const base = linkChildParityReport(deps.connection, deps.runtimeStartedAt, record, nextReportSequence(), routeRecord);
+    // Omission is not a withdrawal for peers retaining their last route confirmation.
+    const report = base && !routeRecord ? { ...base, appliedRouteIntentDigest: null, routeClientOutcomes: [] } : base;
+    let outcome = key && report ? await send(deps.connection, key, report).catch(() => "failed" as const) : "failed";
+    if (key && report && outcome === "schema-rejected" && report.routeClientOutcomes !== undefined) {
+      const { appliedRouteIntentDigest: _digest, routeClientOutcomes: _outcomes, ...baseReport } = report;
+      outcome = await send(deps.connection, key, baseReport).catch(() => "failed" as const);
+    }
     if (outcome === "unsupported") { stopped = true; return; }
     if (outcome === "accepted") {
       failures = 0;

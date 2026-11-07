@@ -93,7 +93,44 @@ test("default identity verification refuses a PID absent from this home's runtim
       disconnected: () => true, findLive: async () => ({ pid: 42, role: "client" }),
       alive: () => true, stopManager: () => { touched = true; }, stop: async () => { touched = true; },
     })).rejects.toThrow("ownership changed");
-    expect(read).toHaveBeenCalledWith(42);
+    expect(read).toHaveBeenCalledWith();
     expect(touched).toBe(false);
   } finally { read.mockRestore(); }
+});
+
+test.each([true, false])("runtime record deletion independently verifies the surviving PID (verified: %s)", async verified => {
+  let record = true, running = true;
+  const calls: string[] = [];
+  const read = spyOn(processState, "readRuntimePort").mockImplementation(() => record ? { pid: 42, port: 10100 } : null);
+  const identity = spyOn(processState, "verifyPidIdentity").mockImplementation(pid => {
+    calls.push(`verify-${record ? "before" : "after"}`);
+    return record || verified ? pid : null;
+  });
+  try {
+    const invoke = () => prepareDisconnectedClientServiceRestart({
+      disconnected: () => true, findLive: async () => ({ pid: 42, role: "client" }),
+      alive: () => running, stopManager: () => { record = false; calls.push("manager"); },
+      stop: async () => { calls.push("stop-pid"); running = false; },
+    });
+    if (verified) {
+      await invoke();
+      expect(calls).toEqual(["verify-before", "manager", "verify-after", "stop-pid"]);
+    } else {
+      await expect(invoke()).rejects.toThrow("ownership is unverified");
+      expect(calls).toEqual(["verify-before", "manager", "verify-after"]);
+    }
+  } finally { read.mockRestore(); identity.mockRestore(); }
+});
+
+test("a changed runtime record preserves the surviving PID", async () => {
+  let record = 42, stopped = false;
+  const read = spyOn(processState, "readRuntimePort").mockImplementation(() => ({ pid: record, port: 10100 }));
+  const identity = spyOn(processState, "verifyPidIdentity").mockImplementation(pid => pid);
+  try {
+    await expect(prepareDisconnectedClientServiceRestart({
+      disconnected: () => true, findLive: async () => ({ pid: 42, role: "client" }), alive: () => true,
+      stopManager: () => { record = 99; }, stop: async () => { stopped = true; },
+    })).rejects.toThrow("ownership is unverified");
+    expect(stopped).toBe(false);
+  } finally { read.mockRestore(); identity.mockRestore(); }
 });

@@ -6,6 +6,9 @@ import { mirrorDesiredEnabledOntoSnapshot } from "./claude-desktop-config-writer
 import { ensureManagementClaudeIntercept, interceptStartRefusal } from "./claude-intercept-routes";
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
+import { initializeHomeRouteIntentDefaults } from "../../routing/home-route-intent";
+import { setRouteClientIntent } from "../../routing/route-intent-state";
+import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
 /**
  * Toggle routes for the integrations that are NOT file-merged clients.
  *
@@ -354,6 +357,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
     const enabled = body.enabled;
 
     const { setCodexIntegrationEnabled } = await import("../../codex/desired-state");
+    initializeHomeRouteIntentDefaults(ctx.config, ctx.version);
     const persisted = setCodexIntegrationEnabled(enabled);
     /*
      * `missing` does not block the switch — see the Grok route for the reasoning.
@@ -370,6 +374,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
       );
     }
     const durable = persisted.ok;
+    setRouteClientIntent("codex", { enabled }, "home");
 
     if (enabled) {
       // The port this process actually BOUND, not what config.json last recorded.
@@ -482,6 +487,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      * on, where the other order leaves artifacts the next start undoes.
      */
     const { setGrokIntegrationEnabled } = await import("../../codex/desired-state");
+    initializeHomeRouteIntentDefaults(ctx.config, ctx.version);
     const persisted = setGrokIntegrationEnabled(enabled);
     /*
      * `missing` does NOT block the toggle here.
@@ -503,6 +509,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
       );
     }
     const durable = persisted.ok;
+    setRouteClientIntent("grok", { enabled }, "home");
     const desiredEnabled = durable ? loadConfig().clientIntegrations?.grok !== false : enabled;
 
     if (!enabled) {
@@ -719,10 +726,12 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
 
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
     const enabled = body.enabled;
+    initializeHomeRouteIntentDefaults(ctx.config, ctx.version);
     const persisted = await settleConfigRoot(configRoot(), () => {
       const result = setIntegrationEnabled("claude-desktop", enabled);
       if (result.ok) {
         committedDesiredEnabled = enabled;
+        setRouteClientIntent("claude-desktop", { enabled }, "home");
         mirrorDesiredEnabledOntoSnapshot(ctx.config, "claude-desktop", enabled);
       }
       return result;
@@ -922,7 +931,7 @@ function persistedIntentConfig(snapshot: ManagementContext["config"]): Managemen
   }
 }
 
-export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+async function handleNativeIntegrationRoutesUnlocked(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
 
   if (url.pathname === "/api/native-integrations" && req.method === "GET") {
@@ -949,7 +958,9 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     }
 
     const enabled = body.enabled;
+    initializeHomeRouteIntentDefaults(config, ctx.version);
     if (claudeCodeEnabled(config) === enabled) {
+      setRouteClientIntent("claude", { enabled }, "home");
       // Re-run the same reconcile on a repeated OFF: definitions left behind by an older
       // version that never pruned on disable are removed the next time the user says off.
       if (!enabled) await ctx.syncClaudeAgentDefsBestEffort?.();
@@ -995,6 +1006,7 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       }
       throw error;
     }
+    setRouteClientIntent("claude", { enabled }, "home");
 
     /*
      * The generated ~/.claude/agents/ocx-*.md definitions route through this proxy; a
@@ -1033,4 +1045,16 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
   }
 
   return null;
+}
+
+export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+  if (ctx.req.method !== "PUT" || !/^\/api\/native-integrations\/(claude|claude-desktop|codex|grok)$/.test(ctx.url.pathname)) {
+    return handleNativeIntegrationRoutesUnlocked(ctx);
+  }
+  if (ctx.config.runtimeRole === "client") return jsonResponse({ error: "Route decisions are owned by the Home", code: "link_child_read_only" }, 403);
+  try { return await withLinkApply(() => handleNativeIntegrationRoutesUnlocked(ctx)); }
+  catch (error) {
+    if (error instanceof LinkApplyBusyError) return refusal(409, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "config_busy", "Another Home apply is running. Nothing was written; retry in a moment.");
+    throw error;
+  }
 }

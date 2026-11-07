@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { materializeRouteIntent, cleanupRouteIntent, effectiveRouteIntent, readRouteIntentReceipt, setLocalRouteIntentOff } from "../../src/integrations/route-intent";
-import { ROUTE_CLIENT_IDS, type HomeRouteIntentDocument } from "../../src/link/route-intent";
+import { ROUTE_CLIENT_IDS, routeIntentDigest, type HomeRouteIntentDocument } from "../../src/link/route-intent";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import type { RouteIntentApplyInput } from "../../src/integrations/route-intent-contract";
@@ -75,12 +75,55 @@ test("persistent local off overrides fetched Home intent, inherit removes it", a
 });
 test("connection fence rejects a writer before touching client files and clears prior success", async () => {
   const path = installPi(); await materializeRouteIntent(input);
+  expect(readRouteIntentReceipt(input.statePath)?.appliedRouteIntentDigest).toBe(routeIntentDigest(input.document));
   const before = readFileSync(path, "utf8");
   input.models = [{ namespaced: "child/new", provider: "child", id: "new" }];
   input.beforeWrite = () => { throw new Error("client_connection_changed"); };
   await expect(materializeRouteIntent(input)).rejects.toThrow("client_connection_changed");
   expect(readFileSync(path, "utf8")).toBe(before);
   expect(readRouteIntentReceipt(input.statePath)?.appliedRouteIntentDigest).toBeNull();
+});
+
+test("review: local off rejects unreadable receipts before publishing an override", () => {
+  mkdirSync(join(input.statePath!, "receipt.json"), { recursive: true });
+  expect(() => setLocalRouteIntentOff("pi", true, input.statePath)).toThrow("unreadable");
+  expect(() => readFileSync(join(input.statePath!, "local-off.json"))).toThrow();
+});
+
+test("review: local off rejects malformed receipts and preserves the previous override", () => {
+  setLocalRouteIntentOff("pi", true, input.statePath);
+  const before = readFileSync(join(input.statePath!, "local-off.json"), "utf8");
+  writeFileSync(join(input.statePath!, "receipt.json"), JSON.stringify({ version: 1 }));
+  expect(() => setLocalRouteIntentOff("pi", false, input.statePath)).toThrow("malformed");
+  expect(readFileSync(join(input.statePath!, "local-off.json"), "utf8")).toBe(before);
+});
+
+test("review: unmanaged Aside off needs no account manifest", async () => {
+  installPi();
+  mkdirSync(join(input.home!, ".aside"), { recursive: true });
+  const receipt = await materializeRouteIntent(input);
+  expect(outcome(receipt, "aside").outcome).toBe("current");
+  expect(receipt.appliedRouteIntentDigest).toBe(routeIntentDigest(input.document));
+});
+
+test("review: orphaned Aside profile ownership cannot claim clean disconnect", async () => {
+  const { aside, four } = installAside();
+  expect(outcome(await materializeRouteIntent(input), "aside").outcome).toBe("current");
+  const before = readFileSync(four, "utf8");
+  writeFileSync(join(aside, "accounts.json"), JSON.stringify({ currentAccountId: 0,
+    accounts: [{ id: 0, userId: "local-beta" }] }));
+  const cleaned = await cleanupRouteIntent(input);
+  expect(cleaned.find(row => row.client === "aside")?.outcome).toBe("failed");
+  expect(readFileSync(four, "utf8")).toBe(before);
+  expect(createIntegrationStateStore(join(input.store!.root, "aside-profiles", "4")).readRecordsStrict().aside).toBeDefined();
+  expect(readRouteIntentReceipt(input.statePath)?.appliedRouteIntentDigest).toBeNull();
+});
+
+test("review: missing Aside installation with retained ownership cannot claim clean", async () => {
+  const { aside } = installAside();
+  expect(outcome(await materializeRouteIntent(input), "aside").outcome).toBe("current");
+  rmSync(aside, { recursive: true });
+  expect((await cleanupRouteIntent(input)).find(row => row.client === "aside")?.outcome).toBe("failed");
 });
 
 function installAside() {

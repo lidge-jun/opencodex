@@ -1,7 +1,7 @@
 /** Local CLI reads/applies never relay management writes from a Child to its Home. */
 import { readClientConnectionState } from "../client/state";
 import { withLinkApply } from "../client/link-home";
-import { projectHomeRouteIntent, type RouteClientId, type RouteClientOutcome } from "../link/route-intent";
+import { projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteClientOutcome } from "../link/route-intent";
 import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState } from "./home-route-intent";
 import { routeToDeviceStatus, type RouteToDeviceStatus, type RouteToStatus } from "./route-to-status";
 import { readLocalRouteIntentOff, readRouteIntentReceipt, setLocalRouteIntentOff } from "../integrations/route-intent";
@@ -14,13 +14,18 @@ export function readHomeRouteToStatus(config: OcxConfig, version: string): Route
   return routeToDeviceStatus("home", "home", document, receipt?.outcomes ?? [], receipt?.appliedRouteIntentDigest ?? null);
 }
 
-export async function syncHomeRouteTo(config: OcxConfig, version: string, overwriteConflict = false, overwriteClient?: RouteClientId): Promise<RouteClientOutcome[]> {
+export async function syncHomeRouteTo(config: OcxConfig, version: string, overwriteConflict = false, overwriteClient?: RouteClientId, commit?: () => void,
+  deps: { loadModels?: typeof import("../server/management/model-rows").loadExportModels; materialize?: typeof import("../client/route-intent-apply").materializeLocalRouteIntent } = {}): Promise<RouteClientOutcome[]> {
   return withLinkApply(async () => {
+    commit?.();
     initializeHomeRouteIntentDefaults(config, version);
     const document = projectHomeRouteIntent(config, version, "home", readHomeRouteIntentState(config));
     const { loadExportModels } = await import("../server/management/model-rows");
     const { materializeLocalRouteIntent } = await import("../client/route-intent-apply");
-    const receipt = await materializeLocalRouteIntent(config, document, await loadExportModels(config), { overwriteConflict, overwriteClient });
+    const materialize = deps.materialize ?? materializeLocalRouteIntent;
+    const off = ROUTE_CLIENT_IDS.filter(client => !document.clients[client].enabled);
+    await materialize(config, document, [], { overwriteConflict, overwriteClient, onlyClients: off });
+    const receipt = await materialize(config, document, await (deps.loadModels ?? loadExportModels)(config), { overwriteConflict, overwriteClient });
     return receipt.outcomes;
   });
 }

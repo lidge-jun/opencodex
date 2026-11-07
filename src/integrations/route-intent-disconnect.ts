@@ -9,6 +9,30 @@ import { readRouteIntentReceiptStrict } from "./route-intent-state";
 import { homeRouteIntentPath } from "../client/link-home";
 import type { OcxClientConnectionConfig } from "../types";
 
+/** Droid's empty-roster contribution has no selectors, so its generic classifier cannot prove absence. */
+async function droidRoutingAbsent(port: number): Promise<boolean> {
+  const { INTEGRATION_CLIENTS } = await import("./registry");
+  const { defaultIntegrationIO, loadTarget } = await import("./config-io");
+  const { createIntegrationStateStore } = await import("./store");
+  const target = loadTarget(defaultIntegrationIO(createIntegrationStateStore()), INTEGRATION_CLIENTS.droid.configPath());
+  if (!target.ok) return false;
+  if (target.before === null) return true;
+  try {
+    const value: unknown = JSON.parse(target.before);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const rows = (value as Record<string, unknown>).customModels;
+    if (rows === undefined) return true;
+    if (!Array.isArray(rows)) return false;
+    return rows.every(row => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+      if (typeof row.displayName === "string" && row.displayName.startsWith("OpenCodex:")) return false;
+      if (typeof row.baseUrl !== "string") return false;
+      const url = new URL(row.baseUrl);
+      return !(["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.port === String(port));
+    });
+  } catch { return false; }
+}
+
 export async function cleanupConnectedRouteIntent(
   connection: OcxClientConnectionConfig, expected: DesktopDisconnectReceipt, lifecycleLockDeps?: ClientLifecycleLockDeps, recoverConflicts = false,
 ): Promise<void> {
@@ -17,8 +41,23 @@ export async function cleanupConnectedRouteIntent(
     let homeReceiptPresent = false;
     try { lstatSync(homeRouteIntentPath()); homeReceiptPresent = true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    if (connection.link && (connection.selectedClients.some(id => id !== "codex" && id !== "claude") || homeReceiptPresent)) {
-      throw new Error("Route intent cleanup receipt is missing; preserve the connection and repair its route ownership evidence before disconnect");
+    if (connection.link) {
+      const { createIntegrationStateStore } = await import("./store");
+      const { isIntegrationClientId } = await import("./registry");
+      const { readIntegrationState } = await import("./state");
+      const { listAsideProfileStores } = await import("./aside-profile-context");
+      const store = createIntegrationStateStore();
+      const owned = Object.keys(store.readRecordsStrict()).length > 0
+        || listAsideProfileStores(store).some(child => Object.keys(child.store.readRecordsStrict()).length > 0);
+      const config = loadConfig();
+      // Older Homes and --no-sync may never invoke the controller. Only disk absence,
+      // not selectedClients alone, proves those file clients have nothing to drain.
+      const unproved = connection.selectedClients.some(id => id !== "codex" && id !== "claude"
+        && (!isIntegrationClientId(id) || readIntegrationState({ clientId: id, config, port: config.port, models: [], store }).state !== "absent"));
+      const droidUnproved = connection.selectedClients.includes("droid") && !await droidRoutingAbsent(config.port);
+      if (homeReceiptPresent || owned || unproved || droidUnproved) {
+        throw new Error("Route intent cleanup receipt is missing; preserve the connection and repair its route ownership evidence before disconnect");
+      }
     }
     return;
   }
