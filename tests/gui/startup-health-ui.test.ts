@@ -10,13 +10,59 @@ import {
   desktopBadgeKey,
   desktopManagesStartup,
   mapStartupHealthProbe,
+  mergeStartupProbe,
   probeNeedsFastRetry,
   seedStartupHealthFromSettings,
   settingsPollMayCommit,
+  startupChecklistDone,
+  startupPresentation,
   startupRiskDetailKey,
 } from "../../gui/src/startup-health-ui";
 
 describe("startup health UI decisions", () => {
+  test("desktop login evidence distinguishes unverified, disabled and protected presentation", () => {
+    const base = {
+      status: "at-risk", routingKind: "opencodex-local", routingInjected: true,
+      localRoutingDependency: true, autostartEnabled: true, rebootSafe: false, protection: "none",
+      serviceInstalled: false, serviceViable: false, serviceEnabled: false, serviceRunning: false,
+      serviceStale: false, serviceConflict: false, serviceSupported: true,
+      shimInstalled: false, shimHealthy: false, shimCoverage: "none", platform: "darwin",
+      recommendedCommand: null, diagnosticStale: false,
+      commands: { installService: "ocx service install", repairService: "ocx service repair",
+        installShim: "ocx codex-shim install", restoreNative: "ocx restore" },
+    } as const;
+    const t: TFn = key => DICTS.en[key];
+    const render = (loginState: "unknown" | "disabled" | "enabled") => {
+      const enabled = loginState === "enabled";
+      const data = { ...base, ...(enabled ? { status: "protected", rebootSafe: true, protection: "desktop" } : {}),
+        desktop: { owned: true, running: true, loginEnabled: enabled, loginState, viable: enabled } } as StartupHealthData;
+      return renderToStaticMarkup(createElement(I18nContext.Provider,
+        { value: { locale: "en", setLocale: () => {}, t } },
+        createElement(StartupHeroSection, { failed: false, data })));
+    };
+    expect(render("unknown")).not.toContain("Action required");
+    expect(render("disabled")).toContain("Action required");
+    expect(render("enabled")).not.toContain("Action required");
+  });
+
+  test("desktop uncertainty does not hide independently protected or unrelated routing", () => {
+    const desktop = { owned: true, loginState: "unknown" };
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop })).toBe("unverified");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { ...desktop, loginState: "disabled" } })).toBe("at-risk");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { ...desktop, loginState: "enabled" } })).toBe("unverified");
+    expect(startupPresentation({ status: "protected", routingKind: "opencodex-local", desktop })).toBe("protected");
+    expect(startupPresentation({ status: "at-risk", routingKind: "custom-local", desktop })).toBe("at-risk");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { owned: false, supervisor: null } })).toBe("at-risk");
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", desktop: { owned: false, supervisor: {} } })).toBe("at-risk");
+    expect(mapStartupHealthProbe({ status: "at-risk", routingKind: "opencodex-local", desktop })).toBe("unverified");
+    expect(startupChecklistDone({ status: "at-risk", routingKind: "opencodex-local", desktop, protection: "none" })).toBeUndefined();
+    expect(startupChecklistDone({ status: "protected", routingKind: "opencodex-local", desktop, protection: "desktop" })).toBe(true);
+    expect(startupPresentation({ status: "at-risk", routingKind: "opencodex-local", diagnosticStale: true, desktop: { ...desktop, loginState: "disabled" } })).toBe("unverified");
+    expect(mergeStartupProbe({ status: "error", stale: false }, true)).toEqual({ status: "unverified", desktopManaged: true });
+    expect(mergeStartupProbe({ status: "error", stale: false }, false)).toEqual({ status: "error", desktopManaged: false });
+    expect(mergeStartupProbe({ status: "protected", stale: false, desktopManaged: true }, false)).toEqual({ status: "protected", desktopManaged: true });
+    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local", desktop })).toBe("unverified");
+  });
   test("selects the shared risk-detail message", () => {
     expect(startupRiskDetailKey({ routingKind: "custom-local", shimCoverage: "none" }))
       .toBe("startup.riskDetailCustomLocal");
@@ -53,6 +99,7 @@ describe("startup health UI decisions", () => {
   test("a running desktop app with unverified Start at Login is not labelled unhealthy (#6963)", () => {
     const supervisor = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app" };
     const loginOff = { running: true, loginEnabled: false, viable: false };
+    expect(desktopBadgeKey({ owned: true, ...loginOff, loginState: "disabled" }, false)).toBe("startup.loginDisabled");
     expect(desktopBadgeKey({ owned: false, supervisor, ...loginOff }, false)).toBe("startup.desktopLoginUnverified");
     expect(desktopBadgeKey({ owned: true, ...loginOff }, false)).toBe("startup.desktopLoginUnverified");
     // A failed or stale read never vouches for the running process it last saw.
@@ -113,7 +160,7 @@ describe("startup health UI decisions", () => {
         const markup = renderToStaticMarkup(createElement(I18nContext.Provider,
           { value: { locale, setLocale: () => {}, t } },
           createElement(StartupHeroSection, { failed: false, data: { ...data, diagnosticStale } })));
-        const guidance = diagnosticStale ? "startup.desktopReopenRecovery" : "startup.desktopSupervisedRecovery";
+        const guidance = "startup.loginUnverifiedAction";
         const localized = t(guidance);
         expect(typeof localized).toBe("string");
         // The guidance is the hero's own paragraph, whatever classes the paragraph carries.

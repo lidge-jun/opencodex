@@ -12,17 +12,44 @@ export function desktopManagesStartup(health: Pick<StartupRiskDetail, "desktop">
   return health.desktop !== undefined && (health.desktop.owned || health.desktop.supervisor !== undefined);
 }
 
+/** Presentation is distinct from conservative restart-protection credit. */
+export function startupPresentation(data: {
+  status: "native" | "protected" | "at-risk";
+  routingKind?: unknown;
+  diagnosticStale?: unknown;
+  desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
+}, failed = false): "native" | "protected" | "at-risk" | "unverified" | "error" {
+  if (!failed && data.diagnosticStale !== true && (data.status === "native" || data.status === "protected")) return data.status;
+  if (startupDesktopContext(data)
+    && (failed || data.diagnosticStale === true || data.desktop?.loginState !== "disabled")) return "unverified";
+  return failed ? "error" : data.status;
+}
+
+export function startupChecklistDone(data: {
+  status?: "native" | "protected" | "at-risk";
+  routingKind?: unknown;
+  diagnosticStale?: unknown;
+  desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
+  protection?: string;
+  serviceInstalled?: boolean;
+  shimInstalled?: boolean;
+}): boolean | undefined {
+  if (data.status && startupPresentation({ ...data, status: data.status }) === "unverified") return undefined;
+  return (data.protection !== undefined && data.protection !== "none") || Boolean(data.serviceInstalled || data.shimInstalled);
+}
+
 /**
  * Badge for the Desktop app row. A running app whose Start at Login could not be verified is not
  * "installed but unhealthy": the proxy is fine and only restart protection is missing (#6963).
  * `failed` already folds in a stale diagnostic, so old facts never earn the narrower label.
  */
 export function desktopBadgeKey(
-  desktop: Pick<NonNullable<StartupHealthData["desktop"]>, "owned" | "supervisor" | "running" | "loginEnabled" | "viable">,
+  desktop: Pick<NonNullable<StartupHealthData["desktop"]>, "owned" | "supervisor" | "running" | "loginEnabled" | "loginState" | "viable">,
   failed: boolean,
 ): TKey {
   if (failed) return "startup.unhealthy";
   if (desktop.viable) return "startup.viable";
+  if (desktop.running && desktop.loginState === "disabled" && (desktop.owned || desktop.supervisor !== undefined)) return "startup.loginDisabled";
   if (desktop.running && !desktop.loginEnabled && (desktop.owned || desktop.supervisor !== undefined)) {
     return "startup.desktopLoginUnverified";
   }
@@ -81,7 +108,7 @@ export function beginPollEpochs(refs: {
   };
 }
 
-export type StartupHealthStatus = "native" | "protected" | "at-risk" | "error";
+export type StartupHealthStatus = "native" | "protected" | "at-risk" | "unverified" | "error";
 
 /**
  * Probe result for the dashboard chip: the status plus whether the server answered from
@@ -99,6 +126,23 @@ export interface StartupHealthProbe {
   status: StartupHealthStatus;
   /** True while the server is still resolving the real answer in the background. */
   stale: boolean;
+  /** This reading identifies a Desktop-managed local proxy. */
+  desktopManaged?: boolean;
+}
+
+export function startupDesktopContext(data: { routingKind?: unknown; desktop?: { owned?: boolean; supervisor?: unknown } }): boolean {
+  const value = data.desktop?.supervisor;
+  const supervisor = value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+  const validSupervisor = supervisor !== null && typeof supervisor.supervisorPid === "number" && Number.isSafeInteger(supervisor.supervisorPid) && supervisor.supervisorPid > 0
+    && typeof supervisor.runtimePid === "number" && Number.isSafeInteger(supervisor.runtimePid) && supervisor.runtimePid > 0
+    && typeof supervisor.app === "string" && supervisor.app.length > 0;
+  return data.routingKind === "opencodex-local" && (data.desktop?.owned === true || validSupervisor);
+}
+
+export function mergeStartupProbe(probe: StartupHealthProbe, previousDesktop: boolean): { status: StartupHealthStatus; desktopManaged: boolean } {
+  if (probe.status === "error") return { status: previousDesktop ? "unverified" : "error", desktopManaged: previousDesktop };
+  return { status: probe.status, desktopManaged: probe.desktopManaged === true };
 }
 
 /** How soon to re-ask after a stale answer; matches the Startup page's follow-up delay. */
@@ -110,17 +154,19 @@ export const STARTUP_HEALTH_STALE_RETRY_MS = 2_000;
  * `diagnosticStale` means the server is still refreshing (SWR fallback / expired TTL).
  * That is NOT a hard read failure — collapsing it to "error" shows the misleading
  * "Could not read startup protection" chip whenever the 30s cache misses.
- * Keep the payload status (the cache already forces at-risk for local-proxy routing
- * when stale). Reserve "error" for fetchStartupHealth hard failures only.
+ * Preserve the backend verdict for unrelated routing; known Desktop uncertainty
+ * is shown as unverified. Reserve "error" for hard failures without prior context.
  */
 export function mapStartupHealthProbe(data: {
   status?: unknown;
   diagnosticStale?: unknown;
+  routingKind?: unknown;
+  desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown };
 }): StartupHealthStatus | null {
   const status = data.status;
   const valid = status === "native" || status === "protected" || status === "at-risk";
   if (!valid) return null;
-  return status;
+  return startupPresentation({ ...data, status });
 }
 
 /** True when a probe result should be re-fetched shortly instead of waiting for the poll. */
@@ -134,19 +180,19 @@ export function probeNeedsFastRetry(probe: StartupHealthProbe | undefined | null
 /**
  * Settings may only seed startup health while it is still unknown or a hard error.
  * After `/api/startup-health` has produced a real status, it stays authoritative.
- * A `diagnosticStale` seed never colors the chip: it is a placeholder while the server
- * refreshes (on a cold server, a synthetic not-installed reading), so a healthy service
- * would flash `at-risk` until the dedicated probe answered.
+ * A stale Desktop seed is unverified; other stale seeds leave the previous value alone
+ * so a synthetic not-installed placeholder cannot flash an alarm for a healthy service.
  */
 export function seedStartupHealthFromSettings(
   previous: StartupHealthStatus | null,
-  seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean } | null | undefined,
+  seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean; routingKind?: unknown; desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown } } | null | undefined,
 ): StartupHealthStatus | null {
-  if (!seeded || seeded.diagnosticStale) return previous;
+  if (!seeded) return previous;
+  if (seeded.diagnosticStale) return startupDesktopContext(seeded) ? "unverified" : previous;
   // A prior hard "error" (or unknown) may be replaced by a settings seed; a real
   // status from the dedicated probe must not be overwritten.
   if (previous !== null && previous !== "error") return previous;
-  return seeded.status;
+  return startupPresentation(seeded);
 }
 
 /** Single owner cadence for project-config diagnostics (ms). */

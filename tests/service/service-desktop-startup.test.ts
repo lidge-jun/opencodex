@@ -52,7 +52,50 @@ function fixture() {
 
 test("matching install, loaded login item and exact supervisor paths grant desktop protection", () => {
   const { deps } = fixture();
-  expect(diagnoseMacDesktopStartup(deps)).toEqual({ owned: true, loginEnabled: true, loginRegistration: "loaded", running: true, viable: true });
+  expect(diagnoseMacDesktopStartup(deps)).toEqual({ owned: true, loginEnabled: true, loginState: "enabled", loginRegistration: "loaded", running: true, viable: true });
+});
+
+test("login state reports verified enabled and disabled separately from ambiguous evidence", () => {
+  const enabled = fixture();
+  expect(diagnoseMacDesktopStartup(enabled.deps)).toMatchObject({ loginState: "enabled", viable: true });
+  const disabled = fixture();
+  disabled.state.disabled = 'disabled services = { "OpenCodex" => disabled }';
+  expect(diagnoseMacDesktopStartup(disabled.deps)).toMatchObject({ loginState: "disabled", viable: false });
+  const ambiguous = fixture();
+  ambiguous.state.disabled = 'disabled services = { "OpenCodex" => unknown }';
+  expect(diagnoseMacDesktopStartup(ambiguous.deps)).toMatchObject({ loginState: "unknown", viable: false });
+});
+
+test("a disabled registration that changes between reads is unknown", () => {
+  const f = fixture();
+  f.state.disabled = 'disabled services = { "OpenCodex" => disabled }';
+  const run = f.deps.run;
+  let reads = 0;
+  f.deps.run = (command, args) => {
+    if (command === "/bin/launchctl" && args[0] === "print-disabled" && ++reads === 2) {
+      f.state.disabled = 'disabled services = { "OpenCodex" => enabled }';
+    }
+    return run(command, args);
+  };
+  expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginState: "unknown", viable: false });
+});
+
+test("a disabled registration cannot survive an owner or supervisor change", () => {
+  for (const change of ["owner", "parent"] as const) {
+    const f = fixture();
+    f.state.disabled = 'disabled services = { "OpenCodex" => disabled }';
+    const run = f.deps.run;
+    let reads = 0;
+    f.deps.run = (command, args) => {
+      const output = run(command, args);
+      if (command === "/bin/launchctl" && args[0] === "print-disabled" && ++reads === 2) {
+        if (change === "owner") f.state.changedOwner = true;
+        else f.state.parent = "1 /different/app";
+      }
+      return output;
+    };
+    expect(diagnoseMacDesktopStartup(f.deps)).toMatchObject({ loginState: "unknown", viable: false });
+  }
 });
 
 function unloadedLogin(f: ReturnType<typeof fixture>, stderr = 'Could not find service "OpenCodex" in domain for user gui: 501', status = 113, beforeMissing?: () => void) {
@@ -287,7 +330,7 @@ test("other platforms and CLI or unknown ownership cannot grant desktop protecti
 test("ownership-only fallback does not run external probes", () => {
   const f = fixture();
   expect(desktopStartupOwnership({ ...f.deps, run: () => { throw new Error("must not probe"); } })).toEqual({
-    owned: true, loginEnabled: false, running: false, viable: false,
+    owned: true, loginEnabled: false, loginState: "unknown", running: false, viable: false,
   });
   expect(f.state.pidReads).toBe(0);
 });
@@ -299,7 +342,7 @@ test("an unowned Desktop supervisor receives login credit without install-id mat
     kind: "desktop", runtimePid: 100, supervisorPid: 200, app: realpathSync(f.app), proxy: realpathSync(f.proxy),
   });
   expect(diagnoseMacDesktopStartup(f.deps)).toEqual({
-    owned: false, loginEnabled: true, loginRegistration: "loaded", running: true, viable: true,
+    owned: false, loginEnabled: true, loginState: "enabled", loginRegistration: "loaded", running: true, viable: true,
     supervisor: { supervisorPid: 200, runtimePid: 100, app: realpathSync(f.app) },
   });
   expect(desktopStartupOwnership(f.deps)).toBeUndefined();
@@ -314,10 +357,10 @@ test("unowned login failures retain the supervisor but revoke restart viability"
     (f: ReturnType<typeof fixture>) => { f.state.fail = "/usr/bin/plutil"; },
     (f: ReturnType<typeof fixture>) => { f.state.plist.ProgramArguments[0] = f.proxy; },
   ];
-  for (const change of changes) {
+  for (const [index, change] of changes.entries()) {
     const f = fixture(); f.state.owner = { kind: "none", revision: 0 }; change(f);
     expect(diagnoseMacDesktopStartup(f.deps)).toEqual({
-      owned: false, loginEnabled: false, running: true, viable: false,
+      owned: false, loginEnabled: false, loginState: index === 0 ? "disabled" : "unknown", running: true, viable: false,
       supervisor: { supervisorPid: 200, runtimePid: 100, app: realpathSync(f.app) },
     });
   }

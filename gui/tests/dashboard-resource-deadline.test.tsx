@@ -73,3 +73,53 @@ test("a controlled overview deadline marks retained dashboard data stale", async
     }
   }
 });
+
+test("switching proxy targets cannot carry Desktop context into a failed new target", async () => {
+  const keys = ["window", "document", "navigator", "sessionStorage", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const previous = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const win = new Window({ url: "http://localhost/" });
+  Object.defineProperty(win.document, "visibilityState", { configurable: true, value: "hidden" });
+  for (const [key, value] of Object.entries({ window: win, document: win.document, navigator: win.navigator,
+    sessionStorage: win.sessionStorage, localStorage: win.localStorage, IS_REACT_ACT_ENVIRONMENT: true })) {
+    Object.defineProperty(globalThis, key, { configurable: true, value });
+  }
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/old/api/startup-health") return Response.json({ status: "protected", diagnosticStale: false,
+      routingKind: "opencodex-local", desktop: { owned: true, loginState: "enabled" } });
+    if (path === "/new/api/startup-health") return new Response(null, { status: 500 });
+    return new Response(null, { status: 404 });
+  } });
+  clearClientResourceStoresForTests();
+  let data: ReturnType<typeof useDashboardData> | undefined;
+  function Probe({ target }: { target: string }) {
+    data = useDashboardData(target);
+    return <span>{data.startupHealth ?? "pending"}</span>;
+  }
+  const { createRoot } = await import("react-dom/client");
+  const host = win.document.createElement("div");
+  win.document.body.append(host);
+  const root = createRoot(host);
+  const waitFor = async (predicate: () => boolean) => {
+    const until = Date.now() + 5000;
+    while (!predicate()) {
+      if (Date.now() >= until) throw new Error("startup target fixture did not settle");
+      await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
+    }
+  };
+  try {
+    await act(async () => { root.render(<LanguageProvider><Probe target="/old" /></LanguageProvider>); });
+    await waitFor(() => data?.startupHealth === "protected");
+    await act(async () => { root.render(<LanguageProvider><Probe target="/new" /></LanguageProvider>); });
+    await waitFor(() => data?.startupHealth === "error");
+    expect(host.textContent).toBe("error");
+  } finally {
+    await act(async () => { root.unmount(); });
+    clearClientResourceStoresForTests();
+    win.close();
+    for (const key of keys) {
+      const descriptor = previous.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+});

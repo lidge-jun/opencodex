@@ -6,6 +6,7 @@ import { HubCard, type HubBadge } from "@/components/ui-v2/hub-card";
 import { Button } from "@/components/ui-v2/button";
 import { frame, sectionTitle } from "@/components/v2-connect/classes";
 import { cn } from "@/lib/utils";
+import { startupChecklistDone } from "../startup-health-ui";
 
 /*
  * The "Set up" tier: everything people do once, in the order they do it. Each row opens
@@ -24,7 +25,7 @@ interface SetupHubProps {
 
 interface ConfigBody { providers?: Record<string, unknown> }
 interface UsageBody { summary?: { requests?: number } }
-interface StartupBody { protection?: string; serviceInstalled?: boolean; shimInstalled?: boolean }
+type StartupBody = Parameters<typeof startupChecklistDone>[0];
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
   const res = await fetch(url, { signal });
@@ -53,9 +54,7 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
 
   const providers = config.data ? Object.keys(config.data.providers ?? {}).length > 0 : undefined;
   const requested = usage.data ? (usage.data.summary?.requests ?? 0) > 0 : undefined;
-  const protectedStart = startup.data
-    ? startup.data.protection !== "none" || Boolean(startup.data.serviceInstalled || startup.data.shimInstalled)
-    : undefined;
+  const protectedStart = startup.data ? startupChecklistDone(startup.data) : undefined;
 
   const steps: Step[] = [
     { key: "provider", title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"),

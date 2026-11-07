@@ -14,6 +14,13 @@ disabled solely from `loginEnabled === false`. Establish the running app through
 independent ownership/supervision evidence before attributing a negative registration.
 Linux negatives and Windows are unknown until independently proven. Preserve
 the existing protection credit and shared Rust/TS enabled-registration parity.
+Map the existing two-capture Linux verified positive to enabled; never make the
+presentation contradict its existing protection credit. Map both owned and unowned
+supervised Linux positives to enabled; `tests/service/service-desktop-startup-linux.test.ts`
+must cover the supervised path through health API and both UI presentations. The owned macOS path
+currently derives executable identity from registration, so a missing registration
+must use independently verified supervision plus durable ownership or stay unknown;
+an install ID alone does not establish the executable.
 
 For a disabled override require a uniquely parsed `disabled`/`true` override on
 a valid registration for the independently identified app. Compare registration,
@@ -34,7 +41,9 @@ consumers in `gui/src/startup-health-ui.ts`, `gui/src/pages/startup-sections.tsx
 `gui/src/pages/dashboard-core-poll.ts`, `gui/src/pages/use-dashboard-data.ts`,
 `gui/src/pages/dashboard-overview-head.tsx`, `gui/src/pages/Startup.tsx`,
 `gui/classic/src/pages/Startup.tsx`, `gui/classic/src/pages/startup-sections.tsx`,
-`gui/classic/src/pages/dashboard-overview-head.tsx` and settings-seed types. Search all
+`gui/classic/src/pages/dashboard-overview-head.tsx`, `gui/src/pages/Home.tsx`,
+`gui/src/pages/SetupHub.tsx` and settings-seed types. Audit and test Home/SetupHub
+checklist semantics against the evidence state. Search all
 `loginEnabled`, `DesktopStartupDiagnostic`, `startupHealth` and status consumers
 before coding. Missing/invalid field in an older response means unknown.
 
@@ -62,6 +71,8 @@ semantic status and live-region accessibility. Do not change shared label styles
 For verified-off guidance direct the user through the OpenCodex menu without claiming
 that toggling the item resolves a macOS system-disabled override: the tray opens Login
 Items settings for that case. Update the unconditional backend recommendation too.
+Also update the separate CLI summary in `src/codex/autostart-health.ts` so it does
+not claim a menu toggle can clear a system override.
 
 ## OAuth identity contract
 
@@ -85,18 +96,31 @@ secondary identification and replace the no-roster `oauth.email` status fallback
 with a safe label or generic localized status. Test these surfaces with masking off,
 missing field, malformed identity, alias and both Anthropic instances. Never use
 opaque IDs as labels.
+Include `gui/src/pages/tray-data.ts`, both `gui/src/pages/Tray.tsx` and
+`gui/classic/src/pages/Tray.tsx`, their accessible switch names and
+`gui/tests/tray-data.test.ts`: OAuth rows use alias -> safe masked label -> localized
+ordinal while preserving existing Codex and API-key behavior. Pass source kind and
+translation context where necessary instead of treating all roster shapes alike.
+OAuth secondary identification may use only the server-projected safe label or be
+omitted; never derive it from the configurable email, including for older servers.
+Render both editions' trays with alias, safe label and a missing safe field plus a
+populated legacy email; verify secondary text and accessible switch names. Preserve
+Codex and API-key secondary behavior.
 
 ## Regression and documentation map
 
 MODIFY `tests/service/service-desktop-login-registration.test.ts`, shared login
 fixtures as necessary, `tests/service/service-desktop-startup.test.ts`,
 `tests/service/service-desktop-startup-health.test.ts`, and startup API/cache
-tests for enabled, verified off, missing/invalid evidence, races, another copy,
+tests (`tests/service/autostart-health.test.ts`, `tests/config/settings-startup-health-seam.test.ts`,
+`tests/server/startup-health-packaged-probe.test.ts`) for enabled, verified off, missing/invalid evidence, races, another copy,
 stale state and service protection. Preserve Rust fixture parity and run its tests
 if the shared fixture or Rust contract changes. MODIFY `tests/gui/startup-health-ui.test.ts`
 and dashboard render/poll tests for unknown/off/enabled and old payload, including
-single explanation. MODIFY `tests/gui/provider-workspace-auth.test.ts` and OAuth
-management tests for both Anthropic instances, aliases, masked vs unmasked privacy
+single explanation and Home/SetupHub checklist cases. MODIFY `tests/gui/provider-workspace-auth.test.ts` and OAuth
+management tests (`tests/oauth/oauth-accounts-api.test.ts`,
+`tests/server/account-pool-management-api.test.ts`, `tests/server/provider-account-quota-routes.test.ts`)
+for both Anthropic instances, aliases, masked vs unmasked privacy
 configuration, malformed identities, quota response and accessible labels. Write
 the behavior regressions first, run them and record red before implementing.
 
@@ -107,7 +131,7 @@ translated descriptions to avoid contradiction; MODIFY the owners identified in
 `structure/ops/service-and-sidecars.md`, and `structure/gui-and-management-api.md`.
 Do not add a new test file without both layout registration and expected fixture.
 
-Verification: run named focused tests, GUI tests/lint/build, root typecheck,
+Verification: run named focused tests, `bun run test:changed`, GUI tests/lint/build, root typecheck,
 `bun run structure:check`, privacy scan, file-size ratchet and GUI i18n plus
 React Doctor. Baseline commands and their target coverage are in `000_plan.md`;
 revalidate additional commands against package scripts and tests before execution.
@@ -117,6 +141,10 @@ port and synthetic accounts; capture before/after using GOAT browser, upload onl
 through the `pr-assets` branch and link immutable commit SHAs. Never touch the real
 app, service, login items or credentials. Check each conditional path through its
 named tests and visually inspect both startup and account surfaces.
+
+Concrete focused commands (in repository root): `bun test tests/service/service-desktop-login-registration.test.ts tests/service/service-desktop-startup.test.ts tests/service/service-desktop-startup-linux.test.ts tests/service/service-desktop-startup-health.test.ts tests/service/autostart-health.test.ts tests/config/settings-startup-health-seam.test.ts tests/server/startup-health-packaged-probe.test.ts`; `bun test tests/oauth/oauth-accounts-api.test.ts tests/server/account-pool-management-api.test.ts tests/server/provider-account-quota-routes.test.ts tests/gui/provider-workspace-auth.test.ts tests/gui/startup-health-ui.test.ts`; and from `gui/`, `bun test tests/startup-minimal.test.tsx tests/startup-revisit-cache.test.tsx tests/dashboard-contracts.test.ts tests/tray-data.test.ts` plus affected account render tests. The named tests import their targets directly; the baseline startup/UI and OAuth commands ran successfully as recorded in 000, while the added suite commands must be run and recorded before relying on them. Add main/Classic rendered regressions through the real Vite Classic overlay, not raw Bun imports: `vite.classic.config.ts` resolves Classic files to overrides or shared `src` dependencies. Exercise the built `/classic/` through the fixture-backed proxy in GOAT alongside the main edition; assert stale, failed refresh and old cache there, and record observable DOM and screenshots. `bun run build` in `gui/` builds both editions using the overlay.
+
+Baseline command `bun test tests/config/settings-startup-health-seam.test.ts tests/server/startup-health-packaged-probe.test.ts tests/server/account-pool-management-api.test.ts tests/server/provider-account-quota-routes.test.ts tests/service/service-desktop-startup-linux.test.ts` exited 0 with 110 passing tests; these files directly import the named backend modules. This validates baseline targets, not the future change.
 
 Isolation must account for `src/config/owner-registry.ts`: a custom OpenCodex
 home alone still writes its locator under the default home. Use the existing test
@@ -131,3 +159,45 @@ startup-health data, and the settings seed and dedicated startup endpoint must b
 return the same chosen enabled, disabled or unknown fixture. Seed synthetic OAuth
 accounts through test-owned state; block external quota/network probes. Confirm the
 real GUI is served by that isolated proxy and inspect the relevant two pages in GOAT.
+
+## Implementation-cycle planning
+
+Prior D: roadmap audit passed; the original assumption that the configured email
+projection was always masked was rejected. At `51db5cd279` the implementation
+architect proposed P-ARCH-01 through P-ARCH-06: accept the additive conservative
+contract, independently anchored negative evidence, shared neutral presentation,
+state-specific guidance, dedicated masked roster projection and fixture harness.
+The plan incorporates the existing Linux positive, Home/SetupHub checklist and CLI
+summary. The same architect returned ALIGNED on all six decisions; its `test:changed`
+verification omission was accepted and added above. Implementation audit round 1
+identified three medium findings: tray consumer chain, unowned Linux positive and
+specific verification targets. All were accepted and added above. Same-architect
+reflection initially found missing secondary tray identity coverage; that was added,
+and its targeted recheck returned ALIGNED. Same-reviewer re-audit returned PASS,
+with all three findings closed and no new high or critical gaps.
+
+## Implementation evidence so far
+
+The new UI regressions first failed on the unknown Desktop "Action required" banner
+and on an Anthropic alias rendered as an ordinal; the new API regression failed on
+the absent masked label. Focused reruns passed after implementation. The GUI suite
+ran 3,950 tests with zero failures before the final target-switch guard; that guard was
+subsequently covered by `gui/tests/dashboard-resource-deadline.test.tsx` (2 pass).
+The latest focused backend run had 296 pass, and the latest GUI slice had 55 pass.
+Root typecheck, GUI build/lint/i18n, locale parity, file-size ratchet, privacy scan,
+structure check and React Doctor changed-file scan passed. The full root suite was
+not run as requested. `bun run test:changed --parallel=1` exceeded the runner's
+900-second limit and exited 124; it did not complete, and one GUI classifier edit
+occurred during the run. Do not describe it as passing. The focused files and
+`ci:full` cover the pending verification; exact-head hosted results are still needed.
+
+The isolated browser reproduced the old warning and ordinal labels, then observed a
+neutral unknown state and masked synthetic account names in both main and Classic.
+The proxy ran with temporary homes, test guard, an in-memory provider keychain,
+loopback-only sandbox networking, and denied `security` and `launchctl` execution;
+quota requests failed under that deliberate network restriction. Before/after images
+are stored at the `pr-assets` commit 90a1122d79edcf3ae74d8b3cccc15dd70d9d9f4f.
+GOAT's credential expired after its server restarted, so enabled/disabled browser
+scenarios and the required fresh independent implementation/security review remain
+unverified. The fixture-based tests cover those state mappings, but do not replace
+the requested review or the remaining browser observation.

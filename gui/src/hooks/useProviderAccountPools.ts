@@ -1,4 +1,3 @@
-import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
@@ -20,6 +19,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   id: string;
   alias?: string;
   email?: string;
+  maskedLabel?: string;
   active: boolean;
   needsReauth?: boolean;
   autoSelectable?: boolean;
@@ -768,7 +768,6 @@ export function useProviderAccountPools(deps: {
 
   const accountLabel = (provider: string, account: OAuthAccount) => oauthAccountDisplayLabel(
     accountSets[provider]?.accounts ?? [account], account, t,
-    isAnthropicInstanceId(provider) && anthropicInstanceRowShapeMatches(provider, config?.providers[provider]),
   );
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {

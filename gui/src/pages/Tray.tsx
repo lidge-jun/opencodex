@@ -119,7 +119,7 @@ export default function Tray({ resolveApiBase = resolveTrayApiBase }: TrayProps 
                     payload.activeCodexAccountId = selection.activeCodexAccountId ?? '__main__';
                   } catch { /* Missing selection is unknown, never inferred from quota. */ }
                 }
-                return { name: source.name, switchKind: source.switchKind, accounts: parseAccounts(payload) };
+                return { name: source.name, switchKind: source.switchKind, accounts: parseAccounts(payload, source.switchKind, index => t('pws.accountOrdinal', { count: index })) };
               }
               catch { return { name: source.name, switchKind: source.switchKind, accounts: [], unavailable: true }; }
             }));
@@ -184,7 +184,7 @@ export default function Tray({ resolveApiBase = resolveTrayApiBase }: TrayProps 
       window.removeEventListener('blur', blur); window.removeEventListener('focus', focus);
       window.removeEventListener('opencodex:tray-visibility', nativeVisibility);
     };
-  }, [revision, apiBase]);
+  }, [revision, apiBase, t]);
 
   const hiddenProviders = new Set(settings?.hiddenProviders ?? []);
   // Read off the popover's own requests: the runtime answered, could not be reached, or has not yet.

@@ -10,6 +10,8 @@ export interface DesktopStartupDiagnostic {
   /** Durable desktop claim; failed supervision does not release ownership. */
   owned: boolean;
   loginEnabled: boolean;
+  /** Whether login registration was verified for the supervising app. */
+  loginState?: "enabled" | "disabled" | "unknown";
   /** Verified enabled macOS registration; absence means registration is not credited. */
   loginRegistration?: "loaded" | "registered-not-loaded";
   running: boolean;
@@ -24,7 +26,8 @@ export interface DesktopStartupDiagnostic {
 
 /** A login item alone is insufficient: the same app must supervise this proxy. */
 export function deriveDesktopStartup(facts: Omit<DesktopStartupDiagnostic, "viable">): DesktopStartupDiagnostic {
-  return { ...facts, viable: (facts.owned || facts.supervisor !== undefined) && facts.loginEnabled && facts.running };
+  return { ...facts, loginState: facts.loginEnabled ? "enabled" : facts.loginState ?? "unknown",
+    viable: (facts.owned || facts.supervisor !== undefined) && facts.loginEnabled && facts.running };
 }
 
 export function desktopLoginStatusSummary(desktop: DesktopStartupDiagnostic): string {
@@ -96,12 +99,18 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
     if (registrationPath !== realpathSync(path) || plistIdentity !== identity(path) || targetIdentity !== identity(registrationPath)
       || app !== realpathSync(args[0]) || proxy !== realpathSync(join(dirname(app), "ocx"))
       || appIdentity !== identity(app) || proxyIdentity !== identity(proxy)) return null;
-    return { app, proxy, loginEnabled, registrationPath, plistIdentity, targetIdentity, definition, appIdentity, proxyIdentity, disabled };
+    const verifiedDisabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
+      && mentions === 1 && (override === "disabled" || override === "true");
+    return { app, proxy, loginEnabled, verifiedDisabled, registrationPath, plistIdentity, targetIdentity, definition, appIdentity, proxyIdentity, disabled };
   };
   const first = capture();
   if (!first) return null;
   const { app, proxy } = first;
-  if (!first.loginEnabled) return { app, proxy, loginEnabled: false };
+  if (!first.loginEnabled) {
+    const final = first.verifiedDisabled ? capture() : null;
+    return { app, proxy, loginEnabled: false, loginState: final && JSON.stringify(first) === JSON.stringify(final)
+      ? "disabled" as const : "unknown" as const };
+  }
   let loaded: string;
   try { loaded = execute("/bin/launchctl", ["print", `${domain}/OpenCodex`]); }
   catch (error) {
@@ -141,7 +150,7 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
 const SMD_SUBMITTED = /^\(submitted by smd\.\d+\)$/;
 const SERVICE_MANAGEMENT = "com.apple.xpc.ServiceManagement";
 
-type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration">;
+type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration" | "loginState">;
 
 /**
  * Start at Login credit for one Desktop app copy. The tray's Start at Login item ports this
@@ -151,7 +160,7 @@ type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginR
 export function macLoginFactsFor(app: string, deps: DesktopStartupDeps): DesktopLoginFacts {
   const login = macLoginRegistration(deps);
   return login !== null && login.app === app
-    ? { loginEnabled: login.loginEnabled, ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
+    ? { loginEnabled: login.loginEnabled, ...(login.loginState ? { loginState: login.loginState } : {}), ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
     : { loginEnabled: false };
 }
 
@@ -187,23 +196,28 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
     const home = deps.home ?? homedir();
     const id = readFileSync(join(home, "Library", "Application Support", "com.opencodex.desktop", "install-id"), "utf8").trim();
     if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
+    const pid = pidReader();
+    const child = pid !== null ? processIdentity(pid, execute) : null;
+    const parent = child && child.parent > 1 ? processIdentity(child.parent, execute) : null;
     const login = macLoginRegistration(deps);
     if (!login) return deriveDesktopStartup(facts);
     const { app, proxy } = login;
     facts.loginEnabled = login.loginEnabled;
+    facts.loginState = login.loginState;
     if (login.loginRegistration) facts.loginRegistration = login.loginRegistration;
-    const pid = pidReader();
     if (pid !== null) {
-      const child = processIdentity(pid, execute);
-      const parent = child && child.parent > 1 ? processIdentity(child.parent, execute) : null;
-      facts.running = child?.executable === proxy && parent?.executable === app && pidReader() === pid;
+      const finalChild = processIdentity(pid, execute);
+      const finalParent = finalChild && finalChild.parent > 1 ? processIdentity(finalChild.parent, execute) : null;
+      facts.running = child?.executable === proxy && parent?.executable === app && pidReader() === pid
+        && JSON.stringify(child) === JSON.stringify(finalChild) && JSON.stringify(parent) === JSON.stringify(finalParent);
     }
     const currentOwner = ownership();
     if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) facts.running = false;
+    if (!facts.running && !facts.loginEnabled) facts.loginState = "unknown";
     return deriveDesktopStartup(facts);
   } catch {
     // Unreadable launchd/process evidence never grants protection or releases the claim.
-    return deriveDesktopStartup({ ...facts, running: false });
+    return deriveDesktopStartup({ ...facts, loginState: "unknown", running: false });
   }
 }
 
