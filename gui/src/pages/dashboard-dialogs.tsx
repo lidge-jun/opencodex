@@ -78,6 +78,9 @@ export function DashboardDialogs(d: Dash) {
               {updateCheck.reason === "source_checkout" && (
                 <div className="notice-warn" role="status"><IconAlert /> {t("dash.updateSource")}</div>
               )}
+              {updateCheck.reason === "managed_release" && (
+                <div className="notice-ok" role="status">{t("dash.updateManaged")}</div>
+              )}
               {updateCheck.reason === "latest_unavailable" && (
                 <div className="notice-warn" role="status">
                   <IconAlert /> {t("dash.updateUnavailable")}
@@ -92,7 +95,7 @@ export function DashboardDialogs(d: Dash) {
                   </button>
                 </div>
               )}
-              {!updateCheck.canUpdate && updateCheck.reason !== "latest_unavailable" && updateCheck.reason !== "source_checkout" && (
+              {!updateCheck.canUpdate && updateCheck.reason !== "latest_unavailable" && updateCheck.reason !== "source_checkout" && updateCheck.reason !== "managed_release" && (
                 <div className="update-recheck">
                   <span className="muted update-recheck-reason">
                     {t("dash.updateCannotAuto", { reason: updateReasonLabel(updateCheck.reason, t) })}
