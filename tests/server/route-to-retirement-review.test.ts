@@ -66,7 +66,10 @@ test("standalone seed callers hold one config lease across retirement, defaults 
     try {
       expect(() => competing.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
       observations++;
-    } finally { try { competing.exec("ROLLBACK"); } catch {} competing.close(); }
+    } finally {
+      try { if (competing.inTransaction) competing.exec("ROLLBACK"); }
+      finally { competing.close(); }
+    }
     return update(mutate);
   });
   try { seedRouteDeviceClients(f.ctx.config, "test", retired, ["codex"], [active, retired]); }
