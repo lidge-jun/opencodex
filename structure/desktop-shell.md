@@ -420,7 +420,10 @@ packaging matrices, verifies every checksum and every updater signature, and wri
 platforms to have updater signatures. Publication waits for that verification, and the
 attachment job uploads the verified bundle only after the verification receipt names
 the same version and commit.
-Updater signature verification decodes Tauri’s outer-base64 minisign box, checks the
+Updater signature verification uses the shared offline minisign primitive in
+`src/update/minisign.mjs`. Its release adapter preserves the existing trimmed
+trusted-comment convention; the strict primitive verifies exact comment bytes
+and grants no update or installation authority by itself. It decodes Tauri’s outer-base64 minisign box, checks the
 `ED` signature over the BLAKE2b-512 digest against the pinned key, and verifies the
 trusted-comment signature. Missing or malformed fields fail before publication.
 On macOS, in-app updates download `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for
