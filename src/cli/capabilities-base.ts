@@ -407,7 +407,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "envelope",
     details: ["A bare invocation reads and never writes.","The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.","Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.","One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged."],
-    usage: "ocx account strategy <provider> [quota|round-robin|fill-first|least-loaded|reset-first] [--json]",
+    usage: "ocx account strategy <provider> [quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first] [--json]",
   },
   {
     command: ["account","sticky"],

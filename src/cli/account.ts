@@ -60,7 +60,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account resume <provider> <account-id|alias|main> [--json]
   ocx account reset-affinity <anthropic|anthropic2> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account routes <anthropic|anthropic2> [--file <json-file>|--clear] [--json]
   ocx account remove <provider> <account-or-key-id|alias|main> --yes [--json]

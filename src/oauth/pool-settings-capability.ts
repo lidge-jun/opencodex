@@ -35,9 +35,11 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
 export function parseGenericPoolStrategy(value: unknown, providerName?: string): GenericPoolStrategy | null {
   // reset-first is shared with the Codex pool, so it is named here rather than added to the
   // three-name shared parser that the Anthropic kind also uses. least-loaded is Kiro-specific.
+  // reset-near-weighted is Codex and Anthropic only; the generic runtime does not run it.
   if (value === "reset-first") return value;
   if (value === "least-loaded") return providerName === "kiro" ? value : null;
-  return parseAccountPoolStrategy(value);
+  const parsed = parseAccountPoolStrategy(value);
+  return parsed === "reset-near-weighted" ? null : parsed;
 }
 
 export function parseKiroAccountCap(value: unknown): number | null {
