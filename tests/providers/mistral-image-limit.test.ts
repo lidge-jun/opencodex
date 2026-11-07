@@ -56,6 +56,48 @@ describe("Mistral image count limit", () => {
     expect(out[0].content.slice(21)).toEqual(content.slice(21));
   });
 
+  test("prunes a large valid history without mutating input or copying untouched turns", () => {
+    const first = Array.from({ length: 5_000 }, (_, n) => image(n));
+    const boundary = Array.from({ length: 4_996 }, (_, n) => image(5_000 + n));
+    const newest = Array.from({ length: 4 }, (_, n) => image(9_996 + n));
+    const history = [
+      { role: "system", content: "keep this context" },
+      { role: "user", content: first },
+      { role: "assistant", content: "preserve turn order" },
+      { role: "user", content: boundary },
+      { role: "user", content: newest },
+    ];
+    for (const content of [first, boundary, newest]) {
+      for (const part of content) { Object.freeze(part.image_url); Object.freeze(part); }
+      Object.freeze(content);
+    }
+    for (const message of history) Object.freeze(message);
+    Object.freeze(history);
+    const before = JSON.stringify(history);
+
+    const out = limitMistralChatImages(history, mistral(), "mistral-medium-latest") as typeof history;
+    expect(kept(out)).toEqual([9_992, 9_993, 9_994, 9_995, 9_996, 9_997, 9_998, 9_999]);
+    expect(out).not.toBe(history);
+    expect(out).toHaveLength(history.length);
+    expect(out[0]).toBe(history[0]);
+    expect(out[2]).toBe(history[2]);
+    expect(out[4]).toBe(history[4]);
+    expect(out[1]).not.toBe(history[1]);
+    expect(out[3]).not.toBe(history[3]);
+    const firstOut = out[1].content as unknown[];
+    const boundaryOut = out[3].content as unknown[];
+    const note = { type: "text", text: "[image omitted: Mistral accepts at most 8 images per request for this model; older images were dropped]" };
+    expect(firstOut).toHaveLength(first.length);
+    expect(boundaryOut).toHaveLength(boundary.length);
+    expect(firstOut.every(part => part === firstOut[0])).toBe(true);
+    expect(firstOut[0]).toEqual(note);
+    expect(boundaryOut.slice(0, -4).every(part => part === firstOut[0])).toBe(true);
+    expect(boundaryOut.slice(-4)).toEqual(boundary.slice(-4));
+    expect(boundaryOut.at(-1)).toBe(boundary.at(-1));
+    expect(JSON.stringify(history)).toBe(before);
+    expect(kept(history)).toHaveLength(10_000);
+  });
+
   test("keeps the newest images across turns, names the cap and leaves the history untouched", () => {
     const history = messages(21);
     const before = structuredClone(history);
