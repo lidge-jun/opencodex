@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "declaration": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../src/telemetry/contract.ts"
+  ]
+}
