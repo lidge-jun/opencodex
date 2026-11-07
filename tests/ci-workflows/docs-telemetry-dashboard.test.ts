@@ -38,21 +38,27 @@ import {
   computeHeatmapGrade,
   createEmptyStatsSnapshot,
   createStatsRequestSequencer,
+  fetchGithubReleasesPages,
   fetchJsonWithTimeout,
   formatActiveHours,
+  formatAvgDailyActiveInstalls,
   formatCompactNumber,
   formatHeatmapCellAriaLabel,
   formatLocalizedMonthShort,
   getHeatmapGradeColor,
   getLocalizedWeekdayLabels,
+  getStatsRangeDays,
   isStatsSnapshotEmpty,
   isValidTelemetryStatsV1,
   navigateHeatmapDate,
   parseDownloadsPayload,
+  parseGithubNextLink,
   parseStatsRangeParam,
+  resolveAvgDailyActiveInstalls,
   type TelemetryStatsRange as DashboardStatsRange,
   type TelemetryStatsV1 as DashboardStatsV1,
 } from "../../docs-site/src/components/telemetry-dashboard/index";
+import { mountTelemetryDashboard } from "../../docs-site/src/components/telemetry-dashboard/client";
 import {
   TELEMETRY_DASHBOARD_LOCALES,
   TELEMETRY_DASHBOARD_STRINGS,
@@ -61,13 +67,28 @@ import {
 } from "../../docs-site/src/data/telemetry-dashboard-i18n";
 import { repoPath } from "../helpers/repo-root";
 
+type NormalizeCollectorStatsForParity<T extends { totals: { activeInstalls: number } }> = Omit<
+  T,
+  "totals"
+> & {
+  totals: Omit<T["totals"], "avgDailyActiveInstalls"> & {
+    avgDailyActiveInstalls?: number;
+  };
+};
+
 type AssertExactType<A, B> = [A] extends [B]
   ? [B] extends [A]
     ? true
     : never
   : never;
 
-const _assertStatsParity: AssertExactType<CollectorStatsV1, DashboardStatsV1> = true;
+const _assertStatsParity: AssertExactType<
+  NormalizeCollectorStatsForParity<CollectorStatsV1>,
+  NormalizeCollectorStatsForParity<DashboardStatsV1>
+> = true;
+const _assertCollectorAssignableToDashboard: [CollectorStatsV1] extends [DashboardStatsV1]
+  ? true
+  : never = true;
 const _assertRangeParity: AssertExactType<CollectorStatsRange, DashboardStatsRange> = true;
 
 function makeFixtureStats(overrides: Partial<DashboardStatsV1> = {}): DashboardStatsV1 {
@@ -94,6 +115,7 @@ function makeFixtureStats(overrides: Partial<DashboardStatsV1> = {}): DashboardS
     range: "30d",
     totals: {
       activeInstalls: 4_820,
+      avgDailyActiveInstalls: 160.7,
       newInstalls: 640,
       activeMinutes: 187_500,
       requests: 1_250_000,
@@ -190,6 +212,7 @@ function makeFixtureStats(overrides: Partial<DashboardStatsV1> = {}): DashboardS
 describe("docs telemetry dashboard route and navigation", () => {
   test("dashboard.mdx exists as a splash page mounting TelemetryDashboard.astro", () => {
     expect(_assertStatsParity).toBe(true);
+    expect(_assertCollectorAssignableToDashboard).toBe(true);
     expect(_assertRangeParity).toBe(true);
 
     const mdxPath = repoPath("docs-site/src/content/docs/dashboard.mdx");
@@ -220,6 +243,7 @@ describe("docs telemetry dashboard route and navigation", () => {
     expect(NPM_DOWNLOADS_WEEKLY_URL).toContain(pkg.name);
     expect(GITHUB_REPO_SLUG).toBe("lidge-jun/opencodex");
     expect(GITHUB_RELEASES_URL).toContain("lidge-jun/opencodex");
+    expect(GITHUB_RELEASES_URL).toContain("per_page=100");
     expect(TOKSCALE_REPO_URL).toBe("https://github.com/junhoyeo/tokscale");
     expect(TELEMETRY_GUIDE_PATH).toBe("guides/telemetry/");
 
@@ -254,7 +278,12 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     const fixture = makeFixtureStats();
     const kpis = buildKpiStrip(fixture, "en-US");
     expect(kpis).toEqual([
-      { id: "activeInstalls", rawValue: 4_820, compact: "4.8K", exactTitle: "4,820" },
+      {
+        id: "activeInstalls",
+        rawValue: 160.7,
+        compact: "160.7",
+        exactTitle: "160.7 (4,820 install-days)",
+      },
       { id: "newInstalls", rawValue: 640, compact: "640", exactTitle: "640" },
       { id: "requests", rawValue: 1_250_000, compact: "1.3M", exactTitle: "1,250,000" },
       { id: "tokens", rawValue: 2_000_000_000, compact: "2.0B", exactTitle: "2,000,000,000" },
@@ -271,6 +300,52 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       compact: "0h",
       exactTitle: "0h (0 min)",
     });
+    expect(formatAvgDailyActiveInstalls(0, 0)).toEqual({
+      avg: 0,
+      compact: "0",
+      exactTitle: "0 (0 install-days)",
+    });
+    expect(getStatsRangeDays("7d")).toBe(7);
+    expect(getStatsRangeDays("30d")).toBe(30);
+    expect(getStatsRangeDays("90d")).toBe(90);
+    expect(getStatsRangeDays("365d")).toBe(365);
+    expect(getStatsRangeDays("unknown")).toBe(30);
+
+    // Explicit avgDailyActiveInstalls from newer collector takes precedence
+    const withExplicitAvg = makeFixtureStats({
+      totals: {
+        ...fixture.totals,
+        avgDailyActiveInstalls: 42.5,
+      },
+    });
+    expect(resolveAvgDailyActiveInstalls(withExplicitAvg)).toBe(42.5);
+    expect(buildKpiStrip(withExplicitAvg, "en-US")[0]).toEqual({
+      id: "activeInstalls",
+      rawValue: 42.5,
+      compact: "42.5",
+      exactTitle: "42.5 (4,820 install-days)",
+    });
+
+    // Older collector without avgDailyActiveInstalls computes activeInstalls / days rounded to 1 decimal
+    const withoutExplicitAvg = makeFixtureStats({
+      totals: {
+        ...fixture.totals,
+        avgDailyActiveInstalls: undefined,
+      },
+    });
+    expect(resolveAvgDailyActiveInstalls(withoutExplicitAvg)).toBe(160.7);
+    expect(buildKpiStrip(withoutExplicitAvg, "en-US")[0]).toEqual({
+      id: "activeInstalls",
+      rawValue: 160.7,
+      compact: "160.7",
+      exactTitle: "160.7 (4,820 install-days)",
+    });
+    expect(
+      resolveAvgDailyActiveInstalls({
+        range: "7d",
+        totals: { ...fixture.totals, activeInstalls: 100, avgDailyActiveInstalls: undefined },
+      }),
+    ).toBe(14.3);
 
     const mix = buildTokenMix(fixture.totals.tokens, "en-US");
     expect(mix.totalTokens).toBe(2_000_000_000);
@@ -616,6 +691,7 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       npmMonthly: 74_900,
       npmYearly: 612_300,
       githubTotalDownloads: 5_450,
+      githubDownloadsPartial: false,
       githubLatestTag: "v2.99.0",
       githubLatestDownloads: 2_050,
       githubReleaseCount: 2,
@@ -626,10 +702,27 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       npmMonthly: null,
       npmYearly: null,
       githubTotalDownloads: null,
+      githubDownloadsPartial: false,
       githubLatestTag: null,
       githubLatestDownloads: null,
       githubReleaseCount: 0,
     });
+
+    expect(
+      parseGithubNextLink(
+        '<https://api.github.com/repos/lidge-jun/opencodex/releases?per_page=100&page=2>; rel="next", <https://api.github.com/repos/lidge-jun/opencodex/releases?per_page=100&page=5>; rel="last"',
+        GITHUB_RELEASES_URL,
+      ),
+    ).toBe(
+      "https://api.github.com/repos/lidge-jun/opencodex/releases?per_page=100&page=2",
+    );
+    expect(
+      parseGithubNextLink(
+        '<https://evil.example.com/releases?page=2>; rel="next"',
+        GITHUB_RELEASES_URL,
+      ),
+    ).toBeNull();
+    expect(parseGithubNextLink(null)).toBeNull();
   });
 
   test("all 8 site locales carry complete dashboard copy and component markup contains no secrets", () => {
@@ -663,6 +756,12 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     }
     expect(TELEMETRY_DASHBOARD_STRINGS.en.subtitle).toContain("on by default");
     expect(TELEMETRY_DASHBOARD_STRINGS.en.subtitle).toContain("privacy notice");
+    expect(TELEMETRY_DASHBOARD_STRINGS.en.kpiActiveInstalls).toBe(
+      "Avg daily active installs",
+    );
+    expect(TELEMETRY_DASHBOARD_STRINGS.en.subtitle.toLowerCase()).toContain(
+      "self-reported by opencodex installs",
+    );
     expect(resolveTelemetryDashboardLocale("KO")).toBe("ko");
     expect(resolveTelemetryDashboardLocale("unknown")).toBe("en");
 
@@ -673,6 +772,7 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     expect(astroSource).toContain('data-state-panel="loading"');
     expect(astroSource).toContain('data-state-panel="empty"');
     expect(astroSource).toContain('data-state-panel="error"');
+    expect(astroSource).toContain("data-self-reported-label");
     expect(astroSource).toContain("data-daily-chart-table");
     expect(astroSource).toContain("var(--sl-color-gray-3)");
     expect(astroSource).toContain("junhoyeo/tokscale");
@@ -694,6 +794,296 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     for (const file of scannedFiles) {
       const text = readFileSync(file, "utf8");
       expect(secretPattern.test(text), `secret pattern in ${file}`).toBe(false);
+    }
+  });
+
+  test("D15 breakdown tables format 'other' rows without a 'v' prefix and sort 'other' last", () => {
+    const versionRows = buildVersionRows([
+      { version: "other", installs: 900, newInstalls: 50 },
+      { version: "2.99.0", installs: 500, newInstalls: 40 },
+      { version: "2.98.0", installs: 300, newInstalls: 20 },
+    ]);
+    expect(versionRows.map((r) => r.label)).toEqual(["v2.99.0", "v2.98.0", "other"]);
+
+    const platformRows = buildPlatformRows([
+      { os: "other", arch: "other", installs: 800 },
+      { os: "other", arch: "", installs: 50 },
+      { os: "darwin", arch: "arm64", installs: 600 },
+    ]);
+    expect(platformRows.map((r) => ({ key: r.key, installs: r.installs }))).toEqual([
+      { key: "darwin/arm64", installs: 600 },
+      { key: "other", installs: 850 },
+    ]);
+
+    const providerRows = buildProviderShareRows([
+      { providerKind: "other", requests: 900, tokens: 9_000_000 },
+      { providerKind: "anthropic", requests: 500, tokens: 5_000_000 },
+    ]);
+    expect(providerRows.map((r) => r.key)).toEqual(["anthropic", "other"]);
+
+    const modelRows = buildModelShareRows([
+      { modelFamily: "other", requests: 900, tokens: 9_000_000 },
+      { modelFamily: "claude-opus", requests: 500, tokens: 5_000_000 },
+    ]);
+    expect(modelRows.map((r) => r.key)).toEqual(["claude-opus", "other"]);
+
+    const channelRows = buildChannelRows([
+      { installChannel: "other", installs: 900, newInstalls: 50 },
+      { installChannel: "npm-global", installs: 500, newInstalls: 40 },
+    ]);
+    expect(channelRows.map((r) => r.key)).toEqual(["npm-global", "other"]);
+
+    const reliability = buildReliabilitySummary(
+      { completed: 100, failed: 20, incomplete: 0, aborted: 0 },
+      [
+        { cause: "other", count: 15 },
+        { cause: "rate-limit", count: 5 },
+      ],
+    );
+    expect(reliability.errors.map((e) => e.cause)).toEqual(["rate-limit", "other"]);
+
+    const dailyChart = buildDailyProviderChart(
+      [
+        { day: "2026-11-08", providerKind: "other", requests: 500, tokens: 9_000_000 },
+        { day: "2026-11-08", providerKind: "anthropic", requests: 200, tokens: 3_000_000 },
+      ],
+      [{ day: "2026-11-08", activeInstalls: 50, newInstalls: 5, activeMinutes: 100, requests: 700, failed: 0, tokens: 12_000_000 }],
+      "tokens",
+      6,
+    );
+    expect(dailyChart.series.map((s) => s.providerKind)).toEqual(["anthropic", "other"]);
+  });
+
+  test("D20 mountTelemetryDashboard clears heatmap on empty snapshot and paginates GitHub release downloads up to 10 pages", async () => {
+    class MockElement {
+      tagName: string;
+      className = "";
+      textContent = "";
+      title = "";
+      type = "";
+      hidden = false;
+      disabled = false;
+      tabIndex = 0;
+      dataset: Record<string, string> = {};
+      attributes = new Map<string, string>();
+      styleProps = new Map<string, string>();
+      style: Record<string, unknown> = {
+        setProperty: (k: string, v: string) => {
+          this.styleProps.set(k, v);
+        },
+      };
+      children: MockElement[] = [];
+      listeners = new Map<string, Array<(ev?: unknown) => void>>();
+      constructor(tagName = "div", attrs: Record<string, string> = {}) {
+        this.tagName = tagName.toLowerCase();
+        for (const [k, v] of Object.entries(attrs)) {
+          this.setAttribute(k, v);
+        }
+      }
+      setAttribute(name: string, value: string) {
+        this.attributes.set(name, value);
+        if (name.startsWith("data-")) {
+          const camel = name
+            .slice(5)
+            .replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+          this.dataset[camel] = value;
+        }
+      }
+      getAttribute(name: string): string | null {
+        return this.attributes.get(name) ?? null;
+      }
+      append(...nodes: MockElement[]) {
+        this.children.push(...nodes);
+      }
+      appendChild(node: MockElement) {
+        this.children.push(node);
+        return node;
+      }
+      replaceChildren(...nodes: MockElement[]) {
+        this.children = [...nodes];
+      }
+      addEventListener(type: string, cb: (ev?: unknown) => void) {
+        const list = this.listeners.get(type) ?? [];
+        list.push(cb);
+        this.listeners.set(type, list);
+      }
+      click() {
+        for (const cb of this.listeners.get("click") ?? []) cb({});
+      }
+      focus() {}
+      matchesSelector(sel: string): boolean {
+        if (sel === "button[data-date]") {
+          return this.tagName === "button" && Boolean(this.dataset.date);
+        }
+        const attrMatch = /^\[([a-z0-9-]+)(?:="([^"]*)")?\]$/i.exec(sel.trim());
+        if (!attrMatch) return false;
+        const [, attrName, attrVal] = attrMatch;
+        if (!attrName) return false;
+        if (attrVal === undefined) {
+          if (attrName.startsWith("data-")) {
+            const camel = attrName
+              .slice(5)
+              .replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+            return this.attributes.has(attrName) || camel in this.dataset;
+          }
+          return this.attributes.has(attrName);
+        }
+        if (attrName.startsWith("data-")) {
+          const camel = attrName
+            .slice(5)
+            .replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+          return this.attributes.get(attrName) === attrVal || this.dataset[camel] === attrVal;
+        }
+        return this.attributes.get(attrName) === attrVal;
+      }
+      querySelectorAll(sel: string): MockElement[] {
+        const results: MockElement[] = [];
+        const visit = (node: MockElement) => {
+          for (const child of node.children) {
+            if (child.matchesSelector(sel)) results.push(child);
+            visit(child);
+          }
+        };
+        visit(this);
+        return results;
+      }
+      querySelector(sel: string): MockElement | null {
+        return this.querySelectorAll(sel)[0] ?? null;
+      }
+    }
+
+    const root = new MockElement("div", {
+      "data-telemetry-dashboard": "",
+      "data-locale": "en",
+      "data-stats-endpoint": "https://telemetry.opencodex.me/v1/stats",
+      "data-default-range": "30d",
+      "data-npm-weekly-url": "https://api.npmjs.org/downloads/point/last-week/@bitkyc08/opencodex",
+      "data-npm-monthly-url": "https://api.npmjs.org/downloads/point/last-month/@bitkyc08/opencodex",
+      "data-npm-yearly-url": "https://api.npmjs.org/downloads/point/last-year/@bitkyc08/opencodex",
+      "data-github-releases-url": GITHUB_RELEASES_URL,
+      "data-copy": JSON.stringify(TELEMETRY_DASHBOARD_STRINGS.en),
+    });
+    const gridEl = new MockElement("div", { "data-heatmap-grid": "" });
+    const monthsEl = new MockElement("div", { "data-heatmap-months": "" });
+    const activeDaysEl = new MockElement("span", { "data-heatmap-active-days": "" });
+    const peakEl = new MockElement("span", { "data-heatmap-peak": "" });
+    const rangeLabelEl = new MockElement("span", { "data-heatmap-range-label": "" });
+    const tooltipEl = new MockElement("div", { "data-heatmap-tooltip": "" });
+    const retryBtn = new MockElement("button", { "data-retry-btn": "" });
+    const ghTotalEl = new MockElement("dd", { "data-dl-gh-total": "" });
+    const ghLatestEl = new MockElement("dd", { "data-dl-gh-latest": "" });
+    const ghLatestTagEl = new MockElement("span", { "data-dl-gh-latest-tag": "" });
+    root.append(
+      gridEl,
+      monthsEl,
+      activeDaysEl,
+      peakEl,
+      rangeLabelEl,
+      tooltipEl,
+      retryBtn,
+      ghTotalEl,
+      ghLatestEl,
+      ghLatestTagEl,
+    );
+
+    const prevWindow = (globalThis as Record<string, unknown>).window;
+    const prevDocument = (globalThis as Record<string, unknown>).document;
+    const prevMutationObserver = (globalThis as Record<string, unknown>).MutationObserver;
+    const prevFetch = globalThis.fetch;
+
+    let statsReturnEmptyNext = false;
+    const fetchedUrls: string[] = [];
+
+    try {
+      (globalThis as Record<string, unknown>).window = {
+        location: { search: "", href: "https://opencodex.me/dashboard/" },
+        history: { replaceState: () => {} },
+        addEventListener: () => {},
+      };
+      (globalThis as Record<string, unknown>).document = {
+        createElement: (tag: string) => new MockElement(tag),
+        documentElement: new MockElement("html"),
+        body: new MockElement("body"),
+      };
+      (globalThis as Record<string, unknown>).MutationObserver = class {
+        observe() {}
+      };
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        fetchedUrls.push(url);
+        if (url.includes("/v1/stats")) {
+          if (statsReturnEmptyNext) {
+            return new Response("Service Unavailable", { status: 503 });
+          }
+          return new Response(JSON.stringify(makeFixtureStats()), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.includes("api.npmjs.org")) {
+          return new Response(JSON.stringify({ downloads: 1_000 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.includes("api.github.com")) {
+          const parsed = new URL(url);
+          const page = Number(parsed.searchParams.get("page") ?? "1");
+          const nextPage = page + 1;
+          const linkHeader = `<https://api.github.com/repos/lidge-jun/opencodex/releases?per_page=100&page=${nextPage}>; rel="next"`;
+          return new Response(
+            JSON.stringify([
+              {
+                tag_name: `v2.${100 - page}.0`,
+                draft: false,
+                assets: [{ download_count: 100 }],
+              },
+            ]),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                link: linkHeader,
+              },
+            },
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      }) as typeof fetch;
+
+      mountTelemetryDashboard(root as unknown as HTMLElement);
+      await new Promise((r) => setTimeout(r, 25));
+
+      // After initial stats load, heatmap has 365 selectable [data-date] buttons
+      expect(gridEl.querySelectorAll("button[data-date]").length).toBe(365);
+      expect(rangeLabelEl.textContent).toBe("2025-11-09 → 2026-11-08 (UTC)");
+      expect(peakEl.hidden).toBe(false);
+
+      // Downloads followed pagination up to 10 pages (10 * 100 = 1,000) and marked partial
+      const ghReleaseFetches = fetchedUrls.filter((u) => u.includes("api.github.com"));
+      expect(ghReleaseFetches.length).toBe(10);
+      expect(ghTotalEl.dataset.partial).toBe("true");
+      expect(ghTotalEl.textContent).toContain("partial");
+      expect(ghTotalEl.title).toContain("1,000");
+      expect(ghTotalEl.title).toContain("partial");
+
+      // Now trigger retry where collector returns 503 -> empty snapshot applied
+      statsReturnEmptyNext = true;
+      retryBtn.click();
+      await new Promise((r) => setTimeout(r, 25));
+
+      // Heatmap must be cleared: 0 [data-date] buttons, range label reset, peak hidden
+      expect(gridEl.querySelectorAll("button[data-date]").length).toBe(0);
+      expect(gridEl.children.length).toBe(53 * 7);
+      expect(gridEl.children.every((c) => c.disabled && c.dataset.grade === "0")).toBe(true);
+      expect(monthsEl.children.length).toBe(0);
+      expect(rangeLabelEl.textContent).toBe("365d UTC");
+      expect(peakEl.hidden).toBe(true);
+    } finally {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+      (globalThis as Record<string, unknown>).document = prevDocument;
+      (globalThis as Record<string, unknown>).MutationObserver = prevMutationObserver;
+      globalThis.fetch = prevFetch;
     }
   });
 });

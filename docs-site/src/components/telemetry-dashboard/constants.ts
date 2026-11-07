@@ -14,10 +14,20 @@ export const TELEMETRY_RANGES: readonly TelemetryStatsRange[] = Object.freeze([
   "365d",
 ]);
 
+export const TELEMETRY_RANGE_DAYS: Readonly<Record<TelemetryStatsRange, number>> =
+  Object.freeze({
+    "7d": 7,
+    "30d": 30,
+    "90d": 90,
+    "365d": 365,
+  });
+
 export const DEFAULT_TELEMETRY_RANGE: TelemetryStatsRange = "30d";
 
 export const NPM_PACKAGE_NAME = "@bitkyc08/opencodex";
 export const GITHUB_REPO_SLUG = "lidge-jun/opencodex";
+export const GITHUB_RELEASES_PER_PAGE = 100;
+export const GITHUB_RELEASES_MAX_PAGES = 10;
 
 export const NPM_DOWNLOADS_WEEKLY_URL =
   "https://api.npmjs.org/downloads/point/last-week/@bitkyc08/opencodex";
@@ -26,7 +36,7 @@ export const NPM_DOWNLOADS_MONTHLY_URL =
 export const NPM_DOWNLOADS_YEARLY_URL =
   "https://api.npmjs.org/downloads/point/last-year/@bitkyc08/opencodex";
 export const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/lidge-jun/opencodex/releases?per_page=30";
+  `https://api.github.com/repos/${GITHUB_REPO_SLUG}/releases?per_page=${GITHUB_RELEASES_PER_PAGE}`;
 
 export const TOKSCALE_REPO_URL = "https://github.com/junhoyeo/tokscale";
 

@@ -22,6 +22,7 @@ export interface TelemetryDashboardCopy {
   updatedPrefix: string;
   updatedPending: string;
   privacyBadge: string;
+  selfReportedLabel: string;
   privacyBody: string;
   privacyOptOutHint: string;
   privacyGuideLink: string;
@@ -96,6 +97,7 @@ export interface TelemetryDashboardCopy {
   npmYearlyLabel: string;
   githubTotalLabel: string;
   githubLatestLabel: string;
+  downloadsPartial: string;
   downloadsUnavailable: string;
   noDataInTable: string;
   creditPrefix: string;
@@ -108,7 +110,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   en: {
     title: "Usage Dashboard",
     subtitle:
-      "Project-wide anonymous daily aggregates from opencodex installs (on by default after a person has seen the privacy notice, unless declined or turned off).",
+      "Project-wide anonymous daily aggregates, with all figures self-reported by opencodex installs (on by default after a person has seen the privacy notice, unless declined or turned off).",
     rangeAria: "Reporting window",
     range7d: "7d",
     range30d: "30d",
@@ -117,6 +119,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "Updated",
     updatedPending: "Awaiting snapshot",
     privacyBadge: "Anonymous aggregates only",
+    selfReportedLabel: "Self-reported by opencodex installs",
     privacyBody:
       "Telemetry is on by default and sends nothing until a person has seen the notice. Reports carry closed-vocabulary daily counts with a rotating daily install hash — never prompts, model outputs, API keys, account identifiers, file paths, or IP addresses.",
     privacyOptOutHint:
@@ -133,7 +136,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "The request to telemetry.opencodex.me did not complete (the collector may not be deployed yet or is temporarily unreachable).",
     retryButton: "Retry",
     kpiSectionAria: "Key usage metrics",
-    kpiActiveInstalls: "Active install-days",
+    kpiActiveInstalls: "Avg daily active installs",
     kpiNewInstalls: "New installs",
     kpiRequests: "Requests",
     kpiTokens: "Total tokens",
@@ -205,6 +208,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm (last 365 days)",
     githubTotalLabel: "GitHub release assets (total)",
     githubLatestLabel: "Latest release assets",
+    downloadsPartial: "partial",
     downloadsUnavailable: "Unavailable",
     noDataInTable: "No data reported for this window.",
     creditPrefix:
@@ -214,7 +218,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   fr: {
     title: "Tableau de bord d’utilisation",
     subtitle:
-      "Agrégats quotidiens anonymes à l’échelle du projet provenant des installations opencodex (activé par défaut après affichage de l’avis de confidentialité à une personne, sauf refus ou désactivation).",
+      "Agrégats quotidiens anonymes à l’échelle du projet, tous les chiffres étant auto-déclarés par les installations opencodex (activé par défaut après affichage de l’avis de confidentialité à une personne, sauf refus ou désactivation).",
     rangeAria: "Période d’analyse",
     range7d: "7j",
     range30d: "30j",
@@ -223,6 +227,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "Mis à jour",
     updatedPending: "En attente d’instantané",
     privacyBadge: "Agrégats anonymes uniquement",
+    selfReportedLabel: "Auto-déclaré par les installations opencodex",
     privacyBody:
       "La télémétrie est activée par défaut et n’envoie rien tant qu’une personne n’a pas vu l’avis. Les rapports ne contiennent que des compteurs quotidiens à vocabulaire fermé avec un hachage journalier rotatif — jamais de prompts, de réponses, de clés API, d’identifiants de compte, de chemins ou d’adresses IP.",
     privacyOptOutHint:
@@ -239,7 +244,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "La requête vers telemetry.opencodex.me a échoué (le collecteur n’est peut-être pas encore déployé ou est temporairement injoignable).",
     retryButton: "Réessayer",
     kpiSectionAria: "Indicateurs clés d’utilisation",
-    kpiActiveInstalls: "Jours-installations actifs",
+    kpiActiveInstalls: "Installations actives moy./jour",
     kpiNewInstalls: "Nouvelles installations",
     kpiRequests: "Requêtes",
     kpiTokens: "Jetons totaux",
@@ -309,6 +314,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm (365 derniers jours)",
     githubTotalLabel: "GitHub Releases (total)",
     githubLatestLabel: "Dernière version GitHub",
+    downloadsPartial: "partiel",
     downloadsUnavailable: "Indisponible",
     noDataInTable: "Aucune donnée déclarée pour cette période.",
     creditPrefix:
@@ -318,7 +324,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   ko: {
     title: "사용량 대시보드",
     subtitle:
-      "개인정보 안내를 확인한 뒤 기본으로 활성화되는 opencodex 설치(거부하거나 끈 경우 제외)에서 집계된 프로젝트 전체 익명 일일 통계입니다.",
+      "개인정보 안내를 확인한 뒤 기본으로 활성화되는 opencodex 설치(거부하거나 끈 경우 제외)에서 자체 보고된 프로젝트 전체 익명 일일 통계입니다.",
     rangeAria: "집계 기간",
     range7d: "7일",
     range30d: "30일",
@@ -327,6 +333,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "업데이트",
     updatedPending: "스냅샷 대기 중",
     privacyBadge: "익명 집계 전용",
+    selfReportedLabel: "opencodex 설치에서 자체 보고된 수치",
     privacyBody:
       "텔레메트리는 기본으로 켜져 있으며 사람이 안내를 확인하기 전에는 아무것도 전송하지 않습니다. 보고서에는 매일 회전하는 설치 해시와 고정 어휘 일일 카운터만 포함되며 프롬프트, 모델 출력, API 키, 계정 식별자, 파일 경로, IP 주소는 절대 전송되지 않습니다.",
     privacyOptOutHint:
@@ -343,7 +350,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "telemetry.opencodex.me 요청을 완료하지 못했습니다(수집기가 아직 배포 전이거나 일시적으로 연결할 수 없습니다).",
     retryButton: "다시 시도",
     kpiSectionAria: "주요 사용 지표",
-    kpiActiveInstalls: "활성 설치-일수",
+    kpiActiveInstalls: "일평균 활성 설치",
     kpiNewInstalls: "신규 설치",
     kpiRequests: "요청 수",
     kpiTokens: "총 토큰",
@@ -412,6 +419,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm (최근 365일)",
     githubTotalLabel: "GitHub 릴리스 에셋 (누적)",
     githubLatestLabel: "최신 릴리스 에셋",
+    downloadsPartial: "일부 집계",
     downloadsUnavailable: "확인 불가",
     noDataInTable: "이 기간에 보고된 데이터가 없습니다.",
     creditPrefix:
@@ -421,7 +429,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   "zh-cn": {
     title: "使用量仪表盘",
     subtitle:
-      "来自 opencodex 安装实例的全项目匿名每日汇总（在用户查看隐私提示后默认开启，除非拒绝或关闭）。",
+      "由 opencodex 安装实例自行上报的全项目匿名每日汇总（在用户查看隐私提示后默认开启，除非拒绝或关闭）。",
     rangeAria: "统计时间范围",
     range7d: "7天",
     range30d: "30天",
@@ -430,6 +438,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "更新于",
     updatedPending: "等待快照",
     privacyBadge: "仅匿名汇总数据",
+    selfReportedLabel: "由 opencodex 安装实例自行上报",
     privacyBody:
       "遥测默认开启，但在人工查看隐私提示前不会发送任何数据。上报数据仅包含固定词汇的每日计数与每日轮换的安装哈希——绝不包含提示词、模型输出、API 密钥、账户标识、文件路径或 IP 地址。",
     privacyOptOutHint:
@@ -445,7 +454,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "对 telemetry.opencodex.me 的请求未能完成（收集器可能尚未部署或暂时无法访问）。",
     retryButton: "重试",
     kpiSectionAria: "核心使用指标",
-    kpiActiveInstalls: "活跃安装日",
+    kpiActiveInstalls: "日均活跃安装",
     kpiNewInstalls: "新增安装",
     kpiRequests: "请求数",
     kpiTokens: "总 Token 数",
@@ -511,6 +520,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm（最近 365 天）",
     githubTotalLabel: "GitHub 发行版资产（累计）",
     githubLatestLabel: "最新发行版资产",
+    downloadsPartial: "部分统计",
     downloadsUnavailable: "暂不可用",
     noDataInTable: "该时间窗口内暂无上报数据。",
     creditPrefix: "视觉设计与贡献热力图模式改编自",
@@ -519,7 +529,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   "zh-tw": {
     title: "使用量儀表板",
     subtitle:
-      "來自 opencodex 安裝實例之全專案匿名每日彙總（於使用者查看隱私提示後預設開啟，除非拒絕或關閉）。",
+      "由 opencodex 安裝實例自行回報之全專案匿名每日彙總（於使用者查看隱私提示後預設開啟，除非拒絕或關閉）。",
     rangeAria: "統計時間範圍",
     range7d: "7天",
     range30d: "30天",
@@ -528,6 +538,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "更新於",
     updatedPending: "等待快照",
     privacyBadge: "僅限匿名彙總資料",
+    selfReportedLabel: "由 opencodex 安裝實例自行回報",
     privacyBody:
       "遙測預設開啟，但在人工查看隱私提示前不會傳送任何資料。回報資料僅包含固定詞彙的每日計數與每日輪替的安裝雜湊——絕不包含提示詞、模型輸出、API 金鑰、帳號識別碼、檔案路徑或 IP 位址。",
     privacyOptOutHint:
@@ -543,7 +554,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "對 telemetry.opencodex.me 的請求未能完成（收集器可能尚未部署或暫時無法連線）。",
     retryButton: "重試",
     kpiSectionAria: "核心使用指標",
-    kpiActiveInstalls: "活躍安裝日",
+    kpiActiveInstalls: "日均活躍安裝",
     kpiNewInstalls: "新增安裝",
     kpiRequests: "請求數",
     kpiTokens: "總 Token 數",
@@ -609,6 +620,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm（最近 365 天）",
     githubTotalLabel: "GitHub 發行版資產（累計）",
     githubLatestLabel: "最新發行版資產",
+    downloadsPartial: "部分統計",
     downloadsUnavailable: "暫不可用",
     noDataInTable: "此時間視窗內暫無回報資料。",
     creditPrefix: "視覺設計與貢獻熱力圖模式改編自",
@@ -617,7 +629,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   ru: {
     title: "Дашборд использования",
     subtitle:
-      "Анонимные ежедневные сводки по всему проекту от установок opencodex (включено по умолчанию после показа уведомления человеку, если не отклонено и не отключено).",
+      "Анонимные ежедневные сводки по всему проекту по данным самоотчётов установок opencodex (включено по умолчанию после показа уведомления человеку, если не отклонено и не отключено).",
     rangeAria: "Период отчёта",
     range7d: "7д",
     range30d: "30д",
@@ -626,6 +638,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "Обновлено",
     updatedPending: "Ожидание снимка",
     privacyBadge: "Только анонимные сводки",
+    selfReportedLabel: "По данным самоотчётов установок opencodex",
     privacyBody:
       "Телеметрия включена по умолчанию и ничего не отправляет, пока человек не увидит уведомление. Отчёты содержат только суточные счётчики фиксированного словаря и ежедневно меняющийся хеш установки — без промптов, ответов моделей, API-ключей, аккаунтов, путей или IP-адресов.",
     privacyOptOutHint:
@@ -642,7 +655,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "Запрос к telemetry.opencodex.me не завершился (коллектор ещё не развёрнут или временно недоступен).",
     retryButton: "Повторить",
     kpiSectionAria: "Ключевые метрики использования",
-    kpiActiveInstalls: "Активные инсталл-дни",
+    kpiActiveInstalls: "Среднесуточные активные установки",
     kpiNewInstalls: "Новые установки",
     kpiRequests: "Запросы",
     kpiTokens: "Всего токенов",
@@ -712,6 +725,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm (за 365 дней)",
     githubTotalLabel: "GitHub Releases (всего)",
     githubLatestLabel: "Последний релиз GitHub",
+    downloadsPartial: "частично",
     downloadsUnavailable: "Недоступно",
     noDataInTable: "Нет данных за выбранный период.",
     creditPrefix:
@@ -721,7 +735,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   ja: {
     title: "利用統計ダッシュボード",
     subtitle:
-      "opencodex インストールから集計されたプロジェクト全体の匿名日次統計です（プライバシー通知の表示後にデフォルトで有効になり、拒否または無効化されている場合を除きます）。",
+      "opencodex インストールによる自己申告データから集計されたプロジェクト全体の匿名日次統計です（プライバシー通知の表示後にデフォルトで有効になり、拒否または無効化されている場合を除きます）。",
     rangeAria: "集計期間",
     range7d: "7日",
     range30d: "30日",
@@ -730,6 +744,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "更新",
     updatedPending: "スナップショット待機中",
     privacyBadge: "匿名集計のみ",
+    selfReportedLabel: "opencodex インストールによる自己申告データ",
     privacyBody:
       "テレメトリはデフォルトでオンですが、人が通知を確認するまでは何も送信されません。レポートには日替わりインストールハッシュと固定語彙の日次カウンタのみが含まれ、プロンプト、モデル出力、APIキー、アカウント識別子、ファイルパス、IPアドレスは一切含まれません。",
     privacyOptOutHint:
@@ -746,7 +761,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "telemetry.opencodex.me へのリクエストが完了しませんでした（コレクターが未デプロイか一時的に到達不能です）。",
     retryButton: "再試行",
     kpiSectionAria: "主要利用指標",
-    kpiActiveInstalls: "アクティブインストール日",
+    kpiActiveInstalls: "1日平均アクティブインストール",
     kpiNewInstalls: "新規インストール",
     kpiRequests: "リクエスト数",
     kpiTokens: "総トークン数",
@@ -814,6 +829,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm（過去365日間）",
     githubTotalLabel: "GitHub リリースアセット（累計）",
     githubLatestLabel: "最新リリースアセット",
+    downloadsPartial: "一部集計",
     downloadsUnavailable: "取得不可",
     noDataInTable: "この期間のレポートデータはありません。",
     creditPrefix:
@@ -823,7 +839,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
   tr: {
     title: "Kullanım Paneli",
     subtitle:
-      "opencodex kurulumlarından toplanan proje genelinde anonim günlük istatistikler (bir kişi gizlilik bildirimini gördükten sonra, reddedilmediği veya kapatılmadığı sürece varsayılan olarak açıktır).",
+      "opencodex kurulumları tarafından kendi kendine bildirilen proje genelinde anonim günlük istatistikler (bir kişi gizlilik bildirimini gördükten sonra, reddedilmediği veya kapatılmadığı sürece varsayılan olarak açıktır).",
     rangeAria: "Raporlama aralığı",
     range7d: "7g",
     range30d: "30g",
@@ -832,6 +848,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     updatedPrefix: "Güncellendi",
     updatedPending: "Anlık görüntü bekleniyor",
     privacyBadge: "Yalnızca anonim toplamlar",
+    selfReportedLabel: "opencodex kurulumları tarafından kendi kendine bildirilen veriler",
     privacyBody:
       "Telemetri varsayılan olarak açıktır ve bir kişi bildirimi görene kadar hiçbir şey göndermez. Raporlar yalnızca günlük dönen kurulum karması ve kapalı sözlük sayaçları içerir; istemler, model çıktıları, API anahtarları, hesap kimlikleri, dosya yolları veya IP adresleri asla gönderilmez.",
     privacyOptOutHint:
@@ -848,7 +865,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
       "telemetry.opencodex.me isteği tamamlanamadı (toplayıcı henüz dağıtılmamış veya geçici olarak erişilemiyor olabilir).",
     retryButton: "Yeniden dene",
     kpiSectionAria: "Temel kullanım ölçütleri",
-    kpiActiveInstalls: "Etkin kurulum-gün",
+    kpiActiveInstalls: "Günlük ort. etkin kurulum",
     kpiNewInstalls: "Yeni kurulumlar",
     kpiRequests: "İstekler",
     kpiTokens: "Toplam jeton",
@@ -916,6 +933,7 @@ export const TELEMETRY_DASHBOARD_STRINGS: Readonly<
     npmYearlyLabel: "npm (son 365 gün)",
     githubTotalLabel: "GitHub sürüm varlıkları (toplam)",
     githubLatestLabel: "Son sürüm varlıkları",
+    downloadsPartial: "kısmi",
     downloadsUnavailable: "Kullanılamıyor",
     noDataInTable: "Bu aralık için veri bildirilmedi.",
     creditPrefix:

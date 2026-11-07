@@ -17,6 +17,7 @@ import {
   classifyStatsResponse,
   createEmptyStatsSnapshot,
   createStatsRequestSequencer,
+  fetchGithubReleasesPages,
   fetchJsonWithTimeout,
   formatCompactNumber,
   formatExactNumber,
@@ -210,10 +211,32 @@ export function mountTelemetryDashboard(
     }
 
     if (calendar.weekCount === 0) {
+      focusedHeatmapDate = null;
+      if (peakEl) {
+        peakEl.hidden = true;
+        peakEl.textContent = "";
+      }
+      if (rangeLabelEl) {
+        rangeLabelEl.textContent = "365d UTC";
+      }
+      gridEl.style.setProperty("--heatmap-weeks", "53");
+      monthsEl.style.setProperty("--heatmap-weeks", "53");
       monthsEl.replaceChildren();
+      const emptyButtons = Array.from({ length: 53 * 7 }, () => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "td-heatmap-cell";
+        btn.dataset.grade = "0";
+        btn.disabled = true;
+        btn.tabIndex = -1;
+        btn.setAttribute("aria-hidden", "true");
+        return btn;
+      });
+      gridEl.replaceChildren(...emptyButtons);
       if (tooltipEl) {
         tooltipEl.dataset.active = "false";
         tooltipEl.setAttribute("aria-hidden", "true");
+        tooltipEl.textContent = "\u00a0";
       }
       return;
     }
@@ -585,7 +608,7 @@ export function mountTelemetryDashboard(
       fetchJsonWithTimeout(root.dataset.npmWeeklyUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
       fetchJsonWithTimeout(root.dataset.npmMonthlyUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
       fetchJsonWithTimeout(root.dataset.npmYearlyUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
-      fetchJsonWithTimeout(root.dataset.githubReleasesUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
+      fetchGithubReleasesPages(root.dataset.githubReleasesUrl, DEFAULT_STATS_REQUEST_TIMEOUT_MS),
     ]);
 
     const dl = parseDownloadsPayload({
@@ -610,7 +633,23 @@ export function mountTelemetryDashboard(
     setDlValue("[data-dl-npm-weekly]", dl.npmWeekly);
     setDlValue("[data-dl-npm-monthly]", dl.npmMonthly);
     setDlValue("[data-dl-npm-yearly]", dl.npmYearly);
-    setDlValue("[data-dl-gh-total]", dl.githubTotalDownloads);
+    const ghTotalEl = root.querySelector<HTMLElement>("[data-dl-gh-total]");
+    if (ghTotalEl) {
+      if (dl.githubTotalDownloads === null) {
+        ghTotalEl.textContent = "—";
+        ghTotalEl.title = copy.downloadsUnavailable;
+        delete ghTotalEl.dataset.partial;
+      } else if (dl.githubDownloadsPartial) {
+        const partialLabel = copy.downloadsPartial || "partial";
+        ghTotalEl.textContent = `${formatCompactNumber(dl.githubTotalDownloads)} (${partialLabel})`;
+        ghTotalEl.title = `${formatExactNumber(dl.githubTotalDownloads, locale)} (${partialLabel})`;
+        ghTotalEl.dataset.partial = "true";
+      } else {
+        ghTotalEl.textContent = formatCompactNumber(dl.githubTotalDownloads);
+        ghTotalEl.title = formatExactNumber(dl.githubTotalDownloads, locale);
+        ghTotalEl.dataset.partial = "false";
+      }
+    }
     setDlValue("[data-dl-gh-latest]", dl.githubLatestDownloads);
 
     const latestTagEl = root.querySelector<HTMLElement>("[data-dl-gh-latest-tag]");

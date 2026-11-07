@@ -11,6 +11,7 @@ export type TelemetryStatsV1 = {
   range: TelemetryStatsRange;
   totals: {
     activeInstalls: number;
+    avgDailyActiveInstalls?: number;
     newInstalls: number;
     activeMinutes: number;
     requests: number;
@@ -226,6 +227,7 @@ export interface DownloadStats {
   npmMonthly: number | null;
   npmYearly: number | null;
   githubTotalDownloads: number | null;
+  githubDownloadsPartial: boolean;
   githubLatestTag: string | null;
   githubLatestDownloads: number | null;
   githubReleaseCount: number;

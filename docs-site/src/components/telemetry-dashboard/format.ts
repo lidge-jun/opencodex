@@ -1,6 +1,7 @@
 import {
   DEFAULT_TELEMETRY_RANGE,
   TELEMETRY_RANGES,
+  TELEMETRY_RANGE_DAYS,
   TELEMETRY_STATS_ENDPOINT,
   TOKEN_BUCKET_ORDER,
   TOKEN_MIX_COLORS,
@@ -112,11 +113,79 @@ export function sumDisjointTokens(
   );
 }
 
-export function buildKpiStrip(
-  stats: Pick<TelemetryStatsV1, "totals">,
+export function getStatsRangeDays(
+  range?: TelemetryStatsRange | string | null,
+): number {
+  if (isTelemetryStatsRange(range)) {
+    return TELEMETRY_RANGE_DAYS[range];
+  }
+  return TELEMETRY_RANGE_DAYS[DEFAULT_TELEMETRY_RANGE];
+}
+
+export function resolveAvgDailyActiveInstalls(
+  stats: Pick<TelemetryStatsV1, "totals"> &
+    Partial<Pick<TelemetryStatsV1, "range">>,
+): number {
+  const explicit = stats.totals.avgDailyActiveInstalls;
+  if (typeof explicit === "number" && Number.isFinite(explicit) && explicit >= 0) {
+    return Math.round(Math.min(explicit, MAX_SAFE) * 10) / 10;
+  }
+  const installDays = finiteNonNegativeInt(stats.totals.activeInstalls);
+  const days = getStatsRangeDays(stats.range);
+  if (days <= 0 || installDays <= 0) return 0;
+  return Math.round((installDays / days) * 10) / 10;
+}
+
+export function formatAvgDailyActiveInstalls(
+  avgDailyActiveInstalls: number,
+  installDays: number,
   locale = "en-US",
+  installDaysLabel = "install-days",
+): { avg: number; compact: string; exactTitle: string } {
+  const safeInstallDays = finiteNonNegativeInt(installDays);
+  const safeAvg =
+    typeof avgDailyActiveInstalls === "number" &&
+    Number.isFinite(avgDailyActiveInstalls) &&
+    avgDailyActiveInstalls > 0
+      ? Math.round(Math.min(avgDailyActiveInstalls, MAX_SAFE) * 10) / 10
+      : 0;
+  const exactInstallDays = safeInstallDays.toLocaleString(locale);
+  if (safeAvg === 0 && safeInstallDays === 0) {
+    return {
+      avg: 0,
+      compact: "0",
+      exactTitle: `0 (0 ${installDaysLabel})`,
+    };
+  }
+  const exactAvg = safeAvg.toLocaleString(locale, {
+    minimumFractionDigits: safeAvg % 1 === 0 ? 0 : 1,
+    maximumFractionDigits: 1,
+  });
+  const compact =
+    safeAvg >= 1_000
+      ? formatCompactNumber(Math.round(safeAvg))
+      : safeAvg.toFixed(1).replace(/\.0$/, "");
+  return {
+    avg: safeAvg,
+    compact,
+    exactTitle: `${exactAvg} (${exactInstallDays} ${installDaysLabel})`,
+  };
+}
+
+export function buildKpiStrip(
+  stats: Pick<TelemetryStatsV1, "totals"> &
+    Partial<Pick<TelemetryStatsV1, "range">>,
+  locale = "en-US",
+  installDaysLabel = "install-days",
 ): KpiCardItem[] {
-  const activeInstalls = finiteNonNegativeInt(stats.totals.activeInstalls);
+  const installDays = finiteNonNegativeInt(stats.totals.activeInstalls);
+  const avgDaily = resolveAvgDailyActiveInstalls(stats);
+  const formattedAvg = formatAvgDailyActiveInstalls(
+    avgDaily,
+    installDays,
+    locale,
+    installDaysLabel,
+  );
   const newInstalls = finiteNonNegativeInt(stats.totals.newInstalls);
   const requests = finiteNonNegativeInt(stats.totals.requests);
   const totalTokens = sumDisjointTokens(stats.totals.tokens);
@@ -125,9 +194,9 @@ export function buildKpiStrip(
   return [
     {
       id: "activeInstalls",
-      rawValue: activeInstalls,
-      compact: formatCompactNumber(activeInstalls),
-      exactTitle: formatExactNumber(activeInstalls, locale),
+      rawValue: formattedAvg.avg,
+      compact: formattedAvg.compact,
+      exactTitle: formattedAvg.exactTitle,
     },
     {
       id: "newInstalls",

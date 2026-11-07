@@ -1,4 +1,8 @@
 import {
+  GITHUB_RELEASES_MAX_PAGES,
+  GITHUB_RELEASES_PER_PAGE,
+} from "./constants";
+import {
   finiteNonNegativeInt,
   isTelemetryStatsRange,
   safeAddInt,
@@ -24,6 +28,14 @@ export function isValidTelemetryStatsV1(value: unknown): value is TelemetryStats
   if (!isTelemetryStatsRange(value.range)) return false;
   if (!isPlainObject(value.totals)) return false;
   if (!isPlainObject(value.totals.tokens)) return false;
+  if (
+    value.totals.avgDailyActiveInstalls !== undefined &&
+    (typeof value.totals.avgDailyActiveInstalls !== "number" ||
+      !Number.isFinite(value.totals.avgDailyActiveInstalls) ||
+      value.totals.avgDailyActiveInstalls < 0)
+  ) {
+    return false;
+  }
   if (!isPlainObject(value.outcomes)) return false;
   if (
     !Array.isArray(value.daily) ||
@@ -65,6 +77,7 @@ export function createEmptyStatsSnapshot(
     range,
     totals: {
       activeInstalls: 0,
+      avgDailyActiveInstalls: 0,
       newInstalls: 0,
       activeMinutes: 0,
       requests: 0,
@@ -193,6 +206,126 @@ export async function fetchJsonWithTimeout(
   }
 }
 
+export function parseGithubNextLink(
+  linkHeader: string | null | undefined,
+  currentUrl?: string,
+): string | null {
+  if (!linkHeader || typeof linkHeader !== "string") return null;
+  for (const part of linkHeader.split(",")) {
+    const urlMatch = /<([^>]+)>/.exec(part);
+    if (!urlMatch?.[1]) continue;
+    const params = part.slice(urlMatch.index + urlMatch[0].length);
+    if (!/;\s*rel\s*=\s*(?:"next"|'next'|next\b)/i.test(params)) continue;
+    try {
+      const parsed = currentUrl
+        ? new URL(urlMatch[1].trim(), currentUrl)
+        : new URL(urlMatch[1].trim());
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        return null;
+      }
+      if (currentUrl) {
+        const base = new URL(currentUrl);
+        if (parsed.origin !== base.origin) return null;
+      }
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export interface GithubReleasesFetchResult {
+  releases: unknown[] | null;
+  partial: boolean;
+  pagesFetched: number;
+}
+
+export async function fetchGithubReleasesPages(
+  initialUrl: string | undefined,
+  timeoutMs = DEFAULT_STATS_REQUEST_TIMEOUT_MS,
+  fetchImpl: typeof fetch = fetch,
+  maxPages = GITHUB_RELEASES_MAX_PAGES,
+): Promise<GithubReleasesFetchResult> {
+  if (!initialUrl) {
+    return { releases: null, partial: false, pagesFetched: 0 };
+  }
+  const pageCap = Math.max(1, Math.floor(maxPages));
+  let nextUrl: string | null = null;
+  try {
+    const normalized = new URL(initialUrl);
+    if (!normalized.searchParams.has("per_page")) {
+      normalized.searchParams.set("per_page", String(GITHUB_RELEASES_PER_PAGE));
+    }
+    nextUrl = normalized.toString();
+  } catch {
+    nextUrl = initialUrl;
+  }
+
+  const allReleases: unknown[] = [];
+  let pagesFetched = 0;
+
+  while (nextUrl && pagesFetched < pageCap) {
+    const controller = new AbortController();
+    const timer =
+      timeoutMs > 0 && Number.isFinite(timeoutMs)
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : null;
+    let res: Response;
+    try {
+      res = await fetchImpl(nextUrl, {
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
+    } catch {
+      if (timer !== null) clearTimeout(timer);
+      return pagesFetched === 0
+        ? { releases: null, partial: false, pagesFetched: 0 }
+        : { releases: allReleases, partial: true, pagesFetched };
+    }
+    let pageBody: unknown;
+    try {
+      if (!res.ok) {
+        return pagesFetched === 0
+          ? { releases: null, partial: false, pagesFetched: 0 }
+          : { releases: allReleases, partial: true, pagesFetched };
+      }
+      pageBody = await res.json();
+    } catch {
+      return pagesFetched === 0
+        ? { releases: null, partial: false, pagesFetched: 0 }
+        : { releases: allReleases, partial: true, pagesFetched };
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+
+    if (!Array.isArray(pageBody)) {
+      return pagesFetched === 0
+        ? { releases: null, partial: false, pagesFetched: 0 }
+        : { releases: allReleases, partial: true, pagesFetched };
+    }
+
+    pagesFetched += 1;
+    allReleases.push(...pageBody);
+
+    const linkHeader = res.headers?.get?.("link") ?? null;
+    const linkedNext = parseGithubNextLink(linkHeader, nextUrl);
+    if (!linkedNext) {
+      return { releases: allReleases, partial: false, pagesFetched };
+    }
+    if (pagesFetched >= pageCap) {
+      return { releases: allReleases, partial: true, pagesFetched };
+    }
+    nextUrl = linkedNext;
+  }
+
+  return {
+    releases: pagesFetched > 0 ? allReleases : null,
+    partial: false,
+    pagesFetched,
+  };
+}
+
 export interface ClassifyStatsInput {
   ok?: boolean;
   status?: number;
@@ -281,19 +414,34 @@ export function parseDownloadsPayload(input: {
   npmMonthly?: unknown;
   npmYearly?: unknown;
   githubReleases?: unknown;
+  githubDownloadsPartial?: boolean;
 }): DownloadStats {
   const npmWeekly = parseNpmDownloadsCount(input.npmWeekly);
   const npmMonthly = parseNpmDownloadsCount(input.npmMonthly);
   const npmYearly = parseNpmDownloadsCount(input.npmYearly);
 
   let githubTotalDownloads: number | null = null;
+  let githubDownloadsPartial = Boolean(input.githubDownloadsPartial);
   let githubLatestTag: string | null = null;
   let githubLatestDownloads: number | null = null;
   let githubReleaseCount = 0;
 
+  let releasesArray: unknown[] | null = null;
   if (Array.isArray(input.githubReleases)) {
+    releasesArray = input.githubReleases;
+  } else if (
+    isPlainObject(input.githubReleases) &&
+    Array.isArray(input.githubReleases.releases)
+  ) {
+    releasesArray = input.githubReleases.releases;
+    if (typeof input.githubReleases.partial === "boolean") {
+      githubDownloadsPartial = input.githubReleases.partial;
+    }
+  }
+
+  if (releasesArray) {
     let total = 0;
-    for (const rel of input.githubReleases) {
+    for (const rel of releasesArray) {
       if (!isPlainObject(rel) || rel.draft === true) continue;
       githubReleaseCount += 1;
       const assets = Array.isArray(rel.assets) ? rel.assets : [];
@@ -310,6 +458,8 @@ export function parseDownloadsPayload(input: {
       }
     }
     githubTotalDownloads = total;
+  } else {
+    githubDownloadsPartial = false;
   }
 
   return {
@@ -317,6 +467,7 @@ export function parseDownloadsPayload(input: {
     npmMonthly,
     npmYearly,
     githubTotalDownloads,
+    githubDownloadsPartial,
     githubLatestTag,
     githubLatestDownloads,
     githubReleaseCount,

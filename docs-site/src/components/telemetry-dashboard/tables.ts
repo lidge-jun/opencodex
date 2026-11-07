@@ -36,6 +36,14 @@ function nonEmptyKey(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isOtherKey(key: string): boolean {
+  return key.trim().toLowerCase() === "other";
+}
+
+function normalizeKeyOrOther(key: string): string {
+  return isOtherKey(key) ? "other" : key;
+}
+
 export function buildDailyProviderChart(
   dailyByProvider: TelemetryStatsV1["dailyByProvider"] | null | undefined,
   daily: TelemetryStatsV1["daily"] | null | undefined,
@@ -57,24 +65,30 @@ export function buildDailyProviderChart(
     if (!row || typeof row.day !== "string" || typeof row.providerKind !== "string") {
       continue;
     }
+    const rawProvider = nonEmptyKey(row.providerKind);
+    if (!rawProvider) continue;
+    const providerKind = normalizeKeyOrOther(rawProvider);
     const dayIdx = dayIndexByKey.get(row.day);
     if (dayIdx === undefined) continue;
     const rawVal = metric === "requests" ? row.requests : row.tokens;
     const val = finiteNonNegativeInt(rawVal);
     if (val <= 0) continue;
-    let entry = byProvider.get(row.providerKind);
+    let entry = byProvider.get(providerKind);
     if (!entry) {
       entry = { total: 0, values: new Array<number>(days.length).fill(0) };
-      byProvider.set(row.providerKind, entry);
+      byProvider.set(providerKind, entry);
     }
     entry.values[dayIdx] = safeAddInt(entry.values[dayIdx] ?? 0, val);
     entry.total = safeAddInt(entry.total, val);
   }
 
-  const ranked = [...byProvider.entries()].sort((a, b) => {
-    if (b[1].total !== a[1].total) return b[1].total - a[1].total;
-    return a[0].localeCompare(b[0]);
-  });
+  const explicitOther = byProvider.get("other");
+  const ranked = [...byProvider.entries()]
+    .filter(([key]) => key !== "other")
+    .sort((a, b) => {
+      if (b[1].total !== a[1].total) return b[1].total - a[1].total;
+      return a[0].localeCompare(b[0]);
+    });
 
   const limit = Math.max(1, Math.floor(maxSeries));
   const top = ranked.slice(0, limit);
@@ -87,22 +101,22 @@ export function buildDailyProviderChart(
     values: data.values,
   }));
 
-  if (overflow.length > 0) {
+  if (explicitOther || overflow.length > 0) {
     const otherValues = new Array<number>(days.length).fill(0);
     let otherTotal = 0;
+    if (explicitOther) {
+      otherTotal = safeAddInt(otherTotal, explicitOther.total);
+      for (let i = 0; i < days.length; i++) {
+        otherValues[i] = safeAddInt(otherValues[i] ?? 0, explicitOther.values[i] ?? 0);
+      }
+    }
     for (const [, data] of overflow) {
       otherTotal = safeAddInt(otherTotal, data.total);
       for (let i = 0; i < days.length; i++) {
         otherValues[i] = safeAddInt(otherValues[i] ?? 0, data.values[i] ?? 0);
       }
     }
-    const existingOther = series.find((s) => s.providerKind === "other");
-    if (existingOther) {
-      existingOther.total = safeAddInt(existingOther.total, otherTotal);
-      existingOther.values = existingOther.values.map((v, idx) =>
-        safeAddInt(v, otherValues[idx] ?? 0),
-      );
-    } else if (otherTotal > 0) {
+    if (otherTotal > 0) {
       series.push({
         providerKind: "other",
         color: getProviderColor("other"),
@@ -150,18 +164,26 @@ export function buildProviderShareRows(
   providers: TelemetryStatsV1["providers"] | null | undefined,
   locale = "en-US",
 ): ShareRow[] {
-  const rows: Array<{ key: string; requests: number; tokens: number }> = [];
+  const merged = new Map<string, { key: string; requests: number; tokens: number }>();
   for (const p of providers ?? []) {
     if (!isRecord(p)) continue;
-    const key = nonEmptyKey(p.providerKind);
-    if (!key) continue;
-    rows.push({
-      key,
-      requests: finiteNonNegativeInt(p.requests),
-      tokens: finiteNonNegativeInt(p.tokens),
-    });
+    const rawKey = nonEmptyKey(p.providerKind);
+    if (!rawKey) continue;
+    const key = normalizeKeyOrOther(rawKey);
+    const requests = finiteNonNegativeInt(p.requests);
+    const tokens = finiteNonNegativeInt(p.tokens);
+    const prev = merged.get(key);
+    if (prev) {
+      prev.requests = safeAddInt(prev.requests, requests);
+      prev.tokens = safeAddInt(prev.tokens, tokens);
+    } else {
+      merged.set(key, { key, requests, tokens });
+    }
   }
+  const rows = [...merged.values()];
   rows.sort((a, b) => {
+    if (a.key === "other" && b.key !== "other") return 1;
+    if (b.key === "other" && a.key !== "other") return -1;
     if (b.tokens !== a.tokens) return b.tokens - a.tokens;
     if (b.requests !== a.requests) return b.requests - a.requests;
     return a.key.localeCompare(b.key);
@@ -194,18 +216,26 @@ export function buildModelShareRows(
   models: TelemetryStatsV1["models"] | null | undefined,
   locale = "en-US",
 ): ShareRow[] {
-  const rows: Array<{ key: string; requests: number; tokens: number }> = [];
+  const merged = new Map<string, { key: string; requests: number; tokens: number }>();
   for (const m of models ?? []) {
     if (!isRecord(m)) continue;
-    const key = nonEmptyKey(m.modelFamily);
-    if (!key) continue;
-    rows.push({
-      key,
-      requests: finiteNonNegativeInt(m.requests),
-      tokens: finiteNonNegativeInt(m.tokens),
-    });
+    const rawKey = nonEmptyKey(m.modelFamily);
+    if (!rawKey) continue;
+    const key = normalizeKeyOrOther(rawKey);
+    const requests = finiteNonNegativeInt(m.requests);
+    const tokens = finiteNonNegativeInt(m.tokens);
+    const prev = merged.get(key);
+    if (prev) {
+      prev.requests = safeAddInt(prev.requests, requests);
+      prev.tokens = safeAddInt(prev.tokens, tokens);
+    } else {
+      merged.set(key, { key, requests, tokens });
+    }
   }
+  const rows = [...merged.values()];
   rows.sort((a, b) => {
+    if (a.key === "other" && b.key !== "other") return 1;
+    if (b.key === "other" && a.key !== "other") return -1;
     if (b.tokens !== a.tokens) return b.tokens - a.tokens;
     if (b.requests !== a.requests) return b.requests - a.requests;
     return a.key.localeCompare(b.key);
@@ -238,25 +268,36 @@ export function buildVersionRows(
   versions: TelemetryStatsV1["versions"] | null | undefined,
   locale = "en-US",
 ): InstallRow[] {
-  const rows: Array<{ version: string; installs: number; newInstalls: number }> = [];
+  const merged = new Map<
+    string,
+    { version: string; installs: number; newInstalls: number }
+  >();
   for (const v of versions ?? []) {
     if (!isRecord(v)) continue;
-    const version = nonEmptyKey(v.version);
-    if (!version) continue;
-    rows.push({
-      version,
-      installs: finiteNonNegativeInt(v.installs),
-      newInstalls: finiteNonNegativeInt(v.newInstalls),
-    });
+    const rawVersion = nonEmptyKey(v.version);
+    if (!rawVersion) continue;
+    const version = normalizeKeyOrOther(rawVersion);
+    const installs = finiteNonNegativeInt(v.installs);
+    const newInstalls = finiteNonNegativeInt(v.newInstalls);
+    const prev = merged.get(version);
+    if (prev) {
+      prev.installs = safeAddInt(prev.installs, installs);
+      prev.newInstalls = safeAddInt(prev.newInstalls, newInstalls);
+    } else {
+      merged.set(version, { version, installs, newInstalls });
+    }
   }
+  const rows = [...merged.values()];
   rows.sort((a, b) => {
+    if (a.version === "other" && b.version !== "other") return 1;
+    if (b.version === "other" && a.version !== "other") return -1;
     if (b.installs !== a.installs) return b.installs - a.installs;
     return b.version.localeCompare(a.version);
   });
   const totalInstalls = rows.reduce((acc, r) => safeAddInt(acc, r.installs), 0);
   return rows.map((r) => ({
     key: r.version,
-    label: `v${r.version.replace(/^v/i, "")}`,
+    label: r.version === "other" ? "other" : `v${r.version.replace(/^v/i, "")}`,
     installs: r.installs,
     installsCompact: formatCompactNumber(r.installs),
     installsExact: formatExactNumber(r.installs, locale),
@@ -272,18 +313,32 @@ export function buildPlatformRows(
   platforms: TelemetryStatsV1["platforms"] | null | undefined,
   locale = "en-US",
 ): InstallRow[] {
-  const rows: Array<{ key: string; installs: number }> = [];
+  const merged = new Map<string, { key: string; installs: number }>();
   for (const p of platforms ?? []) {
     if (!isRecord(p)) continue;
     const os = nonEmptyKey(p.os);
     const arch = nonEmptyKey(p.arch);
-    if (!os || !arch) continue;
-    rows.push({
-      key: `${os}/${arch}`,
-      installs: finiteNonNegativeInt(p.installs),
-    });
+    if (!os) continue;
+    let key: string;
+    if (isOtherKey(os) && (!arch || isOtherKey(arch))) {
+      key = "other";
+    } else if (!arch) {
+      continue;
+    } else {
+      key = `${os}/${arch}`;
+    }
+    const installs = finiteNonNegativeInt(p.installs);
+    const prev = merged.get(key);
+    if (prev) {
+      prev.installs = safeAddInt(prev.installs, installs);
+    } else {
+      merged.set(key, { key, installs });
+    }
   }
+  const rows = [...merged.values()];
   rows.sort((a, b) => {
+    if (a.key === "other" && b.key !== "other") return 1;
+    if (b.key === "other" && a.key !== "other") return -1;
     if (b.installs !== a.installs) return b.installs - a.installs;
     return a.key.localeCompare(b.key);
   });
@@ -303,18 +358,29 @@ export function buildChannelRows(
   channels: TelemetryStatsV1["channels"] | null | undefined,
   locale = "en-US",
 ): InstallRow[] {
-  const rows: Array<{ channel: string; installs: number; newInstalls: number }> = [];
+  const merged = new Map<
+    string,
+    { channel: string; installs: number; newInstalls: number }
+  >();
   for (const c of channels ?? []) {
     if (!isRecord(c)) continue;
-    const channel = nonEmptyKey(c.installChannel);
-    if (!channel) continue;
-    rows.push({
-      channel,
-      installs: finiteNonNegativeInt(c.installs),
-      newInstalls: finiteNonNegativeInt(c.newInstalls),
-    });
+    const rawChannel = nonEmptyKey(c.installChannel);
+    if (!rawChannel) continue;
+    const channel = normalizeKeyOrOther(rawChannel);
+    const installs = finiteNonNegativeInt(c.installs);
+    const newInstalls = finiteNonNegativeInt(c.newInstalls);
+    const prev = merged.get(channel);
+    if (prev) {
+      prev.installs = safeAddInt(prev.installs, installs);
+      prev.newInstalls = safeAddInt(prev.newInstalls, newInstalls);
+    } else {
+      merged.set(channel, { channel, installs, newInstalls });
+    }
   }
+  const rows = [...merged.values()];
   rows.sort((a, b) => {
+    if (a.channel === "other" && b.channel !== "other") return 1;
+    if (b.channel === "other" && a.channel !== "other") return -1;
     if (b.installs !== a.installs) return b.installs - a.installs;
     return a.channel.localeCompare(b.channel);
   });
@@ -368,16 +434,25 @@ export function buildReliabilitySummary(
     color: OUTCOME_COLORS[key],
   }));
 
-  const rawErrors: Array<{ cause: string; count: number }> = [];
+  const mergedErrors = new Map<string, { cause: string; count: number }>();
   for (const e of errors ?? []) {
     if (!isRecord(e)) continue;
-    const cause = nonEmptyKey(e.cause);
-    if (!cause) continue;
+    const rawCause = nonEmptyKey(e.cause);
+    if (!rawCause) continue;
+    const cause = normalizeKeyOrOther(rawCause);
     const count = finiteNonNegativeInt(e.count);
     if (count <= 0) continue;
-    rawErrors.push({ cause, count });
+    const prev = mergedErrors.get(cause);
+    if (prev) {
+      prev.count = safeAddInt(prev.count, count);
+    } else {
+      mergedErrors.set(cause, { cause, count });
+    }
   }
+  const rawErrors = [...mergedErrors.values()];
   rawErrors.sort((a, b) => {
+    if (a.cause === "other" && b.cause !== "other") return 1;
+    if (b.cause === "other" && a.cause !== "other") return -1;
     if (b.count !== a.count) return b.count - a.count;
     return a.cause.localeCompare(b.cause);
   });

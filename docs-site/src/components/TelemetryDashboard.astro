@@ -46,7 +46,7 @@ const rangeLabels: Record<(typeof TELEMETRY_RANGES)[number], string> = {
 };
 
 const kpiCards = [
-  { id: "activeInstalls", label: copy.kpiActiveInstalls, initial: "0", title: "0" },
+  { id: "activeInstalls", label: copy.kpiActiveInstalls, initial: "0", title: "0 (0 install-days)" },
   { id: "newInstalls", label: copy.kpiNewInstalls, initial: "0", title: "0" },
   { id: "requests", label: copy.kpiRequests, initial: "0", title: "0" },
   { id: "tokens", label: copy.kpiTokens, initial: "0", title: "0" },
@@ -91,6 +91,7 @@ const skeletonCells = Array.from({ length: 53 * 7 }, (_, idx) => idx);
         <div class="td-title-row">
           <h1 id="_top" class="td-title">{copy.title}</h1>
           <span class="td-badge">{copy.privacyBadge}</span>
+          <span class="td-badge" data-self-reported-label>{copy.selfReportedLabel}</span>
         </div>
         <p class="td-subtitle">{copy.subtitle}</p>
         <div class="td-meta-row">
