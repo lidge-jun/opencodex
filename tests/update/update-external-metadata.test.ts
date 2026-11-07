@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -98,6 +98,53 @@ describe("external signed update metadata", () => {
       const wrongTargetReceiptEvidence = fixture.verifyExternalMetadataEvidence(wrongTargetCandidate, { kind: "receipt", bytes: wrongTargetReceiptBytes }, basis, now);
       expect(() => fixture.verifyExternalMetadataEvidence(wrongTargetCandidate, { kind: "capability", bytes: wrongTargetCapability, receiptEvidence: wrongTargetReceiptEvidence }, basis, now)).toThrow();
 
+      // Re-sign the enclosing release so each refusal reaches the receipt binding.
+      for (const [name, change] of [
+        [assetName, "missing"], [assetName, "digest"], [capName, "missing"],
+        [capName, "size"], [treeName, "missing"], [`${treeName}.signatures.json`, "missing"],
+      ]) {
+        const altered = JSON.parse(receipt.toString());
+        if (change === "missing") altered.assets = altered.assets.filter((entry: {name: string}) => entry.name !== name);
+        else {
+          const entry = altered.assets.find((item: {name: string}) => item.name === name);
+          if (change === "digest") entry.sha256 = "f".repeat(64); else entry.size++;
+        }
+        const bytes = Buffer.from(JSON.stringify(altered));
+        const signedRelease = Buffer.from(JSON.stringify({ ...JSON.parse(release.toString()), receipt: digest(bytes) }));
+        const evidence = fixture.verifyReleaseEvidence(signedRelease, envelope(signedRelease), basis, "latest", now);
+        const selected = fixture.selectTargetEvidence(evidence, selection);
+        expect(() => fixture.verifyExternalMetadataEvidence(selected, { kind: "receipt", bytes }, basis, now)).toThrow(/Receipt asset mismatch/);
+      }
+
+      // Descriptors and receipt entries match the bytes, so these cases exercise
+      // semantic bindings rather than failing the earlier digest checks.
+      for (const [field, value] of [["version", "1.2.4"], ["channel", "preview"], ["artifactSha256", "f".repeat(64)]]) {
+        const bytes = Buffer.from(JSON.stringify({ ...JSON.parse(capability.toString()), [field]: value }));
+        const altered = JSON.parse(receipt.toString());
+        Object.assign(altered.assets.find((entry: {name: string}) => entry.name === capName), digest(bytes));
+        const receiptBytes = Buffer.from(JSON.stringify(altered));
+        const signed = JSON.parse(release.toString());
+        signed.receipt = digest(receiptBytes);
+        signed.targets[0].capabilities = digest(bytes);
+        const signedBytes = Buffer.from(JSON.stringify(signed));
+        const selected = fixture.selectTargetEvidence(fixture.verifyReleaseEvidence(signedBytes, envelope(signedBytes), basis, "latest", now), selection);
+        const acceptedReceipt = fixture.verifyExternalMetadataEvidence(selected, { kind: "receipt", bytes: receiptBytes }, basis, now);
+        expect(() => fixture.verifyExternalMetadataEvidence(selected, { kind: "capability", bytes, receiptEvidence: acceptedReceipt }, basis, now)).toThrow(/Capability target mismatch/);
+      }
+      const wrongTree = Buffer.from(JSON.stringify({ ...JSON.parse(tree.toString()), version: "1.2.4" }));
+      const wrongTreeEnvelope = envelope(wrongTree);
+      const wrongTreeReceipt = JSON.parse(receipt.toString());
+      Object.assign(wrongTreeReceipt.assets.find((entry: {name: string}) => entry.name === treeName), digest(wrongTree));
+      Object.assign(wrongTreeReceipt.assets.find((entry: {name: string}) => entry.name === `${treeName}.signatures.json`), digest(wrongTreeEnvelope));
+      const wrongTreeReceiptBytes = Buffer.from(JSON.stringify(wrongTreeReceipt));
+      const wrongTreeRelease = JSON.parse(release.toString());
+      wrongTreeRelease.receipt = digest(wrongTreeReceiptBytes);
+      wrongTreeRelease.targets[0].tree = digest(wrongTree);
+      const wrongTreeReleaseBytes = Buffer.from(JSON.stringify(wrongTreeRelease));
+      const wrongTreeCandidate = fixture.selectTargetEvidence(fixture.verifyReleaseEvidence(wrongTreeReleaseBytes, envelope(wrongTreeReleaseBytes), basis, "latest", now), selection);
+      const wrongTreeReceiptEvidence = fixture.verifyExternalMetadataEvidence(wrongTreeCandidate, { kind: "receipt", bytes: wrongTreeReceiptBytes }, basis, now);
+      expect(() => fixture.verifyExternalMetadataEvidence(wrongTreeCandidate, { kind: "tree", bytes: wrongTree, signatureEnvelopeBytes: wrongTreeEnvelope, receiptEvidence: wrongTreeReceiptEvidence }, basis, now)).toThrow(/Tree target mismatch/);
+
       // Desktop's shared macOS archive requires universal proof for either target.
       for (const arch of ["x64", "arm64"]) {
         const macTarget = `macos-${arch}-desktop-tauri`;
@@ -131,6 +178,34 @@ describe("external signed update metadata", () => {
       const standaloneReleaseEvidence = fixture.verifyReleaseEvidence(standaloneRelease, envelope(standaloneRelease), basis, "latest", now);
       const standaloneCandidate = fixture.selectTargetEvidence(standaloneReleaseEvidence, { platform: "macos", arch: "x64", owner: "standalone", artifactKind: "standalone", bundleKind: "tar-gz" });
       expect(() => fixture.verifyExternalMetadataEvidence(standaloneCandidate, { kind: "receipt", bytes: standaloneReceipt }, basis, now)).not.toThrow();
+      for (const proofs of [[], [{ ...JSON.parse(standaloneReceipt.toString()).architectureProofs[0], arch: "arm64" }]]) {
+        const bytes = Buffer.from(JSON.stringify({ ...JSON.parse(standaloneReceipt.toString()), architectureProofs: proofs }));
+        const signedBytes = Buffer.from(JSON.stringify({ ...JSON.parse(standaloneRelease.toString()), receipt: digest(bytes) }));
+        const selected = fixture.selectTargetEvidence(fixture.verifyReleaseEvidence(signedBytes, envelope(signedBytes), basis, "latest", now), { platform: "macos", arch: "x64", owner: "standalone", artifactKind: "standalone", bundleKind: "tar-gz" });
+        expect(() => fixture.verifyExternalMetadataEvidence(selected, { kind: "receipt", bytes }, basis, now)).toThrow(/architecture proof/);
+      }
+
+      // A two-key root requires both tree signatures, independently of the
+      // enclosing receipt's authenticated envelope digest.
+      const thresholdDir = join(dir, "threshold");
+      mkdirSync(thresholdDir);
+      for (const name of ["signed-supply.mjs", "update-bytes.mjs", "update-contracts.mjs", "update-bounded-json.mjs", "update-candidate-id.mjs", "update-signed-version.mjs", "update-signature-threshold.mjs", "minisign.mjs"]) copyFileSync(repoPath("src/update", name), join(thresholdDir, name));
+      const thresholdRoot = Buffer.from(JSON.stringify({ ...JSON.parse(root.toString()), releaseKeys: [{ ...key, channels: ["latest"], roles: ["release", "tree"] }, { ...otherKey, channels: ["latest"], roles: ["release", "tree"] }], releaseThreshold: 2 }));
+      writeFileSync(join(thresholdDir, "update-trust-anchor.mjs"), `export const EMBEDDED_ROOT_SHA256 = "${createHash("sha256").update(thresholdRoot).digest("hex")}";\n`);
+      const thresholdFixture = await import(pathToFileURL(join(thresholdDir, "signed-supply.mjs")).href);
+      const thresholdBasis = thresholdFixture.bootstrapEmbeddedRoot(thresholdRoot, now);
+      const thresholdEnvelope = (bytes: Buffer, two: boolean) => Buffer.from(JSON.stringify({ schema: "ocx.update.signatures/1", signatures: [{ keyFingerprint: fingerprint, signatureBox: signBox(bytes) }, ...(two ? [{ keyFingerprint: otherFingerprint, signatureBox: signBox(bytes, otherPair.privateKey, otherId) }] : [])] }));
+      for (const two of [false, true]) {
+        const signatureBytes = thresholdEnvelope(tree, two);
+        const altered = JSON.parse(receipt.toString());
+        Object.assign(altered.assets.find((entry: {name: string}) => entry.name === `${treeName}.signatures.json`), digest(signatureBytes));
+        const receiptBytes = Buffer.from(JSON.stringify(altered));
+        const signedBytes = Buffer.from(JSON.stringify({ ...JSON.parse(release.toString()), receipt: digest(receiptBytes) }));
+        const selected = thresholdFixture.selectTargetEvidence(thresholdFixture.verifyReleaseEvidence(signedBytes, thresholdEnvelope(signedBytes, true), thresholdBasis, "latest", now), selection);
+        const acceptedReceipt = thresholdFixture.verifyExternalMetadataEvidence(selected, { kind: "receipt", bytes: receiptBytes }, thresholdBasis, now);
+        const verify = () => thresholdFixture.verifyExternalMetadataEvidence(selected, { kind: "tree", bytes: tree, signatureEnvelopeBytes: signatureBytes, receiptEvidence: acceptedReceipt }, thresholdBasis, now);
+        if (two) expect(verify).not.toThrow(); else expect(verify).toThrow();
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
