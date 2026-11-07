@@ -6,6 +6,15 @@ import type { RequestLogContext } from "../request-log";
 import { workflowSendCeilingRefusalResponse, workflowRefusalResponse } from "../workflow-refusal";
 import { NativeContinuationRefusalError } from "./native-continuation-refusal";
 import type { RequestSpendTracker } from "./request-spend";
+import type { ResponsesSendBudget } from "./request-send-budget";
+
+/** Every native-capable leg admits the reconstructed successor as a new physical send. */
+export function createNativeContinuationDispatch(
+  budget: Pick<ResponsesSendBudget, "continuationSendReporter" | "workflowRootId">,
+  logCtx: RequestLogContext,
+): (frame: { body: Record<string, unknown>; text: string }) => void {
+  return frame => claimNativeContinuationSend(budget.continuationSendReporter(frame), logCtx, budget.workflowRootId);
+}
 
 /** Claim one successor's physical start; never borrow an initial or recovery receipt. */
 export function claimNativeContinuationSend(reporter: PhysicalSendReporter, logCtx: RequestLogContext, rootId?: string): void {

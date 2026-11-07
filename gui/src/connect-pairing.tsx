@@ -119,6 +119,7 @@ export function ConnectPairingForm({
           : error === "origin-denied" ? "connection.pairing.originDenied"
           : error === "cloudflare-challenge" ? "connection.pairing.cloudflareChallenge"
           : error === "remote-link-unauthorized" || error === "remote-link-forbidden" ? "connection.pairing.sessionNotAuthorized"
+          : error === "client-state-changed" ? "connection.clientStateChanged"
           : error === "invalid-response" ? "connection.pairing.responseError" : "connection.pairing.error")}
         </p>}
       </form>

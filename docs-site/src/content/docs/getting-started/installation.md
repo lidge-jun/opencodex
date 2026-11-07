@@ -13,6 +13,12 @@ A stable OpenCodex Desktop install configures `ocx` for new terminals when the a
 
 On macOS and Linux, a current npm/pnpm package launcher that still runs delegates eligible commands to the Desktop CLI when its record is enabled and passes ownership, permission and file-safety checks. Windows has no package-launcher handoff: new terminals select the Desktop `ocx.exe` through user `Path` order. A `record-unsafe` error means the record or its directory failed a safety check. Open OpenCodex Desktop to repair the terminal command, or use `OCX_NO_DESKTOP_HANDOFF=1` for a package invocation on macOS/Linux. Package update/removal and internal inspection keep their existing path. `OCX_NO_DESKTOP_HANDOFF=1` suppresses that package handoff for one invocation; it does not change a direct Desktop shim or PATH configuration.
 
+With an enabled Desktop command record, eligible macOS/Linux package-launcher calls stop if
+the selected Desktop executable is missing or cannot start; they do not silently run the
+npm/pnpm implementation. This can briefly interrupt commands during app replacement. Repair
+or disable the terminal command in Desktop, or explicitly use `OCX_NO_DESKTOP_HANDOFF=1`
+for one package invocation. That bypass does not repair the Desktop record, shim or PATH.
+
 ## Prerequisites
 
 | Requirement | Why |

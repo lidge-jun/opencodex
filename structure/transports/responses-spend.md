@@ -37,7 +37,10 @@ ladder's default send cap. Every native-capable executor — the initial passthr
 recovery leg (rebuild, OAuth replay, wire refresh and rate-limit replay) — installs that admission
 hook, so a continuation on a recovered socket is admitted the same way as on the first. Each
 successor reserves a fresh token seed before claiming its root slot, priced on the exact
-reconstructed successor frame, never reusing the opening input estimate. An explicit successor
+reconstructed successor frame, never reusing the opening input estimate. The reporter resolves
+the selected candidate's spend identity at physical admission for both initial and successor
+sends; `tests/responses/responses-workflow-send-ceiling.test.ts` covers that pairing.
+An explicit successor
 `max_output_tokens` replaces its output reservation (null removes it); when the wire omits that
 field, the caller's existing local output reservation remains, including canonical-backend stripping.
 Explicit starts have separate physical

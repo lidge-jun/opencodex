@@ -1,4 +1,5 @@
 import { carryProxyErrorPresentation } from "../../lib/client-error-body";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
 import { carryWorkflowRefusal } from "../workflow-refusal";
 import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
@@ -148,6 +149,7 @@ export async function consumeComboFailure(
   carryWorkflowRefusal(response, failureResponse);
   carryReplayRefusal(response, failureResponse);
   carryProxyErrorPresentation(response, failureResponse);
+  carryPolicyCandidateRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
   carryCodexAccountCooldownResponse(response, failureResponse);

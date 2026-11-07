@@ -1,4 +1,5 @@
 import { createInferenceSendBudget } from "../inference/context";
+import { responsesSpendTarget } from "./request-spend-target";
 import type { ResponsesRequestContext } from "./core-options";
 import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, hasWorkflowSendObserver, reportDispatchSends } from "../../lib/request-execution-budget";
 import {
@@ -90,8 +91,8 @@ export function createResponsesSendBudget(
     continuationEstimate?: { inputTokens: number; outputCeilingTokens: number }) => {
     let unreportedWorkflowStarts = 0;
     const targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined;
-    const reporter = createPhysicalSendReporter(sendBudget, () => ({ poolId: logCtx.spendPoolId ?? logCtx.provider,
-      identityId: logCtx.accountLogLabel, ...(targetKey ? { targetKey } : {}),
+    const reporter = createPhysicalSendReporter(sendBudget, () => ({ ...responsesSpendTarget(logCtx),
+      ...(targetKey ? { targetKey } : {}),
       ...(continuationEstimate ? { estimate: continuationEstimate, explicitEstimate: true } : {}) }), permit, charged => {
       noteTargetSends(Math.max(0, charged));
       options.onCompactionRecoverySendsReported?.(charged);

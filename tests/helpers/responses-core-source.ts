@@ -61,6 +61,7 @@ export const RESPONSES_CORE_MODULES = [
   "response-tool-ownership.ts",
   "request-send-budget.ts",
   "request-spend.ts",
+  "request-spend-target.ts",
   "account-auto-pause-recovery.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",

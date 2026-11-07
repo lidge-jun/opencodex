@@ -6,6 +6,7 @@ import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
 import { fetchWithTransientRetry, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { bindResponsesSpendTarget } from "../../src/server/responses/request-spend-target";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 afterEach(() => { bindWorkflowBudgetConfig(null); resetWorkflowBudgetsForTest(); });
@@ -214,6 +215,29 @@ test("native successors reserve fresh token capacity before each physical start"
     expect(sends()).toBe(2); expect(budget.used).toBe(2); expect(budget.physicalStarted).toBe(2);
     expect(tracker.refusals).toBe(1);
   } finally { tracker.settle(undefined); release(); }
+});
+
+test("routed spend identity survives continuation estimates", () => {
+  const sends = root(10);
+  const f = request(true);
+  const targets: Array<Parameters<typeof f.tracker.ensureSeed>[0]> = [];
+  const budget = createRequestExecutionBudget(undefined, undefined, { ...f.tracker,
+    ensureSeed: (target, proof) => { targets.push(target); return f.tracker.ensureSeed(target, proof); },
+  });
+  bindResponsesSpendTarget(f.logCtx, () => ({ poolId: "candidate-pool", identityId: "candidate-account" }));
+  try {
+    const state = auxiliaryOwner(budget, f.logCtx);
+    for (const reporter of [state.transientSendReporter(),
+      state.continuationSendReporter({ body: { max_output_tokens: 8 }, text: "saved result ".repeat(40) })]) {
+      try { expect(reporter.beforeSend!()).toBe(true); reporter(1); } finally { reporter.close?.(); }
+    }
+    expect(sends()).toBe(2);
+    expect(targets).toHaveLength(2);
+    expect(targets[0]).toMatchObject({ poolId: "candidate-pool", identityId: "candidate-account" });
+    expect(targets[1]).toMatchObject({ poolId: "candidate-pool", identityId: "candidate-account",
+      explicitEstimate: true, estimate: { outputCeilingTokens: 8 } });
+    expect(targets[1].estimate!.inputTokens).toBeGreaterThan(1);
+  } finally { bindResponsesSpendTarget(f.logCtx); f.tracker.settle(undefined); }
 });
 
 test("explicit native starts do not replenish ordinary or bounded recovery grants", () => {
