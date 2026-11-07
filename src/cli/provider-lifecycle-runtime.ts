@@ -119,8 +119,9 @@ async function add(name: string, options: ReturnType<typeof parseAdd>, wantsJson
   }
   const presets = await runtimeRequest("/api/provider-presets", { redirect: "error" }, deps);
   const seed = presetSeed(name, presets);
-  if (!seed && (name === "openai" || !options.fields.adapter || !options.fields.baseUrl)) {
-    throw new Error("Target preset unavailable. Custom providers require --adapter and --base-url.");
+  if (!seed && name === "openai") invalid("The selected target does not offer the canonical openai preset.");
+  if (!seed && (!options.fields.adapter || !options.fields.baseUrl)) {
+    invalid(`The selected target does not offer a "${name}" preset. Custom providers require --adapter and --base-url.`);
   }
   const provider = { ...seed, ...options.fields };
   if (provider.googleToolSchemaPolicy !== undefined && provider.adapter !== "google") {
