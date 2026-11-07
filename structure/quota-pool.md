@@ -23,6 +23,12 @@ every account quota this Home already holds. GOAT owns the decoder
 `readQuotaPool` (`src/quota-pool/assemble.ts`) runs the whole assembly inside `runPassiveRead`, for
 every caller, and reads only caches other paths filled:
 
+OAuth roster and credential ownership checks may inspect the local auth store to detect external
+replacement and selection changes, including A→B→A revisions. The observe-only read does not
+repair or harden the store, publish the decision roster, refresh tokens, or change quota caches;
+an unreadable store leaves ownership unknown. This inspection is confined to passive management
+reads, not added to the response path.
+
 - Codex pool accounts: the passive `listCodexAuthAccountsSnapshot` (stored `StoredAccountQuota` per
   account and the cached main-account reading), with no WHAM probe, token refresh or native-main
   claim. Each account's window `source` is `header` when its newest quota-history sample came from
@@ -42,7 +48,8 @@ every caller, and reads only caches other paths filled:
   destination and credential to match the owner of the report. Literal and environment keys are
   checked without publishing routing observations; keychain-backed reports are omitted because a
   passive read cannot establish currentness without consulting the OS keychain. The same rule
-  applies to passive provider quota reads.
+  applies to passive provider quota reads. Pool assembly selects enabled providers and validates
+  held reports after the Codex snapshot yields, against the configuration used for projection.
 
 Display-only `ProviderQuota` readings are excluded from both account and pooled decision windows.
 The rows remain present; without other evidence their quota is unknown. Account pause and reauth

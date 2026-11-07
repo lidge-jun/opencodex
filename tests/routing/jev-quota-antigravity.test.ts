@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { runPassiveRead } from "../../src/lib/passive-read";
 import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { jevQuotaSignalForTarget, JEV_QUOTA_SIGNAL_MAX_AGE_MS } from "../../src/combos/jev-quota";
-import { keyReport, publishCollectedDecisionQuota, type ProviderQuotaReport } from "../../src/providers/quota/report-cache";
+import { isProviderQuotaReportCurrent, keyReport, publishCollectedDecisionQuota, setProviderQuotaBeforeObservationForTests, type ProviderQuotaReport } from "../../src/providers/quota/report-cache";
 import { fetchAntigravityQuota, setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
-import { fetchProviderQuotaReports, clearProviderQuotaCache } from "../../src/providers/quota";
+import { fetchProviderQuotaReports, clearProviderQuotaCache, flushProviderQuotaObservationsForTests, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
+import { setQuotaResetSink } from "../../src/quota/reset-observer";
+import { flushQuotaResetStoreForTests, resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
+import type { QuotaResetEvent } from "../../src/quota/reset-detector";
 import { antigravityDecisionWindows } from "../../src/providers/quota-decision-publication";
 import { invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../src/providers/quota-decision-snapshot";
 import { getAuthStorePath, loadAuthStore, type AuthStore } from "../../src/oauth/store";
@@ -49,9 +53,122 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  setProviderQuotaBeforePublishForTests(null); setProviderQuotaBeforeObservationForTests(null); setQuotaResetSink(null); resetQuotaResetStoreForTests();
   setAntigravityAccountQuotaTransportForTests(null); clearProviderQuotaCache(); deactivateJevQuotaEvidence(); invalidateDecisionKeyQuotas(); restoreClock();
   for (const key of proxyKeys) { if (proxyEnv[key] === undefined) delete process.env[key]; else process.env[key] = proxyEnv[key]; }
   home.remove();
+});
+
+for (const transition of ["credential", "login", "switch", "aba"] as const) test(`held reports retire on ${transition} even without advisory activation`, async () => {
+  deactivateJevQuotaEvidence();
+  const held = await fetchProviderQuotaReports(config, true);
+  expect(held.reports).toHaveLength(1);
+  const original = structuredClone(store["google-antigravity"]!); const set = store["google-antigravity"]!;
+  if (transition === "credential") set.accounts[0]!.credential.access = "replacement-access";
+  else if (transition === "login") set.accounts[0]!.loginId = "00000000-0000-4000-8000-000000000002";
+  else { set.accounts.push({ id: "fixture-b", credential: { ...set.accounts[0]!.credential } }); set.activeAccountId = "fixture-b"; }
+  persistStore();
+  if (transition === "aba") { store["google-antigravity"] = original; persistStore(); }
+  expect(isProviderQuotaReportCurrent(held.reports[0]!)).toBe(false);
+  setAntigravityAccountQuotaTransportForTests({ resolveAddresses: async () => { throw new Error("offline"); } });
+  expect((await fetchProviderQuotaReports(config)).reports).toEqual([]);
+});
+
+test("passive reads withhold malformed stores without repairing them or changing advisory evidence", async () => {
+  await fetchProviderQuotaReports(config, true);
+  expect(signal("gemini-3.8-flash").tier).toBe("healthy");
+  writeFileSync(getAuthStorePath(), "invalid-json");
+  const held = await runPassiveRead(() => fetchProviderQuotaReports(config));
+  expect(held.reports).toEqual([]);
+  expect(readFileSync(getAuthStorePath(), "utf8")).toBe("invalid-json");
+  expect(signal("gemini-3.8-flash").tier).toBe("healthy");
+  persistStore();
+});
+
+test("passive reads withhold an Antigravity report after an external credential replacement", async () => {
+  await fetchProviderQuotaReports(config, true);
+  store["google-antigravity"]!.accounts[0]!.credential.access = "external-replacement";
+  writeFileSync(getAuthStorePath(), JSON.stringify(store));
+  expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
+});
+
+test("a switch during the network probe cannot return or publish the old account report", async () => {
+  let release!: () => void; let started!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => { started(); await waiting; return Response.json(summary); },
+  });
+  const flight = fetchProviderQuotaReports(config, true); await entered;
+  store["google-antigravity"]!.accounts.push({ id: "fixture-b", credential: { access: "other-access", refresh: "other-refresh", expires: reset + 86_400_000, projectId: "other-project" } });
+  store["google-antigravity"]!.activeAccountId = "fixture-b"; writeFileSync(getAuthStorePath(), JSON.stringify(store)); release();
+  expect((await flight).reports).toEqual([]);
+  expect(signal("gemini-3.8-flash").tier).toBe("unknown");
+});
+
+for (const transition of ["switch", "replacement", "aba"] as const) test(`in-flight ${transition} cannot publish the old account report`, async () => {
+  const original = structuredClone(store["google-antigravity"]!);
+  setProviderQuotaBeforePublishForTests(() => {
+    const set = store["google-antigravity"]!;
+    if (transition === "replacement") {
+      set.accounts[0]!.credential.access = "new-access";
+      set.accounts[0]!.loginId = "00000000-0000-4000-8000-000000000002";
+    } else {
+      set.accounts.push({ id: "fixture-b", credential: { access: "other-access", refresh: "other-refresh", expires: reset + 86_400_000, projectId: "other-project" } });
+      set.activeAccountId = "fixture-b";
+    }
+    persistStore();
+    if (transition === "aba") { store["google-antigravity"] = original; persistStore(); }
+  });
+  expect((await fetchProviderQuotaReports(config, true)).reports).toEqual([]);
+});
+
+test("same-account reports remain current and a replacement gets a separate reset baseline", async () => {
+  const events: QuotaResetEvent[] = []; let percent = 95; let deadline = clock - 1000;
+  setQuotaResetSink(event => events.push(event));
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => Response.json({ groups: [{ displayName: "Gemini", buckets: [{ window: "5h", remainingFraction: (100 - percent) / 100, resetTime: deadline }] }] }),
+  });
+  const first = await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  expect(first.reports).toHaveLength(1); expect(isProviderQuotaReportCurrent(first.reports[0]!)).toBe(true);
+  const account = store["google-antigravity"]!.accounts[0]!;
+  account.loginId = "00000000-0000-4000-8000-000000000002"; account.credential.access = "new-access"; persistStore();
+  percent = 2; deadline = clock + 3_600_000;
+  expect((await fetchProviderQuotaReports(config, true)).reports).toHaveLength(1); await flushProviderQuotaObservationsForTests();
+  expect(events).toEqual([]);
+  percent = 95; deadline = clock - 1000; await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  percent = 2; deadline = clock + 3_600_000; await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  expect(events).toHaveLength(1);
+  flushQuotaResetStoreForTests();
+  const persisted = readFileSync(home.path("quota-reset-state.json"), "utf8");
+  for (const secret of ["fixture-access", "fixture-refresh", "new-access", "fixture-project"]) expect(persisted).not.toContain(secret);
+  expect(JSON.stringify(first)).not.toContain("fixture-access");
+});
+
+test("a delayed reset observation is discarded after an unobserved account replacement", async () => {
+  const events: QuotaResetEvent[] = []; let percent = 95; let deadline = clock - 1000;
+  setQuotaResetSink(event => events.push(event));
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => Response.json({ groups: [{ displayName: "Gemini", buckets: [{ window: "5h", remainingFraction: (100 - percent) / 100, resetTime: deadline }] }] }),
+  });
+  await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  let release!: () => void; let started!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  setProviderQuotaBeforeObservationForTests(async () => { started(); await waiting; });
+  percent = 2; deadline = clock + 3_600_000;
+  await fetchProviderQuotaReports(config, true); await entered;
+  const original = structuredClone(store["google-antigravity"]!);
+  store["google-antigravity"]!.accounts[0]!.credential.access = "other-access";
+  writeFileSync(getAuthStorePath(), JSON.stringify(store));
+  setProviderQuotaBeforeObservationForTests(null); release(); await flushProviderQuotaObservationsForTests();
+  expect(events).toEqual([]);
+  store["google-antigravity"] = original; persistStore();
+  await fetchProviderQuotaReports(config, true); await flushProviderQuotaObservationsForTests();
+  expect(events).toHaveLength(1);
 });
 
 /** Observe a real authenticated probe and the accepted collector publication, not a fixture receipt. */

@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveCredential } from "../../src/oauth/store";
-import { clearProviderQuotaCache, fetchProviderQuotaReports, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
+import { getAccountSet, getAuthStorePath, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
 import { clearComboTargetCooldowns, pickComboTarget } from "../../src/combos";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
@@ -13,6 +14,9 @@ import { readQuotaPool } from "../../src/quota-pool/assemble";
 import { getCachedProviderQuota } from "../../src/providers/quota-routing-cache";
 import { heldProviderQuotaReports, report, setProviderQuotaReportCache, validateJoinedReports } from "../../src/providers/quota/report-cache";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
+import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
+import { runPassiveRead } from "../../src/lib/passive-read";
+import { accountQuotaCache } from "../../src/providers/quota/account-cache";
 
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -71,6 +75,81 @@ const monthlyRow = { used_ratio: 0.375, reset_at: resetAt };
 async function saveKimiFixture(): Promise<void> {
   await saveCredential("kimi", { access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 3600_000 });
 }
+
+test.each(["unchanged", "replacement", "selection", "aba"] as const)("passive Kimi report and account pool preserve currentness after %s without effects", async change => {
+  clearAccountQuotaCache();
+  await saveCredential("kimi", { access: "fixture-a", refresh: "refresh-a", expires: Date.now() + 3600_000, accountId: "a" });
+  await saveCredential("kimi", { access: "fixture-b", refresh: "refresh-b", expires: Date.now() + 3600_000, accountId: "b" });
+  const set = getAccountSet("kimi")!;
+  const active = set.activeAccountId;
+  const other = set.accounts.find(row => row.id !== active)!.id;
+  const cfg = config("oauth");
+  mockUsage({ usages: { limit_month_total: monthlyRow } });
+  expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
+  expect((await fetchProviderAccountQuotas("kimi", true, cfg.providers.kimi)).some(row => row.quota)).toBe(true);
+  ensureQuotaPoolIdentity();
+  if (change === "replacement") {
+    const store = JSON.parse(readFileSync(getAuthStorePath(), "utf8"));
+    store.kimi.accounts.find((row: { id: string }) => row.id === active).credential.access = "external-replacement";
+    writeFileSync(`${getAuthStorePath()}.replacement`, JSON.stringify(store));
+    renameSync(`${getAuthStorePath()}.replacement`, getAuthStorePath());
+  }
+  if (change === "selection" || change === "aba") await setActiveAccount("kimi", other);
+  if (change === "aba") await setActiveAccount("kimi", active);
+  chmodSync(getAuthStorePath(), 0o644);
+  const before = readFileSync(getAuthStorePath(), "utf8");
+  const mode = statSync(getAuthStorePath()).mode;
+  let sinkCalls = 0;
+  let fetches = 0;
+  let mutations = 0;
+  const beforeCache = [...accountQuotaCache.entries()];
+  const spies = (["chmodSync", "writeFileSync", "renameSync", "unlinkSync", "mkdirSync"] as const).map(name => {
+    const original = fs[name];
+    return spyOn(fs, name).mockImplementation(((...args: never[]) => { mutations++; return (original as (...args: never[]) => unknown)(...args); }) as never);
+  });
+  const detach = registerDecisionQuotaSink(new Proxy({} as DecisionQuotaSink, { get: () => () => { sinkCalls++; } }));
+  globalThis.fetch = (async () => { fetches++; throw new Error("unexpected upstream call"); }) as typeof fetch;
+  try {
+    const held = await runPassiveRead(async () => heldProviderQuotaReports(cfg));
+    expect(held.reports).toHaveLength(change === "unchanged" ? 1 : 0);
+    const pool = await readQuotaPool(cfg);
+    if (!pool.ok) throw new Error(pool.error);
+    const accounts = pool.pool.providers.find(row => row.provider === "kimi")!.accounts;
+    const activeRow = accounts[set.accounts.findIndex(row => row.id === active)]!;
+    expect(activeRow.windows.length > 0).toBe(change !== "replacement");
+    expect(fetches).toBe(0);
+    expect(sinkCalls).toBe(0);
+    expect(mutations).toBe(0);
+    expect([...accountQuotaCache.entries()]).toEqual(beforeCache);
+    expect(readFileSync(getAuthStorePath(), "utf8")).toBe(before);
+    expect(statSync(getAuthStorePath()).mode).toBe(mode);
+  } finally { detach(); for (const spy of spies) spy.mockRestore(); clearAccountQuotaCache(); }
+});
+
+test.each([false, true])("passive pool checks an Anthropic failure against the current credential (replaced: %s)", async replaced => {
+  clearAccountQuotaCache();
+  await saveCredential("anthropic", { access: "fixture-anthropic", refresh: "fixture-refresh", expires: Date.now() + 3600_000, accountId: "a" });
+  globalThis.fetch = (async () => new Response("unavailable", { status: 503 })) as typeof fetch;
+  expect((await fetchProviderAccountQuotas("anthropic", true))[0]?.quotaFailure).toBe("upstream_error");
+  ensureQuotaPoolIdentity();
+  if (replaced) {
+    const store = JSON.parse(readFileSync(getAuthStorePath(), "utf8"));
+    store.anthropic.accounts[0].credential.access = "external-replacement";
+    writeFileSync(`${getAuthStorePath()}.replacement`, JSON.stringify(store));
+    renameSync(`${getAuthStorePath()}.replacement`, getAuthStorePath());
+  }
+  let sinkCalls = 0, fetches = 0;
+  const detach = registerDecisionQuotaSink(new Proxy({} as DecisionQuotaSink, { get: () => () => { sinkCalls++; } }));
+  globalThis.fetch = (async () => { fetches++; throw new Error("unexpected upstream call"); }) as typeof fetch;
+  const cfg = { defaultProvider: "anthropic", providers: { anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } } } as OcxConfig;
+  try {
+    const pool = await readQuotaPool(cfg);
+    if (!pool.ok) throw new Error(pool.error);
+    expect(pool.pool.providers[0]?.accounts[0]?.failure).toBe(replaced ? undefined : "upstream_error");
+    expect(sinkCalls).toBe(0);
+    expect(fetches).toBe(0);
+  } finally { detach(); clearAccountQuotaCache(); }
+});
 
 test("passive pool rejects a held OAuth report for a separately configured key or destination", async () => {
   await saveKimiFixture();

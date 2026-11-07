@@ -3,9 +3,8 @@ import { isAnthropicInstanceId, configuredAnthropicInstance } from "./anthropic-
 import { ANTIGRAVITY_OAUTH_STORE_KEY } from "./antigravity-quota-identity";
 import { fetchAnthropicAccountQuota } from "./quota/anthropic-account-quota";
 import { thrownQuotaFailure } from "./quota/failure-codes";
-import { resolveEnvValue } from "../config";
 import { getAccountCredential, getAccountSet } from "../oauth/store";
-import { apiKeyPoolEntryId } from "./api-keys";
+import { providerObservationAccountKey } from "./quota/reset-identity";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, CACHE_TTL_MS } from "./quota-wire";
 import { replaceCachedProviderQuotas } from "./quota-routing-cache";
@@ -20,7 +19,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent,
+  accountReportCurrent, accountReportObservationKeys,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -32,7 +31,7 @@ import {
   isBuiltInChatGptForwardProvider,
   isProviderQuotaReportCurrent,
   LAST_GOOD_MAX_AGE_MS,
-  providerQuotaBeforePublishForTests,
+  providerQuotaBeforePublishForTests, providerQuotaBeforeObservationForTests,
   routingEvidence, publishCollectedDecisionQuota,
   keyReportCredentialIds, providerReportCurrentForConfig, validateJoinedReports, bindProviderReportProbe,
   setProviderQuotaReportCache,
@@ -75,6 +74,7 @@ import { persistKiroAccountState } from "./kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe";
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 export { QUOTA_RESPONSE_MAX_BYTES } from "./quota-wire";
+export { providerObservationAccountKeyForTests } from "./quota/reset-identity";
 export {
   clearProviderQuotaCache, clearProviderQuotaCacheFor,
   publishKeyReportForTests,
@@ -109,7 +109,7 @@ export async function fetchProviderApiKeyQuotas(config: OcxConfig, name: string,
     const result = await maybeFetchProviderQuota(name, isolatedProvider, isolatedConfig, false);
     if (result === TERMINAL_QUOTA_FAILURE) return { kind: "terminal" };
     if (result === AUTHORITATIVE_EMPTY_QUOTA) return { kind: "empty" };
-    return result ? { kind: "quota", quota: result.quota } : { kind: "unavailable" };
+    return result ? { kind: "quota", quota: result.quota, routing: routingEvidence.get(result) } : { kind: "unavailable" };
   });
 }
 async function maybeFetchProviderQuota(
@@ -170,29 +170,6 @@ async function maybeFetchProviderQuota(
  */
 let pendingProviderObservation: Promise<void> = Promise.resolve();
 
-/**
- * Stable per-account observation key for one provider report.
- *
- * Fallback identity for reports without a probe-bound credential. OAuth providers use their
- * active account; other reports use the configured key or "default". Key probes instead
- * carry the digest of the credential they actually sent in private report metadata.
- */
-function providerObservationAccountKey(provider: string, config: OcxConfig): string {
-  const oauthAccountId = getAccountSet(provider)?.activeAccountId;
-  if (oauthAccountId !== undefined) return `${provider}\u0000${oauthAccountId}`;
-  const providerConfig = config.providers[provider];
-  const resolvedKey = typeof providerConfig?.apiKey === "string"
-    ? resolveEnvValue(providerConfig.apiKey)?.trim()
-    : undefined;
-  const keyId = resolvedKey ? apiKeyPoolEntryId(resolvedKey) : "default";
-  return `${provider}\u0000key:${keyId}`;
-}
-
-/** Test-only view of the observation account key. */
-export function providerObservationAccountKeyForTests(provider: string, config: OcxConfig): string {
-  return providerObservationAccountKey(provider, config);
-}
-
 function notifyProviderQuotaSnapshot(
   reports: ReadonlyArray<ProviderQuotaReport>,
   config: OcxConfig,
@@ -204,9 +181,9 @@ function notifyProviderQuotaSnapshot(
     const authMode = config.providers[report.provider]?.authMode;
     return {
       scope: report.provider,
-      accountKey: keyId && authMode !== "oauth" && authMode !== "forward"
+      report, accountKey: accountReportObservationKeys.get(report) ?? (keyId && authMode !== "oauth" && authMode !== "forward"
         ? `${report.provider}\u0000key:${keyId}`
-        : providerObservationAccountKey(report.provider, config),
+        : providerObservationAccountKey(report.provider, config)),
       quota: report.quota,
     };
   });
@@ -215,7 +192,12 @@ function notifyProviderQuotaSnapshot(
       const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
       const { providerWindowObservations } = await import("../quota/window-mapping");
+      await providerQuotaBeforeObservationForTests?.();
       for (const observation of observations) {
+        if (accountReportObservationKeys.has(observation.report)) {
+          getAccountSet(observation.scope);
+          if (!isProviderQuotaReportCurrent(observation.report)) continue;
+        }
         observer.observeQuotaSnapshot({
           scope: observation.scope,
           accountKey: observation.accountKey,
@@ -228,7 +210,6 @@ function notifyProviderQuotaSnapshot(
       // here also keeps the chain alive — a rejected link would poison every later one.
     });
 }
-
 /** Await the observation chain. Tests only: production never needs to join it. */
 export function flushProviderQuotaObservationsForTests(): Promise<void> {
   return pendingProviderObservation;
@@ -238,6 +219,7 @@ export function flushProviderQuotaObservationsForTests(): Promise<void> {
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   // A passive read (a Remote Link Child's, #6959) shows the held reports and starts nothing.
   if (isPassiveRead()) return heldProviderQuotaReports(config);
+  if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
   // A Pool report's cache signature and provider fetch must share one account snapshot.
   // Preserve force semantics when deciding whether that snapshot refreshes upstream data.
   const prefetchedCodexSnapshot = hasCodexPoolProvider(config)
@@ -290,6 +272,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       )),
     );
     await providerQuotaBeforePublishForTests?.();
+    if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
     let commitKey: string | null = null;
     if (epoch === invalidationEpoch) {
       const commitKeyCandidate = cacheKeyWithAggregationState(config);
@@ -417,12 +400,14 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
   return flight;
 }
 async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderConfig, liveConfig: OcxConfig): Promise<ProviderQuotaProbeResult> {
-  const id = getAccountSet(provider)?.activeAccountId;
+  const selection = getAccountSet(provider), id = selection?.activeAccountId;
   if (!id) return null;
   const read = await readExplicitAccountQuota(provider, id, config);
   if (!read) return null;
-  const isCurrent = () => liveConfig.providers[provider] === config
-    && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id;
+  const isCurrent = () => {
+    const current = getAccountSet(provider);
+    return liveConfig.providers[provider] === config && read.isCurrent() && current?.activeAccountId === id && current.selectionRevision === selection.selectionRevision;
+  };
   if (!isCurrent()) return TERMINAL_QUOTA_FAILURE;
   if (read.result && typeof read.result !== "symbol") accountReportCurrent.set(read.result, isCurrent);
   return read.result;
