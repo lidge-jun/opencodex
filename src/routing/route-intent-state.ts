@@ -86,6 +86,11 @@ export function setRouteClientIntent(client: RouteClientId, intent: RouteClientI
   const parsed = parseRouteClientIntent(intent, client);
   if (!isRouteClientId(client) || !parsed || (deviceId !== undefined && !deviceIdAllowed(deviceId))) throw new Error("invalid route intent selection");
   return updateRouteIntentState(state => {
+    // Once the operator chooses a Home-specific native override, capture the
+    // separate Child builtin so a later inherit does not spread that choice.
+    if (deviceId === "home" && (client === "grok" || client === "claude-desktop")) {
+      state.defaults[client] ??= { enabled: false };
+    }
     const map = deviceId === undefined ? state.defaults : (state.devices[deviceId] ??= {});
     map[client] = { ...map[client], ...parsed };
     if (deviceId !== undefined) advanceRevision(state, deviceId, client);
@@ -95,6 +100,9 @@ export function setRouteClientIntent(client: RouteClientId, intent: RouteClientI
 export function clearRouteClientIntent(client: RouteClientId, deviceId: string): RouteIntentState {
   if (!isRouteClientId(client) || !deviceIdAllowed(deviceId)) throw new Error("invalid route intent selection");
   return updateRouteIntentState(state => {
+    if (deviceId === "home" && (client === "grok" || client === "claude-desktop")) {
+      state.defaults[client] ??= { enabled: false };
+    }
     const map = state.devices[deviceId];
     if (map) { delete map[client]; if (Object.keys(map).length === 0) delete state.devices[deviceId]; }
     advanceRevision(state, deviceId, client);

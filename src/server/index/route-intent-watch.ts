@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { projectHomeRouteIntent, routeIntentDigest, ROUTE_INTENT_DIGEST_PATTERN } from "../../link/route-intent";
-import { homeRouteIntentWatch, ROUTE_INTENT_AFTER_HEADER, ROUTE_INTENT_WATCH_HEADER } from "../../link/route-intent-watch";
+import { homeRouteIntentWatch, ROUTE_INTENT_AFTER_HEADER, ROUTE_INTENT_WAKE_HEADER, ROUTE_INTENT_WATCH_HEADER } from "../../link/route-intent-watch";
 import { readHomeRouteIntentState } from "../../routing/home-route-intent";
 import { linkStorePath } from "../../link/paths";
 import { readLinkStore } from "../../link/store";
@@ -25,15 +25,18 @@ export async function readLinkRouteIntent(req: Request, config: OcxConfig, versi
     if (!linkId) return refused(403, "link_mismatch");
     const project = () => projectHomeRouteIntent(config, version, linkId, readHomeRouteIntentState(config));
     let document = project();
+    let wakeReason: "changed" | "notified" | "timeout" = "changed";
     if (watch === "1" && after === routeIntentDigest(document)) {
       const wake = await homeRouteIntentWatch.wait(linkId, req.signal);
       if (wake === "cancelled") return refused(499, "route_intent_watch_cancelled");
       if (wake === "busy") return refused(429, "route_intent_watch_busy");
+      wakeReason = wake;
       // Trust and effective policy can both have changed during the wait.
       if (ownedLink() !== linkId) return refused(403, "link_mismatch");
       document = project();
     }
     if (req.signal.aborted) return refused(499, "route_intent_watch_cancelled");
-    return Response.json(document, { headers: { "cache-control": "no-store", [ROUTE_INTENT_WATCH_HEADER]: "1" } });
+    return Response.json(document, { headers: { "cache-control": "no-store", [ROUTE_INTENT_WATCH_HEADER]: "1",
+      ...(watch === "1" ? { [ROUTE_INTENT_WAKE_HEADER]: wakeReason } : {}) } });
   } catch { return refused(503, "route_intent_unavailable"); }
 }

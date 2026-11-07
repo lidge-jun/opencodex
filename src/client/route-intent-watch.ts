@@ -2,7 +2,7 @@
 import type { OcxClientConnectionConfig } from "../types";
 import { LINK_ROUTE_INTENT_PATH } from "../link/management-routes";
 import { parseHomeRouteIntentDocument, routeIntentDigest, ROUTE_INTENT_DIGEST_PATTERN, type HomeRouteIntentDocument } from "../link/route-intent";
-import { ROUTE_INTENT_AFTER_HEADER, ROUTE_INTENT_WATCH_HEADER } from "../link/route-intent-watch";
+import { ROUTE_INTENT_AFTER_HEADER, ROUTE_INTENT_WAKE_HEADER, ROUTE_INTENT_WATCH_HEADER } from "../link/route-intent-watch";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { signalWithTimeout } from "../lib/abort";
 import { fetchBoundLinkRelay } from "./link-relay-transport";
@@ -18,7 +18,7 @@ export interface RouteIntentWatchReadDeps {
   signal?: AbortSignal;
   timeoutMs?: number;
 }
-export type RouteIntentWatchResult = { kind: "fresh"; document: HomeRouteIntentDocument; watchSupported: boolean }
+export type RouteIntentWatchResult = { kind: "fresh"; document: HomeRouteIntentDocument; watchSupported: boolean; wakeReason?: "changed" | "notified" | "timeout" }
   | { kind: "unsupported" } | { kind: "cancelled" } | { kind: "failed"; reason: "route_intent_watch_unavailable" };
 
 function cancel(response: Response): void {
@@ -51,14 +51,16 @@ export async function watchHomeRouteIntent(
     let headerBytes = 0;
     for (const [name, value] of response.headers) headerBytes += Buffer.byteLength(name) + Buffer.byteLength(value) + 4;
     const support = response.headers.get(ROUTE_INTENT_WATCH_HEADER);
+    const wakeReason = response.headers.get(ROUTE_INTENT_WAKE_HEADER);
     const declared = response.headers.get("content-length");
     if (headerBytes > WATCH_MAX_HEADER_BYTES || (support !== null && support !== "1")
+      || (wakeReason !== null && wakeReason !== "changed" && wakeReason !== "notified" && wakeReason !== "timeout")
       || response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json"
       || (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > WATCH_MAX_BYTES))) return failed();
     const read = await readBoundedResponseBytes(response, { maxBytes: WATCH_MAX_BYTES, signal: deadline.signal });
     if (read.oversized) return failed();
     const document = parseHomeRouteIntentDocument(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(read.bytes)));
-    return document ? { kind: "fresh", document, watchSupported: support === "1" } : failed();
+    return document ? { kind: "fresh", document, watchSupported: support === "1", ...(wakeReason === null ? {} : { wakeReason }) } : failed();
   } catch { return deps.signal?.aborted ? { kind: "cancelled" } : failed(); }
   finally { if (response) cancel(response); deadline.cleanup(); }
 }
@@ -119,7 +121,7 @@ export function startRouteIntentWatch(
     const next = routeIntentDigest(result.document);
     const unchanged = after === next;
     after = next;
-    request();
+    if (!unchanged || result.wakeReason !== "timeout") request();
     // Broken peers advertising support but never waiting cannot make a tight loop.
     schedule(unchanged ? Math.max(0, 1_000 - (Date.now() - started)) : 0);
   };

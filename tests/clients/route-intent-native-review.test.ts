@@ -62,6 +62,39 @@ function scenario(body: string) {
   } finally { removeTreeWithRetry(home); }
 }
 
+test("unrelated Home routing change preserves default-on Grok and first-party Desktop", () => scenario(`
+  const {injectGrokConfig}=await import('./src/grok/inject');
+  const {syncHomeRouteTo}=await import('./src/routing/route-to-local');
+  const {initializeHomeRouteIntentDefaults,readHomeRouteIntentState}=await import('./src/routing/home-route-intent');
+  const {setRouteClientIntent}=await import('./src/routing/route-intent-state');
+  const {projectHomeRouteIntent}=await import('./src/link/route-intent');
+  const current=loadConfig(); delete current.clientIntegrations;
+  current.claudeCode={...current.claudeCode,desktopMode:'first-party'}; saveConfig(current);
+  mkdirSync(process.env.GROK_HOME,{recursive:true});
+  expect(injectGrokConfig(18274,[{id:'fixture/old'}],{grokHome:process.env.GROK_HOME,hostname:'127.0.0.1'}).ok).toBe(true);
+  const grokPath=join(process.env.GROK_HOME,'config.toml');
+  const desktopBefore=readFileSync(join(library,'_meta.json'),'utf8');
+  const localConfig=loadConfig();
+  initializeHomeRouteIntentDefaults(localConfig,'1','opencode');
+  setRouteClientIntent('opencode',{enabled:true});
+  const outcomes=await syncHomeRouteTo(localConfig,'1',false,undefined,undefined,{
+    loadModels:async()=>models,
+    materialize:async (config,doc,rows,opts)=>materializeLocalRouteIntent(config,doc,rows,{
+      ...opts, onlyClients: opts.onlyClients ? opts.onlyClients.filter(x=>x==='grok'||x==='claude-desktop') : ['grok','claude-desktop'],
+      lifecycleLockDeps:lockDeps,
+    }),
+  });
+  expect(readFileSync(grokPath,'utf8')).toContain('opencodex');
+  expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(desktopBefore);
+  expect(loadConfig().claudeCode.desktopMode).toBe('first-party');
+  expect(loadConfig().clientIntegrations?.grok).toBeUndefined();
+  expect(loadConfig().clientIntegrations?.['claude-desktop']).toBeUndefined();
+  const child=projectHomeRouteIntent(localConfig,'1','lnk_0123456789abcdef',readHomeRouteIntentState(localConfig));
+  expect(child.clients.grok.enabled).toBe(false);
+  expect(child.clients['claude-desktop'].enabled).toBe(false);
+  expect(outcomes.find(row=>row.client==='claude-desktop').outcome).not.toBe('current');
+`), SPAWN_BUDGET_MS);
+
 for (const evidence of ["marker", "settings"]) {
   test(`connected Desktop inherited enable preserves first-party ${evidence}`, () => scenario(`
     connect();

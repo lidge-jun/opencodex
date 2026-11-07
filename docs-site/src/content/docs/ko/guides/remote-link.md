@@ -75,6 +75,8 @@ ocx disconnect
 
 Home의 Route to 의도는 Child에 기본으로 동기화됩니다. 각 기기는 자신의 설치된 클라이언트, 경로, 수신 포트, 제공 모델 카탈로그로 설정을 생성합니다. 우선순위는 기기 override > Home 기본값 > 내장 기본값(Codex·Claude Code만 켜짐)입니다.
 
+기존 Home에서 Grok 또는 Claude Desktop 통합 플래그를 설정하지 않았다면, 명시적으로 경로를 선택하기 전까지 그 Home의 기존 활성화 의도를 유지합니다. 이것만으로 Child의 해당 클라이언트가 켜지지는 않습니다.
+
 ```sh
 ocx route to status --device all --json
 ocx route to aside on --accounts all

@@ -40,6 +40,7 @@ test("untrusted responses have strict size, type, UTF-8, schema and support-head
     new Response("x".repeat(65537), { headers: { "content-type": "application/json" } }),
     new Response(new Uint8Array([0xff]), { headers: { "content-type": "application/json" } }),
     Response.json({ secret: "private-body" }), reply("secret-invalid"),
+    Response.json(document, { headers: { "x-ocx-route-intent-watch": "1", "x-ocx-route-intent-wake": "unknown" } }),
     Response.json(document, { headers: { "x-extra": "x".repeat(8193) } })];
   for (const response of responses) {
     const result = await watchHomeRouteIntent(connection, "secret-key", undefined, { fetchImpl: (async () => response) as typeof fetch });
@@ -71,6 +72,41 @@ test("old Home without watch support (including 404) defers to periodic tick wit
     expect(reads).toBe(1); expect(applies).toBe(0); expect(timers).toHaveLength(0);
     handle.stop();
   }
+});
+
+test("unchanged watch timeout skips sync but explicit and legacy wakeups still apply", async () => {
+  const timers: Array<() => void> = [];
+  const wakes: Array<string | null> = ["changed", "timeout", "notified", null];
+  let reads = 0, applies = 0;
+  const handle = startRouteIntentWatch(connection, "key", {
+    requestSync: async () => { applies++; },
+    fetchImpl: (async () => {
+      const wake = wakes[reads++];
+      if (wake === undefined) return new Promise<Response>(() => {});
+      return Response.json(document, { headers: { "x-ocx-route-intent-watch": "1",
+        ...(wake === null ? {} : { "x-ocx-route-intent-wake": wake }) } });
+    }) as typeof fetch,
+    setTimer: cb => { timers.push(cb); return cb; }, clearTimer() {},
+  }); handles.push(handle);
+  timers.shift()?.(); await turn(); await turn(); expect(applies).toBe(1);
+  timers.shift()?.(); await turn(); await turn(); expect(applies).toBe(1);
+  timers.shift()?.(); await turn(); await turn(); expect(applies).toBe(2);
+  timers.shift()?.(); await turn(); await turn(); expect(applies).toBe(3);
+});
+
+test("a changed digest is applied even when the Home reports a timeout", async () => {
+  const timers: Array<() => void> = [];
+  const changed = structuredClone(document);
+  changed.clients.grok.enabled = !changed.clients.grok.enabled;
+  let reads = 0, applies = 0;
+  const handle = startRouteIntentWatch(connection, "key", {
+    requestSync: async () => { applies++; },
+    fetchImpl: (async () => Response.json(reads++ === 0 ? document : changed,
+      { headers: { "x-ocx-route-intent-watch": "1", "x-ocx-route-intent-wake": "timeout" } })) as typeof fetch,
+    setTimer: cb => { timers.push(cb); return cb; }, clearTimer() {},
+  }); handles.push(handle);
+  timers.shift()?.(); await turn(); await turn(); expect(applies).toBe(1);
+  timers.shift()?.(); await turn(); await turn(); expect(applies).toBe(2);
 });
 
 test("watch keeps reading while apply busy, coalesces wakeups and retries without overlapping local writes", async () => {
@@ -114,11 +150,12 @@ test("production watch proves the actual socket before sending a key and never f
   const sessions = createLinkRelaySessions({ fingerprints: () => [serviceApiTokenFingerprint(key)] });
   const home = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req, server) => {
     seen.push({ port: server.requestIP(req)!.port, path: new URL(req.url).pathname, auth: req.headers.get("authorization") });
-    return sessions.dispatch(req, server, async () => reply());
+    return sessions.dispatch(req, server, async () => Response.json(document,
+      { headers: { "x-ocx-route-intent-watch": "1", "x-ocx-route-intent-wake": "timeout" } }));
   } });
   try {
     const bound = { ...connection, link: { ...connection.link!, tunnelPort: home.port! } };
-    expect(await watchHomeRouteIntent(bound, key)).toMatchObject({ kind: "fresh", watchSupported: true });
+    expect(await watchHomeRouteIntent(bound, key)).toMatchObject({ kind: "fresh", watchSupported: true, wakeReason: "timeout" });
     expect(seen).toHaveLength(2); expect(seen[0]!.port).toBe(seen[1]!.port);
     expect(seen[0]!.auth).toBeNull(); expect(seen[1]!.auth).toBe(`Bearer ${key}`);
     expect(seen[1]!.path).toBe("/v1/link-management/route-intent");

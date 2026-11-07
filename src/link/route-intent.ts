@@ -77,12 +77,15 @@ export function projectHomeRouteIntent(
   const clients = {} as HomeRouteIntentDocument["clients"];
   const sources = {} as HomeRouteIntentDocument["sources"];
   for (const client of ROUTE_CLIENT_IDS) {
-    // Preserve explicit native toggles on upgrades; absent settings use the route builtins.
+    // Preserve explicit native toggles. An untouched Home keeps the legacy native
+    // default without changing the builtin defaults inherited by other devices.
     const legacy = client === "claude" ? config.claudeCode?.enabled
       : client === "codex" || client === "grok" || client === "claude-desktop" ? config.clientIntegrations?.[client] : undefined;
     const home = state.defaults[client] ?? (typeof legacy === "boolean" ? { enabled: legacy } : undefined);
     const device = deviceId === undefined ? undefined : state.devices[deviceId]?.[client];
-    const chosen = { enabled: client === "codex" || client === "claude", ...home, ...device };
+    const implicitNativeHome = deviceId === "home" && (client === "grok" || client === "claude-desktop")
+      && home === undefined && device === undefined;
+    const chosen = { enabled: client === "codex" || client === "claude" || implicitNativeHome, ...home, ...device };
     clients[client] = { ...chosen, ...(Array.isArray(chosen.accounts) ? { accounts: [...chosen.accounts].sort() } : {}) };
     sources[client] = device ? "device" : home ? "default" : "builtin";
   }

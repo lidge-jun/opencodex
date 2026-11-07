@@ -45,7 +45,8 @@ export function persistNativeRouteIntent(client: "codex" | "claude" | "claude-de
       ...(result.value.claudeCode?.authModeMigratedAt ? { authModeMigratedAt: result.value.claudeCode.authModeMigratedAt } : {}) };
     if (result.value.apiSurfaces?.messages !== undefined) snapshot.apiSurfaces = { ...snapshot.apiSurfaces, messages: { ...result.value.apiSurfaces.messages } };
   }
-  else snapshot.clientIntegrations = { ...snapshot.clientIntegrations, [client]: enabled };
+  else if (result.value.clientIntegrations) snapshot.clientIntegrations = { ...result.value.clientIntegrations };
+  else delete snapshot.clientIntegrations;
   return result.value;
 }
 

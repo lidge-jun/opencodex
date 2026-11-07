@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,17 @@ import { setRouteClientIntent, routeIntentStatePath } from "../../src/routing/ro
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { homeRouteIntentWatch } from "../../src/link/route-intent-watch";
 import { handleRouteToRoutes } from "../../src/server/management/route-to-routes";
+
+test("watch replies distinguish unchanged timeout from explicit notification", async () => {
+  const after = await digest();
+  const wait = spyOn(homeRouteIntentWatch, "wait");
+  try {
+    wait.mockResolvedValueOnce("timeout").mockResolvedValueOnce("notified");
+    const headers = { "x-ocx-route-intent-watch": "1", "x-ocx-route-intent-after": after };
+    expect((await read(headers).response).headers.get("x-ocx-route-intent-wake")).toBe("timeout");
+    expect((await read(headers).response).headers.get("x-ocx-route-intent-wake")).toBe("notified");
+  } finally { wait.mockRestore(); }
+});
 
 const link: LinkRecord = { id: "lnk_0123456789abcdef", alias: "child", direction: "client-initiated", hostKeyFingerprint: null,
   tunnelPort: 19200, apiKeyId: "own-key", createdAt: "2026-11-07T00:00:00.000Z" };

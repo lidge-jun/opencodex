@@ -1,6 +1,7 @@
 /** Ephemeral Home wakeups. The admitted link id, never a caller selector, owns each slot. */
 export const ROUTE_INTENT_WATCH_HEADER = "x-ocx-route-intent-watch";
 export const ROUTE_INTENT_AFTER_HEADER = "x-ocx-route-intent-after";
+export const ROUTE_INTENT_WAKE_HEADER = "x-ocx-route-intent-wake";
 export const ROUTE_INTENT_WATCH_TIMEOUT_MS = 30_000;
 export const ROUTE_INTENT_WATCH_MAX_LINKS = 256;
 export type RouteIntentWake = "notified" | "timeout" | "cancelled" | "busy";

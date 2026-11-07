@@ -69,6 +69,11 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
   const inherited = projectHomeRouteIntent(config, version, undefined, readHomeRouteIntentState(config, { state: prior }));
   updateRouteIntentState(state => {
     for (const [client, intent] of Object.entries(inherited.clients)) {
+      // Leave untouched native Home intent implicit: recording an off builtin as
+      // a global default would remove legacy Home routing during an unrelated edit.
+      if ((client === "grok" || client === "claude-desktop")
+        && config.clientIntegrations?.[client] === undefined
+        && prior.defaults[client] === undefined && inherited.sources[client] === "builtin") continue;
       state.defaults[client as keyof typeof state.defaults] ??= intent;
     }
     return state;

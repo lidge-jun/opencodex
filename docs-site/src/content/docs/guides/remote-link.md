@@ -111,6 +111,8 @@ To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disc
 
 The Home owns which clients route through OpenCodex. Each Child materializes that intent using its own installed clients, filesystem paths, listener port and served model catalog. No client config file or credential is copied from the Home. Device overrides take precedence over Home defaults; the built-in default enables Codex and Claude Code and leaves other clients off.
 
+On an existing Home, an unset Grok or Claude Desktop integration flag keeps its previous enabled intent locally until an explicit route decision overrides it. This does not enable either client on Child devices by itself.
+
 ```sh
 ocx route to status --device all --json
 ocx route to aside on --accounts all
