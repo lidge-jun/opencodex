@@ -9,13 +9,32 @@ test("account display labels omit malformed identities and mask valid addresses"
   }
 });
 
+function fastestLabelMs(input: string, runs = 5): number {
+  let best = Infinity;
+  for (let i = 0; i < runs; i++) {
+    const started = performance.now();
+    maskedAccountLabel(input);
+    const elapsed = performance.now() - started;
+    if (elapsed < best) best = elapsed;
+  }
+  return best;
+}
+
 test("account label validation stays linear on adversarial domain labels", () => {
   // Each "00." label had two ways to match, so a trailing invalid character backtracked 2^n.
-  const adversarial = "%@0." + "00.".repeat(26) + "!";
-  const started = performance.now();
-  expect(maskedAccountLabel(adversarial)).toBeUndefined();
-  expect(performance.now() - started).toBeLessThan(50);
-  expect(maskedAccountLabel("%@0." + "00.".repeat(80) + "!")).toBeUndefined();
+  // The vulnerable pattern took ~400ms at 26 labels and would not finish at 80; a linear
+  // check lands orders of magnitude below the bound. The fastest of several runs keeps a
+  // single scheduler pause from failing the test.
+  for (const labels of [26, 80]) {
+    const domain = "0." + "00.".repeat(labels);
+    const invalid = `%@${domain}!`;
+    const valid = `%@${domain}a`;
+    // Valid addresses of the same length prove these inputs still reach the pattern.
+    expect(valid.length).toBeLessThanOrEqual(254);
+    expect(maskedAccountLabel(valid)).toBe(`*@${domain}a`);
+    expect(maskedAccountLabel(invalid)).toBeUndefined();
+    expect(fastestLabelMs(invalid)).toBeLessThan(50);
+  }
   expect(maskedAccountLabel("a@b-c.d0-e.f")).toBe("*@b-c.d0-e.f");
 });
 
