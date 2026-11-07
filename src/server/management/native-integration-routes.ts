@@ -9,6 +9,7 @@ import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
 import { initializeHomeRouteIntentDefaults } from "../../routing/home-route-intent";
 import { setRouteClientIntent } from "../../routing/route-intent-state";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
+import { ConfigMutationLockError } from "../../config/mutation-lock";
 /**
  * Toggle routes for the integrations that are NOT file-merged clients.
  *
@@ -1054,7 +1055,7 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
   if (ctx.config.runtimeRole === "client") return jsonResponse({ error: "Route decisions are owned by the Home", code: "link_child_read_only" }, 403);
   try { return await settleConfigRoot(configRoot(), () => withLinkApply(() => handleNativeIntegrationRoutesUnlocked(ctx))); }
   catch (error) {
-    if (error instanceof LinkApplyBusyError) return refusal(409, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "config_busy", "Another Home apply is running. Nothing was written; retry in a moment.");
+    if (error instanceof LinkApplyBusyError || error instanceof ConfigMutationLockError) return refusal(409, ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId, "config_busy", "Another Home apply or config mutation is running. Nothing was written; retry in a moment.");
     if (error instanceof WindowsSecretAclSettleTimeoutError) {
       const clientId = ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId;
       const firstParty = clientId === "claude-desktop" && resolveClaudeDesktopApplyMode(ctx.config, observeClaudeDesktopMode(ctx.config)) === "first-party";
