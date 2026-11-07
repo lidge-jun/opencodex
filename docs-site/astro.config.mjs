@@ -27,15 +27,17 @@ export default defineConfig({
         "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.",
       tagline: "Use any LLM with OpenAI Codex and Claude Code.",
       logo: {
-        light: "./src/assets/logo-light.png",
-        dark: "./src/assets/logo-dark.png",
+        light: "./src/assets/logo-light.svg",
+        dark: "./src/assets/logo-dark.svg",
         replacesTitle: false,
       },
       favicon: "/favicon.ico",
       customCss: [
         "@fontsource-variable/geist",
-        "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css",
+        "@fontsource-variable/geist-mono",
+        "wanted-sans/fonts/webfonts/variable/split/WantedSansVariable.css",
         "./src/styles/custom.css",
+        "./src/styles/site-theme.css",
       ],
       components: {
         Header: "./src/components/Header.astro",
@@ -44,6 +46,10 @@ export default defineConfig({
       head: [
         // Google favicon guidelines: PNG at a multiple of 48px, exposed via rel="icon".
         { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "192x192", href: "/favicon.png" } },
+        // The vector mark recolours itself for dark browser chrome; browsers that
+        // understand SVG icons prefer it over the generated ICO/PNG (scripts/brand-favicons.ts).
+        { tag: "link", attrs: { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" } },
+        { tag: "link", attrs: { rel: "apple-touch-icon", href: "/favicon.png" } },
         { tag: "meta", attrs: { property: "og:image", content: `${SITE_URL}/og.png` } },
         { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
         { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
