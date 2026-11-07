@@ -47,7 +47,16 @@ describe("verified release and candidate handles", () => {
       const fingerprint = createHash("sha256").update(raw).digest("hex");
       const publicBox = Buffer.from(`untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), id, raw]).toString("base64")}\n`).toString("base64");
       const key = { keyId: fingerprint, algorithm: "minisign-ed25519-blake2b512/1", publicKey: publicBox };
-      const root = Buffer.from(JSON.stringify({ schema: "ocx.update.root/1", revision: 1, expiresAt: "2030-01-01T00:00:00Z", rootKeys: [key], rootThreshold: 1, releaseKeys: [{ ...key, channels: ["latest"], roles: ["release", "desktop-artifact"] }], releaseThreshold: 1, channels: ["latest"] }));
+      const extraSigner = (byte: number) => {
+        const pair = generateKeyPairSync("ed25519");
+        const publicBytes = Buffer.from(pair.publicKey.export({ format: "der", type: "spki" })).subarray(-32);
+        const keyId = createHash("sha256").update(publicBytes).digest("hex");
+        const packetId = Buffer.alloc(8, byte);
+        const publicKeyBox = Buffer.from(`untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), packetId, publicBytes]).toString("base64")}\n`).toString("base64");
+        return { pair, packetId, key: { keyId, algorithm: "minisign-ed25519-blake2b512/1", publicKey: publicKeyBox } };
+      };
+      const wrongRole = extraSigner(9), wrongChannel = extraSigner(10);
+      const root = Buffer.from(JSON.stringify({ schema: "ocx.update.root/1", revision: 1, expiresAt: "2030-01-01T00:00:00Z", rootKeys: [key], rootThreshold: 1, releaseKeys: [{ ...key, channels: ["latest"], roles: ["release", "desktop-artifact"] }, { ...wrongRole.key, channels: ["latest"], roles: ["release"] }, { ...wrongChannel.key, channels: ["preview"], roles: ["release", "desktop-artifact"] }], releaseThreshold: 1, channels: ["latest", "preview"] }));
       const anchor = createHash("sha256").update(root).digest("hex");
       writeFileSync(join(dir, "update-trust-anchor.mjs"), `export const EMBEDDED_ROOT_SHA256 = "${anchor}";\n`);
       const fixture = await import(pathToFileURL(join(dir, "signed-supply.mjs")).href);
@@ -80,6 +89,8 @@ describe("verified release and candidate handles", () => {
       expect(Object.isFrozen(artifactEvidence)).toBe(true);
       expect(Object.keys(artifactEvidence)).toEqual([]);
       expect(() => fixture.verifyArtifactEvidence(candidate, Buffer.from("changed"), rootHandle, now)).toThrow();
+      const sameLengthChange = Buffer.from(artifact); sameLengthChange[0] ^= 1;
+      expect(() => fixture.verifyArtifactEvidence(candidate, sameLengthChange, rootHandle, now)).toThrow();
       expect(() => fixture.verifyArtifactEvidence({}, artifact, rootHandle, now)).toThrow();
       expect(() => verifyArtifactEvidence(candidate, artifact, rootHandle, now)).toThrow();
       expect(() => fixture.verifyArtifactEvidence(candidate, artifact, rootHandle, Date.parse("2030-01-01T00:00:00Z"))).toThrow();
@@ -137,6 +148,23 @@ describe("verified release and candidate handles", () => {
       const wrongSignerEnvelope = transitionEnvelope([{ keyFingerprint: fingerprint, signatureBox: signBox(wrongSignerBytes) }]);
       const wrongSignerRelease = fixture.verifyReleaseEvidence(wrongSignerBytes, wrongSignerEnvelope, rootHandle, "latest", now);
       expect(() => fixture.verifyArtifactEvidence(fixture.selectTargetEvidence(wrongSignerRelease, selection), artifact, rootHandle, now)).toThrow();
+      for (const other of [wrongRole, wrongChannel]) {
+        const altered = JSON.parse(release.toString());
+        altered.targets[0].artifact.signerFingerprint = other.key.keyId;
+        altered.targets[0].artifact.signatureBox = signBox(artifact, other.pair.privateKey, other.packetId);
+        const alteredBytes = Buffer.from(JSON.stringify(altered));
+        const alteredEnvelope = transitionEnvelope([{ keyFingerprint: fingerprint, signatureBox: signBox(alteredBytes) }]);
+        const alteredRelease = fixture.verifyReleaseEvidence(alteredBytes, alteredEnvelope, rootHandle, "latest", now);
+        expect(() => fixture.verifyArtifactEvidence(fixture.selectTargetEvidence(alteredRelease, selection), artifact, rootHandle, now)).toThrow();
+      }
+      for (const alteredArtifact of [{ sha256: "f".repeat(64) }, { size: artifact.length + 1 }]) {
+        const altered = JSON.parse(release.toString());
+        Object.assign(altered.targets[0].artifact, alteredArtifact);
+        const alteredBytes = Buffer.from(JSON.stringify(altered));
+        const alteredEnvelope = transitionEnvelope([{ keyFingerprint: fingerprint, signatureBox: signBox(alteredBytes) }]);
+        const alteredRelease = fixture.verifyReleaseEvidence(alteredBytes, alteredEnvelope, rootHandle, "latest", now);
+        expect(() => fixture.verifyArtifactEvidence(fixture.selectTargetEvidence(alteredRelease, selection), artifact, rootHandle, now)).toThrow();
+      }
 
       const multiRoot = JSON.parse(successor.toString());
       multiRoot.releaseKeys = [key, successorKey].map((entry) => ({ ...entry, channels: ["latest"], roles: ["release", "desktop-artifact"] }));
