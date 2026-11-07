@@ -877,14 +877,14 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <div ref={scrollContainerRef} className="logs-table-wrap max-h-[calc(100dvh-300px)] overflow-auto [overflow-anchor:none]">
           <table
             className={cn(
-              "logs-table ui-v2 w-full min-w-[1100px] table-fixed border-collapse text-[13px] font-normal text-fg",
+              "logs-table ui-v2 w-full min-w-[1020px] table-fixed border-collapse text-[13px] font-normal text-fg",
               "[&_th]:h-9 [&_th]:px-3 [&_th]:text-left [&_th]:text-[12px] [&_th]:font-medium [&_th]:whitespace-nowrap [&_th]:text-fg-subtle",
               "[&_td]:px-3 [&_td]:py-2.5 [&_td]:align-middle",
             )}
           >
             <colgroup>
               {/* Keep the protocol badge readable alongside the added client column. */}
-              <col className="logs-col-client w-[128px]" />
+              <col className="logs-col-client w-[48px]" />
               <col className="logs-col-time w-[120px]" />
               <col className="logs-col-status w-[80px]" />
               <col className="logs-col-model" style={{ width: 280 }} />

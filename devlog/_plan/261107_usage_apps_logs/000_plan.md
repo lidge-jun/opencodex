@@ -38,3 +38,7 @@ Field chain: `src/usage/summary.ts` creates app aggregates and serializes them i
 ## Audit disposition
 
 Independent audit: GO-WITH-FIXES (blockers=0). Accepted both medium findings: reset focuses the persistent conversation search after the radio controls are removed and keyboard/pointer tests verify it; echo rejection uses otherwise valid reports and changes only the source echo, with a non-all client for a mismatch. Added scenarios: nonempty report shows model → provider → app and hides app when a particular client is selected; a projected two-provider combo contributes one request and only retained token/cost; warm all/all and key caches, append another client, and compare with a fresh rebuild; hub tests cover omitted older fields, invalid/excessive labels, nested private fields, authenticated-key scope, and no key identity.
+
+## Owner correction
+
+The Logs chip uses only an SVG app mark, with no visible app name. Missing, invalid and other clients use a neutral question-mark SVG; the classified name remains available to assistive technology. The column stays narrow and the existing protocol badge remains legible.

@@ -197,10 +197,11 @@ its request and attempt failure cause is `transport-ambiguous`, with resend perm
 A Codex move to another account after HTTP 402 appears as **Account quota exhausted (402)**
 in the attempt's recovery details and counts as a quota recovery in exported metrics.
 
-Logs shows all apps together, with a client chip on each request instead of app tabs.
-Missing client attribution uses a neutral **Unknown** chip; it does not imply Codex
-or a request failure. The chip identifies the client app, independently of the provider
-and protocol. It is a label, not an app filter.
+Logs shows all apps together, with an icon-only client chip on each request instead of
+app tabs. Recognized clients use their SVG logos; unknown or other clients use a neutral
+question-mark icon. App names remain available to screen readers without visible text.
+Missing client attribution does not imply Codex or a request failure. The chip identifies
+the client app, independently of the provider and protocol, and is not an app filter.
 
 Logs filters combine intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model

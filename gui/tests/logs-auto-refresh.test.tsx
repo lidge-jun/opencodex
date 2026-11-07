@@ -1438,11 +1438,11 @@ test("Logs: a pending refresh reconciles the user's latest selection rather than
 
 
 test.each([
-  ["codex_cli", "Codex"], ["codex_desktop", "Codex"], ["codex_ide", "Codex"],
-  ["claude_code", "Claude Code"], ["claude_desktop", "Claude Desktop"],
-  ["grok", "Grok"], ["opencode", "OpenCode"], ["aside", "Aside"],
-  ["other", "Other"], ["unknown", "Unknown"],
-])("Logs: classified client %s has a compact far-left chip", async (client, label) => {
+  ["codex_cli", "Codex", "openai.svg"], ["codex_desktop", "Codex", "openai.svg"], ["codex_ide", "Codex", "openai.svg"],
+  ["claude_code", "Claude Code", "claude-color.svg"], ["claude_desktop", "Claude Desktop", "claude-color.svg"],
+  ["grok", "Grok", "grok.svg"], ["opencode", "OpenCode", "opencode.svg"], ["aside", "Aside", "aside.svg"],
+  ["other", "Other", null], ["unknown", "Unknown", null],
+])("Logs: classified client %s has an icon-only far-left chip", async (client, label, icon) => {
   // Intentionally conflicting legacy surface: it must not supply the chip label.
   serveLogSnapshot(() => [{ ...sampleLog, client, surface: "grok" }]);
   const { root, container } = await mountLogs();
@@ -1451,7 +1451,11 @@ test.each([
     const row = container.querySelector(".logs-table tbody tr[data-index]")!;
     const chip = row.querySelector("td:first-child [data-log-client]")!;
     expect(chip).not.toBeNull();
-    expect(chip.textContent).toBe(label);
+    expect(chip.textContent).toBe("");
+    expect(chip.getAttribute("aria-label")).toBe(label);
+    expect(chip.getAttribute("role")).toBe("img");
+    if (icon) expect(chip.querySelector("img")?.getAttribute("src")).toBe(`/provider-icons/${icon}`);
+    else expect(chip.querySelector("svg")).not.toBeNull();
     expect(chip.getAttribute("data-log-client")).toBe(client);
     expect(chip.classList.contains("rounded-full")).toBe(true);
     expect(chip.querySelector('[aria-hidden="true"]')).not.toBeNull();
@@ -1473,7 +1477,9 @@ test.each([
     await flushMicrotasks();
     const chip = container.querySelector(".logs-table tbody td:first-child [data-log-client]")!;
     expect(chip).not.toBeNull();
-    expect(chip.textContent).toBe("Unknown");
+    expect(chip.textContent).toBe("");
+    expect(chip.getAttribute("aria-label")).toBe("Unknown");
+    expect(chip.querySelector("svg")).not.toBeNull();
     expect(chip.getAttribute("data-log-client")).toBe("unknown");
     expect(chip.classList.contains("bg-surface-2")).toBe(true);
     expect(chip.outerHTML).not.toContain("raw-private-agent-value");
@@ -1499,7 +1505,7 @@ test("Logs: client chip coexists with rerouting, interception and protocol diagn
   try {
     await flushMicrotasks();
     const row = container.querySelector(".logs-table tbody tr[data-index]")!;
-    expect(row.querySelector("td:first-child")?.textContent).toBe("OpenCode");
+    expect(row.querySelector('td:first-child [data-log-client="opencode"] img')?.getAttribute("src")).toBe("/provider-icons/opencode.svg");
     expect(row.textContent).toContain("requested-model → served-model");
     expect(row.textContent).toContain("helper-model");
     expect(row.querySelector('[data-protocol-mode="native"]')?.textContent).toContain("Native");
