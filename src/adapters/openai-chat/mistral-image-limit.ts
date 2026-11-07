@@ -22,6 +22,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasUsableImageUrl(part: Record<string, unknown>): boolean {
+  if (part.type !== "image_url") return false;
+  const imageUrl = part.image_url;
+  return (typeof imageUrl === "string" && imageUrl.length > 0)
+    || (isRecord(imageUrl) && typeof imageUrl.url === "string" && imageUrl.url.length > 0);
+}
+
 /**
  * Keep the newest images a first-party Mistral request may carry and replace older ones with a
  * text note, across every message (promoted tool-result images included). Normalizes the outbound
@@ -30,21 +37,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function limitMistralChatImages(messages: unknown, provider: OcxProviderConfig, modelId: string): unknown {
   if (!isMistralChatTarget(provider) || !Array.isArray(messages)) return messages;
   const maxImages = mistralMaxImages(provider, modelId);
-  const images: Array<{ message: number; part: number }> = [];
-  messages.forEach((message, index) => {
-    if (!isRecord(message) || !Array.isArray(message.content)) return;
-    message.content.forEach((part, partIndex) => {
-      if (isRecord(part) && part.type === "image_url") images.push({ message: index, part: partIndex });
-    });
-  });
-  const excess = images.length - maxImages;
-  if (excess <= 0) return messages;
   const note = { type: "text", text: `[image omitted: Mistral accepts at most ${maxImages} images per request for this model; older images were dropped]` };
-  const out = [...messages];
-  for (const { message, part } of images.slice(0, excess)) {
-    const original = messages[message] as Record<string, unknown>;
-    if (out[message] === original) out[message] = { ...original, content: [...(original.content as unknown[])] };
-    ((out[message] as Record<string, unknown>).content as unknown[])[part] = note;
+  let imagesKept = 0;
+  let out: unknown[] | undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!isRecord(message) || !Array.isArray(message.content)) continue;
+    const content = message.content;
+    let nextContent: unknown[] | undefined;
+    for (let partIndex = content.length - 1; partIndex >= 0; partIndex--) {
+      const part = content[partIndex];
+      if (!isRecord(part) || !hasUsableImageUrl(part)) continue;
+      if (imagesKept++ < maxImages) continue;
+      nextContent ??= content.slice();
+      nextContent[partIndex] = note;
+    }
+    if (!nextContent) continue;
+    out ??= messages.slice();
+    out[index] = { ...message, content: nextContent };
   }
-  return out;
+  return out ?? messages;
 }

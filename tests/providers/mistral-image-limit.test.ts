@@ -37,6 +37,23 @@ describe("Mistral image count limit", () => {
     expect(limitMistralChatImages("not messages", mistral(), "mistral-medium-latest")).toBe("not messages");
     const malformed = [null, "text", { role: "user", content: "plain" }, { role: "user", content: [null, { type: "image_url" }] }];
     expect(limitMistralChatImages(malformed, mistral(), "mistral-medium-latest")).toBe(malformed);
+
+    const manyMalformed = [{ role: "user", content: Array.from({ length: 10_000 }, () => ({ type: "image_url" })) }];
+    expect(limitMistralChatImages(manyMalformed, mistral(), "mistral-medium-latest")).toBe(manyMalformed);
+  });
+
+  test("counts only usable image URLs and accepts the OpenAI string form", () => {
+    const content = [
+      ...Array.from({ length: 20 }, () => ({ type: "image_url" })),
+      ...Array.from({ length: 9 }, (_, n) => ({ type: "image_url", image_url: `https://example.test/${n}.png` })),
+    ];
+    const history = [{ role: "user", content }];
+    const out = limitMistralChatImages(history, mistral(), "mistral-medium-latest") as typeof history;
+    expect(out[0].content.slice(0, 20)).toEqual(content.slice(0, 20));
+    expect(out[0].content[20]).toEqual({
+      type: "text", text: "[image omitted: Mistral accepts at most 8 images per request for this model; older images were dropped]",
+    });
+    expect(out[0].content.slice(21)).toEqual(content.slice(21));
   });
 
   test("keeps the newest images across turns, names the cap and leaves the history untouched", () => {
