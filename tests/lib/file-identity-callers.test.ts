@@ -8,7 +8,7 @@ import { repoPath } from "../helpers/repo-root";
 const scopes: Record<string, string[]> = {
   "src/lab/public/mutation-lock.ts": ["assertMutationLockDirectory"],
   "src/lab/public/private-file.ts": ["cleanupPublishedPrivateFileStages"],
-  "src/lab/public/file-safety.ts": ["withPrivateRegularFile"],
+  "src/lab/public/file-safety.ts": ["withPrivateRegularFile", "recoverPublishedPrivateFileStage"],
   "src/lab/artifacts/secure-fs.ts": ["assertOpenedPathMatchesDescriptor", "revalidateDir", "openTrustedArtifactDir"],
   "src/lab/fabric/scratch.ts": ["revalidateScratchDir", "openAtScratch", "openTrustedScratchRoot", "openScratchRelativePath"],
   "src/codex/codex-home-owner.ts": ["readCodexHomeJournal"],

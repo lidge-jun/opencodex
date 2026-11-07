@@ -40,6 +40,39 @@ test("private reads reject adjacent NTFS-sized descriptor identities", () => {
   } finally { spy.mockRestore(); pathSpy.mockRestore(); }
 });
 
+for (const replaceOnRecheck of [false, true]) {
+  test.skipIf(process.platform === "win32")(
+    `private reads preserve a distinct large-inode stage ${replaceOnRecheck ? "on recheck" : "on discovery"}`,
+    () => {
+      const root = tempRoot();
+      const target = join(root, "target.txt");
+      const alias = join(root, "alias.txt");
+      const stage = join(root, `.target.txt.${process.pid}.00000000-0000-4000-8000-000000000000.tmp`);
+      writeFileSync(target, "safe-bytes", { mode: 0o600 });
+      linkSync(target, alias);
+      writeFileSync(stage, "unrelated", { mode: 0o600 });
+      const original = fs.lstatSync;
+      let stageChecks = 0;
+      const spy = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+        const stats = options?.bigint ? original(path, { bigint: true }) : original(path);
+        if (!samePath(path, target) && !samePath(path, stage)) return stats;
+        const isStage = samePath(path, stage);
+        if (isStage) stageChecks++;
+        const different = isStage && (!replaceOnRecheck || stageChecks > 1);
+        const ino = 9_007_199_254_740_992n + (different ? 1n : 0n);
+        return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+          { ino: options?.bigint ? ino : Number(ino) });
+      }) as typeof fs.lstatSync);
+      try {
+        expect(() => readPrivateRegularFile(target, {
+          maxBytes: 1024, errorCode: "unsafe", errorMessage: "unsafe",
+        })).toThrow(PublicEvidenceValidationError);
+        expect(fs.existsSync(stage)).toBe(true);
+      } finally { spy.mockRestore(); }
+    },
+  );
+}
+
 test("descriptor-bound private reads reject a symlink even when O_NOFOLLOW is unavailable", () => {
   const root = tempRoot();
   const target = join(root, "target.txt");

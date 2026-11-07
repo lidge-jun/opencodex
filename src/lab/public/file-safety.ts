@@ -39,8 +39,8 @@ function sizeError(options: PrivateRegularFileReadOptions): PublicEvidenceValida
  */
 function recoverPublishedPrivateFileStage(path: string): void {
   if (process.platform === "win32") return;
-  const finalStats = lstatSync(path);
-  if (finalStats.isSymbolicLink() || !finalStats.isFile() || finalStats.nlink <= 1) return;
+  const finalStats = lstatSync(path, { bigint: true });
+  if (finalStats.isSymbolicLink() || !finalStats.isFile() || finalStats.nlink <= 1n) return;
 
   const dir = dirname(path);
   const prefix = `.${basename(path)}.`;
@@ -49,12 +49,11 @@ function recoverPublishedPrivateFileStage(path: string): void {
     if (!name.startsWith(prefix) || !isPrivateFileStageName(name)) continue;
     const stagePath = join(dir, name);
     try {
-      const stageStats = lstatSync(stagePath);
+      const stageStats = lstatSync(stagePath, { bigint: true });
       if (
         stageStats.isFile()
         && !stageStats.isSymbolicLink()
-        && stageStats.dev === finalStats.dev
-        && stageStats.ino === finalStats.ino
+        && sameFileIdentity(stageStats, finalStats)
       ) {
         candidates.push(stagePath);
       }
@@ -76,12 +75,11 @@ function recoverPublishedPrivateFileStage(path: string): void {
 
   for (const stagePath of candidates) {
     try {
-      const stageStats = lstatSync(stagePath);
+      const stageStats = lstatSync(stagePath, { bigint: true });
       if (
         stageStats.isFile()
         && !stageStats.isSymbolicLink()
-        && stageStats.dev === finalStats.dev
-        && stageStats.ino === finalStats.ino
+        && sameFileIdentity(stageStats, finalStats)
       ) {
         unlinkSync(stagePath);
       }
