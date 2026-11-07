@@ -7,7 +7,7 @@ import type { OcxConfig } from "../../src/types";
 import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
 import { saveConfig } from "../../src/config";
 import { setProviderApiKeyPaused } from "../../src/providers/api-key-pause";
-import { resolveProviderApiKey, setProviderKeychainEntryFactoryForTests, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
+import { resolveProviderApiKey, resolveProviderApiKeyPassively, resolveProviderApiKeyQuietly, setProviderKeychainEntryFactoryForTests, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
 import * as decision from "../../src/providers/quota-decision-snapshot";
 
 function fixture(name: string): OcxConfig {
@@ -191,6 +191,49 @@ test("keychain replacement retires passive ownership while normal credential rea
     detach();
     setProviderKeychainEntryFactoryForTests(null);
     observations.clearPassiveKeyLimits();
+  }
+});
+
+test("a passive projection cannot seed routing's keychain cache", () => {
+  const config = fixture("unseen-keychain");
+  const provider = config.providers["unseen-keychain"]!;
+  provider.apiKey = "keychain:unseen-keychain";
+  let stored: string | null = "first-synthetic-key";
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => stored, setPassword: value => { stored = value; }, deletePassword: () => { stored = null; return true; } }));
+  let observed = 0, invalidated = 0;
+  const detach = registerDecisionQuotaSink({
+    observeKeyCredential: () => { observed++; }, invalidateKeyQuotas: () => { invalidated++; },
+  } as DecisionQuotaSink);
+  try {
+    expect(listPassiveKeyLimits(config)).toEqual([]);
+    expect({ observed, invalidated }).toEqual({ observed: 0, invalidated: 0 });
+    stored = "second-synthetic-key";
+    expect(routedProviderConfig("unseen-keychain", provider).apiKey).toBe("second-synthetic-key");
+    expect({ observed, invalidated }).toEqual({ observed: 1, invalidated: 0 });
+    stored = null;
+    expect(resolveProviderApiKeyPassively(provider.apiKey)).toBeUndefined();
+    expect({ observed, invalidated }).toEqual({ observed: 1, invalidated: 0 });
+    expect(resolveProviderApiKey(provider.apiKey)).toBe("second-synthetic-key");
+  } finally {
+    detach();
+    setProviderKeychainEntryFactoryForTests(null);
+    observations.clearPassiveKeyLimits();
+  }
+});
+
+test("passive keychain reads leave an existing normal or quiet resolver cache intact", () => {
+  let stored: string | null = "cached-synthetic-key";
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => stored, setPassword: value => { stored = value; }, deletePassword: () => { stored = null; return true; } }));
+  try {
+    expect(resolveProviderApiKeyQuietly("keychain:quiet-cache")).toBe("cached-synthetic-key");
+    stored = "current-synthetic-key";
+    expect(resolveProviderApiKeyPassively("keychain:quiet-cache")).toBe("current-synthetic-key");
+    expect(resolveProviderApiKey("keychain:quiet-cache")).toBe("cached-synthetic-key");
+    expect(resolveProviderApiKeyQuietly("keychain:quiet-cache")).toBe("cached-synthetic-key");
+    invalidateResolvedProviderKeyCache();
+    expect(resolveProviderApiKey("keychain:quiet-cache")).toBe("current-synthetic-key");
+  } finally {
+    setProviderKeychainEntryFactoryForTests(null);
   }
 });
 

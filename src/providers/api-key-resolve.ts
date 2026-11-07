@@ -103,8 +103,8 @@ export function providerKeychainEntry(account: string): ProviderKeychainEntry {
   };
 }
 
-function readKeychain(account: string, quiet = false): string | undefined {
-  const cached = resolvedCache.get(account);
+function readKeychain(account: string, quiet = false, useCache = true): string | undefined {
+  const cached = useCache ? resolvedCache.get(account) : undefined;
   if (cached !== undefined) return cached;
   let value: string | null = null;
   try {
@@ -114,7 +114,7 @@ function readKeychain(account: string, quiet = false): string | undefined {
   }
   if (typeof value === "string" && value.trim()) {
     if (isGcpCredentialMaterial(value)) throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
-    resolvedCache.set(account, value);
+    if (useCache) resolvedCache.set(account, value);
     return value;
   }
   if (!quiet && !warnedAccounts.has(account)) {
@@ -135,16 +135,16 @@ export function resolveProviderApiKey(value: string | undefined): string | undef
   return resolved;
 }
 
-/** Resolve for passive display ownership without publishing routing evidence or warnings. */
+/** Resolve current display ownership without touching routing's cache, evidence, or warnings. */
 export function resolveProviderApiKeyPassively(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  return isKeychainReference(value) ? readKeychain(keychainAccount(value), true) : resolveEnvValue(value);
+  return isKeychainReference(value) ? readKeychain(keychainAccount(value), true, false) : resolveEnvValue(value);
 }
 
 /** The same resolution without the unreadable-reference warning, for observe-only callers. */
 export function resolveProviderApiKeyQuietly(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const resolved = resolveProviderApiKeyPassively(value);
+  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value), true) : resolveEnvValue(value);
   // A quiet read still sees a replaced secret; advisory key evidence published under the old one must not outlive it.
   observeDecisionKeyCredential(value, resolved);
   return resolved;
