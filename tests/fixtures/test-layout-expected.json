@@ -1622,5 +1622,6 @@
   "messages-sse-baseline-contract.test.ts": "claude-integration",
   "messages-sse-control-fields.test.ts": "claude-integration",
   "messages-sse-continuation.test.ts": "claude-integration",
-  "sse-payload-rewrite-continuation.test.ts": "responses"
+  "sse-payload-rewrite-continuation.test.ts": "responses",
+  "usage-telemetry-client.test.ts": "usage", "usage-telemetry-core-boundary.test.ts": "usage", "server-telemetry-routes.test.ts": "server", "cli-telemetry.test.ts": "cli"
 }

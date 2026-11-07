@@ -33,6 +33,7 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { recordTelemetryEnvOptOut } from "../telemetry/scheduler";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -60,6 +61,15 @@ export type ServerBackgroundLifecycleLease = {
 const owners: LeaseOwner[] = [];
 let processLoops: ProcessLoops | null = null;
 let cleanupInProgress = false;
+let telemetryLoopGeneration = 0;
+let stopTelemetryLoop: (() => void) | null = null;
+
+function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  const ocx = env.OCX_TELEMETRY?.trim().toLowerCase();
+  if (ocx === "0" || ocx === "false" || ocx === "off" || ocx === "no") return true;
+  const dnt = env.DO_NOT_TRACK?.trim().toLowerCase();
+  return dnt === "1" || dnt === "true" || dnt === "yes";
+}
 
 function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyLiveSink(applyPolicy);
@@ -124,8 +134,24 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next poll tick retries.
       });
+    const generation = ++telemetryLoopGeneration;
+    if (!isTelemetryDisabledByEnv()) {
+      void import("../telemetry/scheduler")
+        .then(scheduler => {
+          if (generation !== telemetryLoopGeneration) return;
+          stopTelemetryLoop = scheduler.startTelemetryScheduler();
+        })
+        .catch(() => {
+          // Optional background loop.
+        });
+    } else {
+      try { recordTelemetryEnvOptOut(); } catch { /* best-effort */ }
+    }
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
+    telemetryLoopGeneration += 1;
+    stopTelemetryLoop?.();
+    stopTelemetryLoop = null;
     memoryWatchdog?.stop();
     stateStoreSweeper?.stop();
     stopStorageCleanupScheduler();
@@ -138,6 +164,10 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
 }
 
 function stopProcessLoops(): void {
+  telemetryLoopGeneration += 1;
+  const stopTelemetry = stopTelemetryLoop;
+  stopTelemetryLoop = null;
+  stopTelemetry?.();
   const loops = processLoops;
   processLoops = null;
   loops?.memoryWatchdog.stop();

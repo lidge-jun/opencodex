@@ -29,6 +29,7 @@ import {
   spendSchema,
   chatgptDesktopSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -120,6 +121,7 @@ export const configSchema = z.object({
   skills: skillsConfigSchema.optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  telemetry: telemetryConfigSchema.optional().catch(undefined),
   // Same contract as metricsExport: a malformed hand edit leaves recovery off; live writes reject it.
   serviceHealthRecovery: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",

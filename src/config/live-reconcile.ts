@@ -118,6 +118,19 @@ export function adoptPersistedAdvisor(config: OcxConfig, persisted: OcxConfig["a
   clearConfigTopLevelDeletionIntent(config, ["advisor"]);
   if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["advisor"]);
 }
+
+/** Adopt the committed telemetry consent subtree without advancing unrelated pending live intent. */
+export function adoptPersistedTelemetry(config: OcxConfig, persisted: OcxConfig["telemetry"]): void {
+  if (persisted === undefined) delete config.telemetry;
+  else config.telemetry = structuredClone(persisted);
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) {
+    if (persisted === undefined) delete baseline.telemetry;
+    else baseline.telemetry = structuredClone(persisted);
+  }
+  clearConfigTopLevelDeletionIntent(config, ["telemetry"]);
+  if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["telemetry"]);
+}
 /**
  * The live config retains the address of the socket Bun actually opened, while
  * this map retains the operator's desired address for the next process start.
