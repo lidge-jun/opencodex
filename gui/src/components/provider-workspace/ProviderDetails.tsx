@@ -27,6 +27,10 @@ import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAut
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
+/**
+ * Detail view for one provider. Owns the tab state and derives what the tabs share: the auth
+ * surface, the active account or key, and the active OAuth account's display label for the Overview.
+ */
 export default function ProviderDetails({
   item,
   preset,

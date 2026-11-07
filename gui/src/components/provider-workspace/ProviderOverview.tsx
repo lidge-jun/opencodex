@@ -36,6 +36,10 @@ type ConnectionTestState = {
   result: ConnectionTestResult | null;
 };
 
+/**
+ * Overview tab: connection, authentication, notes, usage statistics and the current account's quota.
+ * A Claude pool names its active account with `activeAccountLabel` and never with the login email.
+ */
 export default function ProviderOverview({
   item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, activeAccountLabel, oauth,
   apiBase, connectionIdentity, probeController, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
