@@ -159,3 +159,6 @@ export class PassiveKeyLimitCache {
     return rows.map(row => ({ ...row, stale: row.resetAt !== undefined && now >= row.resetAt }));
   }
 }
+
+/** One process-local cache, shared by the physical response and management readers. */
+export const passiveKeyLimits = new PassiveKeyLimitCache();
