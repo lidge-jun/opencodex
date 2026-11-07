@@ -103,6 +103,28 @@ try {
   assert.throws(() => supply.verifyArtifactEvidence(candidate, Buffer.from("wrong"), successor, now));
   assert.throws(() => supply.verifyExternalMetadataEvidence(candidate, { kind: "tree", bytes: tree, signatureEnvelopeBytes: metadataEnvelope(Buffer.from("wrong")), receiptEvidence }, successor, now));
   assert.throws(() => supply.verifyReleaseEvidence(release, metadataEnvelope(release), successor, "preview", now));
+
+  const token = Buffer.alloc(32, 9).toString("base64url");
+  const operationId = "12345678-1234-1234-1234-123456789abc";
+  const policy = Buffer.from(JSON.stringify({ schema: "ocx.update.policy/1", revision: 0, channel: "latest", check: "manual", download: "manual", install: "manual" }));
+  const prepared = Buffer.from(JSON.stringify({ schema: "ocx.update.prepared/1", operationId, candidateDigest: "a".repeat(64), stageIdentity: token, stageDigest: "b".repeat(64), installationId: "install-1", ownerKind: "desktop", policyRevision: 0 }));
+  const activation = Buffer.from(JSON.stringify({ schema: "ocx.update.activation/1", action: "reserve", operationId, generation: 1, runtimeInstance: "runtime-1", pid: 1, port: 1, installationId: "install-1", ownerKind: "service", candidateDigest: "a".repeat(64), stageDigest: "b".repeat(64), policyRevision: 0, deadlineMs: 0 }));
+  const cappedDocuments = [
+    ["ocx.update.root/1", before, 65536], ["ocx.update.signatures/1", metadataEnvelope(release), 65536],
+    [transitionSchema, envelope(signed), 262144], ["ocx.update.release/1", release, 1048576],
+    ["ocx.update.verification/1", receipt, 1048576], ["ocx.update.tree/1", tree, 16777216],
+    ["ocx.link-capabilities/1", capability, 1048576], ["ocx.update.policy/1", policy, 4096],
+    ["ocx.update.prepared/1", prepared, 8192], ["ocx.update.activation/1", activation, 8192],
+  ];
+  for (const [schema, bytes, cap] of cappedDocuments) {
+    const exact = Buffer.concat([bytes, Buffer.alloc(cap - bytes.length, 32)]);
+    assert.equal(parseUpdateDocument(exact, schema).schema, schema);
+    assert.throws(() => parseUpdateDocument(Buffer.concat([exact, Buffer.from(" ")]), schema));
+  }
+  const unicodeRelease = Buffer.from(JSON.stringify({ ...JSON.parse(release.toString()), releaseNotes: [{ title: "é", body: "é" }] }));
+  const unicodeExact = Buffer.concat([unicodeRelease, Buffer.alloc(1048576 - unicodeRelease.length, 32)]);
+  assert.equal(parseUpdateDocument(unicodeExact, "ocx.update.release/1").releaseNotes[0].title, "é");
+  assert.throws(() => parseUpdateDocument(Buffer.concat([unicodeExact, Buffer.from(" ")]), "ocx.update.release/1"));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
