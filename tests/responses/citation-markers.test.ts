@@ -4,9 +4,17 @@ import {
   CITATION_MARKER_SEPARATOR,
   CITATION_MARKER_START,
   createCitationMarkerFilter,
+  createMemoryCitationEscaper,
+  escapeMemoryCitationMentions,
   hasCitationMarker,
   stripCitationMarkers,
 } from "../../src/responses/citation-markers";
+import { encodeChatCompletionSse } from "../../src/protocols/encoders/chat";
+import { bridgeToResponsesSSE } from "../../src/bridge";
+import type { AdapterEvent } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { isAnthropicProgressMirror } from "../../src/responses/anthropic-progress";
+import { decodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 
 /**
  * #3150: the ChatGPT backend delimits inline citations with private-use characters
@@ -217,5 +225,188 @@ describe("non-citation directive spans pass through (#6039)", () => {
     expect(filter.push(`go ${S}vis`)).toBe(`go ${S}vis`);
     expect(filter.push(`ualize${P}{"path"`)).toBe(`ualize${P}{"path"`);
     expect(filter.flush()).toBe("");
+  });
+
+  // The Codex client treats a literal <oai-mem-citation> as markup: it keeps the LAST block and
+  // drops everything between the first opening tag and the last closing one. A model that quotes
+  // the tag name in prose therefore loses the rest of its answer, which is the "truncated at a
+  // backtick" report. Escaping the leading `<` keeps the characters visible without matching.
+  test("a literal memory-citation tag in prose is escaped, not left to the client", () => {
+    expect(escapeMemoryCitationMentions("put the `<oai-mem-citation>` block last"))
+      .toBe("put the `&lt;oai-mem-citation>` block last");
+    expect(escapeMemoryCitationMentions("</oai-mem-citation>"))
+      .toBe("&lt;/oai-mem-citation>");
+    // Text that merely shares a prefix is untouched.
+    expect(escapeMemoryCitationMentions("<oai-mem-citationless> and <p> tags"))
+      .toBe("<oai-mem-citationless> and <p> tags");
+  });
+
+  test("a real memory-citation block keeps its tags so the client can still render it", () => {
+    const block = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n"
+      + "<rollout_ids>\n0123\n</rollout_ids>\n</oai-mem-citation>";
+    // A mention before the block is escaped, the block itself survives byte for byte.
+    expect(escapeMemoryCitationMentions(`put the \`<oai-mem-citation>\` block last.\n\n${block}`))
+      .toBe(`put the \`&lt;oai-mem-citation>\` block last.\n\n${block}`);
+    expect(escapeMemoryCitationMentions(block)).toBe(block);
+  });
+
+  test("the streaming escaper escapes a tag split across deltas", () => {
+    const escaper = createMemoryCitationEscaper();
+    const chunks = ["answer: ", "<", "oai", "-mem-cit", "ation", ">", " rest"];
+    const out = chunks.map(chunk => escaper.push(chunk)).join("") + escaper.pending();
+    expect(out).toBe("answer: &lt;oai-mem-citation> rest");
+  });
+
+  test("the streaming escaper releases a tail that stops looking like a tag", () => {
+    const escaper = createMemoryCitationEscaper();
+    // "<o" could still open the tag, so it is held; "ps" proves it cannot and releases it.
+    expect(escaper.push("a <o")).toBe("a ");
+    expect(escaper.push("ps b")).toBe("<ops b");
+    expect(escaper.pending()).toBe("");
+    // An unterminated open tag is released verbatim at close, so no text is invented or lost.
+    const held = createMemoryCitationEscaper();
+    expect(held.push("tail <oai-mem")).toBe("tail ");
+    expect(held.pending()).toBe("<oai-mem");
+  });
+
+  const REAL_BLOCK = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n"
+    + "<rollout_ids>\n0123\n</rollout_ids>\n</oai-mem-citation>";
+
+  /** Feed a string to the escaper in the given pieces and resolve what it still holds. */
+  const streamed = (pieces: string[]): string => {
+    const escaper = createMemoryCitationEscaper();
+    return pieces.map(piece => escaper.push(piece)).join("") + escapeMemoryCitationMentions(escaper.pending());
+  };
+
+  test("a real block split one character at a time keeps both tags, equal to the final text", () => {
+    const text = `see this\n\n${REAL_BLOCK}`;
+    expect(streamed([...text])).toBe(text);
+    expect(streamed([...text])).toBe(escapeMemoryCitationMentions(text));
+  });
+
+  test("an incomplete or invalid block is a mention and is escaped like the final text", () => {
+    for (const text of [
+      "x <oai-mem-citation><citation_entries>e</citation_entries></oai-mem-citation> y",
+      "x <oai-mem-citation><citation_entries>never closes",
+      "quoted <oai-mem-citation> prose </oai-mem-citation> more",
+    ]) {
+      expect(streamed([...text])).toBe(escapeMemoryCitationMentions(text));
+    }
+  });
+
+  test("delta/done parity holds for every two-way split of a mixed text", () => {
+    const text = `a \`<oai-mem-citation>\` b ${REAL_BLOCK} c </oai-mem-citation> d`;
+    const expected = escapeMemoryCitationMentions(text);
+    for (let cut = 0; cut <= text.length; cut++) {
+      expect(streamed([text.slice(0, cut), text.slice(cut)])).toBe(expected);
+    }
+  });
+
+  async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
+    for (const event of events) yield event;
+  }
+  const textEvents = (pieces: string[]): AdapterEvent[] => [
+    ...pieces.map(text => ({ type: "text_delta", text }) as AdapterEvent),
+    { type: "done" } as AdapterEvent,
+  ];
+
+  test("the Chat encoder escapes a mention split across deltas and keeps a split real block", async () => {
+    const chatText = async (pieces: string[]) => {
+      const raw = await new Response(encodeChatCompletionSse(replay(textEvents(pieces)), {
+        model: "client-model", translatorBudget: createTestTranslatorBudget(),
+      })).text();
+      return raw.split("\n").filter(line => line.startsWith("data: {")).map(line => {
+        const content = (JSON.parse(line.slice(6)) as { choices?: Array<{ delta?: { content?: string } }> }).choices?.[0]?.delta?.content;
+        return content ?? "";
+      }).join("");
+    };
+    expect(await chatText(["quoted <oai-mem-", "citation> prose"])).toBe("quoted &lt;oai-mem-citation> prose");
+    const real = `lead\n${REAL_BLOCK}`;
+    expect(await chatText([...real])).toBe(real);
+  });
+
+  test("the Responses bridge streams the same text it reports as done", async () => {
+    const run = async (pieces: string[]) => {
+      const raw = await new Response(bridgeToResponsesSSE(
+        replay(textEvents(pieces)), "internal/model", undefined, undefined, undefined, undefined, 2_000,
+        { translatorBudget: createTestTranslatorBudget(), enforceDeclaredToolNames: false },
+      )).text();
+      const frames = raw.split("\n\n").map(block => block.split("\n").find(line => line.startsWith("data: "))).filter(line => line && line !== "data: [DONE]")
+        .map(line => JSON.parse(line!.slice(6)) as { type?: string; delta?: string; text?: string });
+      return {
+        deltas: frames.filter(f => f.type === "response.output_text.delta").map(f => f.delta ?? "").join(""),
+        done: frames.find(f => f.type === "response.output_text.done")?.text ?? "",
+      };
+    };
+    const real = `lead\n${REAL_BLOCK}`;
+    const block = await run([...real]);
+    expect(block.deltas).toBe(real);
+    expect(block.done).toBe(real);
+    const mention = await run(["quoted <oai-mem-", "citation> prose"]);
+    expect(mention.deltas).toBe("quoted &lt;oai-mem-citation> prose");
+    expect(mention.done).toBe(mention.deltas);
+  });
+
+  test("a held candidate block is charged to the translator budget and released at close", async () => {
+    const body = "MEMORY.md:1-2|note=[x]\n".repeat(150);
+    const candidate = `<oai-mem-citation>\n<citation_entries>\n${body}`;
+    const pieces: string[] = [];
+    for (let at = 0; at < candidate.length; at += 500) pieces.push(candidate.slice(at, at + 500));
+    const peak = async (text: string[]) => {
+      const budget = createTestTranslatorBudget();
+      await new Response(bridgeToResponsesSSE(
+        replay(textEvents(text)), "internal/model", undefined, undefined, undefined, undefined, 2_000,
+        { translatorBudget: budget, enforceDeclaredToolNames: false },
+      )).text();
+      return budget.snapshot();
+    };
+    const held = await peak(pieces);
+    // Same bytes and newlines, but not a tag, so nothing is held.
+    const free = await peak(pieces.map(piece => piece.replace("<oai-mem-citation>", "<oai-mem-citatioX>")));
+    // The never-closed candidate is held whole, so the bridge's high-water mark carries it ...
+    expect(held.highWaterBytes).toBeGreaterThanOrEqual(free.highWaterBytes + Buffer.byteLength(candidate) / 2);
+    // ... and everything is released once the message closes.
+    // (The escaped `&lt;` adds a few bytes to the retained text, nothing more.)
+    expect(Math.abs(held.currentBytes - free.currentBytes)).toBeLessThanOrEqual(16);
+  });
+
+  test("an oversized candidate stops being held and is escaped like the final text", () => {
+    const huge = `<oai-mem-citation>\n<citation_entries>\n${"y".repeat(40_000)}`;
+    const escaper = createMemoryCitationEscaper();
+    const out = [...huge.match(/[\s\S]{1,4000}/g)!].map(piece => escaper.push(piece)).join("");
+    expect(Buffer.byteLength(escaper.pending())).toBeLessThanOrEqual(16_384 + 4_000);
+    expect(out + escapeMemoryCitationMentions(escaper.pending())).toBe(escapeMemoryCitationMentions(huge));
+  });
+
+  test("a block above the hold limit is a mention in the streamed and the final text alike", () => {
+    const big = `<oai-mem-citation>\n<citation_entries>\n${"MEMORY.md:1-2|note=[x]\n".repeat(900)}</citation_entries>\n`
+      + "<rollout_ids>\n0123\n</rollout_ids>\n</oai-mem-citation>";
+    expect(big.length).toBeGreaterThan(16_384);
+    const finalText = escapeMemoryCitationMentions(big);
+    expect(finalText.startsWith("&lt;oai-mem-citation>")).toBe(true);
+    expect(streamed(big.match(/[\s\S]{1,1000}/g)!)).toBe(finalText);
+  });
+
+  test("signed progress text escapes only its visible copy, and the mirror check still matches", async () => {
+    const raw = "quoted <oai-mem-citation> prose";
+    const sse = await new Response(bridgeToResponsesSSE(
+      replay([
+        { type: "text_delta", text: raw, anthropicThinkingSignature: "SyntheticProgressSignature123456==" } as AdapterEvent,
+        { type: "done" } as AdapterEvent,
+      ]), "internal/model", undefined, undefined, undefined, undefined, 2_000,
+      { translatorBudget: createTestTranslatorBudget(), enforceDeclaredToolNames: false },
+    )).text();
+    const frames = sse.split("\n\n").map(block => block.split("\n").find(line => line.startsWith("data: ")))
+      .filter(line => line && line !== "data: [DONE]").map(line => JSON.parse(line!.slice(6)) as {
+        type?: string; text?: string; delta?: string; item?: { type?: string; encrypted_content?: string; content?: unknown[] };
+      });
+    const escaped = "quoted &lt;oai-mem-citation> prose";
+    expect(frames.find(f => f.type === "response.output_text.delta")?.delta).toBe(escaped);
+    expect(frames.find(f => f.type === "response.output_text.done")?.text).toBe(escaped);
+    const items = frames.filter(f => f.type === "response.output_item.done").map(f => f.item!);
+    const carrier = items.find(item => item.type === "reasoning")!;
+    const envelope = decodeReasoningEnvelope(carrier.encrypted_content!);
+    expect(envelope?.txt).toBe(raw);
+    expect(isAnthropicProgressMirror(items.find(item => item.type === "message"), envelope)).toBe(true);
   });
 });

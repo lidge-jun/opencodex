@@ -39,8 +39,11 @@ import {
 import { resolveStallTimeoutSec } from "../stall-timeout";
 import {
   createCitationMarkerFilter,
+  createMemoryCitationEscaper,
+  escapeMemoryCitationMentions,
   stripCitationMarkers,
   type CitationMarkerFilter,
+  type MemoryCitationEscaper,
 } from "../responses/citation-markers";
 import { declaresCodeModeExec, normalizeDeclaredToolName } from "../types";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "../web-search/sources";
@@ -381,6 +384,9 @@ export function bridgeToResponsesSSE(
         outputIndex: number;
         text: StringChunks;
         citationFilter: CitationMarkerFilter;
+        memoryCitationEscaper: MemoryCitationEscaper;
+        /** Bytes the escaper currently holds, charged to the translator budget. */
+        heldBytes: number;
         phase?: OcxMessagePhase;
       } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: StringChunks } | null = null;
@@ -570,10 +576,17 @@ export function bridgeToResponsesSSE(
         // accumulated text: closeCurrentMessage re-sends it in output_text.done and
         // output_item.done, so filtering only the deltas would leave the markers in both.
         const trailing = currentMsg.citationFilter.flush();
-        if (trailing) {
+        const escapedTrailing = trailing ? currentMsg.memoryCitationEscaper.push(trailing) : "";
+        // A held tail is a partial tag whose whole-message context is now known: resolve it once
+        // against the accumulated text so a real block's trailing close tag survives.
+        const heldTail = currentMsg.memoryCitationEscaper.pending();
+        const resolvedTail = heldTail ? escapeMemoryCitationMentions(heldTail) : "";
+        currentMsg.heldBytes = replaceRetainedString(currentMsg.heldBytes, "", "live_transient");
+        const finalDelta = escapedTrailing + resolvedTail;
+        if (finalDelta) {
           emit("response.output_text.delta", {
             item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
-            content_index: 0, delta: trailing,
+            content_index: 0, delta: finalDelta,
           });
         }
         const messageText = stripCitationMarkers(joinChunks(currentMsg.text));
@@ -987,8 +1000,10 @@ export function bridgeToResponsesSSE(
                   if (item.type === "message") {
                     const part = item.content![0];
                     emit("response.content_part.added", { item_id: item.id, output_index: outputIndex, content_index: 0, part: { ...part, text: "" } });
-                    emit("response.output_text.delta", { item_id: item.id, output_index: outputIndex, content_index: 0, delta: event.text });
-                    emit("response.output_text.done", { item_id: item.id, output_index: outputIndex, content_index: 0, text: event.text });
+                    // The visible copy is escaped; the carrier envelope above keeps the raw text.
+                    const visibleText = escapeMemoryCitationMentions(event.text);
+                    emit("response.output_text.delta", { item_id: item.id, output_index: outputIndex, content_index: 0, delta: visibleText });
+                    emit("response.output_text.done", { item_id: item.id, output_index: outputIndex, content_index: 0, text: visibleText });
                     emit("response.content_part.done", { item_id: item.id, output_index: outputIndex, content_index: 0, part });
                   }
                   emit("response.output_item.done", { output_index: outputIndex, item });
@@ -1026,6 +1041,8 @@ export function bridgeToResponsesSSE(
                 currentMsg = {
                   itemId, outputIndex, text: emptyChunks(),
                   citationFilter: createCitationMarkerFilter(),
+                  memoryCitationEscaper: createMemoryCitationEscaper(),
+                  heldBytes: 0,
                   ...(event.phase ? { phase: event.phase } : {}),
                 };
               }
@@ -1038,10 +1055,18 @@ export function bridgeToResponsesSSE(
               // unterminated tail and releases it at close (#3150). The accumulator above
               // keeps the raw text; it is stripped once in closeCurrentMessage.
               const visible = currentMsg.citationFilter.push(event.text);
-              if (visible) {
+              // Escape a literal memory-citation tag: the Codex client hides everything between
+              // the first opening tag and the last closing one, so one quoted mention in prose
+              // swallows the rest of the answer and reads as a truncated turn. This runs per
+              // delta, so it uses the streaming escaper: a tag arrives split across deltas, and a
+              // whole-string match inside a single delta would miss it.
+              const emitted = visible ? currentMsg.memoryCitationEscaper.push(visible) : "";
+              currentMsg.heldBytes = replaceRetainedString(
+                currentMsg.heldBytes, currentMsg.memoryCitationEscaper.pending(), "live_transient");
+              if (emitted) {
                 emit("response.output_text.delta", {
                   item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
-                  content_index: 0, delta: visible,
+                  content_index: 0, delta: emitted,
                 });
               }
               break;
