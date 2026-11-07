@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -21,7 +21,7 @@ afterEach(() => {
   }
 });
 
-test("browser-open preference is an accessible switch and persists the inverse choice", () => {
+beforeEach(() => {
   win = new Window({ url: "http://localhost/" });
   previous = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof previous;
   Object.defineProperties(globalThis, {
@@ -29,6 +29,9 @@ test("browser-open preference is an accessible switch and persists the inverse c
     navigator: { configurable: true, value: win.navigator }, localStorage: { configurable: true, value: win.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+});
+
+test("browser-open preference is an accessible switch and persists the inverse choice", () => {
   const host = win.document.createElement("div");
   win.document.body.append(host);
   act(() => { root = createRoot(host as unknown as HTMLElement); root.render(<LanguageProvider><OpenBrowserPrefToggle /></LanguageProvider>); });
@@ -43,6 +46,18 @@ test("browser-open preference is an accessible switch and persists the inverse c
   act(() => { label.click(); });
   expect(input.checked).toBe(true);
   expect(openBrowserRequestField()).toEqual({ openBrowser: false });
+  act(() => { input.click(); });
+  expect(input.checked).toBe(false);
+  expect(openBrowserRequestField()).toEqual({ openBrowser: true });
+});
+
+test("false server default shows the don't-open switch on without inventing a local override", () => {
+  const host = win.document.createElement("div");
+  win.document.body.append(host);
+  act(() => { root = createRoot(host as unknown as HTMLElement); root.render(<LanguageProvider><OpenBrowserPrefToggle serverDefault={false} /></LanguageProvider>); });
+  const input = host.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  expect(input.checked).toBe(true);
+  expect(openBrowserRequestField()).toEqual({});
   act(() => { input.click(); });
   expect(input.checked).toBe(false);
   expect(openBrowserRequestField()).toEqual({ openBrowser: true });

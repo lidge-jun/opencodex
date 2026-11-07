@@ -25,6 +25,7 @@ export function CodexStaleBanner({ state, controller, actionRef }: {
     <div className="codex-stale-banner" role="status">
       <span className="codex-stale-banner-text">{t("models.staleBanner")}</span>
       <button
+        data-models-reload-action
         ref={actionRef}
         type="button"
         className="btn btn-sm"

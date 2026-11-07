@@ -178,7 +178,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   // onSettled, not a per-button callback: the sidebar control knows nothing about
   // this page, and a restart succeeding there must still clear the banner here.
   const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
-    onSettled: () => { void reloadAppServerState(); },
+    onSettled: () => { void reloadAppServerState(); }, restoreFocusFallback: previous => previous?.hasAttribute("data-models-reload-action") ? reloadBannerRef.current ?? reloadHeadRef.current : null,
     // Reported through the shell, not this page's toast: a restart takes up to 30s and
     // outlives a navigation away, and an outcome that says app-servers are still running
     // must not be discarded because the user moved on while waiting for it.
@@ -2584,7 +2584,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             {SUBTITLE_TKEY[tab][1] && <ModelsAbout key={tab} text={t(SUBTITLE_TKEY[tab][1])}>
               {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
             </ModelsAbout>}
-            {appServerState !== "stale" && <Button ref={reloadHeadRef} variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
+            {appServerState !== "stale" && <Button data-models-reload-action ref={reloadHeadRef} variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
               <span className={codexRestarting ? "inline-flex animate-spin" : "inline-flex"}><IconRefresh aria-hidden="true" /></span>
               {codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
             </Button>}

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 import Models from "../src/pages/Models";
+import { actionDialogOpen, dismissActionDialog } from "./helpers/action-dialog";
 
 const keys = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof keys)[number], PropertyDescriptor | undefined>;
@@ -101,4 +102,65 @@ test("a deliberate blur before the banner is replaced is not reversed", async ()
   });
   expect(header()).toBeTruthy();
   expect(win.document.activeElement === win.document.body).toBe(true);
+});
+
+test("canceling reload restores focus to the replacement after a stale status arrives", async () => {
+  await render(0);
+  const original = header();
+  original.focus();
+  await act(async () => { original.click(); await Promise.resolve(); });
+  expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
+  await resolveRead(0, "stale");
+  const banner = host.querySelector<HTMLButtonElement>(".codex-stale-banner button")!;
+  expect(original.isConnected).toBe(false);
+  await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+  expect(win.document.activeElement === banner as never).toBe(true);
+});
+
+test("a disconnected reload trigger does not steal focus moved outside the dialog", async () => {
+  await render(0);
+  const original = header();
+  original.focus();
+  await act(async () => { original.click(); await Promise.resolve(); });
+  await resolveRead(0, "stale");
+  const other = host.querySelector<HTMLButtonElement>(".page-head-actions button")!;
+  other.focus();
+  await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+  expect(win.document.activeElement === other as never).toBe(true);
+});
+
+test("a removed unrelated pre-dialog focus target does not activate the reload fallback", async () => {
+  await render(0);
+  const outside = win.document.createElement("button");
+  win.document.body.append(outside);
+  outside.focus();
+  await act(async () => { header().click(); await Promise.resolve(); });
+  outside.remove();
+  await resolveRead(0, "stale");
+  await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+  expect(win.document.activeElement === win.document.body).toBe(true);
+});
+
+test("canceling reload returns focus to the header when the stale banner disappears", async () => {
+  await render(0);
+  await resolveRead(0, "stale");
+  const banner = host.querySelector<HTMLButtonElement>(".codex-stale-banner button")!;
+  banner.focus();
+  await act(async () => { banner.click(); await Promise.resolve(); });
+  expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
+  await render(1);
+  expect(banner.isConnected).toBe(false);
+  await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+  expect(win.document.activeElement === header() as never).toBe(true);
+});
+
+test("reload action is unique after each controlled classifier outcome", async () => {
+  for (const state of ["stale", "fresh", "not_running", "unknown", "error"] as const) {
+    await render(reads.length);
+    const index = reads.length - 1;
+    await act(async () => { reads[index]!(state === "error" ? new Response(null, { status: 500 }) : Response.json({ state, runningCount: state === "not_running" ? 0 : 1 })); await Promise.resolve(); });
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")].filter(button => button.textContent?.includes("Reload Codex models"));
+    expect(buttons).toHaveLength(1);
+    expect(!!buttons[0]!.closest(".codex-stale-banner")).toBe(state === "stale");
+  }
 });

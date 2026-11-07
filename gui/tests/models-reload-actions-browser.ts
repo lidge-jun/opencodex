@@ -17,13 +17,15 @@ try {
     await page.goto(`${base}/#models`, { waitUntil: "domcontentloaded" });
     await response;
     await page.locator(".models-workspace-rail-row").first().waitFor();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     if (state === "stale") await page.locator(".codex-stale-banner").waitFor();
     else await page.waitForFunction(() => !document.querySelector(".codex-stale-banner"));
     const head = await page.locator(".page-head-actions").getByRole("button", { name: "Reload Codex models" }).count();
     const banner = await page.locator(".codex-stale-banner").getByRole("button", { name: "Reload Codex models" }).count();
-    if (head !== (state === "stale" ? 0 : 1) || banner !== (state === "stale" ? 1 : 0)) {
+    const total = await page.locator(".main-inner").getByRole("button", { name: "Reload Codex models" }).count();
+    if (head !== (state === "stale" ? 0 : 1) || banner !== (state === "stale" ? 1 : 0) || total !== 1) {
       failures++;
-      console.error(`FAIL ${state}: head=${head} banner=${banner}`);
+      console.error(`FAIL ${state}: head=${head} banner=${banner} total=${total}`);
     }
     await page.close();
   }

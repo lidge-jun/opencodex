@@ -35,7 +35,11 @@ try {
     for (let i = 0; i < count; i++) {
       const result = await rows.nth(i).evaluate((row: HTMLElement) => {
         const bounds = row.getBoundingClientRect();
-        return Array.from(row.querySelectorAll(".models-workspace-rail-name, .models-workspace-rail-meta"))
+        const labels = row.querySelectorAll(".models-workspace-rail-name, .models-workspace-rail-meta");
+        if (!row.querySelector(".models-workspace-rail-name") || !row.querySelector(".models-workspace-rail-meta") || labels.length !== 2) {
+          throw new Error("Expected one provider name and one count in every rail row");
+        }
+        return Array.from(labels)
           .map(element => {
             const range = document.createRange();
             range.selectNodeContents(element);
@@ -50,7 +54,9 @@ try {
       }
     }
     if (screenshots) await page.screenshot({ path: join(screenshots, `rail-${width}-${zoom}.png`) });
-    if (width <= 860) {
+    {
+      // A short viewport forces the desktop rail to overflow too.
+      await page.setViewportSize({ width, height: 600 });
       const list = page.locator(".models-workspace-rail-list");
       const scrollable = await list.evaluate(element => element.scrollHeight > element.clientHeight);
       if (!scrollable) { failures++; console.error(`FAIL ${width}/${zoom}: rail does not scroll`); }

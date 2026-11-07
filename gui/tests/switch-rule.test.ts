@@ -18,7 +18,8 @@ function attr(tag: JsxTag, name: string): ts.JsxAttribute | undefined {
   return tag.attributes.properties.find((item): item is ts.JsxAttribute => ts.isJsxAttribute(item) && item.name.getText() === name);
 }
 function plainToggle(tag: JsxTag): boolean {
-  const value = attr(tag, "className")?.initializer;
+  const initializer = attr(tag, "className")?.initializer;
+  const value = initializer && ts.isJsxExpression(initializer) ? initializer.expression : initializer;
   return tag.tagName.getText() === "span" && tag.attributes.properties.length === 1
     && !!value && ts.isStringLiteral(value) && value.text === "toggle";
 }
@@ -79,6 +80,8 @@ test("every role=switch control uses one of the sanctioned switch classes", asyn
 test("only a checkbox inside a real toggle track with a slider can use the wrapper exception", () => {
   const valid = '<span className="toggle"><input type="checkbox" role="switch" /><span className="slider" /></span>';
   expect(scan(valid, "valid.tsx").offenders).toEqual([]);
+  const staticExpression = '<span className={"toggle"}><input type="checkbox" role="switch" /><span className="slider" /></span>';
+  expect(scan(staticExpression, "valid-expression.tsx").offenders).toEqual([]);
   for (const invalid of [
     '<span className="toggle"><input type="checkbox" role="switch" /></span>',
     '<span className="other"><input type="checkbox" role="switch" /><span className="slider" /></span>',

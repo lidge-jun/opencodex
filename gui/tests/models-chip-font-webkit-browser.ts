@@ -14,13 +14,17 @@ try {
   const identifier = page.locator(".models-chip--identifier").filter({ hasText: "synthetic-alias" }).first();
   await status.waitFor();
   await identifier.waitFor();
-  const fonts = await page.evaluate(() => {
-    const status = document.querySelector<HTMLElement>(".models-chip:not(.models-chip--identifier)")!;
-    const identifier = document.querySelector<HTMLElement>(".models-chip--identifier")!;
-    const heading = document.querySelector<HTMLElement>(".page-head h2")!;
-    return { status: getComputedStyle(status).fontFamily, identifier: getComputedStyle(identifier).fontFamily,
-      heading: getComputedStyle(heading).fontFamily };
-  });
-  if (fonts.status !== fonts.heading || fonts.identifier === fonts.status) throw new Error(`Wrong chip fonts: ${JSON.stringify(fonts)}`);
+  const measure = (element: HTMLElement, tokenName: string) => {
+    const reference = document.createElement("span");
+    reference.style.fontFamily = `var(${tokenName})`;
+    element.append(reference);
+    const actual = getComputedStyle(element).fontFamily, expected = getComputedStyle(reference).fontFamily;
+    reference.remove();
+    return { actual, expected };
+  };
+  const fonts = { status: await status.evaluate(measure, "--font-ui"),
+    identifier: await identifier.evaluate(measure, "--font-code") };
+  if (fonts.status.actual !== fonts.status.expected || fonts.identifier.actual !== fonts.identifier.expected
+      || fonts.status.actual === fonts.identifier.actual) throw new Error(`Wrong chip fonts: ${JSON.stringify(fonts)}`);
   console.log(`PASS: status uses UI sans and alias remains monospace: ${JSON.stringify(fonts)}`);
 } finally { await browser.close(); }

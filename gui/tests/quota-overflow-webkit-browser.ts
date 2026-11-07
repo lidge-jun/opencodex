@@ -22,6 +22,12 @@ try {
   const start = await scroller.evaluate(el => ({ before: getComputedStyle(el, "::before").display,
     after: getComputedStyle(el, "::after").display, image: getComputedStyle(el, "::after").backgroundImage }));
   if (start.before !== "none" || start.after === "none" || start.image === "none") throw new Error(`Missing end-edge fade: ${JSON.stringify(start)}`);
+  await page.locator(".quota-summary-chip").first().focus();
+  if (await next.getAttribute("aria-disabled") === "true"
+      || await scroller.evaluate(el => getComputedStyle(el, "::after").display) !== "none") {
+    throw new Error("End-edge fade obscures keyboard focus while more providers remain");
+  }
+  await next.focus();
   for (let i = 0; i < 8; i++) {
     if (await next.getAttribute("aria-disabled") === "true") break;
     await next.evaluate((button: HTMLElement) => button.click());
