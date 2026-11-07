@@ -764,7 +764,10 @@ configuration that names the old id is rewritten at startup.
   This supports continuity but does not guarantee an upstream cache hit or a particular saving.
 - Reasoning continuity carries provider signatures across turns. If Cognition refuses a signed
   Anthropic replay before visible output, Devin retries once with the signature withheld and the
-  thinking text preserved.
+  thinking text preserved. Responses clients keep live text/tool streaming: a late turn signature
+  receives its own output index after the owning item closes, avoiding duplicate text and
+  unfinished-tool errors in index-keyed clients. Replay pairs the trailer only with adjacent
+  assistant output; matching IDs are checked when present, while ID-stripping clients remain supported.
 - Live model discovery via `GetCascadeModelConfigs`; the static seed is filtered against the
   account's live roster so models not on the plan drop out instead of failing at request time.
 - Tool definitions are encoded in the request and tool-call events are decoded from the response

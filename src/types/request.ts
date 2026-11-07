@@ -482,7 +482,8 @@ export type AdapterEvent =
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
-  | { type: "thinking_signature"; signature: string }
+  // afterOutput marks a turn-level attestation emitted after text/tools, not a new thinking block.
+  | { type: "thinking_signature"; signature: string; afterOutput?: true }
   | { type: "redacted_thinking"; data: string }
   // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
   // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope
