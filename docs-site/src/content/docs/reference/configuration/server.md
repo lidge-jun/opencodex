@@ -507,7 +507,7 @@ that consent state:
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `telemetry.decision?` | `"accepted" \| "declined"` | unset (undecided) | Explicit user choice. `"declined"` disables telemetry and deletes `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` enables daily reports. |
-| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Completed UTC days before `decidedAt ?? noticeShownAt` are never backfilled. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Completed UTC calendar days prior to the UTC day of `decidedAt ?? noticeShownAt` are never backfilled. |
 | `telemetry.noticeShownAt?` | `string` (ISO 8601) | unset | UTC timestamp when a human saw the disclosure in the web dashboard or an interactive terminal. When `decision` is unset, telemetry sends only if `noticeShownAt` is set (`default-on`); without it the proxy remains in `awaiting-notice`. |
 
 The collector endpoint (`https://telemetry.opencodex.me/v1/events`) is a code constant and cannot

@@ -24,14 +24,15 @@ via `adoptPersistedTelemetry` in `src/config/live-reconcile.ts`.
 `decision === "declined"`, `decision === "accepted"`, undecided with `noticeShownAt`
 (`default-on`), and undecided without notice (`awaiting-notice`).
 
-Only a human can transition an undecided install to active sending:
+Casual-path consent guards require human interaction before transitioning an undecided install to active sending:
 
 - `PUT /api/telemetry` and `POST /api/telemetry/notice` in `src/telemetry/routes.ts` (delegated
   from `src/server/management/telemetry-routes.ts` and lazily mounted in `src/server/management-api.ts`)
   require `hasHumanDashboardSession` from `src/server/management/consent-session.ts`.
-- `ocx telemetry enable` in `src/cli/telemetry.ts` and `ocx config set telemetry` in
-  `src/cli/config-command.ts` refuse agent-driven callers; `ocx telemetry disable` is always
-  permitted.
+- `ocx telemetry enable` in `src/cli/telemetry.ts` refuses agent-driven callers (`isAgentDriven()`);
+  `ocx config set telemetry` and `ocx config unset telemetry` in `src/cli/config-command.ts` refuse
+  all callers, while agent-driven `ocx config import` strips incoming `telemetry` keys and preserves
+  persisted consent state. `ocx telemetry disable` is always permitted.
 - Interactive prompts run from `src/cli/star-prompt.ts`, `src/service/cli.ts`, and
   `src/cli/init.ts`; agent-driven, non-TTY, or service starts print a once-per-version notice
   and record neither `noticeShownAt` nor `decision`.

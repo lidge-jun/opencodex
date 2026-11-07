@@ -3,9 +3,14 @@ title: Telemetry and Privacy
 description: Anonymous daily usage statistics, consent and agent boundaries, opt-out controls, payload preview, and collector retention.
 ---
 
-OpenCodex includes anonymous, daily usage telemetry so maintainers can see which versions,
-platforms, install channels, provider kinds, and coarse model families are used in practice and
-where request failures occur.
+opencodex includes anonymous, daily usage telemetry so maintainers and the community can see which
+versions, platforms, install channels, provider kinds, and coarse model families are used in
+practice and where request failures occur. Project-wide daily aggregates (active and new install
+counts, a 365-day active-install heatmap, active minutes, request outcomes, five-bucket token
+totals, daily and range provider-kind and model-family shares, top-50 version counts, OS/CPU
+platform and install-channel counts, and error-cause counts) are served publicly by the
+collector's read-only `GET /v1/stats` endpoint for the public project dashboard; per-day install
+hashes (`installDayHash`) and rate-limit hashes (`ip_hash`) are never returned by `/v1/stats`.
 
 Telemetry is **on by default**, and **nothing is sent until a person has seen the notice**.
 
@@ -17,19 +22,22 @@ sends no telemetry.
 
 Sending becomes active only after a person has seen the disclosure or recorded a choice:
 
-1. **Web dashboard popup (`TelemetryConsentCard`)** — opens on first run or after an update when
-   no decision is recorded and no environment opt-out is set. The **Share anonymous daily usage
-   statistics** checkbox is pre-checked. Clicking **Continue** saves `decision: "accepted"` (or
+1. **Web dashboard popup (`TelemetryConsentCard`)** — opens on a standalone or Home proxy on first
+   run or after an update when no decision is recorded and no environment opt-out is set (connected
+   Remote Link Child proxies defer telemetry management to their Home proxy). The **Share anonymous
+   daily usage statistics** checkbox is pre-checked. Clicking **Continue** saves `decision: "accepted"` (or
    `"declined"` if unchecked) via `PUT /api/telemetry`. Dismissing the dialog with Escape or the
    backdrop records `noticeShownAt` via `POST /api/telemetry/notice` so the default-on state
-   applies. Merely loading the page without interacting with or dismissing the dialog records
-   nothing.
+   applies; because `decision` remains unset, the dialog will appear again on the next dashboard
+   load until you click **Continue** or set a choice in **Proxy details**. Merely loading the page
+   without interacting with or dismissing the dialog records nothing.
 2. **Interactive terminal prompt** — `ocx start`, `ocx init`, and `ocx service install` ask
    `Share anonymous usage statistics? [Y/n]` once when stdin and stdout are interactive TTYs and
    no decision or notice timestamp is recorded. Pressing Enter or `y` records `decision:
    "accepted"`; `n` records `decision: "declined"`.
 3. **Explicit enable** — turning on **Share anonymous usage statistics** in the dashboard under
-   **Proxy details**, or running `ocx telemetry enable` in an interactive terminal, records
+   **Proxy details**, or running `ocx telemetry enable [--json]` outside an agent-driven session,
+   records
    `decision: "accepted"`.
 
 `resolveTelemetryStatus` (`src/telemetry/consent.ts`) evaluates effective state in this exact
@@ -51,11 +59,11 @@ disclosure on your behalf:
 
 - When `ocx start`, `ocx init`, or `ocx service install` runs under an agent or CI environment
   (`CLAUDECODE`, `CODEX_THREAD_ID`, `CURSOR_TRACE_ID`, `CI`, and similar markers checked by
-  `isAgentDriven()`), in a non-TTY shell, or as a background service (`OCX_SERVICE=1`), OpenCodex
+  `isAgentDriven()`), in a non-TTY shell, or as a background service (`OCX_SERVICE=1`), opencodex
   skips the prompt, prints a one-line notice at most once per version (tracked in
   `<OPENCODEX_HOME>/.telemetry-deferred`), and writes **neither** `noticeShownAt` nor `decision`.
   The install stays in `awaiting-notice` and sends nothing until you use the dashboard or an
-  interactive terminal yourself.
+  outside-agent terminal session yourself.
 - `PUT /api/telemetry` and `POST /api/telemetry/notice` require a live human dashboard browser
   session (`hasHumanDashboardSession`). Requests authenticated only with the management admin token
   or a remembered-device session are refused with HTTP `403` (`code: "agent_consent_required"`).
@@ -65,6 +73,11 @@ disclosure on your behalf:
   agent-driven `ocx config import` drops any `telemetry` key rather than importing consent.
 - Opting out with `ocx telemetry disable`, `OCX_TELEMETRY=0`, or `DO_NOT_TRACK=1` is always
   permitted, including from scripts and agent sessions.
+
+As with GitHub starring, these checks guard the standard CLI and management API paths against
+agent harnesses (`AGENT_ENV_VARS`) and admin-token callers; they are paired with the policy rule
+that agents running as your local user must never edit `config.json` or mint a loopback session to
+record consent on your behalf.
 
 ## How to turn telemetry off
 
@@ -111,8 +124,8 @@ and at any time afterward:
   This queries `GET /api/telemetry` when the proxy is running and falls back to building the same
   snapshot locally from `config.json` and `usage.jsonl` when the proxy is stopped.
 - **Web dashboard** — click **Preview the JSON** inside the first-run/post-update consent dialog
-  or beside the **Share anonymous usage statistics** switch in **Proxy details** (labeled
-  "What is sent" in the payload summary header).
+  or beside the **Share anonymous usage statistics** switch in **Proxy details** to view the
+  **What is sent** / **Never sent** summary and the exact JSON payload.
 
 Before the first report has been sent — or after telemetry is disabled and `telemetry-id.json` is
 removed — no local install ID exists on disk, so `installDayHash` in the preview is shown as 64
@@ -190,22 +203,26 @@ Here is a real example payload produced by `buildTelemetryPayloadV1` (`src/telem
 | `env.installChannel` | `"npm-global"`, `"pnpm-global"`, `"bun-global"`, `"mise"`, `"standalone"`, `"desktop"`, `"docker"`, `"source"`, or `"unknown"`. |
 | `activeMinutes` | Distinct UTC minutes (`0`–`1440`) during `day` in which at least one request was logged in `usage.jsonl`. |
 | `requests` | Request counts by closed outcome class: `completed`, `failed`, `incomplete`, and `aborted`. |
-| `models` | Up to 64 rows per day, grouped by unique `(providerKind, modelFamily)` pairs from closed rosters (`PROVIDER_KINDS` and `MODEL_FAMILIES`). Each row reports `requests` and five disjoint token counters — `inputTokens` (uncached input), `cacheReadTokens`, `cacheWriteTokens`, `outputTokens` (non-reasoning output), and `reasoningTokens` — whose sum matches `usageDisplayTotalTokens`. |
+| `models` | Up to 64 rows per day, grouped by unique `(providerKind, modelFamily)` pairs from the closed rosters below (if more than 64 pairs occur in a day, the top 63 rows by requests and total tokens are kept and the remaining rows are merged into `"other"` / `"other"`). Multi-attempt `combo` requests attribute each attempt to the underlying provider and model, so `models[].requests` can sum to more than top-level `requests`. Each row reports `requests` and five disjoint token counters — `inputTokens` (uncached input), `cacheReadTokens`, `cacheWriteTokens`, `outputTokens` (non-reasoning output), and `reasoningTokens` — whose sum equals the request's displayed total tokens (`usageDisplayTotalTokens`). |
 | `errors` | Counts of non-completed requests keyed by the closed failure-cause roster (`transport-unsent`, `transport-ambiguous`, `upstream-declined`, `rate-limit`, `quota-exhausted`, `credential-rejected`, `policy-refusal`, `parameter-rejected`, `ciphertext-refusal`, `payload-too-large`, `payload-rejected`, `upstream-fault`, `empty-output`, `client-cancelled`, `local-refusal`). |
+
+Closed `providerKind` values (26): `openai`, `chatgpt`, `anthropic`, `claude-subscription`, `google`, `vertex`, `xai`, `deepseek`, `moonshot`, `qwen`, `zai`, `minimax`, `mistral`, `openrouter`, `groq`, `cerebras`, `together`, `fireworks`, `cursor`, `kiro`, `copilot`, `devin`, `ollama`, `lmstudio`, `local-other`, `other`.
+
+Closed `modelFamily` values (19): `gpt-6`, `gpt-5`, `gpt-4`, `o-series`, `codex`, `claude-opus`, `claude-sonnet`, `claude-haiku`, `gemini-3`, `gemini-2`, `grok`, `deepseek`, `qwen`, `kimi`, `glm`, `minimax`, `mistral`, `llama`, `other`.
 
 ## What is never collected
 
-OpenCodex never includes any of the following in telemetry payloads:
+opencodex never includes any of the following in telemetry payloads:
 
 - Prompts, completions, reasoning traces, tool arguments, or any request or response bodies.
 - API keys, OAuth access or refresh tokens, session cookies, or management/data-plane tokens.
 - Account IDs, email addresses, organization identifiers, or billing/plan details.
-- User-chosen provider names or keys, custom model IDs outside the closed `MODEL_FAMILIES`
-  buckets (unknown models map to `"other"`), or custom `baseUrl` and proxy URLs.
+- User-chosen provider names or keys, custom model IDs outside the closed `modelFamily`
+  buckets above (unknown models map to `"other"`), or custom `baseUrl` and proxy URLs.
 - Hostnames, local or upstream IP addresses, MAC addresses, hardware serials, working directories,
   or file paths.
 - Raw or free-form upstream error messages or stack traces.
-- Usage from any UTC day before consent or disclosure was recorded (`decidedAt ?? noticeShownAt`).
+- Usage from any UTC calendar day prior to the UTC day on which consent or disclosure was recorded (`formatUtcDay(decidedAt ?? noticeShownAt)`). (The UTC day on which consent or disclosure is recorded is aggregated across the full `00:00`–`24:00` UTC day once that day completes.)
 
 ## Storage, retention, and collector source
 
@@ -219,9 +236,12 @@ OpenCodex never includes any of the following in telemetry payloads:
   runs once after startup (30–60 s jitter) and every 6 hours thereafter, completely off the request
   path. Each tick re-reads `config.json` from disk and sends at most **one** completed UTC day per
   tick (oldest unsent day first, within the last 7 completed UTC days) to
-  `https://telemetry.opencodex.me/v1/events` with a 10-second timeout. Days before the UTC day of
-  `decidedAt ?? noticeShownAt` are never sent. Sent day markers in
-  `<OPENCODEX_HOME>/telemetry-state.json` are pruned after 30 days.
+  `https://telemetry.opencodex.me/v1/events` with a 10-second timeout. Earlier UTC calendar days
+  (`day < formatUtcDay(decidedAt ?? noticeShownAt)`) are never sent, while the full UTC calendar day
+  on which consent or disclosure is recorded becomes eligible once that day completes. Sent day
+  markers in `<OPENCODEX_HOME>/telemetry-state.json` are pruned after 30 days. If the collector is
+  not yet deployed or is unreachable, the 10-second send attempt fails quietly in the background
+  without affecting proxy traffic or advancing `telemetry-state.json` (marking the day as sent).
 - **One report per install per day** — the collector deduplicates on `(day, install_day_hash)` in a
   single atomic conditional D1 batch across `daily_installs`, `daily_totals`, `daily_models`, and
   `daily_errors`. Re-sending the same day for the same `installDayHash` is a no-op and never
@@ -233,7 +253,7 @@ OpenCodex never includes any of the following in telemetry payloads:
 - **Daily aggregate retention** — `daily_installs` rows (which hold only the per-day hash, version,
   release channel, OS, CPU architecture, install channel, `new_install`, and `active_minutes`) are
   pruned after 400 days; `daily_totals`, `daily_models`, and `daily_errors` hold only project-wide
-  daily counters.
+  daily counters with no per-install rows and are retained indefinitely.
 - **Auditable source code** — the client implementation lives in
   [`src/telemetry/`](https://github.com/lidge-jun/opencodex/tree/main/src/telemetry) and the
   Cloudflare Worker + D1 collector lives in
