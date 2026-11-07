@@ -34,7 +34,7 @@ import {
   LAST_GOOD_MAX_AGE_MS,
   providerQuotaBeforePublishForTests,
   routingEvidence, publishCollectedDecisionQuota,
-  keyReportCredentialIds, keyReportCredentialCurrent,
+  keyReportCredentialIds, keyReportCredentialCurrent, validateJoinedReports,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
   type CodexAuthAccountsSnapshotPromise,
@@ -262,7 +262,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
       && keyReportCredentialCurrent(item, config.providers[item.provider]));
   if (!forceRefresh && cacheFresh) return currentCache!.response;
   const joinable = inflight.get(key);
-  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
+  if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return validateJoinedReports(await joinable.promise, config);
   // A forced probe takes commit authority: older in-flight probes must not overwrite its result.
   if (forceRefresh) bumpProviderQuotaInvalidationEpoch();
   const epoch = invalidationEpoch;

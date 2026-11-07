@@ -176,6 +176,27 @@ test.each(["success", "unavailable"] as const)("a colliding replacement key neve
   else expect(next.reports).toEqual([]);
 });
 
+test.each(["unchanged", "key", "removed", "destination"] as const)("a joined quota request validates its own configuration after %s", async change => {
+  const first = { defaultProvider: "mistral", providers: { mistral: { ...provider } } } as OcxConfig;
+  const second = { defaultProvider: "mistral", providers: { mistral: { ...provider } } } as OcxConfig;
+  const gate = Promise.withResolvers<void>();
+  let count = 0;
+  globalThis.fetch = (async input => {
+    count++;
+    await gate.promise;
+    return Response.json(String(input).endsWith("/subscription") ? subscription : budget);
+  }) as typeof fetch;
+  const original = fetchProviderQuotaReports(first);
+  const joined = fetchProviderQuotaReports(second);
+  expect(count).toBe(2);
+  if (change === "key") second.providers.mistral!.apiKey = "replacement-key";
+  if (change === "removed") delete second.providers.mistral;
+  if (change === "destination") second.providers.mistral!.baseUrl = "https://example.com/v1";
+  gate.resolve();
+  expect((await original).reports).toHaveLength(1);
+  expect((await joined).reports).toHaveLength(change === "unchanged" ? 1 : 0);
+});
+
 test("a transient refresh does not return a cached budget after its credential changes before publication", async () => {
   const mutable = { ...provider };
   const cfg = { defaultProvider: "mistral", providers: { mistral: mutable } } as OcxConfig;
