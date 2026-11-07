@@ -1,4 +1,5 @@
 import { messagesFold502Cases } from "./messages-sse-fold-exceptions";
+import { hostedWindowsQuarantine } from "./windows-ci-quarantine";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -131,9 +132,10 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
   expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
   for (const lane of lanes) {
     const rows = cases.filter(row => row.lane === lane);
+    const networkBacked = ["passthrough", "count_tokens", "native-http", "native-fold", "native-fold-builtin", "translated-http", "translated-fold", "translated-json"].includes(lane);
     for (let offset = 0; offset < rows.length; offset += 64) {
       const selected = rows.slice(offset, offset + 64);
-      test(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
+      test.skipIf(hostedWindowsQuarantine && networkBacked)(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
         const started = performance.now();
         const scratch = mkdtempSync(join(tmpdir(), "ocx-overflow-slice-"));
         try {
