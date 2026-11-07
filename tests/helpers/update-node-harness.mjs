@@ -2,7 +2,7 @@
 //   node tests/helpers/update-node-harness.mjs --require-node18
 // This harness performs offline checks only; it never reads an installation.
 import assert from "node:assert/strict";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,6 +101,36 @@ try {
   assert.ok(Object.isFrozen(supply.verifyRootTransition(basis, after, envelope(signed), rootExpiry - 1)));
   for (const time of [rootExpiry, rootExpiry + 1, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => supply.verifyRootTransition(basis, after, envelope(signed), time));
+  }
+  const unionKeys = Array.from({ length: 33 }, (_, i) => makeKey(i + 10));
+  for (const count of [9, 16]) {
+    const fixtureDir = join(dir, `threshold-${count}`);
+    mkdirSync(fixtureDir);
+    for (const name of ["signed-supply.mjs", "update-bytes.mjs", "update-contracts.mjs", "update-bounded-json.mjs", "update-candidate-id.mjs", "update-signed-version.mjs", "update-signature-threshold.mjs", "minisign.mjs"]) copyFileSync(join(dir, name), join(fixtureDir, name));
+    const oldRoot = Buffer.from(JSON.stringify({ ...buildRoot(unionKeys.slice(0, count), 1), rootThreshold: count }));
+    const newRoot = Buffer.from(JSON.stringify({ ...buildRoot(unionKeys.slice(16, 16 + count), 2), rootThreshold: count }));
+    writeFileSync(join(fixtureDir, "update-trust-anchor.mjs"), `export const EMBEDDED_ROOT_SHA256 = "${createHash("sha256").update(oldRoot).digest("hex")}";\n`);
+    const unionSupply = await import(pathToFileURL(join(fixtureDir, "signed-supply.mjs")).href);
+    const oldBasis = unionSupply.bootstrapEmbeddedRoot(oldRoot, now);
+    const entries = [...unionKeys.slice(0, count), ...unionKeys.slice(16, 16 + count)].map(key => signEntry(newRoot, key));
+    assert.equal(unionSupply.inspectTransition(unionSupply.verifyRootTransition(oldBasis, newRoot, envelope(entries), now)).successorRevision, 2);
+    assert.throws(() => unionSupply.verifyRootTransition(oldBasis, newRoot, envelope(entries.slice(1)), now));
+    assert.throws(() => unionSupply.verifyRootTransition(oldBasis, newRoot, envelope([...entries, entries[0]]), now));
+    assert.throws(() => unionSupply.verifyRootTransition(oldBasis, newRoot, envelope([...entries, signEntry(newRoot, unionKeys[32])]), now));
+    const changed = [...entries]; changed[0] = signEntry(Buffer.from("different"), unionKeys[0]);
+    assert.throws(() => unionSupply.verifyRootTransition(oldBasis, newRoot, envelope(changed), now));
+    if (count === 16) {
+      const overlapping = [unionKeys[0], ...unionKeys.slice(16, 31)];
+      const overlapObject = { ...buildRoot(overlapping, 2), rootThreshold: 16 };
+      const overlapBytes = Buffer.from(JSON.stringify(overlapObject));
+      const overlapSigners = [...unionKeys.slice(0, 16), ...unionKeys.slice(16, 31)];
+      const overlapEntries = overlapSigners.map(key => signEntry(overlapBytes, key));
+      assert.equal(unionSupply.inspectTransition(unionSupply.verifyRootTransition(oldBasis, overlapBytes, envelope(overlapEntries), now)).successorRevision, 2);
+      const raw = Buffer.from(unionKeys[0].pair.publicKey.export({ format: "der", type: "spki" })).subarray(-32);
+      overlapObject.rootKeys[0].publicKey = Buffer.from(`untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), Buffer.alloc(8, 201), raw]).toString("base64")}\n`).toString("base64");
+      const incompatibleBytes = Buffer.from(JSON.stringify(overlapObject));
+      assert.throws(() => unionSupply.verifyRootTransition(oldBasis, incompatibleBytes, envelope(overlapSigners.map(key => signEntry(incompatibleBytes, key))), now), /packet identifiers/);
+    }
   }
   const digest = (bytes) => ({ sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length });
   const metadataEnvelope = (bytes) => Buffer.from(JSON.stringify({ schema: "ocx.update.signatures/1", signatures: [signEntry(bytes, keys[2])] }));
