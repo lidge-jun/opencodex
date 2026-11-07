@@ -258,6 +258,7 @@ export default function RoutingProfiles({
   const compatibilityFieldLabels = ROUTING_COMPATIBILITY_FIELD_LABELS[locale];
   const unavailable = t("routing.unavailable");
   const [profiles, setProfiles] = useState<RoutingProfileDto[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [providerNames, setProviderNames] = useState<string[]>([]);
   const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
@@ -382,6 +383,7 @@ export default function RoutingProfiles({
 
       selectedRef.current = refreshed;
       setProfiles(nextProfiles);
+      setLoaded(true);
       setSelected(refreshed);
       setDraft(refreshed ? routingProfileDraftFromDto(refreshed) : null);
       setAnalytics(analyticsJson);
@@ -622,6 +624,7 @@ export default function RoutingProfiles({
 
       {loadError ? <Notice tone="err">{t("routing.loadFailed")}: {loadError}</Notice> : null}
       {status ? <Notice tone={status.ok ? "ok" : "err"}>{status.message}</Notice> : null}
+      {loaded && !loadError && profiles.length === 0 && !draft ? <p className="muted">{t("routing.empty")}</p> : null}
 
       {profiles.length > 0 ? (
         <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 12 }}>

@@ -143,6 +143,29 @@ async function mountPage(): Promise<{ container: HTMLDivElement; root: Root }> {
   return { container, root };
 }
 
+test("an empty loaded routing list explains how to configure profiles", async () => {
+  installFetch(url => {
+    if (url.endsWith("/api/routing-profiles")) return Response.json({ profiles: [] });
+    if (url.endsWith("/api/config")) return Response.json({ providers: {} });
+    if (url.endsWith("/api/models")) return Response.json([]);
+    if (url.endsWith("/api/lab/catalog")) return Response.json({ scenarios: [] });
+    return Response.json({});
+  });
+  const { container, root } = await mountPage();
+  expect(container.textContent).toContain("No routing profiles configured");
+  await act(async () => root.unmount());
+});
+
+test("a failed routing load shows an error instead of claiming the list is empty", async () => {
+  installFetch(url => url.endsWith("/api/routing-profiles")
+    ? new Response("unavailable", { status: 503 })
+    : Response.json({}));
+  const { container, root } = await mountPage();
+  expect(container.textContent).toContain("Could not load routing data");
+  expect(container.textContent).not.toContain("No routing profiles configured");
+  await act(async () => root.unmount());
+});
+
 /** The requirement's Select (ui.tsx) as `{ value }`, like the native select it replaced. */
 function requirementSelect(container: HTMLDivElement, key: string): { value: string } | null {
   // Scope the lookup to the "Hard requirements" fieldset so keys that also
