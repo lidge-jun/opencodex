@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
-import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
+import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { readClientConnectionState } from "../client/state";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
-import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { readCliConfigForMutation } from "./config-mutation";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
@@ -341,12 +341,18 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       await withConfigDirHardeningSettled(getConfigDir(), () => {
         // Reject invalid authority before lock preparation creates coordination files.
         readCliConfigForMutation();
-        const config = validate(loadInput(path));
-        // Do not hold the shared lock while reading stdin. Check live mode and save
-        // in the same synchronous transaction; saveConfig reuses this transaction.
+        const imported = validate(loadInput(path));
+        // Do not hold the shared lock while reading stdin. Recheck the live mode and
+        // the active client connection, then save in the same synchronous transaction;
+        // saveConfig reuses this transaction.
         withConfigMutationLockSync(() => {
-          requireDedicatedPlaintextTransition(readCliConfigForMutation(), config);
-          saveConfig(config);
+          const client = readClientConnectionState();
+          if (client.kind === "connected" && (imported.runtimeRole !== "client"
+            || JSON.stringify(imported.client) !== JSON.stringify(client.value))) {
+            throw new Error("config import refused: disconnect the active client before replacing its connection");
+          }
+          requireDedicatedPlaintextTransition(readCliConfigForMutation(), imported);
+          saveConfig(imported);
         });
       });
       printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ocx sync if needed.`]);

@@ -11,19 +11,21 @@
 import type { HomeCodexSettingsRecord } from "../client/link-home";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { ProxyRestartStartOutcome } from "./tray-proxy";
+import type { RestartSupervisor } from "./restart-failure";
 
 export type ApplyRestartOutcome =
   | { kind: "current" }
   | { kind: "not-running" }
   | { kind: "connection-changed" }
   | { kind: "restarted" }
+  | { kind: "deferred-supervisor"; supervisor: RestartSupervisor }
   | { kind: "failed" };
 
 export interface ApplyRestartDeps {
   findLive?: () => Promise<LiveProxy | null>;
   /** Epoch ms the live client runtime reports as its start, or null when it reports none. */
   readStartedAt?: (live: LiveProxy) => Promise<number | null>;
-  restart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>) => Promise<boolean>;
+  restart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised: (supervisor: RestartSupervisor) => void) => Promise<boolean>;
   recoveryStart: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>;
   /** Still the connection this sync applied for (rechecked right before the restart). */
   connectionUnchanged: () => boolean;
@@ -54,9 +56,11 @@ export async function restartRuntimeAfterApply(record: HomeCodexSettingsRecord, 
   const startedAt = await (deps.readStartedAt ?? (target => readClientRuntimeStartedAt(target)))(live);
   if (startedAt !== null && Number.isFinite(appliedAt) && startedAt >= appliedAt) return { kind: "current" };
   if (!deps.connectionUnchanged()) return { kind: "connection-changed" };
+  let supervisor: RestartSupervisor | undefined;
   const ok = await deps.restart(async recovering => recovering
     ? deps.recoveryStart(true)
-    : { status: "skipped" });
+    : { status: "skipped" }, value => { supervisor = value; });
+  if (!ok && supervisor) return { kind: "deferred-supervisor", supervisor };
   return ok ? { kind: "restarted" } : { kind: "failed" };
 }
 
@@ -67,6 +71,9 @@ export function applyRestartMessage(outcome: ApplyRestartOutcome): string {
     case "not-running": return "No client runtime is running; the applied settings take effect when it starts.";
     case "connection-changed": return "The connection changed during sync; the client runtime was not restarted. Run 'ocx sync' again.";
     case "restarted": return "Client runtime restarted after applying the Home's settings.";
+    case "deferred-supervisor": return outcome.supervisor === "desktop"
+      ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+      : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.";
     case "failed": return "The client runtime restart did not complete; the previous runtime keeps serving. If a background service or the desktop app owns it, restart it there; otherwise retry with 'ocx restart' or 'ocx sync'.";
   }
 }
