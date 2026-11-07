@@ -154,6 +154,13 @@ reset times, and the plan reported by Mistral. A zero or missing initial budget 
 currency is shown as unknown. Quota reads require the key's usage permission; a 401 or 403
 means quota is unavailable for that key. These budgets are display-only and do not rank keys
 under the quota selection strategy. Reports are cached and can be refreshed manually.
+
+For supported OpenAI, Anthropic, xAI, Groq and Mistral endpoints, the header also shows passively
+observed request and token limits as separate entries for each observed key and model, alongside
+any provider budget. Keys are numbered among observed keys and the numbers can change as readings
+appear or expire. Each window shows remaining and limit counts, observation age and reset time
+when supplied. Missing values are unknown, and a reading is marked stale after its reset; these
+observations are for display and do not change routing.
 The proxy does not infer a subscription tier from the key. For every model, explicit upstream
 `Retry-After` deadlines are shared between calls on the same credential and model. A 429
 without a retry time can activate a conservative 60-second recovery wait when valid minute

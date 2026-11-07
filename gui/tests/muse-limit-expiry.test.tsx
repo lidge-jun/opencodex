@@ -75,12 +75,12 @@ async function advance(ms: number) {
   now = target;
 }
 
-async function mount(source: string, percent = 100, extraReports: unknown[] = []) {
+async function mount(source: string, percent = 100, extraReports: unknown[] = [], passiveKeyLimits: unknown = [], passiveOnly = false) {
   let polls = 0;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
-    expect(String(input)).toBe("/api/provider-quotas");
+    if (String(input) !== "/api/provider-quotas") return new Response(null, { status: 404 });
     if (++polls > 1) return new Response(null, { status: 503 });
-    return Response.json({ reports: [
+    return Response.json({ passiveKeyLimits, reports: passiveOnly ? [] : [
       { provider: "meta-muse", label: "Muse Code", source, observed: true, updatedAt: now,
         quota: { customWindows: [{ label: "Muse Code", percent, resetAt: now + 5_000 }], updatedAt: now } },
       { provider: "openai", label: "OpenAI", updatedAt: now, quota: { weeklyPercent: 20, updatedAt: now } },
@@ -100,6 +100,63 @@ async function mount(source: string, percent = 100, extraReports: unknown[] = []
     openai: () => host.querySelector('a[href="#providers?provider=openai&tab=accounts"]'),
   };
 }
+
+test("passive key and model readings remain separate from Mistral budgets and go stale at reset", async () => {
+  const view = await mount("meta-muse:usage-frame", 42, [{
+    provider: "mistral", source: "mistral:budget", updatedAt: now,
+    quota: { updatedAt: now, customWindows: [{ label: "API budget", percent: 10 }] },
+  }], [
+    { provider: "mistral", keyId: "account-a", model: "model-a", windows: [
+      { dimension: "requests", window: "minute", observedAt: now - 120_000, remaining: 4, limit: 10, resetAt: now + 5_000, stale: false },
+      { dimension: "input-tokens", observedAt: now, limit: 200, stale: false },
+    ] },
+    { provider: "mistral", keyId: "account-b", model: "model-b", windows: [
+      { dimension: "tokens", window: "month", observedAt: now, remaining: 0, stale: true },
+    ] },
+  ]);
+  const chips = () => [...view.host.querySelectorAll('a[href="#providers?provider=mistral&tab=accounts"]')];
+  expect(chips()).toHaveLength(3);
+  expect(chips()[0]?.textContent).toContain("API budget: 10%");
+  expect(chips()[1]?.textContent).toContain("model-a");
+  expect(chips()[1]?.textContent).toContain("4 / 10");
+  expect(chips()[2]?.textContent).toContain("model-b");
+  expect(view.host.textContent).not.toContain("account-a");
+  await act(async () => { chips()[1]!.dispatchEvent(new testWindow.PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }) as unknown as Event); });
+  expect(view.host.textContent).toContain("Observed 2m ago");
+  expect(view.host.textContent).toContain("Unknown / 200");
+  expect(view.host.textContent).toContain("Resets");
+  await advance(5_000);
+  expect(view.polls()).toBe(1);
+  expect(chips()[1]?.textContent).toContain("Stale");
+  await advance(60_000);
+  expect(view.host.textContent).toContain("Observed 3m ago");
+});
+
+test("a passive-only response keeps each model for the same account visible", async () => {
+  const window = { dimension: "requests", observedAt: now, remaining: 1, limit: 2, stale: false };
+  const view = await mount("", 0, [], [
+    { provider: "groq", keyId: "opaque", model: "a", windows: [window] },
+    { provider: "groq", keyId: "opaque", model: "b", windows: [window] },
+  ], true);
+  const chips = [...view.host.querySelectorAll('a[href="#providers?provider=groq&tab=accounts"]')];
+  expect(chips).toHaveLength(2);
+  expect(chips[0]?.textContent).toContain("Observed key 1 · a");
+  expect(chips[1]?.textContent).toContain("Observed key 1 · b");
+  expect(view.host.textContent).not.toContain("opaque");
+});
+
+test("malformed passive readings do not render or invent counts", async () => {
+  const view = await mount("meta-muse:usage-frame", 42, [], [
+    null, { provider: "mistral", keyId: "x", model: "m", windows: "bad" },
+    { provider: "mistral", keyId: "x", model: "m", windows: [
+      { dimension: "invalid", observedAt: now, remaining: 10, stale: false },
+      { dimension: "requests", observedAt: now, remaining: -1, limit: "10", stale: false },
+    ] },
+  ]);
+  expect(view.host.querySelectorAll('a[href="#providers?provider=mistral&tab=accounts"]')).toHaveLength(1);
+  expect(view.host.textContent).toContain("Unknown / Unknown");
+  expect(view.host.textContent).not.toContain("-1");
+});
 
 test("Mistral header shows both named budgets and the critical Vibe severity", async () => {
   const view = await mount("meta-muse:usage-frame", 42, [{

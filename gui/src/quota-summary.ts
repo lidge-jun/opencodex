@@ -7,6 +7,7 @@
  */
 import type { AccountQuota } from "./codex-quota-utils";
 import type { TKey } from "./i18n/en";
+import type { PassiveQuotaRow } from "./passive-quota-summary";
 import { quotaWindows, resetTimestamp } from "./pages/tray-data";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
 
@@ -29,6 +30,7 @@ export interface QuotaSummaryWindow {
 }
 
 export interface QuotaSummaryRow {
+  passive?: PassiveQuotaRow;
   provider: string;
   label: string;
   headline: QuotaSummaryWindow;
