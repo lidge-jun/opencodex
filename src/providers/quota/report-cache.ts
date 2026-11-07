@@ -33,6 +33,14 @@ export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider:
   const current = resolveProviderApiKey(provider.apiKey)?.trim();
   return !!current && createHash("sha256").update(current).digest("hex") === captured;
 }
+/** Validate joined results against the joining caller's independently mutable configuration. */
+export function validateJoinedReports(response: ProviderQuotaResponse, config: OcxConfig): ProviderQuotaResponse {
+  return { ...response, reports: response.reports.filter(item => {
+    const provider = config.providers[item.provider];
+    return !!provider && !provider.disabled && isProviderQuotaReportCurrent(item)
+      && keyReportCredentialCurrent(item, provider);
+  }) };
+}
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
 export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();
 export let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
