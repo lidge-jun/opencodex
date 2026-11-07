@@ -9,6 +9,7 @@ import { parseBoundedJson } from "../../src/update/update-bounded-json.mjs";
 import { deriveCandidateId } from "../../src/update/update-candidate-id.mjs";
 import { sameSignedVersion, trustedCommentMatchesVersion } from "../../src/update/update-signed-version.mjs";
 import { bootstrapEmbeddedRoot } from "../../src/update/signed-supply.mjs";
+import { parseSignatureEnvelope, parseUpdateDocument } from "../../src/update/update-contracts.mjs";
 
 const args = process.argv.slice(2);
 assert.ok(args.length === 0 || (args.length === 1 && args[0] === "--require-node18"), "unsupported arguments");
@@ -32,6 +33,16 @@ assert.equal(parseBoundedJson(encode('{"a":[1,true]}'), 65536).a[0], 1);
 assert.throws(() => parseBoundedJson(encode('{"a":1,"\\u0061":2}'), 65536));
 const group = `[${Array(4096).fill("{}").join(",")}]`;
 assert.throws(() => parseBoundedJson(encode(`[${Array(20).fill(group).join(",")}]`), 16777216));
+
+const transitionSchema = "ocx.update.root-transition-signatures/1";
+const signers = Array.from({ length: 33 }, (_, i) => ({ keyFingerprint: i.toString(16).padStart(64, "0"), signatureBox: signature }));
+const transition = encode(JSON.stringify({ schema: transitionSchema, signatures: signers.slice(0, 32) }));
+assert.equal(parseUpdateDocument(transition, transitionSchema).signatures.length, 32);
+assert.throws(() => parseUpdateDocument(encode(JSON.stringify({ schema: transitionSchema, signatures: signers })), transitionSchema));
+assert.throws(() => parseSignatureEnvelope(transition));
+const capped = Buffer.concat([transition, Buffer.alloc(262144 - transition.length, 32)]);
+assert.equal(parseUpdateDocument(capped, transitionSchema).signatures.length, 32);
+assert.throws(() => parseUpdateDocument(Buffer.concat([capped, Buffer.from(" ")]), transitionSchema));
 
 const root = readFileSync(fileURLToPath(new URL("../../src/update/trust-root.json", import.meta.url)));
 const expiry = Date.parse("2028-11-07T00:00:00Z");
