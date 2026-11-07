@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { isComboTargetInCooldown } from "../../src/combos";
-import { isDefiniteContextOverflow } from "../../src/combos/failover";
+import { comboFailureCooldownScope, isDefiniteContextOverflow } from "../../src/combos/failover";
 
 interface ComboHarness<Server> {
   serve(handler: () => Response | Promise<Response>): Server;
@@ -44,6 +44,7 @@ export function registerComboContextOverflowCases<Server>({
     "The input is not malformed; the input exceeds the model's context limit.",
     "This input is beyond the context window for the selected model.",
     "The request has reached the model context length limit.",
+    "Total tokens must not exceed the context window: 9000 > 8192",
     // Devin's opaque context-window refusal: emitted as a structured event with code context_length_exceeded.
     "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
   ]) {
@@ -100,6 +101,8 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
       message: "Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { message: 'Invalid value for "user": "maximum context length" is not allowed.' } }),
+    "The model's context cache is full",
+    "Model context service is at capacity, please retry later",
     "The model's context window is not full; the request is invalid",
     "Your input does not exceed the context window",
     "Your input does not actually exceed the context window",
@@ -178,6 +181,7 @@ export function registerComboContextOverflowCases<Server>({
       "The request has reached the model context length limit.",
       "The model's context window is full.",
       "This model's context limit has been exceeded.",
+      "Total tokens must not exceed the context window: 9000 > 8192",
       "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
     ]) {
       expect(isDefiniteContextOverflow(400, message)).toBe(true);
@@ -188,7 +192,10 @@ export function registerComboContextOverflowCases<Server>({
     expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Please reduce the length of the messages or completion." }))).toBe(true);
     expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Failed to start sampling: [input_too_large] The prompt is too long for this model's context window (555817 tokens > 500000 tokens)" }))).toBe(true);
     expect(isDefiniteContextOverflow(400, JSON.stringify({ error: "Invalid 'tools[0].function.name': 'prompt is too long'" }))).toBe(false);
+    expect(comboFailureCooldownScope(503, "Model context service is at capacity, please retry later")).toBe("target");
     for (const echo of [
+      "The model's context cache is full",
+      "Model context service is at capacity, please retry later",
       JSON.stringify({ error: { code: "invalid_value", message: "customer's prompt is too long" } }),
       JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),
       "Invalid 'tools[0].function.name': 'customer's prompt is too long'.",

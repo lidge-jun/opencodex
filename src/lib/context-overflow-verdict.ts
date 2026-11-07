@@ -25,7 +25,7 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 /** Provider wording that says the conversation has reached/passed its model's context capacity. */
 const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
   /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at(?:\s+or\s+past)?|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
-  /\b(?:context\s+(?:window|length|limit)|model(?:'s)?\s+context(?:\s+(?:window|length|limit))?)\b[^;!?\n.]{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted|at\s+capacity)\b/i,
+  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b[^;!?\n.]{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted)\b/i,
 ];
 
 /** Explicit provider wording that an input is too long for a model's context capacity. */
@@ -87,7 +87,10 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     matchSlice.lastIndexOf("\n"),
   );
   const verdictClause = lastBoundary !== -1 ? matchSlice.slice(lastBoundary + 1) : matchSlice;
-  if (NEGATED_CONTEXT_VERDICT.test(verdictClause)) return true;
+  const nonModalVerdict = verdictClause
+    .replace(/\b(?:must|may|shall)\s+(?:not|never)\b/gi, "")
+    .replace(/\b(?:mustn)['\u2019]t\b/gi, "");
+  if (NEGATED_CONTEXT_VERDICT.test(nonModalVerdict)) return true;
   // Phrase matches can begin at the verb and omit its negating auxiliary (`does not exceed`).
   // Check only a directly attached negator so unrelated wording such as `No tokens remain and
   // the model's context window is full` still counts as an affirmed overflow verdict.
@@ -100,9 +103,15 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     before.lastIndexOf("\n"),
   );
   const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary + 1) : before;
+  // Modal prohibitions ("must not exceed", "may not exceed", "shall not exceed") describe the limit
+  // that was violated rather than asserting the absence of an overflow.
+  if (/\b(?:must|may|shall)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:mustn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)) {
+    return false;
+  }
   return /\b(?:not|no|never|neither|nor)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
-    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|may|might|must)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
-    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn|mustn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore);
+    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|might)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
+    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore);
 }
 
 function hasAffirmedVerdict(text: string, verdict: RegExp): boolean {
