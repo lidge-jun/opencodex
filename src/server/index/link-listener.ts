@@ -107,7 +107,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
 
   // Children read route intent through this listener, and that read is pure: it never captures.
   // So a failed capture (a busy config lock, a damaged route-intent.json, unresolved Aside
-  // ownership) is owed and retried with backoff until it succeeds or the listener stops,
+  // ownership) is owed and retried with backoff until it succeeds, the listener closes or stops,
   // and again on every ensureStarted. Meanwhile every Home-only writer still captures first.
   let routeDefaultsOwed = false;
   let captureAttempt = 0;
@@ -224,6 +224,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
 
   const close = (): Promise<void> => {
     if (closeFlight) return closeFlight;
+    // No link is left to protect: an owed capture is retried at the next bind, not on a timer.
+    if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
+    captureAttempt = 0;
     const flight = (async () => {
       if (ensureFlight) await ensureFlight;
       const current = listener;

@@ -383,4 +383,20 @@ describe("hub-link listener lifecycle", () => {
     await Bun.sleep(30);
     expect(attempts).toBe(1);
   });
+
+  test("a closed listener cancels the owed capture's retry timer like stop", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-capture-close-"));
+    let attempts = 0;
+    const lifecycle = makeLifecycle({ value: store() }, {
+      warn: () => {},
+      serve: () => { throw new Error("fixture listener stops here"); },
+      captureRetryDelayMs: () => 5,
+      captureRouteDefaults: () => { attempts += 1; throw new Error("config lock busy"); },
+    });
+    lifecycle.start(context());
+    await lifecycle.close();
+    await Bun.sleep(30);
+    expect(attempts).toBe(1);
+    await lifecycle.stop();
+  });
 });
