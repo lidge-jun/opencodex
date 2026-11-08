@@ -501,29 +501,14 @@ pub fn apply_attach_or_sync_with_fault(
             let current = current
                 .as_deref()
                 .ok_or("models_cache disappeared during sync")?;
+            // `reconciled` is the detach snapshot: injected slugs carry their pre-attach
+            // versions there. The live cache below lets the new catalog win every shared slug,
+            // exactly as first attach does, and keeps only entries whose slug it does not carry.
             let reconciled = reconcile_modified_models_cache(
                 current,
                 original.as_deref(),
                 &paths.catalog_backup_file,
             )?;
-            let local: serde_json::Value = serde_json::from_slice(&reconciled)
-                .map_err(|e| format!("invalid reconciled models_cache.json: {e}"))?;
-            let local_models = local
-                .get("models")
-                .and_then(serde_json::Value::as_array)
-                .ok_or("reconciled models_cache.json missing models array")?;
-            for entry in local_models {
-                if let Some(slug) = entry.get("slug").and_then(serde_json::Value::as_str)
-                    && catalog_models.iter().any(|model| {
-                        model.get("slug").and_then(serde_json::Value::as_str) == Some(slug)
-                            && model != entry
-                    })
-                {
-                    return Err(format!(
-                        "client_models_cache_conflict: local model {slug} conflicts with Home catalog"
-                    ));
-                }
-            }
             let (rendered, hash) =
                 render_codex_models_cache(Some(&reconciled), &catalog_models, true)?;
             pre_cache_existed = true;
@@ -856,9 +841,12 @@ fn step_err(e: RestoreStepError) -> DetachError {
     DetachError::Io(e.into_message())
 }
 
-/// Preserves newly observed native models (`opencodex_account_observed_native`) and prior cache
-/// entries while stripping Child-injected Home catalog slugs when `models_cache.json` changed
-/// externally while attached.
+/// Rebuilds the pre-attach view of a `models_cache.json` that changed externally while attached.
+///
+/// Every slug of the last catalog the Child injected is Child-owned while attached, whatever its
+/// current content: Codex rewrites the cache and may re-serialize those entries. Such an entry is
+/// replaced by its pre-attach version, or dropped when the pre-attach cache did not have the slug.
+/// Entries with any other slug were added outside the Child and are kept as they are.
 fn reconcile_modified_models_cache(
     cur_cache_bytes: &[u8],
     prior_cache_bytes: Option<&[u8]>,
@@ -887,13 +875,9 @@ fn reconcile_modified_models_cache(
         .ok_or_else(|| {
             "client_models_cache_reconcile_failed: catalog backup missing models array".to_owned()
         })?;
-    let child_by_slug: HashMap<String, serde_json::Value> = backup_models
+    let child_slugs: HashSet<&str> = backup_models
         .iter()
-        .filter_map(|m| {
-            m.get("slug")
-                .and_then(serde_json::Value::as_str)
-                .map(|s| (s.to_owned(), m.clone()))
-        })
+        .filter_map(|m| m.get("slug").and_then(serde_json::Value::as_str))
         .collect();
     let prior_by_slug: HashMap<String, serde_json::Value> = match prior_cache_bytes {
         Some(raw) => {
@@ -925,12 +909,8 @@ fn reconcile_modified_models_cache(
                 .get("slug")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            if let Some(injected) = child_by_slug.get(slug) {
-                if &entry == injected {
-                    prior_by_slug.get(slug).cloned()
-                } else {
-                    Some(entry)
-                }
+            if child_slugs.contains(slug) {
+                prior_by_slug.get(slug).cloned()
             } else {
                 Some(entry)
             }
