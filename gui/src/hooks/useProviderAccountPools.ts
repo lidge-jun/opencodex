@@ -847,7 +847,13 @@ export function useProviderAccountPools(deps: {
       else {
         result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
         partial = result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
-        if (!partial) { if (current()) notify(t(result.deletionCommitted === false ? "prov.accountRemoveFail" : "prov.accountRemoveUnverified", { email: label }), false); return; }
+        if (!partial) {
+          if (current()) {
+            if (result.deletionCommitted === false) notify(t("prov.accountRemoveFail", { email: label }), false);
+            else notify(t("prov.accountRemoveUnverified", { email: label }), false);
+          }
+          return;
+        }
       }
       settleStatus();
       committed = true;
