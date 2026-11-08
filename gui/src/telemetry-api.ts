@@ -180,7 +180,7 @@ export async function fetchTelemetryStatus(
 export async function putTelemetryDecision(
   apiBase: string,
   decision: TelemetryDecision,
-  previous?: TelemetryStatusSnapshot | null,
+  _previous?: TelemetryStatusSnapshot | null,
 ): Promise<TelemetryStatusSnapshot> {
   const bounded = createBoundedFetch(TELEMETRY_TIMEOUT_MS);
   try {
@@ -193,31 +193,8 @@ export async function putTelemetryDecision(
     if (!res.ok) throw new Error("HTTP " + String(res.status));
     const body: unknown = await res.json().catch(() => null);
     const parsed = parseTelemetryStatus(body);
-    const nowIso = new Date().toISOString();
-    const envOverride = previous?.envOverride ?? null;
-    const snapshot: TelemetryStatusSnapshot = parsed ?? {
-      effective: envOverride === null && decision === "accepted",
-      reason:
-        envOverride === "OCX_TELEMETRY"
-          ? "env-ocx-telemetry"
-          : envOverride === "DO_NOT_TRACK"
-            ? "env-do-not-track"
-            : decision,
-      decision,
-      decidedAt: nowIso,
-      noticeShownAt: previous?.noticeShownAt ?? nowIso,
-      envOverride,
-      installChannel: previous?.installChannel ?? "unknown",
-      lastSentDay: previous?.lastSentDay ?? null,
-      lastSentAt: previous?.lastSentAt ?? null,
-      preview: previous?.preview ?? {},
-      ...(previous?.previewEligible !== undefined
-        ? {
-            previewEligible:
-              decision === "accepted" && envOverride === null ? previous.previewEligible : false,
-          }
-        : {}),
-    };
+    // The decision is saved; a reply that cannot be read is re-read from the server, never guessed.
+    const snapshot = parsed ?? (await fetchTelemetryStatus(apiBase));
     notifyTelemetryStatusChanged(snapshot);
     return snapshot;
   } finally {
