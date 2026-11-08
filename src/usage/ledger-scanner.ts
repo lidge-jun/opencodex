@@ -12,6 +12,8 @@ import {
 } from "./log";
 
 export const USAGE_LEDGER_READ_CHUNK_BYTES = 1024 * 1024;
+/** First window tried when reading one indexed row; most rows fit many times over. */
+export const USAGE_LEDGER_ROW_READ_WINDOW_BYTES = 64 * 1024;
 // Normalized writer rows carry a <=16 KiB route trace and <=500-character captured
 // upstream error, so 1 MiB leaves wide headroom even for an extreme multi-attempt row.
 // Hand-edited rows can still exceed it; those are reported separately instead of making
@@ -21,7 +23,11 @@ export const USAGE_LEDGER_BOUNDARY_DIGEST_BYTES = 64 * 1024;
 
 export interface ScanUsageLedgerOptions {
   signal?: AbortSignal;
-  onEntry: (entry: PersistedUsageEntry) => void;
+  /**
+   * Receives each complete row and the absolute byte offset it starts at, so a derived
+   * index can address the same row later without re-reading the whole ledger.
+   */
+  onEntry: (entry: PersistedUsageEntry, rowStartBytes: number) => void;
   /** Absolute LF boundary returned by a previous scan. Defaults to byte zero. */
   startAtBytes?: number;
   /** Stable path/dev/ino/birthtime identity; required when startAtBytes is nonzero. */
@@ -304,7 +310,7 @@ export async function scanUsageLedgerCooperatively(
       }
     }
 
-    const publishLine = (): void => {
+    const publishLine = (rowStartBytes: number): void => {
       if (lineLength === 0 || isJsonWhitespace(line, lineLength)) return;
       let entry: PersistedUsageEntry | undefined;
       try {
@@ -318,7 +324,7 @@ export async function scanUsageLedgerCooperatively(
         invalidRows += 1;
         return;
       }
-      options.onEntry(entry);
+      options.onEntry(entry, rowStartBytes);
       parsedRows += 1;
     };
 
@@ -360,6 +366,7 @@ export async function scanUsageLedgerCooperatively(
 
         if (newline < 0 || newline >= read) break;
         linesSinceYield += 1;
+        const rowStartBytes = processedThroughBytes;
         processedThroughBytes = chunkStart + newline + 1;
         if (pendingLineBytes + 1 >= USAGE_LEDGER_BOUNDARY_DIGEST_BYTES) {
           committedTail.reset();
@@ -371,7 +378,7 @@ export async function scanUsageLedgerCooperatively(
         if (droppingOversizedLine) {
           droppingOversizedLine = false;
         } else {
-          publishLine();
+          publishLine(rowStartBytes);
         }
         lineLength = 0;
         cursor = newline + 1;
@@ -443,6 +450,137 @@ export async function scanUsageLedgerCooperatively(
       processedThroughBytes,
       processedThroughDigest,
     };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export interface ReadUsageLedgerRowsOptions {
+  /** Ascending, distinct row-start offsets reported by an earlier scan of the same file. */
+  offsets: readonly number[];
+  /** Identity those offsets were captured under; a replaced file invalidates all of them. */
+  expectedIdentityKey: string;
+  signal?: AbortSignal;
+}
+
+export interface UsageLedgerRowRead {
+  entries: PersistedUsageEntry[];
+  /** Offsets that no longer frame a complete, normalizable row. */
+  unreadableOffsets: number[];
+}
+
+/**
+ * Re-reads only the rows a derived index selected, addressed by their recorded byte offsets.
+ *
+ * This is the read half of the offset index: the caller already knows which rows match, so a
+ * filtered query pays to decode and normalize its candidates instead of the whole ledger. Every
+ * bound still belongs to this scanner -- the 1 MiB row ceiling, the opened-file identity, and the
+ * refusal to publish a torn final row -- because an offset reader with its own limits would be a
+ * second storage policy.
+ *
+ * A row that no longer parses at its recorded offset means the index and the ledger disagree;
+ * the caller is expected to drop the index and rebuild rather than serve a partial answer.
+ */
+export async function readUsageLedgerRowsAtOffsets(
+  options: ReadUsageLedgerRowsOptions,
+): Promise<UsageLedgerRowRead> {
+  throwIfAborted(options.signal);
+  // Nothing selected means there is nothing to verify against the ledger; a missing ledger is
+  // an empty installation, not a failed read.
+  if (options.offsets.length === 0) return { entries: [], unreadableOffsets: [] };
+  const path = usageLogPath();
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch (error) {
+    if (isMissingFileError(error)) throw rebuildRequired("identity_mismatch");
+    throw error;
+  }
+
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const window = Buffer.allocUnsafe(USAGE_LEDGER_ROW_READ_WINDOW_BYTES);
+  const row = Buffer.allocUnsafe(USAGE_LEDGER_MAX_LINE_BYTES);
+  let windowStart = -1;
+  let windowLength = 0;
+
+  try {
+    const openedRevision = revisionFromStat(path, fd, fstatSync(fd));
+    if (usageLogIdentityKey(openedRevision) !== options.expectedIdentityKey) {
+      throw rebuildRequired("identity_mismatch");
+    }
+    const size = openedRevision.size;
+
+    const lineAt = (offset: number): Buffer | null => {
+      if (offset >= windowStart && offset < windowStart + windowLength) {
+        const newline = window.indexOf(0x0a, offset - windowStart);
+        if (newline >= 0) return window.subarray(offset - windowStart, newline);
+        // The cached window ends without a newline; a torn suffix has no complete row.
+        if (windowStart + windowLength >= size) return null;
+      }
+      const requested = Math.min(window.byteLength, size - offset);
+      if (requested <= 0) return null;
+      const read = readSync(fd, window, 0, requested, offset);
+      if (read <= 0) return null;
+      windowStart = offset;
+      windowLength = read;
+      const newline = window.indexOf(0x0a, 0);
+      if (newline >= 0) return window.subarray(0, newline);
+      // The row spans more than one window: copy the prefix and grow up to the row ceiling.
+      window.copy(row, 0, 0, read);
+      let length = read;
+      while (length < USAGE_LEDGER_MAX_LINE_BYTES) {
+        const want = Math.min(USAGE_LEDGER_MAX_LINE_BYTES - length, size - offset - length);
+        if (want <= 0) return null;
+        const more = readSync(fd, row, length, want, offset + length);
+        if (more <= 0) return null;
+        const found = row.indexOf(0x0a, length);
+        length += more;
+        if (found >= 0) {
+          windowStart = -1;
+          windowLength = 0;
+          return row.subarray(0, found);
+        }
+      }
+      return null;
+    };
+
+    const entries: PersistedUsageEntry[] = [];
+    const unreadableOffsets: number[] = [];
+    for (const offset of options.offsets) {
+      throwIfAborted(options.signal);
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset >= size) {
+        unreadableOffsets.push(offset);
+        continue;
+      }
+      const bytes = lineAt(offset);
+      if (!bytes) {
+        unreadableOffsets.push(offset);
+        continue;
+      }
+      let entry: PersistedUsageEntry | undefined;
+      try {
+        entry = normalizePersistedUsageRow(JSON.parse(decoder.decode(bytes)));
+      } catch {
+        entry = undefined;
+      }
+      if (!entry) {
+        unreadableOffsets.push(offset);
+        continue;
+      }
+      entries.push(entry);
+    }
+
+    throwIfAborted(options.signal);
+    const endingRevision = revisionFromStat(path, fd, fstatSync(fd));
+    if (usageLogIdentityKey(endingRevision) !== options.expectedIdentityKey) {
+      throw rebuildRequired("identity_mismatch");
+    }
+    if (endingRevision.size < size) throw rebuildRequired("shrink");
+    const pathRevision = currentUsageLogRevision();
+    if (!pathRevision || usageLogIdentityKey(pathRevision) !== options.expectedIdentityKey) {
+      throw rebuildRequired("identity_mismatch");
+    }
+    return { entries, unreadableOffsets };
   } finally {
     closeSync(fd);
   }

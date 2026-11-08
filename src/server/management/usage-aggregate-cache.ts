@@ -6,9 +6,19 @@ import {
   type UsageLogRevision,
 } from "../../usage/log";
 import {
+  readUsageLedgerRowsAtOffsets,
   scanUsageLedgerCooperatively,
   UsageLedgerRebuildRequiredError,
 } from "../../usage/ledger-scanner";
+import {
+  readUsageFilterCandidates,
+  requestUsageFilterIndexRebuild,
+  resetUsageFilterIndexForTests,
+  type UsageFilterCandidateRead,
+  type UsageFilterIndexQuery,
+  type UsageFilterIndexSnapshot,
+  type UsageFilterQueryStats,
+} from "../../usage/filter-index";
 import {
   createUsageSummaryAccumulator,
   type UsageSummaryAccumulator,
@@ -63,6 +73,11 @@ export interface UsageAggregateResult {
   overlayVersion: number;
   timeZone: string;
   update: "unchanged" | "append" | "rebuild";
+  /**
+   * Present on filtered results: how many ledger rows the derived candidate index read to
+   * answer this filter, against the whole ledger. A full scan reports the same number twice.
+   */
+  filterIndex?: UsageFilterQueryStats;
 }
 
 export interface UsageAggregateOptions {
@@ -88,13 +103,19 @@ export interface UsageAggregateRetainedStats {
 }
 
 const MAX_REBUILD_ATTEMPTS = 2;
+// A filtered read can lose a race with a concurrent index rebuild and a ledger replacement in
+// the same call, so it gets one more attempt than a plain scan rebuild.
+const MAX_FILTER_INDEX_ATTEMPTS = 3;
+// Selected rows are folded in bounded batches, so a filter that matches most of a large ledger
+// costs the same peak memory as the streaming scan it replaces.
+const FILTER_ROW_READ_BATCH = 2_000;
 const MAX_RETAINED_FILTERED_AGGREGATES = 4;
 
 let retainedAggregate: RetainedUsageAggregate | null = null;
 const pinnedAggregates = new Set<RetainedAggregateState>();
 let baseFlight: Promise<UsageAggregateResult> | null = null;
 const filteredFlights = new Map<string, Promise<UsageAggregateResult>>();
-const retainedFilteredAggregates = new Map<string, RetainedUsageAggregate>();
+const retainedFilteredAggregates = new Map<string, RetainedFilteredAggregate>();
 const MAX_CONCURRENT_FILTERED_AGGREGATES = 4;
 const retainedJevStatsAggregates = new Map<string, RetainedJevStatsAggregate>();
 const jevStatsFlights = new Map<string, Promise<JevStatsAggregateResult>>();
@@ -341,6 +362,105 @@ type NormalizedUsageFilter = {
   configuredApiKeyIds?: readonly string[];
 };
 
+/** A retained filtered projection plus the index generation its candidates came from. */
+type RetainedFilteredAggregate = RetainedUsageAggregate & { indexGeneration: number };
+
+/** The derived index and the ledger disagree about where a row starts. */
+class UsageFilterIndexCorruptError extends Error {}
+
+/** Pricing or time-zone inputs moved while a filtered projection was being built. */
+class UsageAggregationInputsChangedError extends Error {}
+
+function filterQuery(
+  filter: NormalizedUsageFilter,
+  window?: UsageTimeWindow,
+): UsageFilterIndexQuery {
+  return {
+    provider: filter.provider,
+    model: filter.model,
+    apiKeyId: filter.apiKeyId,
+    ...(filter.sourceFilter ? { sourceFilter: filter.sourceFilter } : {}),
+    ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: filter.configuredApiKeyIds } : {}),
+    ...(window ? { window } : {}),
+  };
+}
+
+function filterStats(read: UsageFilterCandidateRead): UsageFilterQueryStats {
+  return {
+    totalRows: read.snapshot.indexedRows,
+    candidateRows: read.offsets.length,
+    ingestedRows: read.snapshot.ingestedRows,
+    ingestPasses: read.snapshot.ingestPasses,
+  };
+}
+
+function filteredStateFrom(
+  accumulator: UsageSummaryAccumulator,
+  snapshot: UsageFilterIndexSnapshot,
+  overlayVersion: number,
+  timeZone: string,
+): RetainedFilteredAggregate {
+  return {
+    accumulator,
+    // Diagnostics describe the whole ledger, not the selected candidates: an invalid or
+    // oversized row outside the filter still means the report is incomplete.
+    usageIncomplete: snapshot.oversizedRows > 0,
+    usageInvalidRows: snapshot.invalidRows > 0,
+    revision: snapshot.revision,
+    identityKey: snapshot.identityKey,
+    revisionKey: usageLogRevisionKey(snapshot.revision),
+    processedThroughBytes: snapshot.indexedOffset,
+    processedThroughDigest: snapshot.processedThroughDigest,
+    overlayVersion,
+    timeZone,
+    retainedAt: Date.now(),
+    indexGeneration: snapshot.generation,
+  };
+}
+
+async function accumulateCandidates(
+  accumulator: UsageSummaryAccumulator,
+  read: UsageFilterCandidateRead,
+  filter: NormalizedUsageFilter,
+): Promise<void> {
+  for (let start = 0; start < read.offsets.length; start += FILTER_ROW_READ_BATCH) {
+    const rows = await readUsageLedgerRowsAtOffsets({
+      offsets: read.offsets.slice(start, start + FILTER_ROW_READ_BATCH),
+      expectedIdentityKey: read.snapshot.identityKey,
+    });
+    if (rows.unreadableOffsets.length > 0) {
+      // Serving only the rows that happened to parse would silently under-report the filter.
+      throw new UsageFilterIndexCorruptError();
+    }
+    for (const entry of rows.entries) accumulator.add(entry);
+  }
+  // Without a source filter the reported span covers the whole ledger, including rows this
+  // filter never selected. A source filter derives its span from the rows that match it, so
+  // only the unfiltered-source case needs the ledger-wide span restored.
+  if (!filter.sourceFilter) {
+    accumulator.noteLedgerSpan(read.snapshot.minTimestamp, read.snapshot.maxTimestamp);
+  }
+}
+
+async function withFilterIndexRetry<T>(run: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_FILTER_INDEX_ATTEMPTS; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (error instanceof UsageFilterIndexCorruptError) {
+        requestUsageFilterIndexRebuild();
+        continue;
+      }
+      if (error instanceof UsageLedgerRebuildRequiredError) continue;
+      if (error instanceof UsageAggregationInputsChangedError) continue;
+      throw error;
+    }
+  }
+  throw lastError ?? new Error("filtered usage aggregate did not settle");
+}
+
 function trimRetainedFilteredAggregates(): void {
   while (retainedFilteredAggregates.size > MAX_RETAINED_FILTERED_AGGREGATES) {
     const oldest = [...retainedFilteredAggregates]
@@ -353,87 +473,69 @@ function trimRetainedFilteredAggregates(): void {
 
 function publishFilteredAggregate(
   key: string,
-  state: RetainedUsageAggregate,
+  state: RetainedFilteredAggregate,
   update: UsageAggregateResult["update"],
+  read: UsageFilterCandidateRead,
 ): UsageAggregateResult {
   retainedFilteredAggregates.set(key, state);
   trimRetainedFilteredAggregates();
   enforceAppOwnedMemoryBudget();
-  return resultFrom(state, update);
+  return { ...resultFrom(state, update), filterIndex: filterStats(read) };
 }
 
 async function rebuildFilteredAggregate(
   key: string,
   filter: NormalizedUsageFilter,
   window?: UsageTimeWindow,
+  overlayVersion: number = userCostOverlayVersion(),
+  timeZone: string = currentTimeZone(),
 ): Promise<UsageAggregateResult> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_REBUILD_ATTEMPTS; attempt += 1) {
-    const overlayVersion = userCostOverlayVersion();
-    const timeZone = currentTimeZone();
-    const accumulator = createUsageSummaryAccumulator({ filter, mode: "row-unique", window });
-    try {
-      const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
-      if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
-        lastError = new Error("usage aggregation inputs changed during filtered scan");
-        continue;
-      }
-      const state = makeRetainedAggregate(accumulator, scan, overlayVersion, timeZone);
-      return publishFilteredAggregate(key, state, "rebuild");
-    } catch (error) {
-      lastError = error;
-      if (!(error instanceof UsageLedgerRebuildRequiredError) || attempt + 1 >= MAX_REBUILD_ATTEMPTS) {
-        throw error;
-      }
-    }
+  const read = await readUsageFilterCandidates(filterQuery(filter, window));
+  const accumulator = createUsageSummaryAccumulator({
+    filter,
+    mode: "row-unique",
+    ...(window ? { window } : {}),
+  });
+  await accumulateCandidates(accumulator, read, filter);
+  if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
+    throw new UsageAggregationInputsChangedError();
   }
-  throw lastError ?? new Error("filtered usage scan did not settle");
+  return publishFilteredAggregate(
+    key,
+    filteredStateFrom(accumulator, read.snapshot, overlayVersion, timeZone),
+    "rebuild",
+    read,
+  );
 }
 
 async function appendFilteredAggregate(
   key: string,
-  state: RetainedUsageAggregate,
+  state: RetainedFilteredAggregate,
   filter: NormalizedUsageFilter,
-  window?: UsageTimeWindow,
+  read: UsageFilterCandidateRead,
+  overlayVersion: number,
+  timeZone: string,
 ): Promise<UsageAggregateResult> {
   pinnedAggregates.add(state);
-  let rebuildAfterUnpin = false;
   try {
     const candidate = state.accumulator.clone();
-    const scan = await scanUsageLedgerCooperatively({
-      startAtBytes: state.processedThroughBytes,
-      expectedIdentityKey: state.identityKey,
-      expectedProcessedThroughDigest: state.processedThroughDigest,
-      onEntry: entry => candidate.add(entry),
-    });
-    if (userCostOverlayVersion() !== state.overlayVersion || currentTimeZone() !== state.timeZone) {
-      if (retainedFilteredAggregates.get(key) === state) retainedFilteredAggregates.delete(key);
-      rebuildAfterUnpin = true;
-    } else {
-      const next: RetainedUsageAggregate = {
-        ...state,
-        accumulator: candidate,
-        usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
-        usageInvalidRows: state.usageInvalidRows || scan.invalidRows > 0,
-        revision: scan.revision,
-        identityKey: usageLogIdentityKey(scan.revision),
-        revisionKey: usageLogRevisionKey(scan.revision),
-        processedThroughBytes: scan.processedThroughBytes,
-        processedThroughDigest: scan.processedThroughDigest,
-        retainedAt: Date.now(),
-      };
-      return publishFilteredAggregate(key, next, "append");
+    await accumulateCandidates(candidate, read, filter);
+    if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
+      throw new UsageAggregationInputsChangedError();
     }
+    return publishFilteredAggregate(
+      key,
+      filteredStateFrom(candidate, read.snapshot, overlayVersion, timeZone),
+      "append",
+      read,
+    );
   } catch (error) {
     if (retainedFilteredAggregates.get(key) === state) retainedFilteredAggregates.delete(key);
-    if (error instanceof UsageLedgerRebuildRequiredError) rebuildAfterUnpin = true;
-    else throw error;
+    throw error;
   } finally {
     pinnedAggregates.delete(state);
     trimRetainedFilteredAggregates();
   }
-  if (rebuildAfterUnpin) return rebuildFilteredAggregate(key, filter, window);
-  throw new Error("filtered usage append did not settle");
 }
 
 async function refreshFilteredAggregate(
@@ -441,20 +543,35 @@ async function refreshFilteredAggregate(
   filter: NormalizedUsageFilter,
   window?: UsageTimeWindow,
 ): Promise<UsageAggregateResult> {
-  const state = retainedFilteredAggregates.get(key);
-  if (!state) return rebuildFilteredAggregate(key, filter, window);
-  const observed = currentUsageLogRevision();
-  const overlayVersion = userCostOverlayVersion();
-  const timeZone = currentTimeZone();
-  if (requiresRebuild(state, observed, overlayVersion, timeZone)) {
-    retainedFilteredAggregates.delete(key);
-    return rebuildFilteredAggregate(key, filter, window);
-  }
-  if (state.revisionKey === usageLogRevisionKey(observed)) {
-    state.retainedAt = Date.now();
-    return resultFrom(state, "unchanged");
-  }
-  return appendFilteredAggregate(key, state, filter, window);
+  return withFilterIndexRetry(async () => {
+    const overlayVersion = userCostOverlayVersion();
+    const timeZone = currentTimeZone();
+    const state = retainedFilteredAggregates.get(key);
+    if (!state || state.overlayVersion !== overlayVersion || state.timeZone !== timeZone) {
+      return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+    }
+    const read = await readUsageFilterCandidates({
+      ...filterQuery(filter, window),
+      afterOffset: state.processedThroughBytes,
+    });
+    if (state.indexGeneration !== read.snapshot.generation
+      || state.identityKey !== read.snapshot.identityKey
+      || state.processedThroughBytes > read.snapshot.indexedOffset) {
+      retainedFilteredAggregates.delete(key);
+      return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+    }
+    if (state.processedThroughBytes === read.snapshot.indexedOffset) {
+      state.retainedAt = Date.now();
+      // Whole-ledger diagnostics can move without the boundary moving: a torn oversized or
+      // malformed suffix is observed by every append scan and never advances the offset.
+      state.usageIncomplete = read.snapshot.oversizedRows > 0;
+      state.usageInvalidRows = read.snapshot.invalidRows > 0;
+      state.revision = read.snapshot.revision;
+      state.revisionKey = usageLogRevisionKey(read.snapshot.revision);
+      return publishFilteredAggregate(key, state, "unchanged", read);
+    }
+    return appendFilteredAggregate(key, state, filter, read, overlayVersion, timeZone);
+  });
 }
 
 function jevStatsResultFrom(
@@ -681,4 +798,5 @@ export function resetUsageAggregateCacheForTests(): void {
   retainedFilteredAggregates.clear();
   jevStatsFlights.clear();
   retainedJevStatsAggregates.clear();
+  resetUsageFilterIndexForTests();
 }

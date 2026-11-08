@@ -27,6 +27,23 @@ in unfiltered reports; unchanged attempt sets retain the recorded row status.
 `src/server/management/usage-aggregate-cache.ts` keys retained aggregates by both source
 dimensions, and `src/server/management/logs-usage-routes.ts` validates the complete query before
 special projections. The device inventory requires a dashboard session and refuses child scope.
+`src/usage/filter-index.ts` selects candidates for those dimensions and for provider, model,
+API-key and window bounds; its client, surface and admission columns mirror `source-filter.ts`
+exactly, so the index can over-select but never reject a row the accumulator would keep. The
+accumulator re-applies the authoritative filter to every candidate, and whole-ledger invalid and
+oversized diagnostics come from the index rather than from the selected rows.
+
+The candidate index is a disposable SQLite projection (`usage-filter-index.sqlite`) that records each
+complete row's byte offset, the fields above, and one attribution per provider/model the row can
+match. `src/usage/ledger-scanner.ts` supplies both halves: `scanUsageLedgerCooperatively` reports the
+row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the selected rows under the
+same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
+or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
+reuses the projection. A replaced, truncated or same-size rewritten ledger rebuilds it, and a
+recorded offset that no longer frames a complete row drops the projection instead of serving a
+partial answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
+`tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole ledger, the
+append cursor, identity handling, and parity with a full-scan oracle.
 
 `src/usage/app-breakdown.ts` maps only the closed recorded-client roster to report app categories:
 the three Codex variants share one category, absent client fields are unclassified, and invalid

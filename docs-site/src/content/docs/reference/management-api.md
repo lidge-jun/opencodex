@@ -484,6 +484,16 @@ or overwrite unfiltered preset summaries. The daily chart remains capped at 366 
 totals cover the full requested interval. Snapshot-window fields describe the scanned ledger before
 the time filter, so they can extend beyond the requested bounds.
 
+Provider, model, `apiKeyId`, source and custom-window queries are answered from a derived candidate
+index (`~/.opencodex/usage-filter-index.sqlite`) instead of a whole-ledger scan. The index records each
+complete row's byte offset with the fields those filters select on, so a new filter combination reads
+and normalizes only its matching rows. The first filtered query after the index is missing or invalid
+performs one full ingest; later queries ingest only newly appended bytes. The totals are unchanged by
+the index: a filtered response reports what a full scan would report. The index is disposable and
+rebuildable — delete the file and the next filtered query rebuilds it from `usage.jsonl`, which stays
+the only authority and is never truncated or rewritten. A replaced, truncated or rewritten ledger
+rebuilds the index rather than extending stale rows.
+
 The Usage page accepts local date/time inputs. Its selected ending minute includes the entire
 minute through `:59.999`. Choosing a preset or clearing the custom window restores preset behavior.
 This adds exact range selection and existing cost estimates; it does not add hourly chart buckets
