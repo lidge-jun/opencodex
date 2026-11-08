@@ -18,6 +18,21 @@ export { parseOutboundRequestBody } from "./outbound-request-body";
 // A guarded published reset response, mapped to when its selection began holding the head.
 const guardedResetResponses = new WeakMap<Response, number>();
 
+/**
+ * How long a direct stream's head may wait on the original's own inspection.
+ *
+ * Returning the response is the latest point this code can still choose a head, but it does not
+ * send one: Bun's server writes the head together with the first body bytes, so a window commit
+ * also gives the client a comment at once. A healthy slow upstream and a dying one look the same
+ * until the source fails, so a direct client gets the original head promptly instead of after a
+ * heartbeat interval. A failure observed inside this window may still publish the replacement's
+ * own head, as a pre-header reset does.
+ */
+export const DIRECT_RESET_INSPECTION_WINDOW_MS = 250;
+
+/** Who consumes the selected head: the client directly, the canonical JSON collector, or a combo parent. */
+export type ResetSelectionDelivery = "direct-stream" | "buffered-json" | "combo-child";
+
 /** A replacement must still be the stream the upstream request asked for; refetch requires 2xx. */
 export function isResetReplacementStream(candidate: Response, upstreamRequestsStream: boolean): boolean {
   const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
@@ -27,8 +42,10 @@ export function isResetReplacementStream(candidate: Response, upstreamRequestsSt
 /**
  * Select the native response a reset preflight publishes.
  *
- * The selection waits at most one heartbeat interval, and never longer than the stall budget, for
- * a head; see `selectProtocolSafeResetResponse`. A consumer that measures silence on the bytes it
+ * A direct stream's head waits on the original's inspection for at most
+ * `DIRECT_RESET_INSPECTION_WINDOW_MS`. The canonical JSON collector and a combo parent publish no
+ * head before their own inspection ends, so their selection may wait one heartbeat interval. No
+ * selection waits longer than the stall budget; see `selectProtocolSafeResetResponse`. A consumer that measures silence on the bytes it
  * receives cannot tell a held prelude, its later replay or a generated comment from an upstream
  * read, and it starts after selection already waited. Both bodies are guarded before preflight, so each physical
  * attempt's stall budget runs on its own upstream reads from its own head. The guard's failure is
@@ -46,8 +63,7 @@ export function selectPassthroughResetResponse(
     config: Pick<OcxConfig, "stallTimeoutSec">;
     signal: AbortSignal;
     allowMissingContentType: boolean;
-    /** `upstream-activity` is the canonical buffered collector; see the selection's keepalive modes. */
-    keepalive: "periodic" | "upstream-activity" | "none";
+    delivery: ResetSelectionDelivery;
   },
 ): Promise<Response> {
   const openGateway = options.request.url === "https://apis.opengateway.ai/v1/responses"
@@ -68,7 +84,9 @@ export function selectPassthroughResetResponse(
     return protect(replacement);
   }, {
     allowMissingContentType: options.allowMissingContentType,
-    keepalive: options.keepalive,
+    // The collector's silence clock sees only delivered bytes; a combo parent holds the head itself.
+    keepalive: options.delivery === "buffered-json" ? "upstream-activity" : options.delivery === "combo-child" ? "none" : "periodic",
+    inspectionWindowMs: options.delivery === "direct-stream" ? DIRECT_RESET_INSPECTION_WINDOW_MS : undefined,
     signal: options.signal,
     maxSelectionMs: stallMs > 0 ? stallMs : undefined,
     onCommit: (published, owner) => {

@@ -24,6 +24,8 @@ export class UnsafePhysicalReplacement extends Error {}
 /** Captures the attempt that actually left, and fences any replacement after queued rebuilding. */
 export function createPhysicalReplayGuard(providerExecuted: () => boolean) {
   let last: PhysicalReplaySnapshot | undefined;
+  // A judgment is a pure function of its snapshot, and the outbound body may be megabytes.
+  let lastSafe: boolean | undefined;
   let pending = false;
   const snapshot = (request: AdapterRequest, body: BodyInit | null | undefined): PhysicalReplaySnapshot => ({
     body, hosted: (request.hostedToolSubstitutions?.length ?? 0) > 0, providerExecuted: providerExecuted(),
@@ -32,13 +34,19 @@ export function createPhysicalReplayGuard(providerExecuted: () => boolean) {
     && !value.hosted && !value.providerExecuted && typeof value.body === "string"
     && selfContainedResponsesBody(parseOutboundRequestBody(value.body));
   return {
-    isSelfContained: (request: AdapterRequest) => safe(last) && safe(snapshot(request, request.body)),
+    isSelfContained: (request: AdapterRequest) => {
+      if (!(lastSafe ??= safe(last))) return false;
+      const current = snapshot(request, request.body);
+      // The body that physically left was judged above; only fresh substitution flags remain.
+      return current.body === last!.body ? !current.hosted && !current.providerExecuted : safe(current);
+    },
     authorize: () => { pending = true; },
     record: (request: AdapterRequest, body: BodyInit | null | undefined, next?: () => void) => {
       const physical = snapshot(request, body);
       if (pending && !safe(physical)) throw new UnsafePhysicalReplacement("The rebuilt request cannot be safely replayed");
       next?.();
       last = physical;
+      lastSafe = undefined;
       pending = false;
     },
   };

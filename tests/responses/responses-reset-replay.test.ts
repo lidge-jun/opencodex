@@ -201,6 +201,88 @@ describe("early reset selection", () => {
     expect(String(rest.error)).toContain("fixture reset");
     expect(commits).toEqual(["original"]);
   });
+
+  test("an inspection window commits a quiet original head, then keeps inspecting behind it", async () => {
+    useFakeTimers();
+    const gate = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    const replacement = { cancelled: false };
+    const order: string[] = [];
+    let acceptedAfterCommit: boolean | undefined;
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(gate.promise, { cancels: 0, waiting: waiting.resolve }), responseLog,
+      async (_error, _stage, _signal, accepts) => {
+        const candidate = trackedReplacement(replacement);
+        acceptedAfterCommit = accepts(candidate);
+        return candidate;
+      }, { heartbeatIntervalMs: 15_000, inspectionWindowMs: 250, onCommit: (_r, owner) => order.push("commit:" + owner) });
+    await waiting.promise;
+    jest.advanceTimersByTime(249);
+    await flush();
+    expect(order).toEqual([]);
+    jest.advanceTimersByTime(1);
+    const published = await selected;
+    order.push("returned");
+    // The owner is bound before the caller can publish the head.
+    expect(order).toEqual(["commit:original", "returned"]);
+    expect([...published.headers]).toEqual([...new Headers(originalHeaders)]);
+    const reader = published.body!.getReader();
+    // An HTTP server may write the head only with body bytes, so the first read is a comment.
+    expect(decoder.decode((await reader.read()).value)).toBe(": keepalive\n\n");
+    let second: string | undefined;
+    const secondRead = reader.read().then(next => { second = decoder.decode(next.value); });
+    jest.advanceTimersByTime(14_999);
+    await flush();
+    expect(second).toBeUndefined();
+    jest.advanceTimersByTime(1);
+    await secondRead;
+    expect(second).toBe(": keepalive\n\n");
+    gate.resolve();
+    const rest = await readAll(reader);
+    expect(acceptedAfterCommit).toBe(false);
+    expect(replacement.cancelled).toBe(true);
+    expect(rest.text).toBe(prelude);
+    expect(String(rest.error)).toContain("fixture reset");
+    expect(order).toEqual(["commit:original", "returned"]);
+  });
+
+  test("a failure inside the inspection window may publish its replacement after the window", async () => {
+    useFakeTimers();
+    const started = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<Response>();
+    const replacement = { cancelled: false };
+    const commits: ResetSelectionOwner[] = [];
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(Promise.resolve(), { cancels: 0 }), responseLog,
+      async () => { started.resolve(); return pending.promise; },
+      { heartbeatIntervalMs: 15_000, inspectionWindowMs: 250, onCommit: (_r, owner) => commits.push(owner) });
+    await started.promise;
+    // The original is already dead; only the replacement's own head is outstanding.
+    jest.advanceTimersByTime(14_999);
+    await flush();
+    expect(commits).toEqual([]);
+    pending.resolve(trackedReplacement(replacement, replacementHeaders, 201));
+    const published = await selected;
+    expect(commits).toEqual(["replacement"]);
+    expect(published.status).toBe(201);
+    expect([...published.headers]).toEqual([...new Headers(replacementHeaders)]);
+    expect(await published.text()).toBe(completed);
+    jest.advanceTimersByTime(15_000);
+    expect(commits).toEqual(["replacement"]);
+  });
+
+  test("an original that commits output inside the inspection window is published once", async () => {
+    useFakeTimers();
+    const output = 'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n';
+    const commits: ResetSelectionOwner[] = [];
+    let recoveries = 0;
+    const selected = selectProtocolSafeResetResponse(new Response(prelude + output, { headers: originalHeaders }), responseLog,
+      async () => { recoveries++; return null; },
+      { heartbeatIntervalMs: 15_000, inspectionWindowMs: 250, onCommit: (_r, owner) => commits.push(owner) });
+    const published = await selected;
+    jest.advanceTimersByTime(15_000);
+    expect(commits).toEqual(["original"]);
+    expect(recoveries).toBe(0);
+    expect(await published.text()).toBe(prelude + output);
+  });
 });
 
 describe("deferred response metadata", () => {

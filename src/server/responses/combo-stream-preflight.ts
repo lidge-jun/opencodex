@@ -649,6 +649,13 @@ export type ResetSelectionOwner = "original" | "replacement";
 export interface ResetSelectionOptions extends DeferredResetRecoveryOptions {
   /** Upper bound on the pre-head wait. The wait never exceeds one heartbeat interval either. */
   maxSelectionMs?: number;
+  /**
+   * Upper bound on how long the original's own inspection may hold the head. When it expires
+   * before the original settles, the original head is committed and inspection continues behind
+   * it. A replacement requested after the original failed inside this window is still bounded by
+   * `maxSelectionMs`, because no healthy source is waiting behind that head.
+   */
+  inspectionWindowMs?: number;
   /** Ends the selection, the committed hold and an in-flight replacement without awaiting cleanup. */
   signal?: AbortSignal;
   /** Called once, synchronously, before the caller receives the published response. */
@@ -680,6 +687,11 @@ function createResetSelection(
   let initializationResult: { kind: "ready" } | { kind: "failed"; error: unknown } | undefined;
   let notifyInitialization: (() => void) | undefined;
   let commitEarly: ((published: Response, owner: ResetSelectionOwner) => void) | undefined;
+  let inspectionTimer: ReturnType<typeof setTimeout> | undefined;
+  const endInspectionWindow = (): void => {
+    if (inspectionTimer !== undefined) clearTimeout(inspectionTimer);
+    inspectionTimer = undefined;
+  };
   let activityPending = false;
   // A replacement head behind a committed head is upstream activity the held stream must report.
   let replacementHeadPending = false;
@@ -708,6 +720,8 @@ function createResetSelection(
           notifyInitialization?.();
         } : undefined },
     );
+    // The original settled, so it no longer holds the head; only a replacement can from here.
+    endInspectionWindow();
     let chosen: { response: Response; owner: ResetSelectionOwner } = { response: preflight.response, owner: "original" };
     if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
       const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal, accepts);
@@ -840,6 +854,7 @@ function createResetSelection(
       commitEarly = undefined;
       headCommitted = true;
       if (deadline !== undefined) clearTimeout(deadline);
+      endInspectionWindow();
       // A published selection owns its own body; the hold and its abort hook are finished.
       if (published !== held) detach();
       try { options?.onCommit?.(published, owner); } finally { resolve(published); }
@@ -849,11 +864,22 @@ function createResetSelection(
       return;
     }
     signal?.addEventListener("abort", onAbort, { once: true });
+    const deadlineMs = Math.min(heartbeatMs, positiveMs(options?.maxSelectionMs) ?? Infinity);
     deadline = setTimeout(() => {
       // The client has waited one heartbeat interval for a head; its first read gets a keepalive.
       if (keepalive === "periodic") heartbeatDue = true;
       commitEarly?.(held, "original");
-    }, Math.min(heartbeatMs, positiveMs(options?.maxSelectionMs) ?? Infinity));
+    }, deadlineMs);
+    const inspectionMs = positiveMs(options?.inspectionWindowMs);
+    // A quiet original is a healthy slow response as often as a dying one; its head goes out now.
+    // Bun's server writes a head only with the first body bytes, so the held body owes a comment.
+    if (inspectionMs !== undefined && inspectionMs < deadlineMs) {
+      inspectionTimer = setTimeout(() => {
+        inspectionTimer = undefined;
+        if (keepalive === "periodic") heartbeatDue = true;
+        commitEarly?.(held, "original");
+      }, inspectionMs);
+    }
     void start().then(() => {
       if (selection && !closed) commitEarly?.(selection.response, selection.owner);
       else commitEarly?.(held, "original");
@@ -879,7 +905,8 @@ export function deferProtocolSafeResetRecovery(
 }
 
 /**
- * Choose the native response before its head is committed, within one heartbeat interval.
+ * Choose the native response before its head is committed, within one heartbeat interval or the
+ * shorter `inspectionWindowMs` while the original itself is still being inspected.
  *
  * Inspection starts immediately. If selection finishes first, the caller receives the selected
  * response, a replacement included, with its own status and headers. If the deadline wins, the

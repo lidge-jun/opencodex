@@ -534,41 +534,79 @@ describe("OpenGateway native empty completion", () => {
     return { cfg, sends };
   }
 
-  for (const replayable of [false, true]) {
-    test(`direct non-gateway reset selection bounds upstream silence (replayable=${replayable})`, async () => {
-      takeSpendHome();
-      jest.useFakeTimers();
-      const firstRead = Promise.withResolvers<void>();
-      let cancelled = 0;
-      const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
-        pull() { firstRead.resolve(); },
-        cancel() { cancelled++; },
-      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
-      "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
-      const client = new AbortController();
-      const pending = handleResponses(new Request(request(true, "question", replayable ? { store: false } : {}),
-        { signal: client.signal }), { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
-      try {
-        await firstRead.promise;
-        for (let i = 0; i < 50; i++) await Promise.resolve();
-        jest.advanceTimersByTime(15_000);
-        for (let i = 0; i < 50; i++) await Promise.resolve();
-        const response = await pending;
-        const reader = response.body!.getReader();
-        expect(new TextDecoder().decode((await reader.read()).value)).toContain(": keepalive");
-        jest.advanceTimersByTime(5_000);
-        for (let i = 0; i < 100; i++) await Promise.resolve();
-        expect(cancelled).toBe(1);
-        expect(f.sends).toHaveLength(1);
-        await reader.cancel();
-      } finally {
-        client.abort();
-        await pending.catch(() => undefined);
-        jest.clearAllTimers();
-        jest.useRealTimers();
-      }
-    });
-  }
+  test("direct non-gateway reset selection bounds upstream silence (replayable=true)", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    const firstRead = Promise.withResolvers<void>();
+    let cancelled = 0;
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      pull() { firstRead.resolve(); },
+      cancel() { cancelled++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    const pending = handleResponses(new Request(request(true, "question", { store: false }),
+      { signal: client.signal }), { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+    let returned = false;
+    void pending.then(() => { returned = true; });
+    try {
+      await firstRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(249);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(returned).toBe(false);
+      // The quiet original's inspection window ends; its head is returned with a comment to carry it.
+      jest.advanceTimersByTime(1);
+      const response = await pending;
+      const reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain(": keepalive");
+      jest.advanceTimersByTime(19_749);
+      for (let i = 0; i < 100; i++) await Promise.resolve();
+      expect(cancelled).toBe(0);
+      jest.advanceTimersByTime(1);
+      for (let i = 0; i < 100; i++) await Promise.resolve();
+      expect(cancelled).toBe(1);
+      expect(f.sends).toHaveLength(1);
+      await reader.cancel();
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  test("a direct request that cannot be replaced is relayed without reset selection", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    // store defaults to true, so the resend gate could never fund a replacement for this turn.
+    const pending = handleResponses(new Request(request(true, "question"), { signal: client.signal }),
+      { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+    try {
+      // No timer has run: nothing held the head.
+      const response = await pending;
+      const reader = response.body!.getReader();
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.created","response":{"id":"resp_open","status":"in_progress","output":[]}}\n\n'));
+      // Nor the prelude, which a reset preflight would retain until output.
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("resp_open");
+      // From here it is an ordinary native SSE relay; its silence belongs to the client's own clock.
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"open"}\n\n'));
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('"delta":"open"');
+      expect(f.sends).toHaveLength(1);
+      await reader.cancel();
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
 
   test("direct reset selection resets its deadline on real upstream bytes", async () => {
     takeSpendHome();

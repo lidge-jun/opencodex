@@ -1911,7 +1911,8 @@ export async function preparePassthroughExchange(
       // This preflight retains that event until output commits, so the two contracts cannot
       // share one body owner.
       && !(options.nativeControl && options.inboundTransport === "websocket")
-      && ambiguousResend() !== undefined
+      // Only a self-contained request can be replaced; any other preflight only delays its head.
+      && ambiguousResend()?.selfContained === true
       && remainingTransientSendBudget(transientSendAttempts()) > 0
       && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && upstreamRequestsStream));
     if (protocolRecoveryCandidate) {
@@ -1934,7 +1935,8 @@ export async function preparePassthroughExchange(
             acceptResponse: candidate => accepts(candidate) && isResetReplacementStream(candidate, upstreamRequestsStream),
           },
         ),
-        { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, keepalive: canonicalBufferedJson ? "upstream-activity" : options.comboAttempt ? "none" : "periodic" },
+        { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream,
+          delivery: canonicalBufferedJson ? "buffered-json" : options.comboAttempt ? "combo-child" : "direct-stream" },
       );
     }
     break;

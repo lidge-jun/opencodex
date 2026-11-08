@@ -144,17 +144,27 @@ or an unfinished output/error/terminal frame on a rejected read also keeps the o
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
 owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
 Native passthrough starts this preflight at dispatch, before it returns a head
-(`selectProtocolSafeResetResponse` in `src/server/responses/combo-stream-preflight.ts`). Dispatch
+(`selectProtocolSafeResetResponse` in `src/server/responses/combo-stream-preflight.ts`), and only
+for a request the resend gate could replace: a request that is not self-contained is relayed without
+preflight, so nothing holds its head or prelude. Dispatch
 waits for whichever comes first: the selection, an abort, or a deadline of one 15-second heartbeat
-interval capped by the stall timeout. A selection that finishes first publishes the selected
-response, including a replacement with its own status and headers. If the deadline wins, the
+interval capped by the stall timeout. Returning the response is the last point at which dispatch can
+choose a head, so a direct stream also commits the original head once the original's own inspection
+has run for `DIRECT_RESET_INSPECTION_WINDOW_MS` (250 ms, `src/server/responses/passthrough-completion.ts`):
+a quiet source may be a healthy slow turn. A failure observed inside that window ends the window, and
+only the replacement's head is then awaited, still bounded by the deadline, as after a pre-header reset.
+Canonical buffered JSON and combo children keep the deadline alone, because their consumer publishes
+no client head before its own inspection ends. A selection that finishes first publishes the selected
+response, including a replacement with its own status and headers. If the deadline or the window wins, the
 original head is returned and the same preflight continues behind it. From then on a replacement
 with a different status, status text, or header set is cancelled and the original bytes and error
 are preserved; the check runs when the recovery accepts the replacement and again when it lands.
 `src/server/responses/passthrough-completion.ts` binds the published head to the main quota proof
 of the attempt that produced it ([OpenAI tiers](../providers/openai-tiers.md)). Direct streaming
 clients get an SSE comment on their first read after a deadline commit and then once per heartbeat
-interval while the hold lasts. Combo streaming
+interval while the hold lasts. A window commit owes the same first comment at once: Bun's server
+writes a response head only with its first body bytes, so a returned head with a silent body never
+reaches the client. Combo streaming
 children omit those timer-generated comments while their parent holds the headers, so those comments
 cannot consume the retained-chunk cap. In all selection modes, the stall budget runs on upstream
 reads: `src/server/responses/passthrough-completion.ts` guards the original body and any accepted
