@@ -361,6 +361,7 @@ export const en = {
   "auth.adminTokenHelp": "This is the OpenCodex management admin token, not a provider API key. The proxy writes it to ~/.opencodex/admin-api-token (or $OPENCODEX_HOME/admin-api-token) on first start, and OPENCODEX_ADMIN_AUTH_TOKEN overrides it.",
   "auth.rememberDevice": "Remember this device",
   "auth.rememberDeviceHint": "Keep a revocable HttpOnly dashboard session for 30 days, not the admin token. Requires a direct HTTPS dashboard that is same-origin with the API (or local loopback).",
+  "auth.rememberUnsupported": "OpenCodex accepted the admin token but cannot remember this device at this address. Remember needs a direct HTTPS dashboard (or local loopback); behind a reverse proxy, sign in without it.",
   "connection.forgetDevice": "Forget this device",
   "connection.forgetDeviceFailed": "Could not forget this device. The session was kept.",
   "auth.adminTokenDocsLink": "How to find it",

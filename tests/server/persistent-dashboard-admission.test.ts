@@ -87,6 +87,16 @@ test("real remember admission requires admin, exact Origin, HTTPS or loopback", 
   expect((await remember("http://127.0.0.1:10100")).body.session.issuance).toBe("remembered-admin");
 });
 
+test("a Remember refusal for a proxied or plaintext origin carries a stable code (#8338)", async () => {
+  const refused = await dispatch(request("/api/session/remember", { origin: "http://dashboard.example.test" }));
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ code: "remember_requires_direct_origin" });
+  const device = await remember();
+  const notAdmin = await dispatch(deviceRequest(device, "/api/session/remember"));
+  expect(notAdmin.status).toBe(403);
+  expect((await notAdmin.json()).code).toBeUndefined();
+});
+
 test("forwarded headers cannot upgrade plaintext or change the origin binding", async () => {
   const headers = { "X-Forwarded-Proto": "https", "X-Forwarded-Host": "dashboard.example.test", "X-Forwarded-For": "127.0.0.1" };
   expect((await dispatch(request("/api/session/remember", { origin: "http://dashboard.example.test", headers }))).status).toBe(403);
