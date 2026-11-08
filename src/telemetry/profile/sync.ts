@@ -12,7 +12,7 @@ import { PROFILE_SCHEMA_VERSION, type ProfileDayV1, type ProfileFamilyRowV1 } fr
 import {
   deleteTelemetryProfileFile,
   readTelemetryProfileFile,
-  writeTelemetryProfileState,
+  updateTelemetryProfileState,
   type TelemetryProfileState,
 } from "./state";
 
@@ -117,11 +117,13 @@ async function retryPendingDelete(
 ): Promise<ProfileTickResult> {
   const result = await deleteProfile(state.secret, options);
   if (result.deleted) {
-    deleteTelemetryProfileFile(configDir);
+    // Only the file of the profile just deleted: a reconnect in the meantime has its own secret.
+    if (readTelemetryProfileFile(configDir).state?.secret === state.secret) deleteTelemetryProfileFile(configDir);
     return { sent: false, deleted: true, reason: "deleted" };
   }
   if (result.retryAfterMs) {
-    writeTelemetryProfileState({ ...state, retryAfterUntil: new Date(now + result.retryAfterMs).toISOString() }, configDir, now);
+    const retryAfterUntil = new Date(now + result.retryAfterMs).toISOString();
+    updateTelemetryProfileState(state.secret, current => ({ ...current, retryAfterUntil }), { configDir, now, whilePendingDelete: true });
   }
   return { sent: false, deleted: false, reason: "deletion-pending" };
 }
@@ -165,28 +167,29 @@ export async function runProfileTick(options: ProfileTickOptions = {}): Promise<
   const nowIso = new Date(now).toISOString();
   const body = buildProfileDay(aggregate);
   if (!body) {
-    writeTelemetryProfileState({ ...latest, sentDays: { ...latest.sentDays, [day]: nowIso } }, configDir, now);
+    updateTelemetryProfileState(latest.secret, current => ({ ...current, sentDays: { ...current.sentDays, [day]: nowIso } }), { configDir, now });
     return { sent: false, day, reason: "no-usage" };
   }
   const result = await submitProfileDay(latest.secret, body, options);
   if (!result.ok) {
     if (result.status === 401) {
-      writeTelemetryProfileState({ ...latest, revoked: true }, configDir, now);
+      updateTelemetryProfileState(latest.secret, current => ({ ...current, revoked: true }), { configDir, now });
       return { sent: false, day, reason: "revoked" };
     }
     if (result.retryAfterMs) {
-      writeTelemetryProfileState({ ...latest, retryAfterUntil: new Date(now + result.retryAfterMs).toISOString() }, configDir, now);
+      const retryAfterUntil = new Date(now + result.retryAfterMs).toISOString();
+      updateTelemetryProfileState(latest.secret, current => ({ ...current, retryAfterUntil }), { configDir, now });
       return { sent: false, day, reason: "retry-after-backoff" };
     }
     return { sent: false, day, reason: "send-failed" };
   }
-  writeTelemetryProfileState({
-    ...latest,
-    sentDays: { ...latest.sentDays, [day]: nowIso },
+  updateTelemetryProfileState(latest.secret, current => ({
+    ...current,
+    sentDays: { ...current.sentDays, [day]: nowIso },
     lastSentDay: day,
     lastSentAt: nowIso,
     retryAfterUntil: null,
-  }, configDir, now);
+  }), { configDir, now });
   return { sent: true, day, reason: "sent" };
 }
 
@@ -257,4 +260,5 @@ export function nudgeProfileScheduler(): void {
   }, 10);
   nudgeTimer.unref?.();
 }
+
 

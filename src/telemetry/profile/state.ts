@@ -138,6 +138,26 @@ export function writeTelemetryProfileState(
 }
 
 /**
+ * Bookkeeping after a network call. The file is re-read and the update applied to what is on disk
+ * now, and only while it still belongs to the same profile (same secret): a disconnect that landed
+ * meanwhile (pendingDelete set, or the file removed) or a reconnect is never overwritten. The
+ * update cannot clear pendingDelete. Returns false when nothing was written.
+ */
+export function updateTelemetryProfileState(
+  secret: string,
+  update: (state: TelemetryProfileState) => TelemetryProfileState,
+  options: { configDir?: string; now?: number; whilePendingDelete?: boolean } = {},
+): boolean {
+  const configDir = options.configDir ?? getConfigDir();
+  const current = readTelemetryProfileFile(configDir).state;
+  if (!current || current.secret !== secret) return false;
+  if (current.pendingDelete && !options.whilePendingDelete) return false;
+  const next = update(current);
+  writeTelemetryProfileState({ ...next, secret: current.secret, pendingDelete: current.pendingDelete || next.pendingDelete }, configDir, options.now);
+  return true;
+}
+
+/**
  * Delete the profile file. Refuses to follow a symlink. A file that cannot be read (corrupt) can
  * still be removed; returns true when no file remains.
  */

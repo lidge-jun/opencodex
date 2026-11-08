@@ -11,7 +11,7 @@ import {
   disconnectTelemetryProfile,
   resetProfileServiceCachesForTests,
 } from "../../src/telemetry/profile/service";
-import { readTelemetryProfileFile } from "../../src/telemetry/profile/state";
+import { deleteTelemetryProfileFile, readTelemetryProfileFile, writeTelemetryProfileState } from "../../src/telemetry/profile/state";
 import { buildProfileDay, runProfileTick } from "../../src/telemetry/profile/sync";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -186,6 +186,38 @@ describe("opt-in public profile: client sync", () => {
     expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 2 * DAY_MS, aggregateDay })).toMatchObject({ reason: "revoked" });
     expect(readTelemetryProfileFile(home).state?.revoked).toBe(true);
     expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 3 * DAY_MS, aggregateDay })).toMatchObject({ sent: false, reason: "revoked" });
+  });
+
+  test("a disconnect that lands while a day is being sent stays pending, and a completed one is not undone", async () => {
+    await connect();
+    const aggregateDay = async (day: string) => aggregate(day, [["openai", "gpt-6", 1, 1]]);
+    // The disconnect cannot reach the collector and lands while the submission is in flight.
+    respond = call => {
+      if (call.url.endsWith("/v1/profiles/me/days")) {
+        const state = readTelemetryProfileFile(home).state!;
+        writeTelemetryProfileState({ ...state, pendingDelete: true }, home);
+        return Response.json({ ok: true, deduplicated: false });
+      }
+      return new Response("down", { status: 502 });
+    };
+    expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 2 * DAY_MS, aggregateDay })).toMatchObject({ sent: true });
+    expect(readTelemetryProfileFile(home).state?.pendingDelete).toBe(true);
+
+    // A disconnect that completed (file removed) while a day was in flight is not resurrected.
+    deleteTelemetryProfileFile(home);
+    respond = call => {
+      if (call.method === "POST" && call.url.endsWith("/v1/profiles")) {
+        return Response.json({ ok: true, profile: { handle: "jun", displayName: "Jun", avatar: "blue" }, secret: SECRET }, { status: 201 });
+      }
+      if (call.url.endsWith("/v1/profiles/me/days")) {
+        deleteTelemetryProfileFile(home);
+        return Response.json({ ok: true, deduplicated: false });
+      }
+      return Response.json({ ok: true });
+    };
+    await connect();
+    await runProfileTick({ configDir: home, env, now: CONNECT_AT + 3 * DAY_MS, aggregateDay });
+    expect(existsSync(telemetryProfilePath(home))).toBe(false);
   });
 
   test("profile modules never reach the anonymous install identity", () => {
