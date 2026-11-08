@@ -1005,6 +1005,16 @@ describe("combo stream preflight", () => {
       { prompt: { output_text: "already produced" } },
       { tool_choice: { output_text: "already produced" } },
       { instructions: { output_text: "already produced" } },
+      { usage: { output_tokens_details: { output_text: "already produced" } } },
+      { usage: { input_tokens: { output_text: "already produced" } } },
+      { prompt: { id: { output_text: "already produced" } } },
+      { tool_choice: { type: "function", function: { output_text: "already produced" } } },
+      { tools: [{ type: "web_search" }] },
+      { tools: [{ type: "function", name: "read", output_text: "already produced" }] },
+      { tools: [{ type: "namespace", name: "ns", tools: [{ type: "mcp" }] }] },
+      { tools: [{ type: "custom", name: "act", format: { type: { output_text: "already produced" } } }] },
+      { tool_choice: "already produced" },
+      { reasoning: { summary: "already produced" } },
     ]) {
       for (const ending of ["eof", "read-error"] as const) {
         test(`${type} preserves unknown snapshot evidence on ${ending}`, async () => {
@@ -1031,12 +1041,13 @@ describe("combo stream preflight", () => {
       let calls = 0;
       const response = {
         id: "resp_first", object: "response", created_at: 1, completed_at: null, status: type === "response.queued" ? "queued" : "in_progress",
-        model: "m1", output: [], error: null, incomplete_details: null, usage: null,
+        model: "m1", output: [], error: null, incomplete_details: null,
+        usage: { input_tokens: 4, output_tokens: 0, total_tokens: 4, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
         background: false, instructions: null, max_output_tokens: null, max_tool_calls: null,
         metadata: {}, parallel_tool_calls: true, previous_response_id: null, prompt_cache_key: null,
         reasoning: { effort: null, summary: null }, safety_identifier: null, service_tier: "default",
         store: false, temperature: 1, text: { format: { type: "text" } },
-        tool_choice: "auto", tools: [], top_p: 1, truncation: "disabled", user: null,
+        tool_choice: { type: "function", name: "read" }, tools: [{ type: "function", name: "read", parameters: { type: "object", properties: {} }, strict: false }], top_p: 1, truncation: "disabled", user: null,
       };
       const wrapped = deferProtocolSafeResetRecovery(sse({ type, response }),
         { model: "m1", provider: "a" }, async () => {

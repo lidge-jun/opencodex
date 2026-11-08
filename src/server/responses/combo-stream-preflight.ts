@@ -60,30 +60,98 @@ function recordWithOnly(value: unknown, fields: readonly string[]): value is Rec
   return isRecord(value) && Object.keys(value).every(key => fields.includes(key));
 }
 
+function safeSnapshotTools(value: unknown, budget: { remaining: number }, depth = 0): boolean {
+  if (!Array.isArray(value) || depth > 4) return false;
+  return value.every(tool => {
+    if (--budget.remaining < 0 || !isRecord(tool)) return false;
+    if (tool.type === "function") {
+      return recordWithOnly(tool, ["type", "name", "description", "parameters", "strict"])
+        && typeof tool.name === "string"
+        && (tool.description == null || typeof tool.description === "string")
+        && (tool.parameters == null || isRecord(tool.parameters))
+        && (tool.strict == null || typeof tool.strict === "boolean");
+    }
+    if (tool.type === "custom") {
+      if (!recordWithOnly(tool, ["type", "name", "description", "format"])
+        || typeof tool.name !== "string"
+        || (tool.description != null && typeof tool.description !== "string")) return false;
+      if (tool.format == null) return true;
+      return recordWithOnly(tool.format, ["type", "syntax", "definition"])
+        && (tool.format.type === "text" || tool.format.type === "grammar")
+        && (tool.format.syntax == null || typeof tool.format.syntax === "string")
+        && (tool.format.definition == null || typeof tool.format.definition === "string");
+    }
+    if (tool.type === "tool_search") {
+      return recordWithOnly(tool, ["type", "execution", "description"])
+        && tool.execution === "client" && (tool.description == null || typeof tool.description === "string");
+    }
+    return tool.type === "namespace" && recordWithOnly(tool, ["type", "name", "description", "tools"])
+      && typeof tool.name === "string" && (tool.description == null || typeof tool.description === "string")
+      && safeSnapshotTools(tool.tools, budget, depth + 1);
+  });
+}
+
+function safeSnapshotUsage(value: unknown): boolean {
+  if (!recordWithOnly(value, ["input_tokens", "output_tokens", "total_tokens", "input_tokens_details", "output_tokens_details"])) return false;
+  for (const key of ["input_tokens", "output_tokens", "total_tokens"]) {
+    if (value[key] != null && !(typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0)) return false;
+  }
+  for (const [key, fields] of [
+    ["input_tokens_details", ["cached_tokens"]],
+    ["output_tokens_details", ["reasoning_tokens"]],
+  ] as const) {
+    const detail = value[key];
+    if (detail != null && (!recordWithOnly(detail, fields)
+      || Object.values(detail).some(count => !(typeof count === "number" && Number.isFinite(count) && count >= 0)))) return false;
+  }
+  return true;
+}
+
 function snapshotMetadataIsSafe(snapshot: Record<string, unknown>): boolean {
   if (PRE_OUTPUT_STRING_FIELDS.some(key => snapshot[key] != null && typeof snapshot[key] !== "string")) return false;
   if (snapshot.object != null && snapshot.object !== "response") return false;
   if (PRE_OUTPUT_NUMBER_FIELDS.some(key => snapshot[key] != null
     && !(typeof snapshot[key] === "number" && Number.isFinite(snapshot[key])))) return false;
   if (snapshot.parallel_tool_calls != null && typeof snapshot.parallel_tool_calls !== "boolean") return false;
-  if (snapshot.tools != null && !Array.isArray(snapshot.tools)) return false;
-  if (snapshot.instructions != null && typeof snapshot.instructions !== "string" && !Array.isArray(snapshot.instructions)) return false;
-  if (snapshot.prompt != null && !recordWithOnly(snapshot.prompt, ["id", "version", "variables"])) return false;
-  if (snapshot.tool_choice != null && typeof snapshot.tool_choice !== "string"
-    && !recordWithOnly(snapshot.tool_choice, ["type", "name", "namespace", "function"])) return false;
-  if (snapshot.usage != null && !recordWithOnly(snapshot.usage, ["input_tokens", "output_tokens", "total_tokens", "input_tokens_details", "output_tokens_details"])) return false;
+  if (snapshot.tools != null && !safeSnapshotTools(snapshot.tools, { remaining: 4096 })) return false;
+  if (snapshot.instructions != null && typeof snapshot.instructions !== "string") return false;
+  if (snapshot.prompt != null) {
+    if (!recordWithOnly(snapshot.prompt, ["id", "version", "variables"])
+      || typeof snapshot.prompt.id !== "string"
+      || (snapshot.prompt.version != null && typeof snapshot.prompt.version !== "string")
+      || (snapshot.prompt.variables != null && (!isRecord(snapshot.prompt.variables)
+        || Object.values(snapshot.prompt.variables).some(value => typeof value !== "string")))) return false;
+  }
+  if (typeof snapshot.tool_choice === "string" && !["none", "auto", "required"].includes(snapshot.tool_choice)) return false;
+  if (snapshot.tool_choice != null && typeof snapshot.tool_choice !== "string") {
+    if (!recordWithOnly(snapshot.tool_choice, ["type", "name", "namespace", "function"])
+      || !["function", "custom", "tool_search"].includes(String(snapshot.tool_choice.type))
+      || (snapshot.tool_choice.name != null && typeof snapshot.tool_choice.name !== "string")
+      || (snapshot.tool_choice.namespace != null && typeof snapshot.tool_choice.namespace !== "string")) return false;
+    const selected = snapshot.tool_choice.function;
+    if (selected != null && (!recordWithOnly(selected, ["name"]) || typeof selected.name !== "string")) return false;
+  }
+  if (snapshot.usage != null && !safeSnapshotUsage(snapshot.usage)) return false;
   if (snapshot.metadata != null && (!isRecord(snapshot.metadata)
     || Object.values(snapshot.metadata).some(value => typeof value !== "string"))) return false;
   if (snapshot.reasoning != null) {
     if (!recordWithOnly(snapshot.reasoning, ["effort", "summary", "generate_summary"])
       || Object.values(snapshot.reasoning).some(value => value != null && typeof value !== "string")) return false;
+    if (snapshot.reasoning.effort != null
+      && !["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(snapshot.reasoning.effort))) return false;
+    if ([snapshot.reasoning.summary, snapshot.reasoning.generate_summary].some(value => value != null
+      && !["auto", "concise", "detailed"].includes(String(value)))) return false;
   }
   if (snapshot.text != null) {
     if (!recordWithOnly(snapshot.text, ["format", "verbosity"])
       || (snapshot.text.verbosity != null && typeof snapshot.text.verbosity !== "string")) return false;
     const format = snapshot.text.format;
     if (format != null && (!recordWithOnly(format, ["type", "name", "description", "schema", "strict"])
-      || !["text", "json_object", "json_schema"].includes(String(format.type)))) return false;
+      || !["text", "json_object", "json_schema"].includes(String(format.type))
+      || (format.name != null && typeof format.name !== "string")
+      || (format.description != null && typeof format.description !== "string")
+      || (format.schema != null && !isRecord(format.schema))
+      || (format.strict != null && typeof format.strict !== "boolean"))) return false;
   }
   return true;
 }
