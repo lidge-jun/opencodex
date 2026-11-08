@@ -384,9 +384,11 @@ test("a save whose reply and re-read both fail says so and holds the switch unti
     await new Promise(r => setTimeout(r, 30));
   });
   // The decline may be saved, so the switch is not left looking like sending is on without a word.
-  expect(host.querySelector(".notice-warn")?.textContent).toContain("Saved. The status could not be read back yet");
+  expect(host.querySelector(".notice-warn")?.textContent).toContain("Could not confirm the telemetry setting yet");
   expect(toggleSwitch().disabled).toBe(true);
   expect(host.querySelector(".notice-err")).toBeNull();
+  // The confirming read failed too, so a manual Retry is offered.
+  expect(host.querySelector(".telemetry-settings-row .btn-ghost")?.textContent).toBe("Retry");
 
   // The next successful read clears it.
   failMethods.clear();
@@ -399,4 +401,21 @@ test("a save whose reply and re-read both fail says so and holds the switch unti
   expect(host.querySelector(".notice-warn")).toBeNull();
   expect(toggleSwitch().disabled).toBe(false);
   expect(toggleSwitch().getAttribute("aria-checked")).toBe("false");
+});
+
+test("a save whose request drops or times out is treated as unconfirmed, since the server may have saved it", async () => {
+  await mountPanel();
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("true");
+  putReply = () => {
+    throw new TypeError("network connection was lost");
+  };
+  await act(async () => {
+    click(toggleSwitch());
+    await new Promise(r => setTimeout(r, 30));
+  });
+  // No "could not save": the status is read again instead, and the switch follows the server.
+  expect(host.querySelector(".notice-err")).toBeNull();
+  expect(calls.filter(call => call.method === "GET").length).toBeGreaterThanOrEqual(2);
+  expect(host.querySelector(".notice-warn")).toBeNull();
+  expect(toggleSwitch().disabled).toBe(false);
 });

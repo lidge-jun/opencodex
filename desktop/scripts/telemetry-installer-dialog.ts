@@ -124,9 +124,10 @@ export function renderTelemetryInstallerFragment(): string {
     <SetProperty Action="OcxTelemetryKeepStamp" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_STAMP]" After="OcxTelemetryKeepChoice" Sequence="both">NOT ${TELEMETRY_INSTALLER_STAMP_PROPERTY} AND OCX_TELEMETRY_PREVIOUS_STAMP</SetProperty>
     <!-- The stamp the page started from, restored when Next leaves the carried choice unchanged. -->
     <SetProperty Action="OcxTelemetryCarriedStamp" Id="OCX_TELEMETRY_CARRIED_STAMP" Value="[${TELEMETRY_INSTALLER_STAMP_PROPERTY}]" After="OcxTelemetryKeepStamp" Sequence="ui">${TELEMETRY_INSTALLER_STAMP_PROPERTY}</SetProperty>
-    <SetProperty Action="OcxTelemetryDefaultChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" After="OcxTelemetryCarriedStamp" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY}</SetProperty>
-    <!-- The box starts checked unless this install already carries an opt-out. -->
-    <SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; "${TELEMETRY_INSTALLER_OPT_OUT}"</SetProperty>
+    <!-- After KeepStamp, which runs in both sequences: WiX's linker rejects a parent missing from a sequence. -->
+    <SetProperty Action="OcxTelemetryDefaultChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" After="OcxTelemetryKeepStamp" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY}</SetProperty>
+    <!-- The box starts checked only when the choice is send, so a carried opt-out (or any other carried value) starts unchecked. -->
+    <SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~= "${TELEMETRY_INSTALLER_SEND}"</SetProperty>
     <ComponentGroup Id="${TELEMETRY_INSTALLER_COMPONENT_GROUP}">
       <!-- Machine-wide, so an opt-out from a silent install run as SYSTEM reaches every user. -->
       <Component Id="OcxTelemetryInstallerChoiceRegistry" Directory="INSTALLDIR" Guid="${COMPONENT_GUID}" Win64="$(var.OcxTelemetryWin64)">
