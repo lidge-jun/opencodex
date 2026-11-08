@@ -497,7 +497,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   // Multiauth account management: list a provider's logged-in accounts, switch the active
-  // one, or remove one. Emails are masked; tokens never leave the store.
+  // one, or remove one. Emails and accountLabel follow privacy.maskEmails, maskedLabel is always
+  // masked, and tokens never leave the store.
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);

@@ -300,6 +300,7 @@ describe("multiauth accounts API", () => {
   });
 
   test("GET keeps the account label masked by default and keeps maskedLabel masked", async () => {
+    saveConfig({ ...baseConfig(), privacy: { maskEmails: "false" } } as unknown as OcxConfig);
     const server = startServer(0);
     try {
       const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
