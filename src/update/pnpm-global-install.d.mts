@@ -24,6 +24,7 @@ export interface PnpmGlobalOwner {
   globalBinDir: string;
   store?: string;
   globalStore?: boolean;
+  virtualStoreDirs?: string[];
   version?: string;
 }
 
@@ -76,6 +77,7 @@ export type PnpmGlobalPackage =
       globalRoot?: string;
       globalBinDir?: string;
       store: string;
+      virtualStoreDirs: string[];
     }
   | { ok: false; reason: string };
 

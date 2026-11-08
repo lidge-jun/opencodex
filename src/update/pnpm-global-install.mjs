@@ -310,12 +310,37 @@ function readPnpmStore(runPnpm, owner, platform) {
   if (owner?.store && lexicalPathKey(store, platform) !== lexicalPathKey(owner.store, platform)) {
     return { ok: false, reason: "pnpm configured store changed" };
   }
-  return { ok: true, store };
+  const virtualStoreDirs = [];
+  for (const key of ["virtualStoreDir", "globalVirtualStoreDir"]) {
+    let value;
+    try {
+      const args = ["config", "get", key, ...(owner ? [`--global-dir=${owner.globalDir}`, `--config.global-bin-dir=${owner.globalBinDir}`] : [])];
+      const result = runPnpm(args, true);
+      const lines = outputText(result?.stdout).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (result?.status !== 0 || lines.length !== 1) throw new Error();
+      value = lines[0];
+    } catch { return { ok: false, reason: "pnpm virtual-store configuration could not be resolved" }; }
+    if (/^(?:undefined|null)$/i.test(value)) continue;
+    if (!isAbsolutePath(value, platform)) return { ok: false, reason: "pnpm virtual-store directory is not absolute" };
+    let path;
+    try { path = realpathSync.native(value); if (!statSync(path).isDirectory()) throw new Error(); }
+    catch { return { ok: false, reason: "pnpm virtual-store directory could not be resolved" }; }
+    const rel = relative(store, path);
+    if (rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel)) {
+      return { ok: false, reason: "pnpm virtual-store directory is outside the selected store" };
+    }
+    virtualStoreDirs.push(path);
+  }
+  if (owner?.virtualStoreDirs && (owner.virtualStoreDirs.length !== virtualStoreDirs.length
+    || virtualStoreDirs.some((path, index) => lexicalPathKey(path, platform) !== lexicalPathKey(owner.virtualStoreDirs[index], platform)))) {
+    return { ok: false, reason: "pnpm virtual-store configuration changed" };
+  }
+  return { ok: true, store, virtualStoreDirs };
 }
 
 function isPackageInGlobalStore(packagePath, store) {
   const path = realpathSync.native(packagePath);
-  const rel = relative(join(store, "links"), path);
+  const rel = relative(store, path);
   return rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel);
 }
 
@@ -404,6 +429,7 @@ export function readPnpmGlobalPackage(
     globalRoot: rootPath || expectedGlobalRoot,
     globalBinDir,
     store,
+    virtualStoreDirs: storeResult.virtualStoreDirs,
   };
 }
 
@@ -489,7 +515,7 @@ export function resolvePnpmGlobalOwner({
       let globalStore;
       try { globalStore = isPackageInGlobalStore(active.path, active.store); }
       catch { lastReason = "pnpm active package path could not be resolved"; continue; }
-      return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version, store: active.store,
+      return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version, store: active.store, virtualStoreDirs: active.virtualStoreDirs,
         ...(globalStore ? { globalStore: true } : {}) } };
     }
     lastReason = active.reason;
@@ -522,6 +548,7 @@ export function runPnpmGlobalUpdate({
     || !owner?.globalRoot
     || !owner?.globalBinDir
     || !owner?.store
+    || !Array.isArray(owner?.virtualStoreDirs)
     || !isAbsolutePath(owner.commandPath, platform)
     || !isAbsolutePath(owner.globalDir, platform)
     || !isAbsolutePath(owner.globalBinDir, platform)
@@ -569,7 +596,7 @@ export function runPnpmGlobalUpdate({
     verify,
     { ...constraints, expectedPackagePath: undefined },
   );
-  if (!after.ok && (after.reason === "pnpm configured store could not be resolved" || after.reason === "pnpm configured store changed")) {
+  if (!after.ok && (after.reason.startsWith("pnpm configured store") || after.reason.startsWith("pnpm virtual-store"))) {
     return { ok: false, phase: "install", rolledBack: false, error: after.reason };
   }
   const targetMatches = after.ok && (!targetVersion || after.version === targetVersion);

@@ -280,6 +280,7 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "pnpm", "global", "v11") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
@@ -301,6 +302,7 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: globalDir };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: bin };
         return { status: 1 };
@@ -325,6 +327,7 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: foreign } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
@@ -344,6 +347,7 @@ describe("#4202 install-tree dependency ownership", () => {
     const result = readPnpmGlobalPackage(PKG, args => {
       if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: outside } } }]) };
       if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
       return { status: 1 };
     }, () => ({ ok: true }), { owner, checkShims: false });
     expect(result.ok).toBe(false);
@@ -370,6 +374,7 @@ describe("#4202 install-tree dependency ownership", () => {
           if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: listed } } }]) };
           if (args[0] === "root") return { status: 0, stdout: globalRoot };
           if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
           if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
           if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
           return { status: 1 };
@@ -702,6 +707,75 @@ describe("#4202 install-tree dependency ownership", () => {
     writeDependency(join(group, "zod"), "zod");
     expect(verifyPnpmInstallTree(packageDir, "2.0.0", join(root, "custom-cache", "v11")).ok).toBe(true);
     expect(verifyPnpmInstallTree(packageDir, "2.0.0").ok).toBe(false);
+  });
+
+  test("accepts an alternate virtual-store directory inside the configured store", () => {
+    const store = join(root, "custom-store", "v11"), group = join(store, "custom-links", "pkg", "node_modules");
+    const packageDir = join(group, ...PKG.split("/"));
+    writePackage(packageDir, "2.0.0");
+    writeDependency(join(group, "bun"), "bun"); writeDependency(join(group, "zod"), "zod");
+    expect(verifyPnpmInstallTree(packageDir, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+    const globalRoot = join(root, "global", "v11"), configured = join(store, "custom-links");
+    const owner = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: packageDir, commandPaths: [join(root, "pnpm")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: packageDir } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && args[2] === "virtualStoreDir") return { status: 0, stdout: configured };
+        if (args[0] === "config" && args[2] === "globalVirtualStoreDir") return { status: 0, stdout: "undefined" };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(owner).toMatchObject({ ok: true, owner: { globalStore: true, virtualStoreDirs: [realpathSync(configured)] } });
+    const outside = join(root, "outside", "zod"); writeDependency(outside, "zod");
+    rmSync(join(group, "zod"), { recursive: true }); symlinkSync(outside, join(group, "zod"), "dir");
+    const result = verifyPnpmInstallTree(packageDir, "2.0.0", store);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: zod");
+  });
+
+  test.each(["virtualStoreDir", "globalVirtualStoreDir"])("refuses %s outside the selected store", setting => {
+    const globalRoot = join(root, "global", "v11"), store = join(root, "selected", "v11"), outside = join(root, "outside-virtual");
+    const packageDir = join(outside, "pkg", "node_modules", ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(packageDir, "2.0.0");
+    writeDependency(join(packageDir, "node_modules", "bun"), "bun"); writeDependency(join(packageDir, "node_modules", "zod"), "zod");
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: packageDir, commandPaths: [join(root, "pnpm")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: packageDir } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && args[2] === setting) return { status: 0, stdout: outside };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+  });
+
+  test("refuses preserved symlink mode when the exposed group can resolve outside the store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const exposedGroup = join(root, "pnpm", "global", "v11", "g1", "node_modules");
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n"); symlinkSync(outside, join(exposedGroup, "foreign"), "dir");
+    const node = Bun.which("node"); if (!node) throw new Error("Node is required for this resolution fixture");
+    const probe = spawnSync(node, ["--preserve-symlinks", "--preserve-symlinks-main", "-e",
+      "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('foreign'))", join(exposed, "entry.js")], { encoding: "utf8" });
+    expect({ status: probe.status, stderr: probe.stderr }).toMatchObject({ status: 0 });
+    expect(realpathSync(probe.stdout)).toBe(realpathSync(join(outside, "index.js")));
+    const original = process.env.NODE_OPTIONS;
+    try {
+      process.env.NODE_OPTIONS = "--preserve-symlinks --preserve-symlinks-main";
+      const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+      expect(result.ok).toBe(false);
+      expect(result.failures).toContain("pnpm preserved-symlink lookup root is outside the selected store");
+    } finally {
+      if (original === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = original;
+    }
   });
 
   test("another links group in the same global store cannot vouch for the package", () => {

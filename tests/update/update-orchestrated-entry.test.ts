@@ -224,8 +224,9 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
 test.skipIf(process.platform === "win32")("pnpm child reports unchanged active tree without rollback and installs the pinned version", () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-pnpm-child-")));
   const home = join(root, "home"), group = join(root, "global/v11"), bin = join(root, "bin");
+  const store = join(root, "store", "v11");
   const pkg = join(group, "node_modules/@bitkyc08/opencodex"), result = join(root, "result.json"), log = join(root, "pnpm.log");
-  mkdirSync(home); mkdirSync(bin); mkdirSync(pkg, { recursive: true });
+  mkdirSync(home); mkdirSync(bin); mkdirSync(pkg, { recursive: true }); mkdirSync(store, { recursive: true });
   try {
     cpSync(repoPath("src"), join(pkg, "src"), { recursive: true }); cpSync(repoPath("bin"), join(pkg, "bin"), { recursive: true });
     const launcher = join(pkg, "bin/ocx.mjs"), launcherSource = readFileSync(launcher, "utf8");
@@ -242,23 +243,24 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     const node = spawnSync(executable, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
     if (!node || !node.startsWith("/")) throw new Error("Node executable is not an absolute path");
     for (const name of ["ocx", "opencodex"]) { writeFileSync(join(bin, name), `#!/bin/sh\nexec '${node}' '${pkg}/bin/ocx.mjs' "$@"\n`); chmodSync(join(bin, name), 0o755); }
-    writeFileSync(join(bin, "pnpm"), `#!${node}\nconst fs=require('node:fs'),p=require('node:path'),a=process.argv.slice(2),e=process.env;\nfs.appendFileSync(e.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(e.OCX_FIXTURE_RESULT)),mutex:fs.existsSync(p.join(e.OPENCODEX_HOME,'sync-update.mutation.lock'))})+'\\n');\nconst m=JSON.parse(fs.readFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json')));\nif(a[0]==='list') console.log(JSON.stringify([{path:e.OCX_FIXTURE_GROUP,dependencies:{'@bitkyc08/opencodex':{version:m.version,path:e.OCX_FIXTURE_PKG}}}]));\nelse if(a[0]==='root') console.log(e.OCX_FIXTURE_GROUP+'/node_modules');\nelse if(a[0]==='config') console.log(a[2]==='global-dir'?p.dirname(e.OCX_FIXTURE_GROUP):e.OCX_FIXTURE_BIN);\nelse if(a[0]==='store') console.log(e.OCX_FIXTURE_CHILD_STORE && e.OCX_UPDATE_ORCHESTRATED_CHILD==='1' ? e.OCX_FIXTURE_CHILD_STORE : e.OCX_FIXTURE_STORE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');\nelse if(a[0]==='add'){if(e.OCX_FIXTURE_FAIL==='1')process.exit(1);m.version='2.1.0';fs.writeFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json'),JSON.stringify(m));}\nelse process.exit(90);\n`); chmodSync(join(bin, "pnpm"), 0o755);
+    writeFileSync(join(bin, "pnpm"), `#!${node}\nconst fs=require('node:fs'),p=require('node:path'),a=process.argv.slice(2),e=process.env;\nfs.appendFileSync(e.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(e.OCX_FIXTURE_RESULT)),mutex:fs.existsSync(p.join(e.OPENCODEX_HOME,'sync-update.mutation.lock'))})+'\\n');\nconst m=JSON.parse(fs.readFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json')));\nif(a[0]==='list') console.log(JSON.stringify([{path:e.OCX_FIXTURE_GROUP,dependencies:{'@bitkyc08/opencodex':{version:m.version,path:e.OCX_FIXTURE_PKG}}}]));\nelse if(a[0]==='root') console.log(e.OCX_FIXTURE_GROUP+'/node_modules');\nelse if(a[0]==='config') console.log(a[2]==='global-dir'?p.dirname(e.OCX_FIXTURE_GROUP):a[2]==='global-bin-dir'?e.OCX_FIXTURE_BIN:a[2]==='virtualStoreDir'&&e.OCX_UPDATE_ORCHESTRATED_CHILD==='1'&&e.OCX_FIXTURE_CHILD_VIRTUAL_STORE?e.OCX_FIXTURE_CHILD_VIRTUAL_STORE:'undefined');\nelse if(a[0]==='store') console.log(e.OCX_FIXTURE_CHILD_STORE && e.OCX_UPDATE_ORCHESTRATED_CHILD==='1' ? e.OCX_FIXTURE_CHILD_STORE : e.OCX_FIXTURE_STORE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');\nelse if(a[0]==='add'){if(e.OCX_FIXTURE_FAIL==='1')process.exit(1);m.version='2.1.0';fs.writeFileSync(p.join(e.OCX_FIXTURE_PKG,'package.json'),JSON.stringify(m));}\nelse process.exit(90);\n`); chmodSync(join(bin, "pnpm"), 0o755);
     const token = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "pnpm", cliRoot: pkg, servingRoot: null, runtimeOwner: "none", runtime: null });
     const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token });
     const args = [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result];
     const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1", OPENCODEX_BUN_PATH: process.execPath,
-      PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_STORE: root, OCX_FIXTURE_RESULT: result,
+      PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_STORE: store, OCX_FIXTURE_RESULT: result,
       OCX_FIXTURE_STOP_BOUNDARY: join(root, "stop-boundary") };
     const firstCapability = issueOrchestratedResultCapability(result).capability;
     const legacy = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: firstCapability }, encoding: "utf8", timeout: 30000 });
+    expect({ status: legacy.status, stderr: legacy.stderr }).toMatchObject({ status: 10 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "refused", error: "plan-changed" });
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
     expect(legacy.status).toBe(10);
     expect(existsSync(env.OCX_FIXTURE_STOP_BOUNDARY)).toBe(false);
     expireFixtureFence(home);
     rmSync(result, { force: true });
-    const owner = { commandPath: join(bin, "pnpm"), packagePath: pkg, globalDir: join(root, "global"), globalRoot: group, globalBinDir: bin, store: root };
+    const owner = { commandPath: join(bin, "pnpm"), packagePath: pkg, globalDir: join(root, "global"), globalRoot: group, globalBinDir: bin, store, virtualStoreDirs: [] };
     const expectIndex = args.indexOf("--orchestrated-expect") + 1;
     const pinned = (pnpmOwner: typeof owner) => encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token, pnpmOwner });
     const otherStore = join(root, "other-store"); mkdirSync(otherStore);
@@ -307,6 +309,14 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     const drifted = parent({ OCX_FIXTURE_CHILD_STORE: otherStore });
     expect({ status: drifted.status, stderr: drifted.stderr }).toMatchObject({ status: 10 });
     expect(JSON.parse(drifted.stdout)).toMatchObject({ error: "plan-changed", applied: false });
+    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
+    expect(readFileSync(log, "utf8").split("\n").filter(line => line.includes('"add"')).length).toBe(logBefore);
+    expect(existsSync(env.OCX_FIXTURE_STOP_BOUNDARY)).toBe(false);
+    expireFixtureFence(home);
+    const virtualStore = join(store, "configured-virtual"); mkdirSync(virtualStore);
+    const driftedVirtual = parent({ OCX_FIXTURE_CHILD_VIRTUAL_STORE: virtualStore });
+    expect({ status: driftedVirtual.status, stderr: driftedVirtual.stderr }).toMatchObject({ status: 10 });
+    expect(JSON.parse(driftedVirtual.stdout)).toMatchObject({ error: "plan-changed", applied: false });
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
     expect(readFileSync(log, "utf8").split("\n").filter(line => line.includes('"add"')).length).toBe(logBefore);
     expect(existsSync(env.OCX_FIXTURE_STOP_BOUNDARY)).toBe(false);

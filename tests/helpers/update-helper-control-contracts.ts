@@ -61,6 +61,7 @@ const baseHelperControlContracts: readonly Contract[] = [
   ["src/update/ownership-transaction.ts","withUpdateOwnershipLease","run({",1,"lease callback; guarded caller owns actual update controls"],
   ["src/update/pnpm-global-install.mjs","singleAbsoluteCommandPath","runPnpm(commandPath, args, true)",1,"read-only bounded process/registration/registry probe"],
   ["src/update/pnpm-global-install.mjs","readPnpmStore","runPnpm(ownerGlobalArgs([\"store\", \"path\"], owner), true)",1,"read-only selected-store query under the install workspace policy"],
+  ["src/update/pnpm-global-install.mjs","readPnpmStore","runPnpm(args, true)",1,"read-only selected virtual-store configuration query under the install workspace policy"],
   ["src/update/pnpm-global-install.mjs","readPnpmGlobalPackage","runPnpm(ownerGlobalArgs([\"list\",",1,"read-only bounded process/registration/registry probe"],
   ["src/update/pnpm-global-install.mjs","listGlobalPackage","runPnpm(commandPath, [\"list\",",1,"read-only bounded process/registration/registry probe"],
   ["src/update/pnpm-global-install.mjs","resolvePnpmGlobalOwner","runPnpm(commandPath, args, capture, owner)",1,"read-only bounded process/registration/registry probe"],

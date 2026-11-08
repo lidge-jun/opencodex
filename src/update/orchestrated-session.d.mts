@@ -4,7 +4,7 @@ export interface OrchestratedExpect {
   servingRoot: string | null;
   runtimePid: number | null;
   planToken: string;
-  pnpmOwner?: { commandPath: string; packagePath: string; globalDir: string; globalRoot: string; globalBinDir: string; store: string };
+  pnpmOwner?: { commandPath: string; packagePath: string; globalDir: string; globalRoot: string; globalBinDir: string; store: string; virtualStoreDirs: string[] };
 }
 export declare function encodeOrchestratedExpect(value: OrchestratedExpect): string;
 export declare function decodeOrchestratedExpect(encoded: string): OrchestratedExpect;

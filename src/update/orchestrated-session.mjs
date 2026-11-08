@@ -144,8 +144,10 @@ function validateExpect(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || !["cliRoot,home,planToken,runtimePid,servingRoot", "cliRoot,home,planToken,pnpmOwner,runtimePid,servingRoot"].includes(keys)
     || (keys.includes(",pnpmOwner,") && (!owner || typeof owner !== "object" || Array.isArray(owner)
-      || Object.keys(owner).sort().join(",") !== "commandPath,globalBinDir,globalDir,globalRoot,packagePath,store"
-      || Object.values(owner).some(path => typeof path !== "string" || !isAbsolute(path))))
+      || Object.keys(owner).sort().join(",") !== "commandPath,globalBinDir,globalDir,globalRoot,packagePath,store,virtualStoreDirs"
+      || [owner.commandPath, owner.globalBinDir, owner.globalDir, owner.globalRoot, owner.packagePath, owner.store].some(path => typeof path !== "string" || !isAbsolute(path))
+      || !Array.isArray(owner.virtualStoreDirs) || owner.virtualStoreDirs.length > 2
+      || owner.virtualStoreDirs.some(path => typeof path !== "string" || !isAbsolute(path))))
     || typeof value.home !== "string" || !isAbsolute(value.home)
     || typeof value.cliRoot !== "string" || !isAbsolute(value.cliRoot)
     || (value.servingRoot !== null && (typeof value.servingRoot !== "string" || !isAbsolute(value.servingRoot)))

@@ -28,7 +28,7 @@ test("mutation workspaces are unique, bounded to known files, and cleaned after 
   for (const cwd of seen) expect(existsSync(cwd)).toBe(false);
 });
 
-const owner = { commandPath: "/trusted/pnpm", packagePath: "/pkg", globalDir: "/global", globalRoot: "/global", globalBinDir: "/bin", store: realpathSync(tmpdir()) };
+const owner = { commandPath: "/trusted/pnpm", packagePath: "/pkg", globalDir: "/global", globalRoot: "/global", globalBinDir: "/bin", store: realpathSync(tmpdir()), virtualStoreDirs: [] };
 test("read-only owned pnpm permits store path but refuses store mutation", () => {
   let calls = 0;
   const spawn = ((_bin: unknown, _argv: unknown, options: { cwd: string }) => {
@@ -58,8 +58,8 @@ test.skipIf(process.platform === "win32")("GUI active launcher verification runs
     }
     const commandPath = join(home, "pnpm");
     const listing = JSON.stringify([{ path: globalRoot, dependencies: { "@bitkyc08/opencodex": { version: "2.0.0", path: packagePath } } }]);
-    writeFileSync(commandPath, `#!/usr/bin/env node\nconst command = process.argv[2];\nif (command === 'list') console.log(${JSON.stringify(listing)});\nelse if (command === 'store' && process.argv.at(-1) === 'path') console.log(${JSON.stringify(store)});\nelse process.exit(1);\n`, { mode: 0o755 });
-    expect(resolvePnpmActiveLauncher({ commandPath, packagePath, globalDir, globalRoot, globalBinDir, store })).toBe(launcher);
+    writeFileSync(commandPath, `#!/usr/bin/env node\nconst command = process.argv[2];\nif (command === 'list') console.log(${JSON.stringify(listing)});\nelse if (command === 'store' && process.argv.at(-1) === 'path') console.log(${JSON.stringify(store)});\nelse if (command === 'config') console.log('undefined');\nelse process.exit(1);\n`, { mode: 0o755 });
+    expect(resolvePnpmActiveLauncher({ commandPath, packagePath, globalDir, globalRoot, globalBinDir, store, virtualStoreDirs: [] })).toBe(launcher);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 for (const fail of [false,true]) {
@@ -82,6 +82,12 @@ for (const fail of [false,true]) {
           expect(options.cwd).not.toBe(PNPM_READ_CWD);
           expect(existsSync(options.cwd+"/pnpm-workspace.yaml")).toBe(true);
           stdout=tmpdir();
+        } else if (args[0] === "config") {
+          expect(options.cwd).not.toBe(PNPM_READ_CWD);
+          expect(existsSync(options.cwd+"/pnpm-workspace.yaml")).toBe(true);
+          expect(args).toContain(`--global-dir=${owner.globalDir}`);
+          expect(args).toContain(`--config.global-bin-dir=${owner.globalBinDir}`);
+          stdout="undefined";
         } else {
           expect(options.cwd).toBe(PNPM_READ_CWD);
           if(args[0]==="list") stdout=JSON.stringify([{path:"/global",dependencies:{ocx_test:{version:versions[Math.min(listCall++,versions.length-1)],path:"/pkg"}}}]);

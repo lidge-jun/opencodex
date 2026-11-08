@@ -9,15 +9,19 @@ const OWNER_PATHS = ["commandPath", "packagePath", "globalDir", "globalRoot", "g
 
 /** Freeze physical owner paths at observation time; failure to resolve any path refuses the update. */
 export function canonicalOrchestratedPnpmOwner(owner) {
-  return Object.fromEntries(OWNER_PATHS.map(field => [field, realpathSync.native(owner[field])]));
+  if (!Array.isArray(owner.virtualStoreDirs)) throw new Error("pnpm virtual-store configuration is unpinned");
+  return { ...Object.fromEntries(OWNER_PATHS.map(field => [field, realpathSync.native(owner[field])])),
+    virtualStoreDirs: owner.virtualStoreDirs.map(path => realpathSync.native(path)) };
 }
 
 export function matchesOrchestratedPnpmOwner(expected, owner) {
   if (!expected || !owner) return false;
   try {
     const actual = canonicalOrchestratedPnpmOwner(owner);
-    return OWNER_PATHS.every(field => process.platform === "win32"
-      ? actual[field].toLowerCase() === expected[field].toLowerCase() : actual[field] === expected[field]);
+    const equal = (left, right) => process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+    return OWNER_PATHS.every(field => equal(actual[field], expected[field]))
+      && Array.isArray(expected.virtualStoreDirs) && actual.virtualStoreDirs.length === expected.virtualStoreDirs.length
+      && actual.virtualStoreDirs.every((path, index) => equal(path, expected.virtualStoreDirs[index]));
   } catch { return false; }
 }
 
@@ -41,7 +45,10 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
     if (!resolved.ok || key(resolved.owner.globalDir) !== key(owner.globalDir)
       || key(resolved.owner.globalRoot) !== key(owner.globalRoot)
       || key(resolved.owner.globalBinDir) !== key(owner.globalBinDir)
-      || key(resolved.owner.store) !== key(owner.store)) return false;
+      || key(resolved.owner.store) !== key(owner.store)
+      || !Array.isArray(owner.virtualStoreDirs) || !Array.isArray(resolved.owner.virtualStoreDirs)
+      || owner.virtualStoreDirs.length !== resolved.owner.virtualStoreDirs.length
+      || owner.virtualStoreDirs.some((path, index) => key(path) !== key(resolved.owner.virtualStoreDirs[index]))) return false;
     const active = readPnpmGlobalPackage(PACKAGE_NAME,
       (args, capture) => runPnpm(owner.commandPath, args, capture, owner), verify,
       { owner, expectedPackagePath: activeRoot, expectedGlobalRoot: owner.globalRoot, globalBinDir: owner.globalBinDir });

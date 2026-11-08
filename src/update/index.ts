@@ -212,6 +212,7 @@ export function runOwnedPnpm(
 
 /** Re-read the owning group's active package and return its verified launcher. */
 export function resolvePnpmActiveLauncher(owner: PnpmGlobalOwner): string | null {
+  if (!Array.isArray(owner.virtualStoreDirs)) return null;
   const active = readPnpmGlobalPackage(
     PKG,
     (args, capture = false) => runOwnedPnpm(owner, args, capture),

@@ -124,7 +124,7 @@ function ownedDependencyRoots(packageDir, store) {
   if (real && real !== packageDir) add(join(real, "node_modules"));
   if (isPnpmManagedRoot(lexicalGroup)) add(lexicalGroup);
   const realGroup = real ? enclosingNodeModules(real) : undefined;
-  if (isPnpmManagedRoot(realGroup) || (store && realGroup && inside(realGroup, join(store, "links")))) add(realGroup);
+  if (isPnpmManagedRoot(realGroup) || (store && realGroup && inside(realGroup, store))) add(realGroup);
   return roots;
 }
 
@@ -194,7 +194,7 @@ function inspectAncestorDependency(packageDir, name, store, escaped) {
 }
 
 /** Node may resolve undeclared names from any ancestor node_modules, so none may escape. */
-function inspectAncestorRoots(packageDir, store, escaped) {
+function inspectAncestorRoots(packageDir, store, escaped, preserved = false) {
   for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
     if (basename(parent) !== "node_modules") {
       const root = join(parent, "node_modules");
@@ -204,7 +204,11 @@ function inspectAncestorRoots(packageDir, store, escaped) {
         if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm ancestor dependency root could not be resolved");
       }
       if (exists) {
-        try { if (!inside(root, store) || !inside(realpathSync(root), store)) escaped.add("pnpm ancestor dependency root is outside the selected store"); }
+        try {
+          if (!inside(realpathSync(root), store)) escaped.add(preserved
+            ? "pnpm preserved-symlink lookup root is outside the selected store" : "pnpm ancestor dependency root is outside the selected store");
+          else if (!inside(root, store)) inspectPnpmMetadata(root, store, escaped, "ancestor dependency lookup");
+        }
         catch { escaped.add("pnpm ancestor dependency root could not be resolved"); }
       }
     }
@@ -429,13 +433,15 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
   try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
   let globalLinks;
   try {
-    globalLinks = packagePathUsesGlobalLinks(packageDir, store)
-      || (store && (inside(real, join(store, "links")) || inside(packageDir, join(store, "links"))));
+    globalLinks = packagePathUsesGlobalLinks(packageDir, store) || (store && inside(real, store));
   } catch { return { ok: false, failures: ["pnpm package symlink chain could not be resolved"] }; }
-  if (globalLinks && (!store || !inside(real, join(store, "links")))) {
+  if (globalLinks && (!store || !inside(real, store))) {
     return { ok: false, failures: ["pnpm global links are outside the selected store"] };
   }
   const escaped = new Set();
+  if (globalLinks && /(?:^|[\s"'])--preserve-symlinks(?:-main)?(?=$|[\s"'])/.test([...process.execArgv, process.env.NODE_OPTIONS ?? ""].join(" "))) {
+    inspectAncestorRoots(resolve(packageDir), store, escaped, true);
+  }
   const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
     (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped), globalLinks);
   if (globalLinks) inspectGlobalPnpmGraph(real, store, escaped);
