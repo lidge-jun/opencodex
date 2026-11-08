@@ -11,6 +11,10 @@ manual dispatch from `dev`, not on PRs. A full `lane=all` dispatch provides evid
 source SHA; a PR green or a narrower dispatch is not full-platform evidence. After a batch of
 merges, maintainers run one full dispatch on `dev` rather than one per PR.
 
+The manual `windows-native-claim` lane runs the instrumented native-main quota
+provenance test on one hosted Windows runner, without starting the full matrix.
+It is diagnostic evidence only: it cannot mark a commit green for release.
+
 Two paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
 A change under `.github/actions/` runs `setup-action` on Linux for PRs and on Linux, Windows and macOS for full dispatch: it runs the
 composite Bun setup and requires the installed runtime to equal the version `package.json`

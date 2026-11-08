@@ -471,8 +471,10 @@ show `p***n@example.com` rather than the address on file.
 | --- | --- | --- | --- |
 | `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to reveal stored account emails in projected email fields. Absent, `true`, and any malformed value keep masking, so only a deliberate `false` reveals an address. |
 
-Claude dashboard account labels remain masked even when this flag is `false`; an account alias
-takes precedence over the masked label. The active account uses the same label in Overview.
+Dashboard labels for OAuth accounts (Claude, Grok, Kiro, and the other OAuth providers) follow this
+flag: masked by default, the stored email when it is `false`. An account alias takes precedence over
+the email label. The active account uses the same label in Overview, the reset and coupon dialogs,
+and the remove confirmation. The desktop tray surfaces keep showing the masked form either way.
 
 Turn it off when you run many accounts on a machine you control and cannot tell them apart from
 masked forms. Read the flag as a disclosure decision rather than a display preference: management
