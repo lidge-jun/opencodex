@@ -177,7 +177,9 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     // Ends the period only once no opted-out proxy is still running; otherwise extends it to today.
     endTelemetryEnvOptOut(configDir, now);
   }
-  const state = readTelemetryState(configDir);
+  const current = readTelemetryStateFile(configDir);
+  if (current.unreadable) return { sent: false, reason: "state-unreadable" };
+  const state = current.state;
   if (state.retryAfterUntil) {
     const retryUntilMs = Date.parse(state.retryAfterUntil);
     if (!Number.isNaN(retryUntilMs) && now < retryUntilMs) {
@@ -226,7 +228,12 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     if (!preSendStatus.effective) {
       return { sent: false, day: targetDay, reason: preSendStatus.reason };
     }
-    const preSendState = readTelemetryState(configDir);
+    // The file may have become unreadable while the day was aggregated; never send over it.
+    const preSendFile = readTelemetryStateFile(configDir);
+    if (preSendFile.unreadable) {
+      return { sent: false, day: targetDay, reason: "state-unreadable" };
+    }
+    const preSendState = preSendFile.state;
     const recheckedEligibility = resolveNextEligibleTelemetryDay(preSendStatus, preSendState, now);
     if (recheckedEligibility.day !== targetDay) {
       return { sent: false, day: targetDay, reason: recheckedEligibility.reason };
@@ -253,27 +260,40 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
         return { sent: false, day: targetDay, reason: "aborted", sendResult };
       }
       if (typeof sendResult.retryAfterMs === "number" && sendResult.retryAfterMs > 0) {
-        const freshState = readTelemetryState(configDir);
-        freshState.retryAfterUntil = new Date(now + sendResult.retryAfterMs).toISOString();
-        writeTelemetryState(freshState, configDir, now);
+        const retryAfterUntil = new Date(now + sendResult.retryAfterMs).toISOString();
+        updateReadableTelemetryState(configDir, now, state => {
+          state.retryAfterUntil = retryAfterUntil;
+        });
         return { sent: false, day: targetDay, reason: "retry-after-backoff", sendResult };
       }
       return { sent: false, day: targetDay, reason: "send-failed", sendResult };
     }
     markTelemetryFirstReportSent(configDir);
-    const freshState = readTelemetryState(configDir);
     const nowIso = new Date(now).toISOString();
-    freshState.sentDays[targetDay] = nowIso;
-    freshState.everReported = true;
-    freshState.lastSentDay = targetDay;
-    freshState.lastSentAt = nowIso;
-    freshState.retryAfterUntil = null;
-    writeTelemetryState(freshState, configDir, now);
+    updateReadableTelemetryState(configDir, now, state => {
+      state.sentDays[targetDay] = nowIso;
+      state.everReported = true;
+      state.lastSentDay = targetDay;
+      state.lastSentAt = nowIso;
+      state.retryAfterUntil = null;
+    });
     return { sent: true, day: targetDay, reason: "sent", sendResult };
   } finally {
     parentSignal?.removeEventListener("abort", onParentAbort);
     activeTickControllers.delete(tickController);
   }
+}
+
+/**
+ * Bookkeeping after a send. A file that became unreadable during the send is left as it is: rewriting
+ * it from an empty state would drop the opt-out days it held, and every later tick refuses to send
+ * until it can be read again.
+ */
+function updateReadableTelemetryState(configDir: string, now: number, update: (state: TelemetryState) => void): void {
+  const file = readTelemetryStateFile(configDir);
+  if (file.unreadable) return;
+  update(file.state);
+  writeTelemetryState(file.state, configDir, now);
 }
 
 let startupTimer: ReturnType<typeof setTimeout> | null = null;
