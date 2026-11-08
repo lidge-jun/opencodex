@@ -2,6 +2,7 @@ import { isMistralChatTarget, isNativeOpenAIChatTarget, stripBracketedModelSuffi
 import { reasoningDetailSegmentForWire } from "./response-events";
 import { translatedChatDeveloperWireRole } from "./developer-role";
 import { singleLeadingSystemMessages } from "./single-system";
+import { limitMistralChatImages } from "./mistral-image-limit";
 import { isVolcengineArkPaygChatTarget } from "./tool-schema";
 import { contentPartsToText } from "../image";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
@@ -112,6 +113,12 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   let pendingToolResultAudioParts: unknown[] = [];
   let mintedIdSeq = 0;
   const seenWireCallIds = new Set<string>();
+  // One call id can arrive with more than one result: Codex code mode records the yield marker
+  // for a running cell, then each late `notify()`/wait output as a further result for the same
+  // call. OpenAI-compatible chat providers reject the second `role:"tool"` reply for an id that
+  // was already answered ("Duplicate tool output for call_id"), so the repeats stay out of the
+  // wire body and their text is appended to the result that already answered the call.
+  const answeredToolResults = new Map<string, { content: unknown }>();
 
   const mintCallId = (): string => {
     let id = "";
@@ -165,6 +172,20 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
     flushToolResultImages();
     flushToolResultAudio();
     releaseDeferredBarriers();
+  };
+
+  /** Append a repeated result for an already-answered call to the answer that call already got. */
+  const appendAnsweredToolResultText = (
+    message: { content: unknown },
+    text: string,
+  ): void => {
+    if (text.length === 0) return;
+    const current = message.content;
+    // `toolResultTextForWire` always returns text for a `role:"tool"` reply, so the answer is a
+    // string; an unexpected shape still keeps both halves rather than dropping the repeat.
+    message.content = typeof current === "string" && current.length > 0
+      ? `${current}\n\n${text}`
+      : typeof current === "string" ? text : [current, text];
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
@@ -369,11 +390,13 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         let toolCallId = msg.toolCallId;
         const matchIdx = toolCallId ? pendingToolCalls.findIndex(c => c.id === toolCallId) : -1;
         if (matchIdx >= 0 && toolCallId) {
-          out.push({
+          const toolMsg = {
             role: "tool",
             tool_call_id: toolCallId,
             content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
-          });
+          };
+          out.push(toolMsg);
+          answeredToolResults.set(toolCallId, toolMsg);
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
           pendingToolCalls.splice(matchIdx, 1);
@@ -381,6 +404,34 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             flushToolResultImages();
             flushToolResultAudio();
             releaseDeferredBarriers();
+          }
+        } else if (
+          toolCallId
+          && answeredToolResults.has(toolCallId)
+          && !pendingToolCalls.some(c => c.id === toolCallId)
+        ) {
+          const answer = answeredToolResults.get(toolCallId)!;
+          const text = toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true);
+          if (out[out.length - 1] === answer && deferredBarrierMessages.length === 0) {
+            // Adjacent results can share one reply without moving anything across a later turn.
+            appendAnsweredToolResultText(answer, text);
+            pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
+            pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
+            if (pendingToolCalls.length === 0) {
+              flushToolResultImages();
+              flushToolResultAudio();
+            }
+          } else {
+            // Chat cannot repeat a tool reply. Keep late text and media together at their
+            // recorded position, identified by call ID; an open tool block must close first.
+            const media = typeof msg.content === "string" ? [] : msg.content.flatMap(part => [
+              ...toolResultImageChatParts([part]), ...toolResultAudioChatParts([part]),
+            ]);
+            const carrier = { role: "user", content: [
+              { type: "text", text: `[ocx] additional output for tool call ${toolCallId}:\n${text}` },
+              ...media,
+            ] };
+            (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(carrier);
           }
         } else {
           if (!toolCallId) toolCallId = `call_orphan_${out.length}`;
@@ -422,11 +473,13 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             }],
           });
           seenWireCallIds.add(toolCallId);
-          out.push({
+          const toolMsg = {
             role: "tool",
             tool_call_id: toolCallId,
             content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
-          });
+          };
+          out.push(toolMsg);
+          answeredToolResults.set(toolCallId, toolMsg);
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
           flushToolResultImages();
@@ -439,7 +492,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
 
   flushPendingToolCalls();
   releaseDeferredBarriers();
-  return singleLeadingSystemMessages(out, provider) as unknown[];
+  return limitMistralChatImages(singleLeadingSystemMessages(out, provider), provider, parsed.modelId) as unknown[];
 }
 
 export function safeToolName(name: string | undefined): string {

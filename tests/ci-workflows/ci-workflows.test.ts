@@ -176,11 +176,18 @@ describe("GitHub Actions hardening", () => {
     // green — the worst failure available here. Pin them to each other.
     const linuxShards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
       ?.strategy?.matrix?.shard ?? [];
-    expect(linuxShards).toEqual([1, 2, 3, 4]);
+    expect(linuxShards).toEqual([1, 2, 3, 4, 5]);
     // The Linux shards pass their divisor through TEST_SHARD to the batch runner. Before
     // Windows sharded differently, this assertion matched the Windows step's --shard
     // literal by coincidence; pin the Linux env line so it observes the Linux job.
-    expect(workflow).toContain(`TEST_SHARD: \${{ matrix.shard }}/${linuxShards.length}`);
+    const linuxJob = ci.jobs?.test as {
+      name?: string;
+      steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;
+    };
+    const linuxTest = linuxJob.steps?.find(step => step.name === "Test in fresh-process batches");
+    expect(linuxJob.name).toBe(`test \${{ matrix.shard }}/${linuxShards.length}`);
+    expect(linuxTest?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${linuxShards.length}`);
+    expect(linuxTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
 
     // Every job that runs tests/ must fetch tags, because one of those tests reads
     // them. tests/ci-workflows/release-version-line.test.ts compares package.json against the
@@ -553,8 +560,8 @@ describe("GitHub Actions hardening", () => {
     const workflow = await readText(".github/workflows/service-lifecycle.yml");
 
     expect(workflow).toContain("permissions:\n  contents: read");
-    expect(workflow).toContain("group: service-lifecycle-${{ github.ref }}");
-    expect(workflow).toContain("cancel-in-progress: true");
+    expect(workflow).toContain("group: service-lifecycle-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}");
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}");
     expect(count(workflow, "timeout-minutes: 10")).toBe(3);
     expect(count(workflow, "if: ${{ !cancelled() }}")).toBe(3);
     expect(workflow).not.toContain("always()");
@@ -693,12 +700,13 @@ describe("GitHub Actions hardening", () => {
     expect(release.jobs?.["validate-dispatch"]?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.["validate-dispatch"]?.permissions).toEqual({
       contents: "read",
+      actions: "read",
     });
     
     // Publication is the irreversible public act, so it waits for the pre-publication
     // verification of everything it will publish; the full ordering contract is in
     // tests/ci-workflows/release-pipeline-contract.test.ts.
-    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "verify-release"]);
+    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "verify-release", "verify-npm"]);
     expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
@@ -719,42 +727,13 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).not.toContain("- name: OS keyring create/read/delete smoke");
     expect(workflow).not.toContain("gnome-keyring-daemon");
 
-    // Root and GUI dependency trees share one audit definition across local and
-    // workflow release paths.
-    const packageJson = JSON.parse(await readText("package.json")) as {
-      scripts?: Record<string, string>;
-    };
-    expect(packageJson.scripts?.["audit:high"]).toBe(
-      "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
-    );
-    expect(workflow).toContain("run: bun run audit:high");
-    expect(workflow).not.toContain("run: bun audit --audit-level=high");
-
-    // gh embeds a jq expression but does not expose jq's --arg flag. Keep the
-    // branch and event filters on gh's native, documented flag surface.
-    const ciLookup = workflow.split('ci_url="$(')[1]?.split('\n          )"')[0];
-    expect(ciLookup).toBeDefined();
-    expect(ciLookup).toContain("--workflow ci.yml");
-    expect(ciLookup).toContain('--branch "${GITHUB_REF#refs/heads/}"');
-    expect(ciLookup).toContain('--commit "$GITHUB_SHA"');
-    expect(ciLookup).toContain("--event push");
-    expect(ciLookup).not.toContain("--status success");
-    expect(ciLookup).toContain("--json conclusion,url");
-    expect(ciLookup).toContain("select(.conclusion == \"success\")");
-    expect(ciLookup).toContain("[0].url // \"\"");
-    expect(ciLookup).not.toContain("--arg");
-    expect(ciLookup).not.toContain("$branch");
-
-    const serviceLookup = workflow
-      .split('service_url="$(')[1]?.split('\n            )"')[0];
-    expect(serviceLookup).toBeDefined();
-    expect(serviceLookup).toContain("--workflow service-lifecycle.yml");
-    expect(serviceLookup).toContain('--commit "$GITHUB_SHA"');
-    expect(serviceLookup).not.toContain("--status success");
-    expect(serviceLookup).toContain("--json conclusion,headSha,url,workflowName");
-    expect(serviceLookup).toContain("select(.conclusion == \"success\")");
-    expect(serviceLookup).toContain("[0].url // \"\"");
-    expect(serviceLookup).not.toContain("--arg");
+    // Candidate build runs the package's prepublish audit; the OIDC job never does.
+    const packageJson = JSON.parse(await readText("package.json")) as { scripts?: Record<string, string> };
+    expect(packageJson.scripts?.prepublishOnly).toContain("bun run audit:high");
+    expect(workflow).toContain("npm run prepublishOnly");
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(2);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(2);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(2);
 
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
@@ -812,100 +791,32 @@ describe("GitHub Actions hardening", () => {
       expect(runSource).not.toContain("${{ inputs.");
     }
 
-    // The service gate must cover the post-restructure service surface and stay
-    // in sync with every service-lifecycle.yml push trigger path.
-    const gateMatch = workflow.match(/grep -Eq '(\^\([^']+\)\$)'/);
-    expect(gateMatch).not.toBeNull();
-    const gate = new RegExp(gateMatch![1]!);
-    const lifecycle = await readText(".github/workflows/service-lifecycle.yml");
-    const pushPaths = lifecycle
-      .split("push:")[1]!
-      .split("workflow_dispatch:")[0]!
-      .split("\n")
-      .map(line => line.trim())
-      .filter(line => line.startsWith('- "'))
-      .map(line => line.slice(3, -1));
-    expect(pushPaths.length).toBeGreaterThanOrEqual(6);
-    for (const path of pushPaths) {
-      expect(gate.test(path)).toBe(true);
+    // Service evidence is checked from the trusted workflow revision, on the exact source.
+    const { serviceChangeRequired } = require(join(repoRoot(), ".github", "scripts", "release-evidence.cjs")) as { serviceChangeRequired: (paths: string[]) => boolean };
+    for (const path of ["src/service.ts", "src/service/lifecycle.ts", "src/cli/index.ts", "desktop/src-tauri/Cargo.toml"]) {
+      expect(serviceChangeRequired([path]), path).toBe(true);
     }
-    expect(gate.test("src/cli/index.ts")).toBe(true);
-    expect(gate.test("src/lib/bun-runtime.ts")).toBe(true);
-    expect(gate.test("src/cli.ts")).toBe(true);
-
-    // PR and push triggers must stay path-set identical, and both must cover the
-    // pre-restructure compat stub src/cli.ts that the release gate regex checks
-    // (devlog 260716_passthrough_followups/020 — a release whose only service change
-    // is src/cli.ts must auto-trigger service-lifecycle instead of dead-ending the gate).
-    const prPaths = lifecycle
-      .split("pull_request:")[1]!
-      .split("push:")[0]!
-      .split("\n")
-      .map(line => line.trim())
-      .filter(line => line.startsWith('- "'))
-      .map(line => line.slice(3, -1));
-    expect([...prPaths].sort()).toEqual([...pushPaths].sort());
-    expect(prPaths).toContain("src/cli.ts");
-    expect(pushPaths).toContain("src/cli.ts");
-    expect(gate.test("src/router.ts")).toBe(false);
-    expect(gate.test("docs-site/src/pages/index.astro")).toBe(false);
-
-    // Channel guards stay branch-exact.
-    expect(workflow).toContain("Release must run from main or preview");
-    expect(workflow).toContain("main releases must use a stable semver version");
-    expect(workflow).toContain("preview releases must use a preview prerelease version");
-
-    const readinessStep = workflow
-      .split("- name: Require dev to be ready for this release")[1]
-      ?.split(/\n {6}- name:/)[0];
-    expect(readinessStep).toBeDefined();
-    expect(readinessStep).toContain(
-      "git fetch --force --tags origin +refs/heads/dev:refs/remotes/origin/dev",
-    );
-    expect(readinessStep).toContain("git show origin/dev:package.json");
-    expect(readinessStep).toContain(
-      'bun scripts/version-line.ts assert-ahead "$dev_version" "$RELEASE_VERSION"',
-    );
-
-    const orderingStep = workflow
-      .split("- name: Refuse a release the current tag set already outranks")[1]
-      ?.split(/\n {6}- name:/)[0];
-    expect(orderingStep).toBeDefined();
-    expect(orderingStep).toContain(
-      'git tag --list \'v*\' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" $allow',
-    );
-    expect(orderingStep).toContain('existing_tag_sha="$(git rev-parse');
-    expect(orderingStep).toContain('[ "$DRY_RUN" = "true" ]');
-    expect(orderingStep).toContain('[ "$existing_tag_sha" = "$GITHUB_SHA" ]');
-
-    // This is an ordering gate, not an existence pin. It must consume the freshly
-    // fetched tag set and must run before either dry-run packing or publication.
-    const preflightIndex = workflow.indexOf("- name: Preflight release metadata");
-    const preflightFetchIndex = workflow.indexOf(
-      "git fetch --force --tags origin",
-      preflightIndex,
-    );
-    const orderingGateIndex = workflow.indexOf(
-      "- name: Refuse a release the current tag set already outranks",
-    );
-    const publishBoundaryIndex = workflow.indexOf("- name: Publish (or dry-run)");
-    expect(preflightFetchIndex).toBeGreaterThan(preflightIndex);
-    expect(orderingGateIndex).toBeGreaterThan(preflightFetchIndex);
+    expect(serviceChangeRequired(["src/router.ts"])).toBe(false);
+    expect(workflow).toContain("Release workflow must be dispatched from trusted dev");
+    const orderingGateIndex = workflow.indexOf("- name: Refuse a release the current tag set already outranks");
+    const publishBoundaryIndex = workflow.indexOf("- name: Publish verified npm tarball");
+    expect(orderingGateIndex).toBeGreaterThan(-1);
     expect(publishBoundaryIndex).toBeGreaterThan(orderingGateIndex);
+    expect(workflow).toContain('git tag --list \'v*\' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION"');
 
     // Release notes are built and coverage-validated before npm publish. The
     // builder owns Git-history/PR coverage; the workflow only wires the validated
     // artifact into the release. Stable/preview range semantics are unit-tested in
     // build-release-changelog.test.ts rather than duplicated as YAML string pins.
     const notesBuildIndex = workflow.indexOf("- name: Build and validate release changelog");
-    const publishIndex = workflow.indexOf("- name: Publish (or dry-run)");
+    const publishIndex = workflow.indexOf("- name: Publish verified npm tarball");
     expect(notesBuildIndex).toBeGreaterThan(-1);
     expect(publishIndex).toBeGreaterThan(notesBuildIndex);
     expect(workflow).toContain("bun scripts/build-release-changelog.ts");
     expect(workflow).toContain('--version "$RELEASE_VERSION"');
     expect(workflow).toContain('--dist-tag "$NPM_DIST_TAG"');
     expect(workflow).toContain('--repository "$GITHUB_REPOSITORY"');
-    expect(workflow).toContain('--target "$GITHUB_SHA"');
+    expect(workflow).toContain('--target "$SOURCE_SHA"');
     expect(workflow).toContain('--out "$notes_file"');
     expect(workflow).toContain('test -s "$notes_file"');
     expect(workflow).not.toContain("bun scripts/release-notes.ts matching-preview-tags");
@@ -944,12 +855,10 @@ describe("GitHub Actions hardening", () => {
       createStep.indexOf('git tag "$release_tag"'),
     );
 
-    // The merged-only restriction remains on the service gate, whose
-    // changed-files comparison is deliberately lineage-relative.
-    const ciGateStep = workflow
-      .split("- name: Require successful Cross-platform CI for this commit")[1]!
-      .split(/\n {6}- name:/)[0]!;
-    expect(ciGateStep).toContain("--merged HEAD");
+    // Service comparison uses a reachable baseline from the selected source, not the workflow head.
+    const evidenceStep = workflow.split("- name: Recheck source CI and service evidence")[1]!.split(/\n {6}- name:/)[0]!;
+    expect(evidenceStep).toContain('git tag --merged "$SOURCE_SHA"');
+    expect(evidenceStep).toContain('service-range "$SOURCE_SHA" "$baseline"');
   });
 
   /**
@@ -5027,7 +4936,9 @@ describe("GitHub Actions hardening", () => {
   test("docs deployment is pinned, bounded, and scoped to Pages", async () => {
     const workflow = await readText(".github/workflows/deploy-docs.yml");
 
-    expect(workflow).toContain("permissions:\n  contents: read\n  pages: write\n  id-token: write");
+    expect(workflow).toContain("permissions: {}\n");
+    expect(workflow).toContain("    permissions:\n      contents: read\n");
+    expect(workflow).toContain("    permissions:\n      pages: write\n      id-token: write\n");
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("timeout-minutes: 15");
     expect(workflow).toContain("timeout-minutes: 10");
@@ -5462,7 +5373,7 @@ async function publicationSteps(): Promise<PublicationStep[]> {
 
 test("release recovery requires same-run publication and preserves successful-step gating", async () => {
   const steps = await publicationSteps();
-  const publish = steps.find(step => step.name === "Publish (or dry-run)")!;
+  const publish = steps.find(step => step.name === "Publish verified npm tarball")!;
   const smoke = steps.find(step => step.name === "Post-publish registry smoke")!;
   const release = steps.find(step => step.name === "Create GitHub release")!;
   expect(publish.id).toBe("publication");
@@ -5479,7 +5390,7 @@ test("release recovery requires same-run publication and preserves successful-st
 // Structural workflow guards above still execute on every platform.
 test.skipIf(process.platform === "win32")("release shell recovers only unverified reads after acknowledged publication", async () => {
   const steps = await publicationSteps();
-  const publish = steps.find(step => step.name === "Publish (or dry-run)")!.run!;
+  const publish = steps.find(step => step.name === "Publish verified npm tarball")!.run!;
   const smoke = steps.find(step => step.name === "Post-publish registry smoke")!.run!;
   const scenarios = [
     { mode: "match", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
@@ -5490,7 +5401,6 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
     { mode: "empty", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "dist-failure", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
     { mode: "publish-failure", dry: false, status: 23, receipt: false, verification: "", reads: 0 },
-    { mode: "match", dry: true, status: 0, receipt: false, verification: "", reads: 0 },
     { mode: "missing-receipt", dry: false, status: 1, receipt: false, verification: "", reads: 0 },
   ];
   for (const scenario of scenarios) {
@@ -5533,7 +5443,7 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
         // RESUME mirrors the workflow, where the env always defines it; the
         // non-resume branches are what every scenario here exercises.
         env: { ...process.env, SCENARIO: scenario.mode, DRY_RUN: String(scenario.dry),
-          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", RESUME: "false", GITHUB_SHA: "a".repeat(40), GITHUB_OUTPUT: output,
+          NPM_DIST_TAG: "latest", NPM_TARBALL: "fixture.tgz", RELEASE_VERSION: "9.8.7", RESUME: "false", GITHUB_SHA: "b".repeat(40), SOURCE_SHA: "a".repeat(40), GITHUB_OUTPUT: output,
           GITHUB_STEP_SUMMARY: summary, CALLS: calls, COUNTER: join(dir, "counter") },
         stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });

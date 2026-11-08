@@ -13,11 +13,14 @@ import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
 import { useT, type TFn } from "../src/i18n/shared";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
+import ProviderDetails from "../src/components/provider-workspace/ProviderDetails";
+import { renderToStaticMarkup } from "react-dom/server";
 import CatalogAccountRow from "../src/components/provider-catalog/CatalogAccountRow";
 import type { OAuthAccountRow, ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { useProviderAccountPools, type Config as PoolHookConfig } from "../src/hooks/useProviderAccountPools";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
+import { useProvidersFetch } from "../src/pages/use-providers-fetch";
 import { buildAddModalAccountRows } from "../src/pages/providers-page-utils";
 import type { OAuthAccount, OAuthStatus, ProvidersConfig } from "../src/pages/providers-shared";
 import { oauthTosCopyKeys, oauthTosRisk } from "../src/oauth-tos-risk";
@@ -364,6 +367,39 @@ test("UX-05: equal account IDs keep pool-keyed rosters and thresholds in the acc
 });
 
 for (const item of [POOL_A, POOL_B]) {
+  test(`${item.name} Overview shows only a verified current account label`, () => {
+    const renderOverview = (rows: OAuthAccountRow[], accountLoadState: "idle" | "loading" | "ready" | "error", loggedIn: boolean) => renderToStaticMarkup(
+      <LanguageProvider><ProviderDetails item={item} accounts={rows} accountLoadState={accountLoadState} oauth={{ loggedIn }} oauthEmail={`raw@${item.name}.test`}
+        availableModels={[]} hasLiveModels={false} selectedModels={[]} modelRows={[]} modelRevision="test" modelRowsReady
+        onOpenModels={() => {}} onDeselect={() => {}} apiBase="" /></LanguageProvider>,
+    );
+    const rows = accounts(item.name).map((account, index) => ({ ...account,
+      alias: index === 0 ? "Work" : undefined, maskedLabel: index === 0 ? "s***d@example.test" : "o***r@example.test" }));
+    expect(renderOverview(rows, "ready", true)).toContain("Current account</dt><dd>Work");
+    expect(renderOverview(rows.map(row => ({ ...row, alias: undefined })), "ready", true)).toContain("Current account</dt><dd>s***d@example.test");
+    expect(renderOverview(rows.map((row, index) => ({ ...row, alias: undefined, active: index === 1 })), "ready", true)).toContain("Current account</dt><dd>o***r@example.test");
+    expect(renderOverview(rows.map(row => ({ ...row, alias: undefined, maskedLabel: undefined })), "ready", true)).toContain("Current account</dt><dd>Account 1");
+    for (const state of ["idle", "loading", "error"] as const) expect(renderOverview(rows, state, true)).not.toContain("Current account</dt><dd>Work");
+    const loggedOut = renderOverview(rows, "ready", false);
+    expect(loggedOut).toContain("Current account</dt><dd>Work");
+    expect(loggedOut).not.toContain("Logged in as Work");
+    expect(loggedOut).not.toContain(`raw@${item.name}.test`);
+  });
+  test(`${item.name} account rows prefer aliases and masked labels without rendering raw email`, async () => {
+    respond = async request => request.path === "/api/pool/settings"
+      ? Response.json(poolSettings(item.name, false, 55)) : Response.json(grantSnapshot(item.name, 1));
+    const rows = accounts(item.name).map((row, index) => ({ ...row,
+      maskedLabel: index === 0 ? "s***d@example.test" : "o***r@example.test",
+      ...(index === 0 ? { alias: "Work" } : {}),
+    }));
+    await render(<ProviderAuthPanel item={item} apiBase="" accounts={rows} authHandlers={recordingHandlers([])} />);
+    await tick();
+    expect(host.textContent).toContain("Work");
+    expect(host.textContent).toContain("o***r@example.test");
+    expect(host.textContent).not.toContain(`shared@${item.name}.test`);
+    expect(host.textContent).not.toContain(`other@${item.name}.test`);
+    expect(host.querySelector('[aria-label*="Work"]')).not.toBeNull();
+  });
   test(`${item.name} reset-grant dialog keeps the ordinal account label`, async () => {
     respond = async request => request.path === "/api/pool/settings"
       ? Response.json(poolSettings(item.name, false, 55))
@@ -391,15 +427,184 @@ for (const item of [POOL_A, POOL_B, CUSTOM_B, { ...POOL_A, name: "cursor", adapt
       await act(async () => { await pools.pauseAccount(item.name, target, true); });
       let pending!: Promise<void>;
       await act(async () => { pending = pools.removeAccount(item.name, target); await Promise.resolve(); });
-      const expected = item === POOL_A || item === POOL_B ? "Account 1" : `shared@${item.name}.test`;
+      const expected = "Account 1";
       expect(win.document.querySelector("dialog")?.textContent).toContain(expected);
-      if (item === POOL_A || item === POOL_B) expect(win.document.body.textContent).not.toContain(`shared@${item.name}.test`);
+      expect(win.document.body.textContent).not.toContain(`shared@${item.name}.test`);
       const confirm = [...win.document.querySelectorAll("dialog button")].find(button => button.textContent === en["common.remove"]);
       expect(confirm).toBeTruthy();
       await act(async () => { (confirm as unknown as HTMLElement).click(); await pending; });
       expect(notices).toHaveLength(2);
       expect(notices.every(message => message.includes(expected))).toBe(true);
-      if (item === POOL_A || item === POOL_B) expect(notices.join(" ")).not.toContain(`shared@${item.name}.test`);
+      expect(notices.join(" ")).not.toContain(`shared@${item.name}.test`);
     });
   }
 }
+
+test.each(["switch", "pause"] as const)("logout explains a pending %s and succeeds after it settles", async action => {
+  let release!: (response: Response) => void;
+  let pendingStarted!: () => void;
+  const started = new Promise<void>(resolve => { pendingStarted = resolve; });
+  const notices: string[] = [];
+  respond = async request => {
+    if (request.method === "PUT" && request.path.startsWith("/api/oauth/accounts/")) {
+      pendingStarted(); return new Promise(resolve => { release = resolve; });
+    }
+    if (request.path === "/api/oauth/logout") return Response.json({ ok: true });
+    if (request.path === "/api/oauth/accounts") return Response.json({ activeAccountId: "shared", accounts: accounts("anthropic2") });
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings("anthropic2", false, 55));
+    if (request.path === "/api/anthropic/reset-grants") return Response.json(grantSnapshot("anthropic2", 1));
+    return Response.json({});
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [status, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true } });
+    const pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key,
+      oauthStatus: status, notify: message => notices.push(message), fetchConfig: async () => {},
+      fetchOauth: async () => {}, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    const oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
+      beginAccountLogout: pools.beginAccountLogout, notify: message => notices.push(message), fetchConfig: async () => {},
+      fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return <ProviderAuthPanel item={POOL_B} apiBase="" oauth={status.anthropic2} accounts={accounts("anthropic2")}
+      authHandlers={{ ...recordingHandlers([]), onSwitchAccount: pools.switchAccount, onPauseAccount: pools.pauseAccount, onLogout: oauth.logoutOAuth }} />;
+  }
+  await render(<Harness />);
+  if (action === "switch") await click(host.querySelectorAll(".pwi-auth-row-main")[1]);
+  else await click(host.querySelectorAll('button[aria-label^="' + en["codexAuth.pause"] + ' — "]')[1]);
+  await started;
+  await click(buttonsByText(en["prov.logout"])[0]);
+  expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(0);
+  expect(notices).toContain("prov.logoutBusy");
+  await act(async () => { release(Response.json({ activeAccountId: "other", activeAccountChanged: false })); });
+  await tick(); await tick();
+  await click(buttonsByText(en["prov.logout"])[0]);
+  expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(1);
+});
+
+test("unverified OAuth status never reports a stale roster as logged in or logged out", async () => {
+  respond = async request => request.path === "/api/pool/settings"
+    ? Response.json(poolSettings("anthropic2", false, 55)) : Response.json(grantSnapshot("anthropic2", 1));
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={accounts("anthropic2")}
+    accountLoadState="error" authHandlers={recordingHandlers([])} />);
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["startup.unverified"]);
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={[]} accountLoadState="ready"
+    authHandlers={recordingHandlers([])} />);
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["startup.unverified"]);
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={[]} accountLoadState="ready"
+    oauth={{ loggedIn: false }} authHandlers={recordingHandlers([])} />);
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["pws.notLoggedInTitle"]);
+});
+
+test.each(["delete", "logout"] as const)("%s with failed reads retains explicit logout without claiming authentication", async operation => {
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  let failReads = false;
+  const notices: string[] = [];
+  respond = async request => {
+    if (request.method === "DELETE") { failReads = true; return Response.json({}); }
+    if (request.path === "/api/oauth/logout") { failReads = true; return new Response(null, { status: 500 }); }
+    if (request.path === "/api/oauth/accounts") return failReads ? new Response(null, { status: 503 }) : Response.json({ activeAccountId: "shared", accounts: accounts("anthropic2") });
+    if (request.path === "/api/oauth/providers") return Response.json({ providers: ["anthropic2", "anthropic"] });
+    if (request.path === "/api/oauth/status") return failReads && request.provider === "anthropic2" ? new Response(null, { status: 503 }) : Response.json({ loggedIn: true });
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings("anthropic2", false, 55));
+    return Response.json(grantSnapshot("anthropic2", 1));
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [status, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true }, anthropic: { loggedIn: true } });
+    const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus, notify: () => {}, invalidateProviderQuotas: () => {} });
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: status, notify: message => notices.push(message),
+      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets, setAccountSets: pools.setAccountSets,
+      setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus, invalidateOauthStatusReads: loader.invalidateOauthStatusReads,
+      beginAccountLogout: pools.beginAccountLogout, notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: loader.fetchOauth,
+      fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return <><output data-other>{String(status.anthropic?.loggedIn)}</output><ProviderAuthPanel item={POOL_B} apiBase="" oauth={status.anthropic2} accounts={pools.accountSets.anthropic2?.accounts ?? []}
+      accountLoadState={pools.accountLoadStates.anthropic2} authHandlers={{ ...recordingHandlers([]), onLogout: oauth.logoutOAuth, onRemoveAccount: pools.removeAccount }} /></>;
+  }
+  await render(<Harness />);
+  await act(async () => { await pools.fetchAccountSets(["anthropic2"]); });
+  if (operation === "delete") {
+    await click(host.querySelector(".pwi-auth-row-remove"));
+    await click([...win.document.querySelectorAll("dialog button")].find(button => button.textContent === "common.remove"));
+  } else await click(buttonsByText(en["prov.logout"])[0]);
+  await tick();
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["startup.unverified"]);
+  expect(host.querySelector("[data-other]")?.textContent).toBe("true");
+  const logoutCount = requests.filter(request => request.path === "/api/oauth/logout").length;
+  await click(buttonsByText(en["prov.logout"])[0]);
+  const logouts = requests.filter(request => request.path === "/api/oauth/logout");
+  expect(logouts).toHaveLength(logoutCount + 1);
+  expect(logouts.every(request => request.provider === "anthropic2")).toBe(true);
+});
+
+test("login cancellation is offered only after the provider supplies a hint", async () => {
+  respond = async request => request.path === "/api/pool/settings"
+    ? Response.json(poolSettings("anthropic2", false, 55)) : Response.json(grantSnapshot("anthropic2", 1));
+  const handlers = { ...recordingHandlers([]), onCancelLogin: () => {} };
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" oauth={{ loggedIn: false }} busy authHandlers={handlers} />);
+  expect(buttonsByText(en["common.cancel"])).toHaveLength(0);
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" oauth={{ loggedIn: false }} busy
+    loginHint={{ provider: "anthropic2", url: "https://example.test/login" }} authHandlers={handlers} />);
+  expect(buttonsByText(en["common.cancel"])).toHaveLength(1);
+});
+
+test("pending login cancellation does not prevent logout or account removal", async () => {
+  const { spyOn } = await import("bun:test");
+  const dialogs = await import("../src/action-dialogs");
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  const login = Promise.withResolvers<Response>();
+  const cancel = Promise.withResolvers<Response>();
+  let oauth!: ReturnType<typeof useProvidersOAuth>;
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  respond = async request => {
+    if (request.path === "/api/oauth/login") return login.promise;
+    if (request.path === "/api/oauth/login/cancel") return cancel.promise;
+    return Response.json({ activeAccountId: null, accounts: [] });
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [statuses, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: statuses,
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
+      beginAccountLogout: pools.beginAccountLogout,
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets,
+      fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return null;
+  }
+  try {
+    await render(<Harness />);
+    await act(async () => { void oauth.loginOAuth("anthropic2"); void oauth.cancelLoginOAuth("anthropic2"); });
+    expect(requests.filter(request => request.path === "/api/oauth/login")).toHaveLength(1);
+    expect(requests.filter(request => request.path === "/api/oauth/login/cancel")).toHaveLength(1);
+    await act(async () => { await oauth.logoutOAuth("anthropic2"); });
+    await act(async () => { await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(1);
+    expect(requests.filter(request => request.method === "DELETE")).toHaveLength(1);
+  } finally {
+    await act(async () => { login.resolve(Response.json({}, { status: 400 })); cancel.resolve(Response.json({ cancelled: false })); });
+    consent.mockRestore();
+  }
+});
+
+test.each(["success", "missing", "mismatch"] as const)("reauthentication keeps the requested account identity: %s", async outcome => {
+  let view!: LoginView;
+  respond = async request => {
+    if (request.path === "/api/oauth/login") return Response.json({ url: "https://example.test/login" });
+    if (request.path === "/api/oauth/status") return Response.json({ loggedIn: true, done: true,
+      accounts: outcome === "missing" ? [{ id: "other", active: true }]
+        : [{ id: "shared", active: true, needsReauth: outcome === "mismatch" }] });
+    return Response.json({});
+  };
+  await render(<LoginHarness onView={next => { view = next; }} />);
+  await act(async () => { await view.loginOAuth("anthropic2", true, "shared"); });
+  expect(requests.find(request => request.path === "/api/oauth/login")?.body)
+    .toMatchObject({ provider: "anthropic2", accountId: "shared", reauth: true, addAccount: true });
+  expect(view.notices).toHaveLength(1);
+  if (outcome === "missing") expect(view.notices[0]).toContain(en["prov.reauthAccountMissing"]);
+  if (outcome === "mismatch") expect(view.notices[0]).toContain(en["prov.reauthIdentityMismatch"]);
+  if (outcome === "success") expect(view.oauthStatus.anthropic2?.loggedIn).toBe(true);
+});

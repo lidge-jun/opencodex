@@ -1,0 +1,484 @@
+/* ============================================================================
+   codex-set — isolated stylesheet for the Codex Set prompt panel
+   Namespace: codex-set-  |  widgets: codex-set-prompt__, codex-set-layer-dialog__
+   Uses only design tokens from styles.css. No gradients.
+
+   Rows carry no switch element at all when a layer cannot be turned off, so
+   there is no disabled-control styling here on purpose: the absence is the
+   design, not something to grey out.
+   ============================================================================ */
+
+.codex-set-prompt__rows {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.codex-set-prompt__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* D6 density: this is an operator surface with fifteen rows, not a settings page
+     with three. Consumer-app row height turned a scannable list into a scroll. */
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.codex-set-prompt__row:last-child {
+  border-bottom: 0;
+}
+
+/* C1: Actionable rows carry a subtle left accent so the eye picks them out of the
+   read-only rows without scanning for a switch. */
+.codex-set-prompt__row[data-layer-class="config-toggle"],
+.codex-set-prompt__row[data-layer-class="base"] {
+  border-left: 3px solid var(--green);
+  padding-left: 8px;
+  margin-left: -11px;
+}
+
+.codex-set-prompt__name {
+  flex: 0 0 auto;
+  text-align: left;
+}
+
+/* The stack rail: a fixed column so positions line up as a column, not as prose. */
+.codex-set-prompt__pos {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.codex-set-prompt__group {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* C3: Transition-notices section heading reads as a distinct section label. */
+.codex-set-prompt__group strong {
+  font-size: var(--text-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+}
+
+/* A row the user can act on carries more weight than one that only reports. */
+.codex-set-prompt__row[data-layer-class="config-toggle"] .codex-set-prompt__name {
+  font-weight: 500;
+}
+
+.codex-set-prompt__bytes {
+  flex: 0 0 auto;
+  min-width: 48px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+/* C4: Toggle rows push the switch to the far right so its position is stable
+   whether or not a bytes badge is present. */
+.codex-set-prompt__row[data-layer-class="config-toggle"] .toggle,
+.codex-set-prompt__row[data-layer-class="base"] .toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.codex-set-prompt__key {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* C2: De-emphasize config keys so name->switch is the primary scan line. */
+.codex-set-prompt__row .codex-set-prompt__key {
+  font-size: var(--text-caption);
+  opacity: 0.6;
+}
+
+/* Pushed right so a row without a key still aligns its trailing element. */
+.codex-set-prompt__note {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.codex-set-prompt__extensions {
+  margin-top: 12px;
+}
+
+.codex-set-layer-dialog {
+  max-width: 520px;
+}
+
+.codex-set-layer-dialog__line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.codex-set-layer-dialog__no-text {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The real prompt text. Scrollable rather than clipped: some layers are 15 KB. */
+/*
+ * Chained with .api-code deliberately. Both rules are single-class selectors, so
+ * they tie on specificity and source order decides - and styles.css loads after
+ * this file, so its `white-space: pre` won. The prompt body then scrolled
+ * sideways one long line at a time, which is exactly the "readable layer body"
+ * this dialog exists to provide. The chained selector outranks it outright.
+ */
+.codex-set-layer-dialog__text.api-code {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Custom layers ---------------------------------------------------------- */
+
+.codex-set-custom {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.codex-set-custom__add {
+  margin-left: auto;
+}
+
+.codex-set-custom__reorder {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.codex-set-custom__adopt {
+  margin-top: 12px;
+}
+
+.codex-set-custom__adopt-preview {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.codex-set-custom__confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.codex-set-custom__deleted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The composed projection is the text that actually ships, so its preview gets
+   the same wrapping rules as a layer body rather than one long scrollable line. */
+.codex-set-custom__preview {
+  margin-top: 8px;
+}
+
+.codex-set-custom__preview-body {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.codex-set-custom-dialog {
+  max-width: 640px;
+}
+
+/*
+  The dialog inherits a row layout that put the title input and the body label on
+  one line. A form is a stack: each field owns its own row.
+*/
+.codex-set-custom-dialog .field {
+  display: block;
+  margin-top: 12px;
+}
+
+.codex-set-custom-dialog .field > span {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.codex-set-custom-dialog .field > input {
+  width: 100%;
+}
+
+.codex-set-custom-dialog textarea {
+  width: 100%;
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+  resize: vertical;
+}
+
+/* Advisory, never blocking - styled as notes rather than errors. */
+.codex-set-custom-dialog__lint {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.codex-set-custom-dialog__span {
+  margin-left: 6px;
+}
+
+.codex-set-custom-dialog__discard {
+  align-items: center;
+  gap: 8px;
+}
+
+.codex-set-custom-dialog__nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* Tabular so the indicator does not jitter as the position changes. */
+.codex-set-custom-dialog__nav-pos {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Drift is announced, not silently healed, so the banner sits above the rows. */
+.codex-set-prompt__drift {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.codex-set-prompt__drift button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.codex-set-custom__adopt-refusal {
+  margin-top: 8px;
+}
+
+/* Preset picker ----------------------------------------------------------- */
+
+.codex-set-preset {
+  margin-left: auto;
+  position: relative;
+}
+
+.codex-set-preset > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.codex-set-preset > summary::-webkit-details-marker {
+  display: none;
+}
+
+.codex-set-preset__menu {
+  position: absolute;
+  right: 0;
+  z-index: 10;
+  min-width: 280px;
+  max-width: 380px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.codex-set-preset__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-set-preset__item:hover:not(:disabled) {
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+}
+
+.codex-set-preset__desc,
+.codex-set-preset__provenance {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The preview is the full body, so it is scrollable rather than clipped. */
+.codex-set-preset__preview {
+  margin-top: 4px;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------------------
+   Base-prompt variant picker.
+   Mirrors the custom-layer dialog nav rather than inventing a second vocabulary:
+   both are "move between things without leaving the editor".
+   --------------------------------------------------------------------------- */
+.codex-set-base-dialog__nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* Tabular so the indicator does not jitter as the position changes. */
+.codex-set-base-dialog__pos {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/*
+  The default slot. Bordered rather than plain so it reads as a CARD the user has
+  landed on, not as an empty state - it is a real choice, and the one a fresh
+  install is already using.
+*/
+.codex-set-base-dialog__default {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, transparent);
+}
+
+/*
+  A horizontal drag inside the dialog is a swipe, so the browser must not also
+  claim it for its own gesture handling. Vertical panning stays with the browser:
+  a long prompt body has to remain scrollable.
+*/
+.codex-set-base-dialog {
+  touch-action: pan-y;
+}
+
+/* C5: Dot position indicator for the variant ring. */
+.codex-set-base-dialog__dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.codex-set-base-dialog__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-round);
+  background: var(--border);
+  transition: background 0.15s ease;
+}
+
+.codex-set-base-dialog__dot.active {
+  background: var(--green);
+}
+
+/* Main quota protection shares existing card/toggle/dialog tokens. */
+.codex-main-hard-lock-setting.card-row {
+  margin-top: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.codex-main-hard-lock-copy { flex: 1 1 240px; min-width: 0; }
+.codex-main-hard-lock-setting > .toggle { flex: 0 0 auto; margin-left: auto; }
+.codex-main-hard-lock-feedback { flex: 1 0 100%; min-width: 0; }
+.codex-main-hard-lock-feedback:empty { display: none; }
+.codex-main-hard-lock-feedback p,
+.codex-main-hard-lock-status p { margin: 0; }
+.codex-main-hard-lock-feedback [role="alert"] { color: var(--red); }
+.codex-main-hard-lock-status {
+  margin-top: 12px;
+  padding: 0 16px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  color: var(--muted);
+}
+.codex-main-hard-lock-status.is-blocked { color: var(--amber); }
+.codex-main-hard-lock-status .link-btn { min-height: 32px; display: inline-flex; align-items: center; }
+@media (max-width: 640px) {
+  .codex-main-hard-lock-status .link-btn { min-height: 44px; }
+  .codex-main-hard-lock-dialog .modal-actions .btn { min-height: 44px; }
+}
+.codex-main-hard-lock-dialog .modal-actions { flex-wrap: wrap; }
+.codex-main-hard-lock-copy .card-sub,
+.codex-main-hard-lock-dialog .modal-desc { overflow-wrap: anywhere; }
+.codex-main-hard-lock-copy .card-sub { text-wrap: balance; }
+.codex-main-hard-lock-dialog .modal-desc { text-wrap: pretty; }
+:lang(ko) .codex-main-hard-lock-copy .card-sub,
+:lang(ko) .codex-main-hard-lock-dialog .modal-desc { word-break: keep-all; }
+
+/* Account-pool threshold summary stays with the account workspace. */
+.account-pool-strategy-controls .setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.account-pool-strategy-controls .setting-controls .custom-select {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+.account-pool-threshold-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: normal;
+}

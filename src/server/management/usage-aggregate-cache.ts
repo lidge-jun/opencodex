@@ -12,9 +12,11 @@ import {
 import {
   createUsageSummaryAccumulator,
   type UsageSummaryAccumulator,
+  type UsageSummaryFilterInput,
 } from "../../usage/summary";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
 import type { UsageTimeWindow } from "../../usage/time-range";
+import { snapshotConfiguredKeyIds } from "../../usage/source-filter";
 import {
   createJevStatsAccumulator,
   type JevStatsAccumulator,
@@ -28,6 +30,7 @@ import {
 interface RetainedUsageAggregate {
   accumulator: UsageSummaryAccumulator;
   usageIncomplete: boolean;
+  usageInvalidRows: boolean;
   revision: UsageLogRevision | null;
   identityKey: string;
   revisionKey: string;
@@ -54,6 +57,7 @@ type RetainedAggregateState = RetainedUsageAggregate | RetainedJevStatsAggregate
 export interface UsageAggregateResult {
   accumulator: UsageSummaryAccumulator;
   usageIncomplete: boolean;
+  usageInvalidRows: boolean;
   revision: UsageLogRevision | null;
   processedThroughBytes: number;
   overlayVersion: number;
@@ -108,6 +112,7 @@ function resultFrom(
   return {
     accumulator: state.accumulator,
     usageIncomplete: state.usageIncomplete,
+    usageInvalidRows: state.usageInvalidRows,
     revision: state.revision,
     processedThroughBytes: state.processedThroughBytes,
     overlayVersion: state.overlayVersion,
@@ -133,6 +138,7 @@ function makeRetainedAggregate(
   return {
     accumulator,
     usageIncomplete: scan.oversizedRows > 0,
+    usageInvalidRows: scan.invalidRows > 0,
     revision: scan.revision,
     identityKey: usageLogIdentityKey(scan.revision),
     revisionKey: usageLogRevisionKey(scan.revision),
@@ -233,6 +239,7 @@ async function appendAggregate(
         // A partial unterminated row can be scanned again on the next append.
         // Preserve a boolean diagnostic rather than double-counting omissions.
         usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
+        usageInvalidRows: state.usageInvalidRows || scan.invalidRows > 0,
         revision: scan.revision,
         identityKey: usageLogIdentityKey(scan.revision),
         revisionKey: usageLogRevisionKey(scan.revision),
@@ -293,21 +300,21 @@ function normalizeExactFilterValue(value: string | null | undefined): string | n
   return normalized || null;
 }
 
-export async function getFilteredUsageAggregate(filter: {
-  provider?: string | null;
-  model?: string | null;
-  apiKeyId?: string | null;
-}, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
+export async function getFilteredUsageAggregate(filter: UsageSummaryFilterInput, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
   const fixedWindow = window ? Object.freeze({ ...window }) : undefined;
   const normalizedFilter = {
     provider: normalizeFilterValue(filter.provider),
     model: normalizeFilterValue(filter.model),
     apiKeyId: normalizeExactFilterValue(filter.apiKeyId),
+    ...(filter.sourceFilter ? { sourceFilter: { client: filter.sourceFilter.client, device: { ...filter.sourceFilter.device } } } : {}),
+    ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: snapshotConfiguredKeyIds(filter.configuredApiKeyIds) } : {}),
   };
   const key = JSON.stringify([
     normalizedFilter.provider,
     normalizedFilter.model,
     normalizedFilter.apiKeyId,
+    normalizedFilter.sourceFilter ?? null,
+    normalizedFilter.configuredApiKeyIds ?? null,
     fixedWindow?.since ?? null,
     fixedWindow?.until ?? null,
   ]);
@@ -330,6 +337,8 @@ type NormalizedUsageFilter = {
   provider: string | null;
   model: string | null;
   apiKeyId: string | null;
+  sourceFilter?: UsageSummaryFilterInput["sourceFilter"];
+  configuredApiKeyIds?: readonly string[];
 };
 
 function trimRetainedFilteredAggregates(): void {
@@ -405,6 +414,7 @@ async function appendFilteredAggregate(
         ...state,
         accumulator: candidate,
         usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
+        usageInvalidRows: state.usageInvalidRows || scan.invalidRows > 0,
         revision: scan.revision,
         identityKey: usageLogIdentityKey(scan.revision),
         revisionKey: usageLogRevisionKey(scan.revision),

@@ -5,14 +5,21 @@ import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { hashLogConversationQuery } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
-import { IconX } from "../icons";
+import { IconChevron, IconX } from "../icons";
 import { modelLabel } from "../model-display";
+import { cn } from "@/lib/utils";
+import { panel, panelBody } from "../components/v2-logs/classes";
+import { ColumnsMenu } from "../components/v2-logs/columns-menu";
+import { LiveToggle } from "../components/v2-logs/live-toggle";
+import { StatusPill } from "../components/v2-logs/status-pill";
+import { LOGS_OPTIONAL_COLUMNS, useLogsColumns } from "./logs-columns";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 import { LogsFilterBar } from "./logs-filter-bar";
+import { LogsClientChip } from "./logs-client-chip";
 import { ProtocolBadge } from "../components/protocols/ProtocolBadge";
 import { ProtocolTracePanel } from "../components/protocols/ProtocolTracePanel";
 import { logsClockAnchor, logsClockNow, type LogsClockAnchor } from "./logs-clock";
@@ -27,7 +34,6 @@ import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamC
 import "./logs-decode-rate.css";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
-import type { LogSurface } from "./logs-surface-filter";
 import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
@@ -162,7 +168,8 @@ export interface LogEntry extends LogFailureAttribution {
   timestamp: number;
   model: string;
   provider: string;
-  surface?: LogSurface;
+  /** Closed client classification from the proxy; validate API and cached values before display. */
+  client?: unknown;
   conversationId?: string;
   /**
    * The original helper model, when Shadow Call Intercept rewrote this request.
@@ -408,11 +415,6 @@ function outcomeKey(entry: Pick<LogEntry, "status" | "terminalStatus" | "closeRe
   return OUTCOME_KEYS[classifyRequestOutcome(entry)];
 }
 
-function statusColor(status: number): string {
-  if (status >= 200 && status < 300) return "var(--green)";
-  if (status >= 400) return "var(--red)";
-  return "var(--amber)";
-}
 
 /** Date and time as separate locale strings (no joining comma) for stacked table cells. */
 function formatLogDateParts(ts: number, localeTag?: string, timeZone?: string): { date: string; time: string } {
@@ -454,6 +456,15 @@ function summarizeFilteredLogs(entries: LogEntry[]): {
     totalTokens,
     ...summarizeEstimatedCosts(entries),
   };
+}
+
+/** The Logs / Debug tab buttons: a raised plate on the selected one. */
+function tabClass(selected: boolean): string {
+  return cn(
+    "ui-v2 inline-flex h-7 cursor-pointer items-center rounded-[8px] px-3 text-[13px] font-medium transition-colors duration-200",
+    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
+    selected ? "bg-raised text-fg shadow-sm ring-1 ring-line dark:bg-surface-2" : "text-fg-subtle hover:text-fg-muted",
+  );
 }
 
 export default function Logs({ apiBase }: { apiBase: string }) {
@@ -673,13 +684,19 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const activeFilters = hasActiveLogFilters(filters);
   const filteredLogs = useMemo(() => filterLogs(logs, filters, filterClockNow), [logs, filters, filterClockNow]);
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
+  const failedInView = useMemo(
+    () => filteredLogs.reduce((count, log) => count + (classifyRequestOutcome(log) === "failed" ? 1 : 0), 0),
+    [filteredLogs],
+  );
+  const { columns, toggle: toggleColumn } = useLogsColumns();
+  const columnCount = 5 + LOGS_OPTIONAL_COLUMNS.filter(column => columns[column.key]).length;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.
   // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
   const rowVirtualizer = useVirtualizer({
     count: filteredLogs.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 92,
+    estimateSize: () => 60,
     overscan: 15,
     getItemKey: index => {
       const log = filteredLogs[filteredLogs.length - 1 - index]!;
@@ -693,43 +710,41 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     : 0;
 
   return (
-    <div className="logs-page">
-      <div className="page-head">
-        <h2>{t("nav.logs")}</h2>
-        {tab === "logs" && (
-          <label className="muted text-control logs-auto-refresh">
-            <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
-            {t("logs.autoRefresh")}
-          </label>
-        )}
-      </div>
-      <div className="page-tabs" role="tablist" aria-label={t("nav.logs")}>
-        <button
-          type="button"
-          role="tab"
-          id="logs-tab-logs"
-          aria-selected={tab === "logs"}
-          aria-controls="logs-panel-logs"
-          tabIndex={tab === "logs" ? 0 : -1}
-          className={`page-tab${tab === "logs" ? " page-tab--active" : ""}`}
-          onClick={() => selectTab("logs")}
-          onKeyDown={logsTabKeyDown}
+    <div className="logs-page flex min-w-0 flex-col gap-5 font-sans text-fg">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="m-0 text-title font-semibold tracking-[-0.025em]">{t("nav.logs")}</h2>
+        <div
+          className="inline-flex items-center gap-0.5 rounded-control bg-surface p-0.5 ring-1 ring-inset ring-line"
+          role="tablist"
+          aria-label={t("nav.logs")}
         >
-          {t("logs.tabLogs")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="logs-tab-debug"
-          aria-selected={tab === "debug"}
-          aria-controls="logs-panel-debug"
-          tabIndex={tab === "debug" ? 0 : -1}
-          className={`page-tab${tab === "debug" ? " page-tab--active" : ""}`}
-          onClick={() => selectTab("debug")}
-          onKeyDown={logsTabKeyDown}
-        >
-          {t("logs.tabDebug")}
-        </button>
+          <button
+            type="button"
+            role="tab"
+            id="logs-tab-logs"
+            aria-selected={tab === "logs"}
+            aria-controls="logs-panel-logs"
+            tabIndex={tab === "logs" ? 0 : -1}
+            className={tabClass(tab === "logs")}
+            onClick={() => selectTab("logs")}
+            onKeyDown={logsTabKeyDown}
+          >
+            {t("logs.tabLogs")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="logs-tab-debug"
+            aria-selected={tab === "debug"}
+            aria-controls="logs-panel-debug"
+            tabIndex={tab === "debug" ? 0 : -1}
+            className={tabClass(tab === "debug")}
+            onClick={() => selectTab("debug")}
+            onKeyDown={logsTabKeyDown}
+          >
+            {t("logs.tabDebug")}
+          </button>
+        </div>
       </div>
 
       {debugMounted && (
@@ -749,110 +764,155 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         aria-labelledby="logs-tab-logs"
         hidden={tab !== "logs"}
       >
+      <section className={panel} aria-labelledby="logs-requests-title">
+        <div className="flex min-w-0 flex-col gap-3 px-4 pt-3.5 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h3 id="logs-requests-title" className="m-0 text-[15px] leading-5 font-semibold tracking-[-0.01em]">{t("logsV2.requests")}</h3>
+              <span className={cn("inline-flex items-center gap-1.5 text-[13px] font-medium", autoRefresh ? "text-fg" : "text-fg-subtle")}>
+                <span aria-hidden className={cn("size-1.5 rounded-full", autoRefresh ? "bg-success" : "ring-1 ring-current")} />
+                {t(autoRefresh ? "logsV2.live" : "logsV2.paused")}
+              </span>
+              {logs.length > 0 && (
+                <span className="text-[13px] text-fg-subtle tabular-nums">
+                  {t("logsV2.countLine", { shown: filteredLogs.length, total: logs.length })}
+                  {failedInView > 0 && <span className="text-danger"> · {t("logsV2.failedCount", { count: failedInView })}</span>}
+                </span>
+              )}
+            </div>
+            <LiveToggle
+              className="logs-auto-refresh"
+              checked={autoRefresh}
+              onChange={setAutoRefresh}
+              label={t("logs.autoRefresh")}
+              title={t("logsV2.liveHint")}
+            />
+          </div>
 
-      <LogsFilterBar
-        filters={filters}
-        options={filterOptions}
-        hasActiveFilters={activeFilters}
-        filteredCount={filteredLogs.length}
-        totalCount={logs.length}
-        t={t}
-        onFilterChange={setFilters}
-        onResetFilters={() => setFilters(DEFAULT_LOG_FILTER_STATE)}
-      />
+          <LogsFilterBar
+            filters={filters}
+            options={filterOptions}
+            hasActiveFilters={activeFilters}
+            filteredCount={filteredLogs.length}
+            totalCount={logs.length}
+            t={t}
+            onFilterChange={setFilters}
+            onResetFilters={() => setFilters(DEFAULT_LOG_FILTER_STATE)}
+            trailing={(
+              <ColumnsMenu
+                options={LOGS_OPTIONAL_COLUMNS.map(column => ({ key: column.key, label: t(column.label) }))}
+                visible={columns}
+                onToggle={toggleColumn}
+                label={t("logsV2.columns")}
+                menuLabel={t("logsV2.columnsMenu")}
+              />
+            )}
+          />
 
-      {conversationTotals && (
-        <div className="logs-conversation-totals">
-          <Notice tone="ok">
-            {t("logs.conversation.totals", {
-              requests: conversationTotals.requests,
-              tokens: formatTokens(conversationTotals.totalTokens, localeTag ?? locale),
-              cost: formatEstimatedUsdValue(
-                conversationTotals.estimatedCostUsd,
-                t,
-                localeTag,
-                conversationTotals.priorityLowerBound,
-              ),
-            })}
-            {" "}
-            <span className="muted">
-              {t("logs.conversation.scope")}
-              {(conversationTotals.unpricedRequests + conversationTotals.unmeteredRequests) > 0
-                ? ` ${t("logs.conversation.excluded", {
-                  unpriced: conversationTotals.unpricedRequests,
-                  unmetered: conversationTotals.unmeteredRequests,
-                })}`
-                : ""}
-            </span>
-          </Notice>
+          {conversationTotals && (
+            <div className="logs-conversation-totals m-0">
+              <Notice tone="ok">
+                {t("logs.conversation.totals", {
+                  requests: conversationTotals.requests,
+                  tokens: formatTokens(conversationTotals.totalTokens, localeTag ?? locale),
+                  cost: formatEstimatedUsdValue(
+                    conversationTotals.estimatedCostUsd,
+                    t,
+                    localeTag,
+                    conversationTotals.priorityLowerBound,
+                  ),
+                })}
+                {" "}
+                <span className="muted">
+                  {t("logs.conversation.scope")}
+                  {(conversationTotals.unpricedRequests + conversationTotals.unmeteredRequests) > 0
+                    ? ` ${t("logs.conversation.excluded", {
+                      unpriced: conversationTotals.unpricedRequests,
+                      unmetered: conversationTotals.unmeteredRequests,
+                    })}`
+                    : ""}
+                </span>
+              </Notice>
+            </div>
+          )}
+
+          {/*
+            Only a cold failure or a user-initiated retry surfaces here. This tab polls every two
+            seconds, so a transient 5xx would otherwise flash the banner on and off under a table
+            that is still perfectly readable — noise, not information. A quiet poll failure keeps the
+            held rows and waits for the next tick, which is the behaviour the auto-refresh tests pin.
+          */}
+          {logsState.kind === "failed-cold" && (
+            <Notice tone="err">
+              {logsState.error instanceof Error ? `${t("logs.loadError")} ${logsState.error.message}` : t("logs.loadError")}{" "}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={retryLogs} disabled={logsState.refreshing}>
+                {t("common.retry")}
+              </button>
+            </Notice>
+          )}
+          {/* Stale rows after a sustained poll outage, or any settled failure while auto-refresh is
+              off (no next tick will recover). Cleared by the first successful fetch. */}
+          {pollFailing && logs.length > 0 && (
+            <Notice tone="err">
+              {t("logs.loadError")}{" "}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={retryLogs} disabled={logsResource.refreshing}>
+                {t("common.retry")}
+              </button>
+            </Notice>
+          )}
         </div>
-      )}
-
-      {/*
-        Only a cold failure or a user-initiated retry surfaces here. This tab polls every two
-        seconds, so a transient 5xx would otherwise flash the banner on and off under a table
-        that is still perfectly readable — noise, not information. A quiet poll failure keeps the
-        held rows and waits for the next tick, which is the behaviour the auto-refresh tests pin.
-      */}
-      {logsState.kind === "failed-cold" && (
-        <Notice tone="err">
-          {logsState.error instanceof Error ? `${t("logs.loadError")} ${logsState.error.message}` : t("logs.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={retryLogs} disabled={logsState.refreshing}>
-            {t("common.retry")}
-          </button>
-        </Notice>
-      )}
-      {/* Stale rows after a sustained poll outage, or any settled failure while auto-refresh is
-          off (no next tick will recover). Cleared by the first successful fetch. */}
-      {pollFailing && logs.length > 0 && (
-        <Notice tone="err">
-          {t("logs.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={retryLogs} disabled={logsResource.refreshing}>
-            {t("common.retry")}
-          </button>
-        </Notice>
-      )}
 
       {/* A cold failure must not also render the empty state: "nothing came back" and "there is
           nothing to show" are different answers, and showing both at once tells the user neither. */}
       {logsState.kind === "failed-cold" ? null : logsState.showSkeleton && logs.length === 0 ? (
-        <DataSurfaceSkeleton label={t("common.loading")} rows={6} />
+        <div className={cn(panelBody, "p-3")}>
+          <DataSurfaceSkeleton label={t("common.loading")} rows={6} />
+        </div>
       ) : filteredLogs.length === 0 ? (
-        <EmptyState title={logs.length > 0 && activeFilters ? t("logs.noMatchingRequests") : t("logs.noRequests")} />
+        <div className={panelBody}>
+          <EmptyState title={logs.length > 0 && activeFilters ? t("logs.noMatchingRequests") : t("logs.noRequests")} />
+        </div>
       ) : (
-        <>
-        <div ref={scrollContainerRef} className="tbl-wrap logs-table-wrap">
-          <table className="tbl logs-table">
+        <div className={panelBody}>
+        <div ref={scrollContainerRef} className="logs-table-wrap max-h-[calc(100dvh-300px)] overflow-auto [overflow-anchor:none]">
+          <table
+            className={cn(
+              "logs-table ui-v2 w-full min-w-[1020px] table-fixed border-collapse text-[13px] font-normal text-fg",
+              "[&_th]:h-9 [&_th]:px-3 [&_th]:text-left [&_th]:text-[12px] [&_th]:font-medium [&_th]:whitespace-nowrap [&_th]:text-fg-subtle",
+              "[&_td]:px-3 [&_td]:py-2.5 [&_td]:align-middle",
+            )}
+          >
             <colgroup>
-              <col className="logs-col-time" />
-              <col className="logs-col-tokens" />
-              <col className="logs-col-rate" />
-              <col className="logs-col-cost" />
-              <col className="logs-col-model" />
-              <col className="logs-col-effort" />
-              <col className="logs-col-provider" />
-              <col className="logs-col-status" />
-              <col className="logs-col-request" />
-              <col className="logs-col-duration" />
+              {/* Keep the protocol badge readable alongside the added client column. */}
+              <col className="logs-col-client w-[48px]" />
+              <col className="logs-col-time w-[120px]" />
+              <col className="logs-col-status w-[80px]" />
+              <col className="logs-col-model" style={{ width: 280 }} />
+              {columns.effort && <col className="logs-col-effort w-[104px]" />}
+              {columns.tokens && <col className="logs-col-tokens w-[84px]" />}
+              {columns.rate && <col className="logs-col-rate w-[84px]" />}
+              {columns.cost && <col className="logs-col-cost w-[84px]" />}
+              {columns.duration && <col className="logs-col-duration w-[84px]" />}
+              <col className="logs-col-actions w-[40px]" />
             </colgroup>
-            <thead>
+            <thead className="sticky top-0 z-10 bg-bg shadow-[inset_0_-1px_0_var(--ocx-line)]">
              <tr>
-               <th>{t("logs.col.time")}</th>
-                <th className="num log-col-tokens">{t("logs.col.tokens")}</th>
-                <th className="num log-col-rate" title={t("logs.metric.tokPerSecTitle")}>{t("logs.col.tokPerSec")}</th>
-                <th className="num log-col-cost" title={t("logs.metric.estimatedCostTitle")}>{t("logs.col.estimatedCost")}</th>
-               <th className="log-col-model">{t("logs.col.model")}</th>
-               <th>{t("logs.col.effort")}</th>
-               <th>{t("logs.col.provider")}</th>
-               <th>{t("logs.col.status")}</th>
-                <th>{t("logs.col.request")}</th>
-               <th className="num log-col-duration">{t("logs.col.duration")}</th>
+               <th scope="col"><span className="sr-only">{t("logsV2.client")}</span></th>
+               <th scope="col">{t("logs.col.time")}</th>
+               <th scope="col">{t("logs.col.status")}</th>
+               <th scope="col">{t("logs.col.provider")} · {t("logs.col.model")}</th>
+               {columns.effort && <th scope="col">{t("logs.col.effort")}</th>}
+               {columns.tokens && <th scope="col" className="text-right!">{t("logs.col.tokens")}</th>}
+               {columns.rate && <th scope="col" className="text-right!" title={t("logs.metric.tokPerSecTitle")}>{t("logs.col.tokPerSec")}</th>}
+               {columns.cost && <th scope="col" className="text-right!" title={t("logs.metric.estimatedCostTitle")}>{t("logs.col.estimatedCost")}</th>}
+               {columns.duration && <th scope="col" className="text-right!">{t("logs.col.duration")}</th>}
+               <th scope="col"><span className="sr-only">{t("logs.details")}</span></th>
              </tr>
             </thead>
             <tbody>
               {paddingTop > 0 && (
                 <tr>
-                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingTop }} />
+                  <td colSpan={columnCount} className="logs-virtual-spacer p-0!" style={{ height: paddingTop }} />
                 </tr>
               )}
               {virtualRows.map(virtualRow => {
@@ -861,19 +921,53 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                 const decodeRate = log.displayMetrics?.decodeTokPerSecond;
                 const decodeRateLabels = decodeRateLabelKeys(decodeRate?.kind === "value" ? decodeRate : {});
                 const when = formatLogDateParts(log.timestamp, localeTag, serverTimeZone);
+                const detailLabel = `${t("logs.details")}: ${log.requestId ?? log.status}`;
                 return (
                <tr
                  key={virtualRow.key}
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
+                 className="group cursor-pointer border-b border-line transition-colors last:border-b-0 hover:bg-accent-soft"
+                 onClick={event => {
+                   // Opens the detail like the button does; a drag that selected text is a copy, not a click.
+                   if ((event.target as HTMLElement).closest("button")) return;
+                   if (window.getSelection?.()?.toString()) return;
+                   setDetail(log);
+                 }}
                >
-                 <td className="muted mono log-col-time">
-                   <span className="logs-stack-start">
-                     <span>{when.date}</span>
-                     <span>{when.time}</span>
+                 <td><LogsClientChip client={log.client} t={t} /></td>
+                 <td>
+                   <span className="flex flex-col leading-tight">
+                     <span className="font-mono text-[12.5px] whitespace-nowrap text-fg tabular-nums">{when.time}</span>
+                     <span className="mt-0.5 text-[11.5px] whitespace-nowrap text-fg-subtle tabular-nums">{when.date}</span>
                    </span>
                  </td>
-                  <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
+                 <td>
+                   <StatusPill status={log.status} outcome={classifyRequestOutcome(log)} label={t(outcomeKey(log))} />
+                 </td>
+                 <td title={modelTitle(log, t)}>
+                   <span className="flex min-w-0 flex-col gap-1">
+                     <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                       <span className="text-fg-muted">{formatProviderDisplayName(log.provider, t)}</span>
+                       <span aria-hidden className="text-fg-subtle">·</span>
+                       <span className="min-w-0 font-mono text-[12.5px] break-words text-fg">{servedModelLabel(log)}</span>
+                       {log.shadowCallRewrittenFrom && (
+                         <span className="badge badge-muted whitespace-nowrap" title={t("logs.badge.interceptedHelperTitle")}>
+                           {t("logs.badge.interceptedHelper", { model: log.shadowCallRewrittenFrom })}
+                         </span>
+                       )}
+                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
+                       <ProtocolBadge trace={log.protocolTrace} t={t} />
+                     </span>
+                     <span className="log-reqid block max-w-full truncate font-mono text-[11.5px] text-fg-subtle" title={log.requestId}>{log.requestId ?? "-"}</span>
+                   </span>
+                 </td>
+                  {/* The wire field (reasoning_effort=high) stays in the title and the detail
+                      dialog; as a second line it repeated the label and, in mono, outgrew the
+                      column and painted over the next cell. */}
+                  {columns.effort && <td className="mono log-reasoning-cell" title={reasoningWire}>{effortLabel(log)}</td>}
+                  {columns.tokens && (
+                  <td className="text-right font-mono tabular-nums" title={tokensTitle(log, t)}>
                     {(() => {
                       const tokenTotal = displayContextTokenTotal(log);
                       const { read, write } = cacheSplit(log);
@@ -882,93 +976,73 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                             <span className="logs-stack-end">
                               <span>{log.usageStatus === "estimated" ? "~" : ""}{formatTokens(tokenTotal, locale)}</span>
                               {(read !== undefined && read > 0) && (
-                                <span className="muted text-caption leading-tight">
+                                <span className="text-[11.5px] leading-tight text-fg-subtle">
                                   c {formatTokens(read, locale)}
                                 </span>
                               )}
                               {(write !== undefined && write > 0) && (
-                                <span className="muted text-caption leading-tight">
+                                <span className="text-[11.5px] leading-tight text-fg-subtle">
                                   w {formatTokens(write, locale)}
                                 </span>
                               )}
                               {(log.usageStatus === "estimated" && read === undefined && write === undefined) && (
-                                <span className="muted text-caption leading-tight">
+                                <span className="text-[11.5px] leading-tight text-fg-subtle">
                                   {t(isCursorUsageProvider(log.provider) ? "logs.tokens.noCacheCursor" : "logs.tokens.noCache")}
                                 </span>
                               )}
                             </span>
                           )
-                        : <span className="muted">{t(`logs.tokens.${log.usageStatus ?? "unreported"}`)}</span>;
+                        : <span className="font-sans text-fg-subtle">{t(`logs.tokens.${log.usageStatus ?? "unreported"}`)}</span>;
                     })()}
                   </td>
-                  <td className="num mono log-col-rate">
-                    {formatTokPerSecond(log.displayMetrics?.tokPerSecond, localeTag)}
-                    {/* #4038: decode rate stacked under the end-to-end rate it is easy to mistake
-                        for delivery speed. Only rendered when it actually resolved — a row whose
-                        decode window was too short shows the e2e rate alone rather than a blank. */}
-                    {decodeRate?.kind === "value" && (
-                      <span className="logs-stack-end logs-decode-rate muted" title={t(decodeRateLabels.detail)}>
-                        <span>{formatTokPerSecond(decodeRate, localeTag)}</span>
-                        <span className="text-caption">{t(decodeRateLabels.short)}</span>
-                      </span>
-                    )}
-                  </td>
-                  <td className="num mono log-col-cost">
-                    {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
-                  </td>
-                 <td className="mono log-col-model" title={modelTitle(log, t)}>
-                  <span className="logs-model-cell">
-                   <span>{servedModelLabel(log)}</span>
-                      {log.shadowCallRewrittenFrom && (
-                        <span
-                          className="badge badge-muted"
-                          style={{ whiteSpace: "nowrap" }}
-                          title={t("logs.badge.interceptedHelperTitle")}
-                        >
-                          {t("logs.badge.interceptedHelper", { model: log.shadowCallRewrittenFrom })}
+                  )}
+                  {columns.rate && (
+                  <td className="log-col-rate text-right font-mono tabular-nums">
+                    <span className="logs-stack-end max-w-full">
+                      <span>{formatTokPerSecond(log.displayMetrics?.tokPerSecond, localeTag)}</span>
+                      {/* #4038: decode rate stacked under the end-to-end rate it is easy to mistake
+                          for delivery speed. Only rendered when it actually resolved — a row whose
+                          decode window was too short shows the e2e rate alone rather than a blank. */}
+                      {decodeRate?.kind === "value" && (
+                        <span className="logs-stack-end logs-decode-rate max-w-full text-fg-subtle" title={t(decodeRateLabels.detail)}>
+                          <span>{formatTokPerSecond(decodeRate, localeTag)}</span>
+                          <span className="block max-w-full truncate font-sans text-[11px]">{t(decodeRateLabels.short)}</span>
                         </span>
                       )}
-                      {(log.surface === "claude" || log.surface === "claude-desktop") && (
-                        <span className="badge badge-accent">{t("logs.badge.claude")}</span>
-                      )}
-                      {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
-                      {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
-                      <ProtocolBadge trace={log.protocolTrace} t={t} />
                     </span>
                   </td>
-                  {/* The wire field (reasoning_effort=high) stays in the title and the detail
-                      dialog; as a second line it repeated the label and, in mono, outgrew the
-                      9% column and painted over the provider cell. */}
-                  <td className="mono log-reasoning-cell" title={reasoningWire}>{effortLabel(log)}</td>
-                  <td className="muted">{formatProviderDisplayName(log.provider, t)}</td>
-                  <td>
-                    <span className="log-status-cell">
-                      <span className="mono font-semibold" style={{ color: statusColor(log.status) }}>{log.status}</span>
-                      <button
-                        type="button"
-                        className="log-detail-btn"
-                        onClick={() => setDetail(log)}
-                        aria-label={`${t("logs.details")}: ${log.requestId ?? log.status}`}
-                      >
-                        {t("logs.details")}
-                      </button>
-                    </span>
-                 </td>
-                  <td className="muted mono"><span className="log-reqid" title={log.requestId}>{log.requestId ?? "-"}</span></td>
-                 <td className="num log-col-duration">{log.durationMs}ms</td>
+                  )}
+                  {columns.cost && (
+                  <td className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}>
+                    {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
+                  </td>
+                  )}
+                  {columns.duration && <td className="text-right font-mono whitespace-nowrap text-fg-muted tabular-nums">{log.durationMs}ms</td>}
+                  <td className="px-1!">
+                    <button
+                      type="button"
+                      className="log-detail-btn ui-v2 inline-grid size-7 cursor-pointer place-items-center rounded-[8px] text-fg-subtle no-underline transition-colors group-hover:text-fg hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-highlight"
+                      onClick={() => setDetail(log)}
+                      aria-label={detailLabel}
+                      title={t("logs.details")}
+                    >
+                      <IconChevron aria-hidden className="size-4" />
+                    </button>
+                  </td>
                 </tr>
                 );
               })}
               {paddingBottom > 0 && (
                 <tr>
-                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingBottom }} />
+                  <td colSpan={columnCount} className="logs-virtual-spacer p-0!" style={{ height: paddingBottom }} />
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-        </>
+        </div>
       )}
+      </section>
 
       {detail && (
         <LogDetailDialog
@@ -1044,9 +1118,9 @@ function LogDetailDialog({
       <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={onClose} />
       <div className="modal-card log-detail-card" onClick={event => event.stopPropagation()} role="document">
         <div className="modal-head">
-          <h3 id="log-detail-title">
-            <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
-            {summary.label && <span className="logs-detail-info">{summary.label}</span>}
+          <h3 id="log-detail-title" className="flex min-w-0 flex-wrap items-center gap-2.5">
+            <StatusPill status={detail.status} outcome={classifyRequestOutcome(detail)} label={t(outcomeKey(detail))} announce={false} className="h-6 text-[13px]" />
+            {summary.label && <span className="logs-detail-info m-0">{summary.label}</span>}
           </h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
         </div>

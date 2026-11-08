@@ -299,11 +299,16 @@ describe("rate-limit reset credits", () => {
 
     it("renders reset tickets beside next-session badges instead of replacing them", async () => {
       const source = await Bun.file("gui/src/components/codex-account-pool-cards.tsx").text();
-      expect(source).toContain("className=\"card-badges\"");
-      expect(source).toContain("<CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />");
+      // Design system v2: the badges are the row's `chips`, which AccountRow wraps in the same
+      // .card-badges group, so the ticket and next-session badges still sit side by side.
+      const row = await Bun.file("gui/src/components/v2-accounts/account-row.tsx").text();
+      expect(row).toContain("card-badges");
+      const chips = source.slice(source.indexOf("chips={<>"), source.indexOf("</>}", source.indexOf("chips={<>")));
+      expect(chips).toContain("<CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />");
       // Next-session still renders BESIDE the ticket; health projection also suppresses
       // it for plan exclusion, projected reauth/cooldown and pending validation.
-      expect(source).toContain("{isNext(a) && !planExcluded && !showReauth && !inCooldown && !validationPending && (");
+      expect(source).toContain("const next = isNext(a);");
+      expect(chips).toContain("{next && !planExcluded && !showReauth && !inCooldown && !validationPending && (");
       expect(source).toContain("{t(accountModeState === \"direct\" ? \"codexAuth.poolPrepared\" : \"codexAuth.nextSession\")}");
       const styles = await Bun.file("gui/src/styles.css").text();
       expect(styles).toContain(".card-badges { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }");

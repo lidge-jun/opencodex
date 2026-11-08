@@ -112,6 +112,25 @@ describe("blocked-model redirect compatibility and provider changes", () => {
     });
   });
 
+  test("keyless Vertex is a cross-provider redirect destination", () => {
+    const configured = keyedSourceConfig({ "source/m1": "vertex/gemini" });
+    configured.providers.vertex = {
+      adapter: "google", googleMode: "vertex", authMode: "key",
+      baseUrl: "https://aiplatform.googleapis.com", models: ["gemini"],
+    };
+    expect(routeModel(configured, "source/m1")).toMatchObject({ providerName: "vertex", modelId: "gemini", credentialDomainRewrite: true });
+  });
+
+  test("canonical Vertex forward mode is rejected before registry normalization", () => {
+    const configured = keyedSourceConfig({});
+    for (const adapter of ["google", "openai-chat"]) {
+      configured.providers["google-vertex"] = {
+        adapter, baseUrl: "https://aiplatform.googleapis.com", authMode: "forward", models: ["gemini"],
+      };
+      expect(() => routeModel(configured, "google-vertex/gemini")).toThrow(/forward/i);
+    }
+  });
+
   test("policy rejects a same-provider substitute outside its eligible candidate list", () => {
     const configured = config({ m1: "m2" });
     configured.routingProfiles = { fast: { candidates: [{ provider: "openai", model: "m1" }] } };

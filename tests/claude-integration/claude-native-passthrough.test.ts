@@ -15,6 +15,7 @@ import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
 import { readRecentUsageEntries } from "../../src/usage/log";
 import { tapAnthropicSseForLog } from "../../src/server/claude-messages";
 import type { RequestLogContext } from "../../src/server/request-log";
+import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE } from "../../src/lib/client-error-body";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 
 let testDir = "";
@@ -855,7 +856,7 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
     const errorFrame = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim()) as { type: string; error: { type: string; message: string } };
     expect(errorFrame.type).toBe("error");
     expect(errorFrame.error.type).toBe("api_error");
-    expect(errorFrame.error.message).toContain("anthropic passthrough upstream stream failed: ");
+    expect(errorFrame.error.message).toBe("anthropic passthrough upstream stream failed");
     // The committed request is not replayed.
     expect(upstream.requests()).toBe(1);
 
@@ -1029,15 +1030,19 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
 }
 
 test.each([
-  "prompt is too long: 213000 tokens > 200000 maximum",
-  "This model's maximum context length is 200000 tokens",
-])("an upstream error response is relayed verbatim and its reason reaches the request log and usage.jsonl (%s)", async message => {
-  const errorBody = { type: "error", error: { type: "invalid_request_error", message }, request_id: "req_fixture" };
+  ["prompt is too long: 213000 tokens > 200000 maximum", true],
+  ["This model's maximum context length is 200000 tokens. Your messages resulted in 213000 tokens.", false],
+] as const)("an upstream error response is normalized and its original condition reaches the request log and usage.jsonl (%s)", async (message, compacts) => {
+  const sentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+  const errorBody = { type: "error", error: { type: "invalid_request_error", message: `${message} ${sentinel}` }, request_id: "req_fixture" };
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
   try {
     const { res, text, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
     expect(res.status).toBe(400);
-    expect(JSON.parse(text)).toEqual(errorBody);
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).not.toContain(sentinel);
+    expect(text.includes("prompt is too long")).toBe(compacts);
+    expect(JSON.parse(text)).toEqual({ type: "error", error: { type: "invalid_request_error", message: compacts ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "The request exceeds the model's context window." } });
     expect(row.status).toBe(400);
     expect(row.failureDetail).toEqual({ code: "provider_error", type: "invalid_request_error" });
     // The condition is classified from the message where it is read; only the closed member is kept.
@@ -1097,8 +1102,9 @@ test.each(["account", "request body"] as const)("an upstream message cannot pers
     });
     expect(res.status).toBe(400);
     expect(res.headers.get("retry-after")).toBe("7");
-    expect(text).toBe(responseText);
-    expect(text).toContain(privateValue);
+    expect(JSON.parse(text)).toEqual({ type: "error", error: { type: errorType, message: "The provider rejected the request." } });
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).not.toContain(privateValue);
     const usage = readRecentUsageEntries(1);
     expect(usage).toHaveLength(1);
     for (const record of [row, usage[0]]) {
@@ -1140,7 +1146,7 @@ test.each([
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 502 }) });
   try {
     const { text, row } = await nativeFailureRow(upstream.url.origin);
-    expect(JSON.parse(text)).toEqual(errorBody);
+    expect(JSON.parse(text)).toEqual({ type: "error", error: { type: "api_error", message: "The provider failed to complete the request." } });
     expect(row.failureDetail).toEqual({ code: "provider_error" });
     expect(readRecentUsageEntries(1)[0]?.failureDetail).toEqual({ code: "provider_error" });
   } finally {
@@ -1163,7 +1169,7 @@ test("an unreachable upstream logs the fetch failure as the reason", async () =>
     expect(res.status).toBe(502);
     expect(row.status).toBe(502);
     expect(row.failureDetail).toEqual({ code: "connect_failed" });
-    expect(JSON.parse(text).error.message).toBe("anthropic passthrough failed: connect ECONNREFUSED");
+    expect(JSON.parse(text).error.message).toBe("anthropic passthrough failed: upstream connection error");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1187,7 +1193,7 @@ test("a credential in a local failure message is redacted for the client as well
     expect(row.failureDetail).toEqual({ code: "connect_failed" });
     expect(JSON.stringify(row.failureDetail)).not.toContain(leaked);
     expect(row.upstreamError).toBeUndefined();
-    expect(JSON.parse(text).error.message).toStartWith("anthropic passthrough failed: proxy rejected key ");
+    expect(JSON.parse(text).error.message).toBe("anthropic passthrough failed: upstream connection error");
     const usage = readRecentUsageEntries(1);
     expect(usage).toHaveLength(1);
     expect(usage[0]?.failureDetail).toEqual(row.failureDetail);
@@ -1195,7 +1201,8 @@ test("a credential in a local failure message is redacted for the client as well
       expect(JSON.stringify(record)).not.toContain(privateValue);
       expect(JSON.stringify(record)).not.toContain(leaked);
     }
-    expect(JSON.parse(text).error.message).toContain(privateValue);
+    expect(text.length).toBeGreaterThan(0);
+    expect(JSON.parse(text).error.message).not.toContain(privateValue);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1225,14 +1232,14 @@ test("a non-stream body over the byte cap logs the cap as the reason", async () 
   }
 });
 
-test("an oversized upstream error body is relayed verbatim but not parsed for the log reason", async () => {
-  // 64 Ki characters: the order of the managed native lane's 64 KiB error read bound.
+test("an oversized upstream error body is normalized without changing the bounded log inspection", async () => {
+  // Over 64 KiB: past the managed native lane's 65,536-byte error read bound.
   const errorBody = { type: "error", error: { type: "invalid_request_error", message: "x".repeat(70 * 1024) } };
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
   try {
     const { res, text, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
     expect(res.status).toBe(400);
-    expect(JSON.parse(text)).toEqual(errorBody);
+    expect(JSON.parse(text)).toEqual({ type: "error", error: { type: "invalid_request_error", message: "The provider rejected the request." } });
     expect(row.failureDetail).toEqual({ code: "provider_error" });
   } finally {
     upstream.stop(true);
@@ -1375,7 +1382,7 @@ test("a native stream over the byte cap logs a 502 incomplete row and keeps its 
   const upstream = Bun.serve({ port: 0, fetch: () => new Response(PARTIAL_TURN_SSE, { headers: { "content-type": "text/event-stream" } }) });
   try {
     const { text, row, usage } = await stalledStreamRow(upstream, { bodyMaxBytes: 64 });
-    expect(text).toContain("exceeded 64 bytes");
+    expect(text).toContain("anthropic passthrough body exceeded the safe limit");
     expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
     expect(row.failureDetail).toEqual({ code: "body_overflow", value: 64 });
     expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });

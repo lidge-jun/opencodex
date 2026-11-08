@@ -12,6 +12,7 @@ import {
   listTrackedWorkflowRoots,
   listWorkflowBudgetEvents,
   resetWorkflowBudgetsForTest,
+  reserveWorkflowSend,
   settleWorkflowSpend,
   workflowBudgetSnapshot,
   workflowDenialSummary,
@@ -61,6 +62,16 @@ describe("workflow count caps", () => {
     const decision = admitWorkflowTurn("r1", "interactive", smallPolicy);
     expect(decision?.admitted).toBe(false);
     if (decision && !decision.admitted) expect(decision.reason).toBe("workflow-sends-exhausted");
+  });
+
+  test("physical starts claim the root allowance atomically", () => {
+    const oneSend = { ...smallPolicy, maxPhysicalSends: 1 };
+    admitWorkflowTurn("atomic-root", "interactive", oneSend)?.lease.release();
+
+    expect(reserveWorkflowSend("atomic-root", oneSend)).toBe(true);
+    expect(reserveWorkflowSend("atomic-root", oneSend)).toBe(false);
+    expect(workflowBudgetSnapshot("atomic-root", oneSend)?.sends).toBe(1);
+
   });
 
   test("a worker lane may not take the interactive reserve", () => {
@@ -117,6 +128,89 @@ describe("workflow count caps", () => {
     if (busy?.admitted) busy.lease.release();
     expect(admitWorkflowTurn("n2", "interactive", smallPolicy)?.admitted).toBe(true);
     expect(workflowBudgetSnapshot("n1")).toBeUndefined();
+  });
+});
+
+describe("root tracking retains unexpired accounting", () => {
+  const policy = { ...smallPolicy, windowMs: 60_000 };
+  const park = (root: string, now: number, sends = 0, child?: string) => {
+    const decision = admitWorkflowTurn(root, child ? "worker" : "interactive", policy, child, now);
+    expect(decision?.admitted).toBe(true);
+    if (!decision?.admitted) throw new Error("fixture admission failed");
+    try {
+      for (let i = 0; i < sends; i++) expect(reserveWorkflowSend(root, policy, now)).toBe(true);
+    } finally {
+      decision.lease.release();
+    }
+  };
+
+  test("partial sends survive pressure while the empty LRU root is reused", () => {
+    park("used", 1_000, 2);
+    park("empty", 2_000);
+    park("new", 3_000);
+    expect(workflowBudgetSnapshot("used", policy, 3_000)?.sends).toBe(2);
+    expect(workflowBudgetSnapshot("empty", policy, 3_000)).toBeUndefined();
+    const resumed = admitWorkflowTurn("used", "interactive", policy, undefined, 4_000);
+    expect(resumed?.admitted).toBe(true);
+    if (!resumed?.admitted) throw new Error("retained root should keep its remaining send");
+    try {
+      expect(reserveWorkflowSend("used", policy, 4_000)).toBe(true);
+      expect(reserveWorkflowSend("used", policy, 4_000)).toBe(false);
+    } finally {
+      resumed.lease.release();
+    }
+    expect(admitWorkflowTurn("used", "interactive", policy, undefined, 5_000))
+      .toMatchObject({ admitted: false, reason: "workflow-sends-exhausted" });
+  });
+
+  test("child history survives pressure even when no send has started", () => {
+    park("children", 1_000, 0, "c1");
+    park("children", 1_500, 0, "c2");
+    park("empty", 2_000);
+    park("new", 3_000);
+    expect(workflowBudgetSnapshot("children", policy, 3_000))
+      .toMatchObject({ sends: 0, children: 2 });
+    expect(workflowBudgetSnapshot("empty", policy, 3_000)).toBeUndefined();
+    expect(admitWorkflowTurn("children", "worker", policy, "c3", 4_000))
+      .toMatchObject({ admitted: false, reason: "workflow-children-exhausted" });
+  });
+
+  test("a table holding partial history refuses new roots without growing", () => {
+    park("a", 1_000, 1);
+    park("b", 2_000, 1);
+    expect(admitWorkflowTurn("c", "interactive", policy, undefined, 3_000))
+      .toMatchObject({ admitted: false, reason: "workflow-tracking-exhausted" });
+    expect(workflowBudgetSnapshot("c", policy, 3_000)).toBeUndefined();
+    expect(listTrackedWorkflowRoots(10, policy, 3_000)).toHaveLength(2);
+  });
+
+  test("expired sends and children make the oldest root reusable again", () => {
+    park("expired", 1_000, 1, "c1");
+    park("empty", 2_000);
+    park("new", 62_001);
+    expect(workflowBudgetSnapshot("expired", policy, 62_001)).toBeUndefined();
+    expect(workflowBudgetSnapshot("empty", policy, 62_001)).toBeDefined();
+    expect(workflowBudgetSnapshot("new", policy, 62_001)).toBeDefined();
+  });
+
+  test("live limit changes retain partial counts across root-table pressure", () => {
+    park("used", 1_000, 2);
+    park("empty", 2_000);
+    park("new", 3_000);
+    expect(admitWorkflowTurn("used", "interactive", { ...policy, maxPhysicalSends: 2 }, undefined, 4_000))
+      .toMatchObject({ admitted: false, reason: "workflow-sends-exhausted" });
+    const raised = { ...policy, maxPhysicalSends: 4 };
+    const resumed = admitWorkflowTurn("used", "interactive", raised, undefined, 5_000);
+    expect(resumed?.admitted).toBe(true);
+    if (!resumed?.admitted) throw new Error("raised limit should retain two remaining sends");
+    try {
+      expect(reserveWorkflowSend("used", raised, 5_000)).toBe(true);
+      expect(reserveWorkflowSend("used", raised, 5_000)).toBe(true);
+      expect(reserveWorkflowSend("used", raised, 5_000)).toBe(false);
+      expect(workflowBudgetSnapshot("used", raised, 5_000)?.sends).toBe(4);
+    } finally {
+      resumed.lease.release();
+    }
   });
 });
 
@@ -489,7 +583,7 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     // The admission refusal goes through the decision-carrying wrapper, which forwards the
     // denial's own scope and ceiling. Forwarding `reason` alone would answer a token-ceiling
     // refusal with a 429 that names no ceiling. A native ingress may reshape it (map) but not drop it.
-    expect(source).toMatch(/withCors\((?:map\()?workflowDecisionRefusalResponse\(/);
+    expect(source).toMatch(/withCors\(await normalizeMessagesProxyRefusal\(req, map\(workflowDecisionRefusalResponse\(/);
   });
 
   test("every refusal lands on the record with the counts that caused it", () => {

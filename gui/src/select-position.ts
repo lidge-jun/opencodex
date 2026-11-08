@@ -13,6 +13,8 @@ export interface SelectMenuStyleOptions {
   align?: "left" | "right";
   placement?: "below" | "right";
   menuHeight?: number;
+  maxMenuHeight?: number;
+  menuWidth?: number;
 }
 
 const MENU_GAP_PX = 4;
@@ -34,9 +36,9 @@ function viewportWidth() {
 
 export function computeSelectMenuStyle(
   trigger: SelectMenuTriggerRect,
-  { align, placement = "below", menuHeight = MAX_MENU_HEIGHT_PX }: SelectMenuStyleOptions = {},
+  { align, placement = "below", menuHeight = MAX_MENU_HEIGHT_PX, maxMenuHeight = MAX_MENU_HEIGHT_PX, menuWidth }: SelectMenuStyleOptions = {},
 ): CSSProperties {
-  const measuredHeight = Math.min(Math.max(menuHeight, MIN_MENU_HEIGHT_PX), MAX_MENU_HEIGHT_PX);
+  const measuredHeight = Math.min(Math.max(menuHeight, MIN_MENU_HEIGHT_PX), maxMenuHeight);
   const vh = viewportHeight();
   const vw = viewportWidth();
 
@@ -52,7 +54,7 @@ export function computeSelectMenuStyle(
         left,
         bottom: vh - trigger.top + FLIP_GAP_PX,
         minWidth: BESIDE_MIN_WIDTH_PX,
-        maxHeight: Math.max(MIN_MENU_HEIGHT_PX, Math.min(MAX_MENU_HEIGHT_PX, trigger.top - VIEWPORT_PAD_PX - MENU_GAP_PX)),
+        maxHeight: Math.max(MIN_MENU_HEIGHT_PX, Math.min(maxMenuHeight, trigger.top - VIEWPORT_PAD_PX - MENU_GAP_PX)),
       };
     }
 
@@ -61,12 +63,12 @@ export function computeSelectMenuStyle(
       top: trigger.top,
       left,
       minWidth: BESIDE_MIN_WIDTH_PX,
-      maxHeight: Math.max(MIN_MENU_HEIGHT_PX, Math.min(MAX_MENU_HEIGHT_PX, vh - trigger.top - VIEWPORT_PAD_PX)),
+      maxHeight: Math.max(MIN_MENU_HEIGHT_PX, Math.min(maxMenuHeight, vh - trigger.top - VIEWPORT_PAD_PX)),
     };
   }
 
   const effectiveAlign = align ?? (trigger.right > vw / 2 ? "right" : "left");
-  const width = Math.max(trigger.width, 0);
+  const width = Math.min(Math.max(menuWidth ?? trigger.width, 0), Math.max(0, vw - VIEWPORT_PAD_PX * 2));
   const spaceBelow = vh - trigger.bottom - VIEWPORT_PAD_PX;
   const spaceAbove = trigger.top - VIEWPORT_PAD_PX;
   const flipUp = measuredHeight + MENU_GAP_PX > spaceBelow && spaceAbove > spaceBelow;
@@ -76,7 +78,7 @@ export function computeSelectMenuStyle(
       position: "fixed",
       bottom: vh - trigger.top + FLIP_GAP_PX,
       minWidth: width,
-      maxHeight: Math.max(0, Math.min(MAX_MENU_HEIGHT_PX, spaceAbove - MENU_GAP_PX)),
+      maxHeight: Math.max(0, Math.min(maxMenuHeight, spaceAbove - MENU_GAP_PX)),
     };
     if (effectiveAlign === "right") {
       style.right = Math.max(VIEWPORT_PAD_PX, vw - trigger.right);
@@ -90,7 +92,7 @@ export function computeSelectMenuStyle(
     position: "fixed",
     top: trigger.bottom + MENU_GAP_PX,
     minWidth: width,
-    maxHeight: Math.max(0, Math.min(MAX_MENU_HEIGHT_PX, spaceBelow - MENU_GAP_PX)),
+    maxHeight: Math.max(0, Math.min(maxMenuHeight, spaceBelow - MENU_GAP_PX)),
   };
   if (effectiveAlign === "right") {
     style.right = Math.max(VIEWPORT_PAD_PX, vw - trigger.right);
