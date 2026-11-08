@@ -3,14 +3,13 @@
  * Read-only: never writes to external credential stores.
  * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
  */
-import { execFile, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OAuthCredentials } from "./types";
+import { claudeKeychain } from "../lib/claude-keychain";
 
 const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
-const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 export function detectGrokCliToken(): OAuthCredentials | null {
   const authPath = join(process.env.HOME ?? homedir(), ".grok", "auth.json");
@@ -73,18 +72,6 @@ function claudeConfigDir(): string {
   return explicit ? explicit : join(homedir(), ".claude");
 }
 
-/** Read the Claude Code OAuth credential from the macOS Keychain (darwin only). */
-function readClaudeKeychain(): string | null {
-  if (process.platform !== "darwin") return null;
-  try {
-    return execSync(`security find-generic-password -s "${CLAUDE_KEYCHAIN_SERVICE}" -w`, {
-      encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Read the Claude Code credential file (`<config-dir>/.credentials.json`).
  * Claude Code writes this on Linux/Windows (and on macOS when the Keychain is
@@ -92,7 +79,11 @@ function readClaudeKeychain(): string | null {
  * Exported for tests.
  */
 export function readClaudeCredentialsFile(): string | null {
-  const path = join(claudeConfigDir(), ".credentials.json");
+  return readClaudeCredentialsFileAt(claudeConfigDir());
+}
+
+function readClaudeCredentialsFileAt(configDir: string): string | null {
+  const path = join(configDir, ".credentials.json");
   try {
     if (!existsSync(path)) return null;
     return readFileSync(path, "utf8").trim();
@@ -101,32 +92,43 @@ export function readClaudeCredentialsFile(): string | null {
   }
 }
 
-/** Keychain first on macOS, then the cross-platform credentials file. */
-function readClaudeSecureStorage(): string | null {
-  // An explicit config-dir override identifies a separate Claude installation/profile.
-  // Do not let the default macOS Keychain entry shadow that requested credential file.
-  if (process.env.CLAUDE_CONFIG_DIR?.trim()) return readClaudeCredentialsFile() ?? readClaudeKeychain();
-  return readClaudeKeychain() ?? readClaudeCredentialsFile();
+export type ClaudeTokenObservation =
+  | { kind: "present"; credential: OAuthCredentials; sourceKey: string }
+  | { kind: "absent" }
+  | { kind: "unavailable" };
+
+/** Preserve source precedence while retaining unavailable as distinct from absence. */
+export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}): Promise<ClaudeTokenObservation> {
+  const profile = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";
+  const profilePath = claudeConfigDir();
+  const fromFile = (): ClaudeTokenObservation | null => {
+    let raw: string;
+    try {
+      raw = readFileSync(join(profilePath, ".credentials.json"), "utf8").trim();
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : { kind: "unavailable" };
+    }
+    const credential = parseClaudeOauthPayload(raw);
+    return credential ? { kind: "present", credential, sourceKey: `file:${profilePath}` } : { kind: "absent" };
+  };
+  const preferredFile = profile ? fromFile() : null;
+  if (preferredFile?.kind === "present" || preferredFile?.kind === "unavailable") return preferredFile;
+  const keychain = await claudeKeychain.read(options);
+  if ((process.env.CLAUDE_CONFIG_DIR?.trim() ?? "") !== profile || claudeConfigDir() !== profilePath) return { kind: "unavailable" };
+  if (preferredFile) return keychain.status === "unavailable" ? { kind: "unavailable" } : preferredFile;
+  if (keychain.status === "unavailable") return { kind: "unavailable" };
+  if (keychain.status === "present" && keychain.value.trim()) {
+    const credential = parseClaudeOauthPayload(keychain.value.trim());
+    return credential ? { kind: "present", credential, sourceKey: `keychain:${profilePath}` } : { kind: "absent" };
+  }
+  const fallback = fromFile();
+  if (fallback?.kind === "present") return fallback;
+  return fallback ?? { kind: "absent" };
 }
 
-/** Non-blocking Keychain read for request paths; same item and timeout as the sync reader. */
-function readClaudeKeychainAsync(): Promise<string | null> {
-  if (process.platform !== "darwin") return Promise.resolve(null);
-  return new Promise(resolve => {
-    execFile("security", ["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"], { encoding: "utf8", timeout: 5000 },
-      (error, stdout) => resolve(error ? null : stdout.trim() || null));
-  });
-}
-
-/**
- * Async variant of {@link detectClaudeCodeToken} with the same source precedence. A request-path
- * caller must not hold the event loop for a Keychain lookup (up to five seconds).
- */
 export async function detectClaudeCodeTokenAsync(): Promise<OAuthCredentials | null> {
-  const raw = process.env.CLAUDE_CONFIG_DIR?.trim()
-    ? readClaudeCredentialsFile() ?? await readClaudeKeychainAsync()
-    : await readClaudeKeychainAsync() ?? readClaudeCredentialsFile();
-  return raw ? parseClaudeOauthPayload(raw) : null;
+  const observation = await observeClaudeCodeToken();
+  return observation.kind === "present" ? observation.credential : null;
 }
 
 export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {
@@ -141,12 +143,6 @@ export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {
   } catch {
     return null;
   }
-}
-
-export function detectClaudeCodeToken(): OAuthCredentials | null {
-  const raw = readClaudeSecureStorage();
-  if (!raw) return null;
-  return parseClaudeOauthPayload(raw);
 }
 
 /** Shared-token continuity for opaque Claude tokens; fully rotated pairs need authenticated account proof. */

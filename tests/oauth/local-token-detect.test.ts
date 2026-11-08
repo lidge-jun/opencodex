@@ -1,10 +1,13 @@
-import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, afterAll, describe, expect, spyOn, test } from "bun:test";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   detectGrokCliToken,
   hasClaudeCredentialContinuity,
+  observeClaudeCodeToken,
   parseClaudeOauthPayload,
   readClaudeCredentialsFile,
   shouldAdoptGrokGeneration,
@@ -33,6 +36,81 @@ afterEach(() => {
 });
 
 describe("Claude Code credentials file fallback (Linux/Windows)", () => {
+  test("an explicit profile with a usable credential takes precedence over Keychain", async () => {
+    const dir = join(tmp, "claude-priority");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: "synthetic-file", refreshToken: "synthetic-refresh", expiresAt: 1234,
+    } }));
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
+    try {
+      expect(await observeClaudeCodeToken()).toMatchObject({ kind: "present", credential: { access: "synthetic-file" } });
+      expect(read).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); }
+  });
+
+  test("unavailable Keychain with no usable profile remains unavailable", async () => {
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "claude-unavailable");
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
+    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" }); }
+    finally { read.mockRestore(); }
+  });
+
+  test("a default-profile file cannot override an unavailable higher-priority Keychain", async () => {
+    const dir = mkdtempSync(join(tmp, "default-profile-"));
+    const previousProfile = process.env.USERPROFILE;
+    const previousHome = process.env.HOME;
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(join(dir, ".claude", ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: "synthetic-file", refreshToken: "synthetic-refresh", expiresAt: 1234,
+    } }));
+    process.env.HOME = dir;
+    process.env.USERPROFILE = dir;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
+    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" }); }
+    finally {
+      read.mockRestore();
+      if (previousProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousProfile;
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    }
+  });
+
+  test.each(["", "{broken", "{}"])("an unusable explicit profile is not fallback evidence when Keychain is unavailable (%s)", async raw => {
+    const dir = join(tmp, `claude-unusable-${raw.length}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".credentials.json"), raw);
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
+    try {
+      expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" });
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally { read.mockRestore(); }
+  });
+
+  test("authoritative Keychain absence remains absent", async () => {
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "claude-absent");
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
+    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "absent" }); }
+    finally { read.mockRestore(); }
+  });
+
+  test("an unreadable explicit credentials file is unavailable rather than absent", async () => {
+    const dir = join(tmp, "claude-unreadable");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, ".credentials.json");
+    writeFileSync(path, "{}");
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const originalRead = fs.readFileSync;
+    const file = spyOn(fs, "readFileSync").mockImplementation(((target: unknown, ...args: unknown[]) => {
+      if (target === path) throw Object.assign(new Error("synthetic access denied"), { code: "EACCES" });
+      return originalRead(target as never, ...args as []);
+    }) as typeof fs.readFileSync);
+    const keychain = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
+    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" }); }
+    finally { file.mockRestore(); keychain.mockRestore(); }
+  });
   test("reads .credentials.json from CLAUDE_CONFIG_DIR", () => {
     const dir = join(tmp, "claude-a");
     mkdirSync(dir, { recursive: true });

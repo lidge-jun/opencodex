@@ -1,5 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { createClaudeKeychainService, type KeychainChild } from "../../src/lib/claude-keychain";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -141,18 +143,20 @@ test("the default claude.json reader stays inside the overridden profile", () =>
 // OBSERVED behaviour, not source shape — an assertion that slices this file passes
 // trivially if the args are built dynamically, renamed, or moved, and this is the
 // unit's top security invariant.
-test("the default keychain probe never asks for secret material", () => {
+test("the default keychain probe never asks for secret material", async () => {
   const calls: string[][] = [];
-  const spy = spyOn(childProcess, "spawnSync").mockImplementation(((file: string, args: string[]) => {
+  const child = new EventEmitter();
+  const spy = spyOn(childProcess, "spawn").mockImplementation(((file: string, args: string[]) => {
     calls.push([file, ...args]);
-    return { status: 44, signal: null, error: undefined, stdout: null, stderr: null, output: [], pid: 0 };
+    return child as KeychainChild;
   }) as never);
   try {
-    expect(defaultAuthDetectDeps({}).keychainProbe()).toBe(process.platform === "darwin" ? "absent" : "absent");
-    if (process.platform !== "darwin") return; // non-Darwin short-circuits before spawning
+    const result = createClaudeKeychainService({ platform: "darwin" }).probe();
+    child.emit("spawn"); child.emit("exit", 44, null);
+    expect(await result).toEqual({ status: "absent" });
     expect(calls).toHaveLength(1);
     const [file, ...args] = calls[0]!;
-    expect(file).toBe("security");
+    expect(file).toBe("/usr/bin/security");
     expect(args).toEqual(["find-generic-password", "-s", "Claude Code-credentials"]);
     // -w prints the password, -g prints it to stderr. Neither may ever appear.
     expect(args).not.toContain("-w");
@@ -164,15 +168,17 @@ test("the default keychain probe never asks for secret material", () => {
 
 // The probe's stdio must stay fully ignored: -g writes to stderr, so a captured pipe
 // would put secret material in our process even with correct args.
-test("the default keychain probe captures no output streams", () => {
+test("the default keychain probe captures no output streams", async () => {
   let options: { stdio?: unknown } | undefined;
-  const spy = spyOn(childProcess, "spawnSync").mockImplementation(((_f: string, _a: string[], o: { stdio?: unknown }) => {
+  const child = new EventEmitter();
+  const spy = spyOn(childProcess, "spawn").mockImplementation(((_f: string, _a: string[], o: { stdio?: unknown }) => {
     options = o;
-    return { status: 44, signal: null, error: undefined, stdout: null, stderr: null, output: [], pid: 0 };
+    return child as KeychainChild;
   }) as never);
   try {
-    defaultAuthDetectDeps({}).keychainProbe();
-    if (process.platform !== "darwin") return;
+    const result = createClaudeKeychainService({ platform: "darwin" }).probe();
+    child.emit("spawn"); child.emit("exit", 44, null);
+    expect(await result).toEqual({ status: "absent" });
     expect(options?.stdio).toEqual(["ignore", "ignore", "ignore"]);
   } finally {
     spy.mockRestore();

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import { repoPath } from "../helpers/repo-root";
 import type { OcxConfig } from "../../src/types";
 import {
@@ -27,6 +28,7 @@ const baseConfig = {
 
 let execSpy: ReturnType<typeof spyOn>;
 let execFileSpy: ReturnType<typeof spyOn>;
+let keychainSpy: ReturnType<typeof spyOn>;
 let readSpy: ReturnType<typeof spyOn>;
 let writeSpy: ReturnType<typeof spyOn>;
 let unlinkSpy: ReturnType<typeof spyOn>;
@@ -55,6 +57,7 @@ beforeEach(() => {
   launchctlBaseUrl = undefined;
   launchctlEnvValues = {};
   globalThis.fetch = mock(async () => new Response("ok")) as unknown as typeof fetch;
+  keychainSpy = spyOn(claudeKeychain, "probe").mockResolvedValue({ status: "absent" });
 
   execSpy = spyOn(childProcess, "execSync").mockImplementation((() => Buffer.alloc(0)) as typeof childProcess.execSync);
   execFileSpy = spyOn(childProcess, "execFileSync").mockImplementation(((file: string, args?: readonly string[]) => {
@@ -81,6 +84,7 @@ beforeEach(() => {
 afterEach(() => {
   execSpy.mockRestore();
   execFileSpy.mockRestore();
+  keychainSpy.mockRestore();
   readSpy.mockRestore();
   writeSpy.mockRestore();
   unlinkSpy.mockRestore();

@@ -15,12 +15,14 @@ import { createOAuthRefreshIntentLock, credentialGeneration, getAccountCredentia
   saveCredential, writeOAuthRefreshIntent } from "../../src/oauth/store";
 import { AnthropicTokenError } from "../../src/oauth/anthropic";
 import * as store from "../../src/oauth/store";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const original = { home: process.env.HOME, ocx: process.env.OPENCODEX_HOME,
   claude: process.env.CLAUDE_CONFIG_DIR, fetch: globalThis.fetch,
   anthropic: OAUTH_PROVIDERS.anthropic!.refresh, kimi: OAUTH_PROVIDERS.kimi!.refresh };
 let home: string;
+let defaultKeychain: ReturnType<typeof spyOn>;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "oauth-stale-capacity-"));
   process.env.HOME = home;
@@ -28,9 +30,11 @@ beforeEach(() => {
   process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json"), "{}");
+  defaultKeychain = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
   globalThis.fetch = (async () => Response.json({ account: { uuid: "synthetic-stale-account" } })) as unknown as typeof fetch;
 });
 afterEach(() => {
+  defaultKeychain.mockRestore();
   OAUTH_PROVIDERS.anthropic!.refresh = original.anthropic;
   OAUTH_PROVIDERS.kimi!.refresh = original.kimi;
   globalThis.fetch = original.fetch;

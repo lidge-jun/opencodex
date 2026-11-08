@@ -15,6 +15,7 @@ import { siblingOfLivePort } from "../codex/sibling-start";
 export { getShellEnvFilePath, installShellHook, uninstallShellHook, claudeCodeCliInstalled, reconcileShellHook } from "./system-env-shell";
 export type { SystemEnvDeps } from "./system-env-shell";
 import { systemEnvMarkerMode, writeShellEnvFile, removeShellEnvFile } from "./system-env-shell";
+import { resolveClaudeKeychainPresence } from "../claude/auth-detect";
 import type { SystemEnvDeps } from "./system-env-shell";
 
 const SYSTEM_ENV_NAMES = [
@@ -218,7 +219,11 @@ export async function injectSystemEnv(
     bindHost: probeHostname(config.hostname),
     clientBaseUrl: destination.origin,
   };
-  const markerMode = systemEnvMarkerMode(config, deps);
+  const keychainPresence = deps.authDetect?.keychainProbe
+    ? (() => { try { return deps.authDetect!.keychainProbe!(); } catch { return "unknown" as const; } })()
+    : await resolveClaudeKeychainPresence();
+  const resolvedDeps = { ...deps, authDetect: { ...deps.authDetect, keychainProbe: () => keychainPresence } };
+  const markerMode = systemEnvMarkerMode(config, resolvedDeps);
   // The data-plane credential this host can present to its own public listener: env token,
   // hardened service token file, then a configured key. Never the admin token.
   const hostAdmissionToken = destination.requiresAdmissionToken ? localAdmissionToken(config) : undefined;
@@ -358,7 +363,7 @@ export async function injectSystemEnv(
     }
 
     // Shell-hook env file: works for new shells in already-running Terminal.app.
-    writeShellEnvFile(port, config, modelEnv, auto, deps);
+    writeShellEnvFile(port, config, modelEnv, auto, resolvedDeps);
 
     // Gateway-model cache pre-write (devlog 030): plain `claude` sessions read the
     // picker list from ~/.claude/cache/gateway-models.json and cannot refresh it

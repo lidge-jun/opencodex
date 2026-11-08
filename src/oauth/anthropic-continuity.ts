@@ -1,4 +1,4 @@
-import { detectClaudeCodeToken, hasClaudeCredentialContinuity } from "./local-token-detect";
+import { observeClaudeCodeToken, hasClaudeCredentialContinuity } from "./local-token-detect";
 import { normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { credentialGeneration, type AuthStore } from "./store";
 import { mergeOAuthPlan } from "./plan";
@@ -8,8 +8,16 @@ import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 
 export type ClaudeCredentialObservation =
   | { kind: "absent" }
-  | { kind: "unresolved" | "different"; diskGeneration: string }
-  | { kind: "adopt"; credential: OAuthCredentials; diskGeneration: string };
+  | { kind: "unavailable" }
+  | { kind: "unresolved" | "different"; diskGeneration: string; sourceKey: string }
+  | { kind: "adopt"; credential: OAuthCredentials; diskGeneration: string; sourceKey: string };
+
+export async function freshClaudeGenerationMatches(diskGeneration: string, sourceKey: string): Promise<boolean> {
+  const observed = await observeClaudeCodeToken({ fresh: true });
+  return observed.kind === "present" && observed.sourceKey === sourceKey
+    && observed.credential.expires > Date.now() + REFRESH_SKEW_MS
+    && credentialGeneration(observed.credential) === diskGeneration;
+}
 
 export async function newerClaudeCredential(
   stored: OAuthCredentials, now: number, signal?: AbortSignal,
@@ -24,13 +32,16 @@ export async function newerClaudeCredentialForInstance(
 ): Promise<ClaudeCredentialObservation> {
   if (instance === "anthropic2") return { kind: "absent" };
   if (stored.source !== "local-cli") return { kind: "absent" };
-  const disk = detectClaudeCodeToken();
+  const observation = await observeClaudeCodeToken();
+  if (observation.kind === "unavailable") return observation;
+  const disk = observation.kind === "present" ? observation.credential : null;
   if (!disk || !Number.isFinite(disk.expires) || disk.expires <= now + REFRESH_SKEW_MS
     || credentialGeneration(disk) === credentialGeneration(stored)) return { kind: "absent" };
   const diskGeneration = credentialGeneration(disk);
+  const sourceKey = (observation as Extract<typeof observation, { kind: "present" }>).sourceKey;
   const before = normalizeAnthropicIdentity(stored.anthropicIdentity, stored.access);
   if (hasClaudeCredentialContinuity(stored, disk)) {
-    return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
+    return { kind: "adopt", diskGeneration, sourceKey, credential: {
       ...stored, ...disk, plan: mergeOAuthPlan(disk, stored), anthropicIdentity: disk.access === stored.access ? before : undefined,
     } };
   }
@@ -40,9 +51,9 @@ export async function newerClaudeCredentialForInstance(
   ]);
   const oldIdentity = normalizeAnthropicIdentity(oldProof, stored.access);
   const newIdentity = normalizeAnthropicIdentity(newProof, disk.access);
-  if (!oldIdentity || !newIdentity) return { kind: "unresolved", diskGeneration };
-  if (oldIdentity.accountUuid !== newIdentity.accountUuid) return { kind: "different", diskGeneration };
-  return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
+  if (!oldIdentity || !newIdentity) return { kind: "unresolved", diskGeneration, sourceKey };
+  if (oldIdentity.accountUuid !== newIdentity.accountUuid) return { kind: "different", diskGeneration, sourceKey };
+  return { kind: "adopt", diskGeneration, sourceKey, credential: {
     ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity, plan: newProof?.plan ?? null,
   } };
 }
@@ -68,8 +79,6 @@ export function captureAnthropicCredentialOwnerForInstance(instance: AnthropicIn
     if (diskGeneration !== undefined) {
       if (instance === "anthropic2") return false;
       if (current?.activeAccountId !== selection.id || current?.selectionRevision !== selection.revision) return false;
-      const disk = detectClaudeCodeToken();
-      if (!disk || disk.expires <= Date.now() + REFRESH_SKEW_MS || credentialGeneration(disk) !== diskGeneration) return false;
     }
     return true;
   };

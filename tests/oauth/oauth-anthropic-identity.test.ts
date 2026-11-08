@@ -1,5 +1,8 @@
 import * as localTokens from "../../src/oauth/local-token-detect";
 import * as storeModule from "../../src/oauth/store";
+import { claudeKeychain, createClaudeKeychainService, type KeychainChild } from "../../src/lib/claude-keychain";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
 import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../../src/oauth";
 import { AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
@@ -17,6 +20,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const originalEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 const originalFetch = globalThis.fetch;
 let tmp: string;
+let defaultKeychain: ReturnType<typeof spyOn>;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "anthropic-identity-"));
   process.env.HOME = tmp;
@@ -24,9 +28,11 @@ beforeEach(() => {
   process.env.CLAUDE_CONFIG_DIR = join(tmp, "claude");
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json"), "{}");
+  defaultKeychain = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
 });
 afterEach(() => {
+  defaultKeychain.mockRestore();
   globalThis.fetch = originalFetch;
   for (const [key, value] of Object.entries(originalEnv)) {
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -77,6 +83,70 @@ function deferred() {
   return { promise, resolve };
 }
 const noRefresh = { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new Error("refresh must not run"); } };
+
+for (const withIntent of [false, true]) {
+  test(`unavailable initial Keychain observation preserves account and ${withIntent ? "pending intent" : "refresh token"}`, async () => {
+    const { id, credential } = await seed();
+    const intent = withIntent ? writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential)) : undefined;
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "missing-claude-profile");
+    const security = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
+    let calls = 0;
+    let caught: unknown;
+    try {
+      try {
+        await refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async () => {
+          calls++;
+          return { access: "synthetic-new", refresh: "synthetic-new-refresh", expires: Date.now() + 3600_000 };
+        } }, credential);
+      } catch (error) { caught = error; }
+      expect(security).toHaveBeenCalledTimes(1);
+    } finally {
+      security.mockRestore();
+    }
+    expect(caught).toBeDefined();
+    expect((caught as Error).name).not.toBe("OAuthLoginRequiredError");
+    expect(calls).toBe(0);
+    expect(getAccountCredential("anthropic", id)).toEqual(credential);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+  });
+}
+
+for (const condition of ["metadata conflict", "quarantine", "cooldown", "deadline"] as const) {
+  test(`initial ${condition} refuses refresh without changing the pending intent or health`, async () => {
+    const { id, credential } = await seed();
+    const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "no-usable-profile");
+    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), pid: 1 });
+    let deadline: (() => void) | undefined;
+    const service = createClaudeKeychainService({ platform: "darwin", now: () => 0,
+      setTimer: fn => { deadline = fn; return 1; }, clearTimer: () => {},
+      spawn: () => child as unknown as KeychainChild });
+    if (condition === "metadata conflict" || condition === "cooldown") {
+      const probe = service.probe(); child.emit("spawn");
+      if (condition === "cooldown") { child.emit("exit", 1, null); await probe; }
+    } else if (condition === "quarantine") {
+      const pending = service.read(); child.emit("spawn"); deadline!(); await pending;
+    }
+    const read = spyOn(claudeKeychain, "read").mockImplementation(options => {
+      const pending = service.read(options);
+      if (condition === "deadline") { child.emit("spawn"); deadline!(); }
+      return pending;
+    });
+    let refreshCalls = 0;
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async () => {
+        refreshCalls++;
+        throw new Error("unexpected refresh");
+      } }, credential)).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(refreshCalls).toBe(0);
+      expect(getAccountCredential("anthropic", id)).toEqual(credential);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+    } finally { read.mockRestore(); }
+  });
+}
 
 test("profile boundary uses fixed origin, exact bearer, no redirects and private proof", async () => {
   let request: { url: string; init?: RequestInit } | undefined;
@@ -504,12 +574,12 @@ test("different CLI account can clear an obsolete intent after durable same-acco
 
 test("adoption reads the CLI generation only at observation and inside persistence", async () => {
   const { id, credential } = await seed(); disk();
-  const originalDetect = localTokens.detectClaudeCodeToken;
+  const originalDetect = localTokens.observeClaudeCodeToken;
   const reads: boolean[] = [];
   let insidePersistence = false;
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => {
+  const detect = spyOn(localTokens, "observeClaudeCodeToken").mockImplementation(options => {
     reads.push(insidePersistence);
-    return originalDetect();
+    return originalDetect(options);
   });
   try {
     await expect(refreshAnthropicAccountWithLock("anthropic", id, noRefresh, credential, {

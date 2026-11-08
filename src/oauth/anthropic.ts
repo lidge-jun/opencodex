@@ -227,8 +227,12 @@ export async function loginAnthropic(
   const importLocal = opts?.codeMode ? "off" : opts?.importLocal ?? "off";
   if (opts?.instance === "anthropic2" && importLocal !== "off") throw new AnthropicLocalCliImportError();
   if (importLocal !== "off") {
-    const { detectClaudeCodeToken } = await import("./local-token-detect");
-    const local = detectClaudeCodeToken();
+    const { observeClaudeCodeToken } = await import("./local-token-detect");
+    const observation = await observeClaudeCodeToken();
+    if (observation.kind === "unavailable" && importLocal === "only") {
+      throw new Error("Claude Code credentials are temporarily unavailable. Try again after Keychain access is available.");
+    }
+    const local = observation.kind === "present" ? observation.credential : null;
     if (local) {
       ctrl.onProgress?.("Found Claude Code token, importing automatically");
       if (local.expires >= Date.now() + 60_000) {

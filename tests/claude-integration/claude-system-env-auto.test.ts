@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectSystemEnv } from "../../src/server/system-env";
 import { PROXY_MARKER } from "../../src/claude/auth-detect";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import type { OcxConfig } from "../../src/types";
 
 /**
@@ -13,14 +14,14 @@ import type { OcxConfig } from "../../src/types";
  * nothing from auto-connect (devlog 260726_claude_auth_auto/035).
  *
  * The detector reads HOME-relative files and probes the macOS keychain, so these
- * tests point HOME and CLAUDE_CONFIG_DIR at an empty temp dir AND stub `spawnSync`
- * with the keychain's real "item not found" exit code. Without the spawn stub the
+ * tests point HOME and CLAUDE_CONFIG_DIR at an empty temp dir AND stub the Keychain
+ * probe with an authoritative absent result. Without the stub the
  * suite reads the developer's own keychain and every assertion inverts.
  */
 
 const originalPlatform = process.platform;
 let execSpy: ReturnType<typeof spyOn>;
-let spawnSpy: ReturnType<typeof spyOn>;
+let keychainSpy: ReturnType<typeof spyOn>;
 let readSpy: ReturnType<typeof spyOn>;
 let writeSpy: ReturnType<typeof spyOn>;
 let mkdirSpy: ReturnType<typeof spyOn>;
@@ -63,16 +64,7 @@ beforeEach(() => {
     if (file === "/bin/launchctl" && args?.[0] === "getenv") return "";
     return "";
   }) as never);
-  // 44 = SecKeychainSearchCopyNext "item not found": a REAL absent, not a probe failure.
-  spawnSpy = spyOn(childProcess, "spawnSync").mockImplementation((() => ({
-    status: 44,
-    signal: null,
-    error: undefined,
-    stdout: null,
-    stderr: null,
-    output: [],
-    pid: 0,
-  })) as never);
+  keychainSpy = spyOn(claudeKeychain, "probe").mockResolvedValue({ status: "absent" });
   readSpy = spyOn(fs, "readFileSync").mockImplementation(((path: string) => {
     if (String(path).includes("system-env-port")) throw new Error("ENOENT");
     return "";
@@ -85,7 +77,7 @@ beforeEach(() => {
 
 afterEach(() => {
   execSpy.mockRestore();
-  spawnSpy.mockRestore();
+  keychainSpy.mockRestore();
   readSpy.mockRestore();
   writeSpy.mockRestore();
   mkdirSpy.mockRestore();
@@ -104,6 +96,17 @@ afterEach(() => {
 // plain `claude`, exactly as a stored "proxy" always did.
 test("auto with no detectable auth writes the proxy marker", async () => {
   await injectSystemEnv(4567, baseConfig);
+  expect(shellEnvContents).toContain(`ANTHROPIC_AUTH_TOKEN='${PROXY_MARKER}'`);
+});
+
+test("launchd and shell use one Keychain presence snapshot", async () => {
+  let probes = 0;
+  await injectSystemEnv(4567, baseConfig, { authDetect: {
+    keychainProbe: () => ++probes === 1 ? "absent" : "unknown",
+  } });
+  expect(probes).toBe(1);
+  expect(execSpy.mock.calls.some(call => call[0] === "/bin/launchctl"
+    && (call[1] as string[] | undefined)?.join(" ") === `setenv ANTHROPIC_AUTH_TOKEN ${PROXY_MARKER}`)).toBe(true);
   expect(shellEnvContents).toContain(`ANTHROPIC_AUTH_TOKEN='${PROXY_MARKER}'`);
 });
 

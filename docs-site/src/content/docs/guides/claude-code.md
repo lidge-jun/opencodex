@@ -251,6 +251,11 @@ decides at each launch:
 This is recomputed every launch, not remembered, so logging in or out is picked up on the
 next `ocx claude` with nothing to reconfigure.
 
+On macOS, an unavailable Claude Code Keychain read can temporarily prevent automatic
+credential refresh. Unlock the Keychain or approve its access prompt, then retry. OpenCodex
+waits for a pending read to finish before starting another; after a failed read finishes,
+it waits 60 seconds before trying again. A missing Keychain item does not trigger that wait.
+
 Pick **Subscription** or **Proxy** explicitly when you want it fixed. An explicit choice is
 stored in `claudeCode.authMode` and detection never overrides it — including after you log
 in or out later. Switch back to Auto to hand the decision back.

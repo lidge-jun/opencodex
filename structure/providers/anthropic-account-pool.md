@@ -323,6 +323,15 @@ serialized persistence. Superseding writes win. An unresolved full rotation leav
 pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
 solely from the identity failure. A proven different account may use its own stored refresh only
 when no pending intent blocks it. Intent cleanup follows successful durable adoption.
+`src/lib/claude-keychain.ts` shares one process-local admission slot between password reads and
+metadata-only probes. Caller deadlines do not signal the child; timed-out flights discard late
+output and occupy the slot until termination and captured output closure. Failures cool down for
+60 seconds; a timely item-not-found result is authoritative absence and has no cooldown. An
+unavailable initial credential observation refuses transiently before refresh dispatch, intent
+cleanup or account-health mutation. Adoption obtains a fresh matching source and generation
+inside the serialized mutation after its pre-persist hook, then synchronously rechecks ownership.
+This snapshot does not exclude external Keychain changes after observation, and the process-local
+slot does not bound surviving children across parent restarts.
 An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
 with no outbound proxy configured in either the startup or current environment and a single
 HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as

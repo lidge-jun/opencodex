@@ -96,7 +96,7 @@ export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } fro
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance } from "./anthropic-continuity";
+import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, freshClaudeGenerationMatches } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
@@ -865,6 +865,7 @@ export async function refreshAnthropicAccountWithLock(
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
+    if (observed.kind === "unavailable") throw new OAuthTokenRefreshStaleError();
     const assertOwner = (store: AuthStore, checkDisk = true) => {
       if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
       if (!owns(store, checkDisk && observed.kind !== "absent" ? observed.diskGeneration : undefined)) {
@@ -872,11 +873,20 @@ export async function refreshAnthropicAccountWithLock(
         throw new OAuthTokenRefreshStaleError();
       }
     };
+    if (observed.kind !== "absent" && observed.kind !== "adopt"
+      && !await freshClaudeGenerationMatches(observed.diskGeneration, observed.sourceKey)) {
+      throw new OAuthTokenRefreshStaleError();
+    }
     assertOwner({ [provider]: getAccountSet(provider)! }, observed.kind !== "adopt");
     if (observed.kind === "adopt") {
       const outcome = await mergeAccountCredential(provider, accountId, observed.credential, {
         expectedGeneration: generation,
-        afterPrePersistRead: deps.afterPrePersistRead,
+        afterPrePersistRead: async () => {
+          await deps.afterPrePersistRead?.();
+          if (deps.signal?.aborted || !await freshClaudeGenerationMatches(observed.diskGeneration, observed.sourceKey)) {
+            throw new OAuthTokenRefreshStaleError();
+          }
+        },
         assertOwnership: assertOwner,
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.

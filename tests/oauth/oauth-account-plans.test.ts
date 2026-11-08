@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ const originalFetch = globalThis.fetch;
 const originalEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME,
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 let home: string;
+let defaultKeychain: ReturnType<typeof spyOn>;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "oauth-account-plans-"));
   process.env.HOME = home;
@@ -23,9 +25,11 @@ beforeEach(() => {
   process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
   mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json"), "{}");
+  defaultKeychain = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
 });
 afterEach(async () => {
+  defaultKeychain.mockRestore();
   globalThis.fetch = originalFetch;
   // Store writes start async config-dir hardening (icacls on Windows); drain it under the
   // config dir before removing the tree, and restore the environment last.
