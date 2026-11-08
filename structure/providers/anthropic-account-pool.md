@@ -338,6 +338,14 @@ recovery limitation. These rules do not authenticate the local host owner who ca
 
 Regression coverage: `tests/oauth/oauth-anthropic-identity.test.ts`, `tests/oauth/oauth-refresh.test.ts`.
 
+On macOS the local Claude Code credential is read from the Keychain with `security -w`, and
+`src/oauth/claude-keychain-read.ts` never signals that child: killing `security` while an unlock
+prompt is pending can crash `securityd` and re-lock the keychain (#8161). The async reader resolves
+null after five seconds and leaves the child to exit on its own, keeps one child per process,
+and backs off for sixty seconds after a timeout. The synchronous reader does not spawn while a
+child is running or the backoff is active; its own timeout, which does kill, starts the backoff.
+Every null falls back to the credentials file. `tests/oauth/local-token-detect.test.ts` covers this.
+
 ## Model routes
 
 For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.

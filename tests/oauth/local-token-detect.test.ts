@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, afterAll, describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   readClaudeCredentialsFile,
   shouldAdoptGrokGeneration,
 } from "../../src/oauth/local-token-detect";
+import { createClaudeKeychainReader, isSyncTimeout } from "../../src/oauth/claude-keychain-read";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let tmp: string;
@@ -154,5 +156,155 @@ describe("Claude credential continuity", () => {
         access: token, refresh: token, expires: 2,
       })).toBe(false);
     }
+  });
+});
+
+describe("Claude Keychain reader never kills a blocked security child (#8161)", () => {
+  class FakeChild extends EventEmitter {
+    readonly stdout = Object.assign(new EventEmitter(), { unref: mock(() => undefined) });
+    readonly unref = mock(() => undefined);
+    readonly kill = mock(() => true);
+  }
+
+  function harness(platform = "darwin") {
+    let clock = 1_000;
+    const children: FakeChild[] = [];
+    const deadlines: Array<{ ms: number; fn: () => void; cancelled: boolean }> = [];
+    const reader = createClaudeKeychainReader({
+      platform,
+      spawn: (command, args) => {
+        expect(command).toBe("security");
+        expect(args).toEqual(["find-generic-password", "-s", "Claude Code-credentials", "-w"]);
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      now: () => clock,
+      schedule(ms, fn) {
+        const entry = { ms, fn, cancelled: false };
+        deadlines.push(entry);
+        return () => { entry.cancelled = true; };
+      },
+      timeoutMs: 5_000,
+      backoffMs: 60_000,
+    });
+    const fireDeadline = (index = deadlines.length - 1): void => {
+      const entry = deadlines[index]!;
+      if (!entry.cancelled) entry.fn();
+    };
+    return { reader, children, deadlines, fireDeadline, advance: (ms: number) => { clock += ms; } };
+  }
+
+  test("a non-darwin host never spawns", async () => {
+    const h = harness("linux");
+    expect(await h.reader.readAsync()).toBeNull();
+    expect(h.children).toHaveLength(0);
+    expect(h.reader.syncReadBlocked()).toBe(false);
+  });
+
+  test("a successful read returns trimmed stdout and cancels its deadline", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    h.children[0]!.stdout.emit("data", Buffer.from("{\"claudeAiOauth\":{}}\n"));
+    h.children[0]!.emit("exit", 0, null);
+    expect(await read).toBe("{\"claudeAiOauth\":{}}");
+    expect(h.deadlines[0]!.cancelled).toBe(true);
+    expect(h.reader.syncReadBlocked()).toBe(false);
+  });
+
+  test("a nonzero exit (item not found) resolves null without backoff", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    h.children[0]!.emit("exit", 44, null);
+    expect(await read).toBeNull();
+    expect(h.reader.syncReadBlocked()).toBe(false);
+    void h.reader.readAsync();
+    expect(h.children).toHaveLength(2);
+  });
+
+  test("the deadline resolves null without killing, and unrefs the child", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    expect(h.deadlines[0]!.ms).toBe(5_000);
+    h.fireDeadline();
+    expect(await read).toBeNull();
+    const child = h.children[0]!;
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.unref).toHaveBeenCalledTimes(1);
+    expect(child.stdout.unref).toHaveBeenCalledTimes(1);
+  });
+
+  test("concurrent reads share one child", async () => {
+    const h = harness();
+    const first = h.reader.readAsync();
+    const second = h.reader.readAsync();
+    expect(second).toBe(first);
+    expect(h.children).toHaveLength(1);
+    h.children[0]!.stdout.emit("data", "secret");
+    h.children[0]!.emit("exit", 0, null);
+    expect(await Promise.all([first, second])).toEqual(["secret", "secret"]);
+  });
+
+  test("a timed-out child that is still blocked keeps every later read from spawning", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    h.fireDeadline();
+    await read;
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(await h.reader.readAsync()).toBeNull();
+    // Past the backoff window, but the first child has still not exited.
+    h.advance(60_001);
+    expect(await h.reader.readAsync()).toBeNull();
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(h.children).toHaveLength(1);
+  });
+
+  test("after a timeout, reads back off until the window passes, then spawn again", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    h.fireDeadline();
+    await read;
+    // The prompt is dismissed and the blocked child exits on its own.
+    h.children[0]!.emit("exit", 1, null);
+    h.advance(59_999);
+    expect(await h.reader.readAsync()).toBeNull();
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(h.children).toHaveLength(1);
+    h.advance(2);
+    expect(h.reader.syncReadBlocked()).toBe(false);
+    void h.reader.readAsync();
+    expect(h.children).toHaveLength(2);
+  });
+
+  test("a late exit after the deadline does not resurrect the timed-out read", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    h.fireDeadline();
+    h.children[0]!.stdout.emit("data", "late");
+    h.children[0]!.emit("exit", 0, null);
+    expect(await read).toBeNull();
+  });
+
+  test("a spawn error resolves null and releases the slot", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    h.children[0]!.emit("error", new Error("ENOENT"));
+    expect(await read).toBeNull();
+    expect(h.reader.syncReadBlocked()).toBe(false);
+  });
+
+  test("a synchronous timeout starts the same backoff", () => {
+    const h = harness();
+    h.reader.noteSyncTimeout();
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    h.advance(60_000);
+    expect(h.reader.syncReadBlocked()).toBe(false);
+  });
+
+  test("isSyncTimeout distinguishes an execSync timeout from a nonzero exit", () => {
+    expect(isSyncTimeout(Object.assign(new Error("t"), { code: "ETIMEDOUT", signal: "SIGTERM" }))).toBe(true);
+    expect(isSyncTimeout(Object.assign(new Error("k"), { signal: "SIGKILL" }))).toBe(true);
+    expect(isSyncTimeout(Object.assign(new Error("e"), { status: 44, signal: null }))).toBe(false);
+    expect(isSyncTimeout(null)).toBe(false);
   });
 });
