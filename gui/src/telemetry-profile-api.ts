@@ -115,12 +115,12 @@ async function request(apiBase: string, path: string, init: RequestInit = {}, si
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const res = await fetch(apiBase + path, { ...init, signal: bounded.signal });
-    const body: unknown = await res.json().catch(() => null);
     if (!res.ok) {
-      const code = isRecord(body) && typeof body.code === "string" ? body.code : null;
+      const failure: unknown = await res.json().catch(() => null);
+      const code = isRecord(failure) && typeof failure.code === "string" ? failure.code : null;
       throw new ProfileRequestError(res.status, code);
     }
-    return body;
+    return await res.json().catch(() => null);
   } finally {
     signal?.removeEventListener("abort", onAbort);
     bounded.clear();
