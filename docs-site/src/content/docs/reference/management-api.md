@@ -709,8 +709,10 @@ signed in to. `refresh=1` re-reads the local sign-in and that snapshot. Fetching
 report never spawns the CLI or calls Anthropic; other configured providers can still run their
 normal quota probes. The row is absent until a usage check records quota windows for the signed-in
 account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
-sign-in cache) on a cached read; a newer observation, including one without windows, replaces it
-at once with `refresh=1` and otherwise when the report cache expires. `GET /api/quota-pool` reads no
+sign-in cache) on a normal cached read. A newer recorded observation, including one without windows,
+replaces it on the next read. Passive reads use the last recorded sign-in and snapshot without
+resolving credentials or probing providers, so an external sign-in change appears after another
+operation records it. `GET /api/quota-pool` reads no
 sign-in of its own: it lists the Claude CLI account only for the sign-in this proxy last read, and
 only when that account has a recorded snapshot. After an external sign-out or account switch it keeps
 the previous account until the dashboard or a Claude turn reads the sign-in again; after a restart

@@ -10,6 +10,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { currentClaudeIdentityKey, setClaudeIdentityForTests } from "../../src/adapters/claude-cli/usage-admission";
+import { runPassiveRead } from "../../src/lib/passive-read";
 import { clearProviderQuotaCache, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests } from "../../src/providers/quota";
 import { setProviderQuotaBeforePublishForTests } from "../../src/providers/quota/report-cache";
 import { saveClaudeUsageSnapshot } from "../../src/providers/claude-cli-usage-state";
@@ -284,5 +285,65 @@ test("an identity switch refreshes only the Claude row in a cached multi-provide
   const second = await fetchProviderQuotaReports(multi);
   expect(claudeRow(second)?.quota.weeklyPercent).toBe(7);
   expect(second.reports.find(row => row.provider === "openrouter")).toEqual(other);
+  expect(requests).toBe(1);
+});
+
+test("passive and normal reports follow a recorded account switch without passive probes", async () => {
+  let identityReads = 0;
+  setClaudeIdentityForTests(() => { identityReads++; return signedIn ? { key: signedIn, access: "synthetic" } : null; });
+  seedObservation(Date.now() - 60_000);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(51);
+  signedIn = ACCOUNT_B;
+  const now = Date.now();
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), { identity: ACCOUNT_B, checkedAt: now, quota: { weeklyPercent: 7, updatedAt: now } });
+  await currentClaudeIdentityKey(true);
+  const before = identityReads;
+  expect(claudeRow(await runPassiveRead(() => fetchProviderQuotaReports(config())))?.quota.weeklyPercent).toBe(7);
+  expect(identityReads).toBe(before);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(7);
+  expect(claudeRow(await runPassiveRead(() => fetchProviderQuotaReports(config())))?.quota.weeklyPercent).toBe(7);
+  expect(identityReads).toBe(before);
+});
+
+test("passive reports use a recorded observation even before the report cache is populated", async () => {
+  let identityReads = 0;
+  setClaudeIdentityForTests(() => { identityReads++; return { key: ACCOUNT_A, access: "synthetic" }; });
+  seedObservation(Date.now() - 60_000);
+  await currentClaudeIdentityKey(true);
+  expect(claudeRow(await runPassiveRead(() => fetchProviderQuotaReports(config(), true)))?.quota.weeklyPercent).toBe(51);
+  expect(identityReads).toBe(1);
+});
+
+test.each(["updated", "empty", "missing"] as const)("passive and normal reports reflect a same-account %s snapshot", async kind => {
+  const now = Date.now();
+  seedObservation(now - 60_000);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(51);
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), {
+    identity: ACCOUNT_A, checkedAt: now,
+    ...(kind === "missing" ? {} : { quota: kind === "empty" ? { updatedAt: now } : { weeklyPercent: 23, updatedAt: now } }),
+  });
+  for (const read of [() => runPassiveRead(() => fetchProviderQuotaReports(config())), () => fetchProviderQuotaReports(config())]) {
+    const row = claudeRow(await read());
+    if (kind === "updated") { expect(row?.quota.weeklyPercent).toBe(23); expect(row?.updatedAt).toBe(now); }
+    else expect(row).toBeUndefined();
+  }
+});
+
+test("passive reconciliation preserves other held reports without probing", async () => {
+  let requests = 0;
+  globalThis.fetch = (async () => { requests++; return Response.json({ data: { limit: 20, limit_remaining: 10 } }); }) as typeof fetch;
+  const multi = config();
+  multi.providers.openrouter = { adapter: "openai-chat", authMode: "key", baseUrl: "https://openrouter.ai/api/v1", apiKey: "synthetic-key" } as never;
+  seedObservation(Date.now() - 60_000);
+  const first = await fetchProviderQuotaReports(multi, true);
+  const other = first.reports.find(row => row.provider === "openrouter");
+  expect(other).toBeDefined();
+  signedIn = ACCOUNT_B;
+  const now = Date.now();
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), { identity: ACCOUNT_B, checkedAt: now, quota: { weeklyPercent: 7, updatedAt: now } });
+  await currentClaudeIdentityKey(true);
+  const held = await runPassiveRead(() => fetchProviderQuotaReports(multi, true));
+  expect(claudeRow(held)?.quota.weeklyPercent).toBe(7);
+  expect(held.reports.find(row => row.provider === "openrouter")).toEqual(other);
   expect(requests).toBe(1);
 });
