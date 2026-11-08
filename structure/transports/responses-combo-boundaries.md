@@ -158,7 +158,8 @@ The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.respo
 the same body, usually before `response.created`. These frames are rebuilt from quota and header
 metadata, so the preflight treats them like the lifecycle preamble: they neither commit the child
 nor end inspection. Any other unknown event type still commits. A zero-output
-`server_is_overloaded` refusal that follows a rate-limit frame therefore advances to the next target;
+`server_is_overloaded` refusal that follows a rate-limit frame while the preflight is still
+inspecting (below its byte and chunk caps) therefore advances to the next target;
 `tests/responses/combo-codex-ws-overload-failover.test.ts` covers that hop (#8107).
 
 The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
