@@ -222,6 +222,7 @@ export function createAdapterContinuations(
             headers: requestState.selectedForwardHeaders,
             providerName: route.providerName,
             translatorBudget,
+            abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, continuationRequest);
