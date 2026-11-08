@@ -140,4 +140,21 @@ describe("Route-to device API", () => {
     expect(response?.status).toBe(200);
     expect(scopes).toEqual([[true, "aside"]]);
   });
+  test("a refused --device home write reports whether a Home override was saved", async () => {
+    const refusing = { ...deps, applyHome: async (_ctx: ManagementContext, _overwrite: boolean, client?: string) =>
+      [{ client: client as "opencode", outcome: "conflict" as const, message: "owned block changed" }] };
+    // A non-native client's Home decision is a devices.home override, saved before the apply ran.
+    const opencode = await handleRouteToRoutes(ctx("/api/route-to", { client: "opencode", action: "on", device: "home" }), refusing);
+    expect(opencode?.status).toBe(409);
+    const saved = await opencode!.json();
+    expect(saved).toMatchObject({ code: "route_apply_unresolved", desiredCommitted: true });
+    expect(saved.error).toStartWith("Route policy was saved, but the Home did not apply opencode (conflict)");
+    expect(readRouteIntentState().devices.home?.opencode).toEqual({ enabled: true });
+    // A native client's Home decision is its switch, which a refused apply leaves unchanged.
+    const codex = await handleRouteToRoutes(ctx("/api/route-to", { client: "codex", action: "off", device: "home" }), refusing);
+    expect(codex?.status).toBe(409);
+    const unsaved = await codex!.json();
+    expect(unsaved).toMatchObject({ code: "route_apply_unresolved", desiredCommitted: false });
+    expect(unsaved.error).toStartWith("The Home did not apply codex (conflict)");
+  });
 });

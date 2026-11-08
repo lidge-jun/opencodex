@@ -163,8 +163,11 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       // Report this apply's own outcome rather than the rebuilt row's stale reading of it.
       const row = status.devices.find(device => device.id === "home")?.clients.find(entry => entry.client === write.client);
       if (row) row.applied = decided.outcome;
-      return reply({ ...status, error: `${selected === undefined ? "Route policy was saved, but the" : "The"} Home did not apply ${write.client} (${decided.outcome})${decided.message ? `: ${decided.message}` : ""}`,
-        code: "route_apply_unresolved", desiredCommitted: selected === undefined }, 409);
+      // A default or a non-native devices.home override is saved route policy; a Home native
+      // decision is its switch, which the refused apply left as it was.
+      const policySaved = desiredCommitted && !homeNative;
+      return reply({ ...status, error: `${policySaved ? "Route policy was saved, but the" : "The"} Home did not apply ${write.client} (${decided.outcome})${decided.message ? `: ${decided.message}` : ""}`,
+        code: "route_apply_unresolved", desiredCommitted: policySaved }, 409);
     }
     return reply(status);
   } catch (error) {
