@@ -21,11 +21,11 @@ import { printUnknownCommand } from "./help-recovery";
 import {
   HUB_GATED_SKIP_MESSAGE,
   localClientSkipMessage,
-  setIntegrationEnabled,
   shouldSyncCodexOnStart,
   type LocalClientSkipReason,
 } from "../codex/desired-state";
 import { siblingSkipMessage } from "../codex/sibling-start";
+import { setHomeIntegrationEnabled } from "../routing/home-route-capture";
 import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex/inject";
@@ -173,13 +173,13 @@ const commandRunners: Record<string, CommandRunner> = {
       if (!live) {
         return emitBack(false, "No running proxy found. Run 'ocx start' — it injects opencodex automatically.", 1);
       }
-      const desired = setIntegrationEnabled("codex", true);
+      const desired = setHomeIntegrationEnabled("codex", true);
       if (!desired.ok) {
         return emitBack(false, `Codex desired state was not saved (${desired.reason}).`, desired.reason === "conflict" ? 2 : 1);
       }
       const synced = await syncModelsToCodex(live.port);
       if (synced.status === "skipped") {
-        // `setIntegrationEnabled` above just committed ON, so a skip here is NOT the toggle and
+        // `setHomeIntegrationEnabled` above just committed ON, so a skip here is NOT the toggle and
         // is not a competing writer either — on a hub it is the role gate. Telling the operator
         // to "retry after the competing integration change finishes" sent them waiting for a
         // writer that does not exist (#4236).
@@ -200,7 +200,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (removeProviderTable && !restoreJson) {
       console.log("⚠️  Removing [model_providers.opencodex] means conversations already tagged opencodex will stop opening.");
     }
-    const desired = setIntegrationEnabled("codex", false);
+    const desired = setHomeIntegrationEnabled("codex", false);
     if (!desired.ok) {
       if (restoreJson) {
         // Machine-readable contract: every restore --json outcome emits one

@@ -41,6 +41,7 @@
   "route-intent-watch-client.test.ts": "clients",
   "route-intent-watch-waiters.test.ts": "server",
   "route-intent.test.ts": "clients",
+  "route-to-child-defaults.test.ts": "routing",
   "route-to-home-live-flags.test.ts": "routing",
   "route-to-home-off-review.test.ts": "routing",
   "route-to-live-settings.test.ts": "server",

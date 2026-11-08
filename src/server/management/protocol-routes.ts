@@ -22,6 +22,7 @@ import { protocolPolicyRevision, resolveApiSurfaceSettings, resolveProtocolSetti
 import type { OcxConfig } from "../../types";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
+import { captureHomeRouteDefaults } from "../../routing/home-route-capture";
 import {
   applyProtocolSettingsPatch,
   parseProtocolSettingsPatch,
@@ -116,6 +117,8 @@ async function patchProtocolSettings(ctx: ManagementContext): Promise<Response> 
   const persist = ctx.deps.saveConfigPreservingClaudeCode
     ?? (await import("../../config")).saveConfigPreservingClaudeCode;
   try {
+    // Closing Messages turns Claude Code off on this Home alone: freeze what Children inherit first.
+    if (applied.claudeCodeChanged) captureHomeRouteDefaults(undefined, { whenLinked: true });
     persist(config);
   } catch (error) {
     // Undo in memory too: a live config that serves a state the file does not hold would

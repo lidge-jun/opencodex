@@ -90,12 +90,23 @@ export function isHomeNativeRouteClient(client: RouteClientId): client is HomeNa
 }
 
 /**
+ * The defaults Children inherit for the native clients, captured once from the Home's durable
+ * switches. Codex and Claude Code keep their switch meaning (only an explicit `false` is off).
+ * Grok and Claude Desktop are never captured on: a Home switch enables them on the Home alone.
+ */
+export function homeNativeRouteDefaults(config: OcxConfig): Record<HomeNativeRouteClientId, RouteClientIntent> {
+  return { codex: { enabled: config.clientIntegrations?.codex !== false }, claude: { enabled: config.claudeCode?.enabled !== false },
+    grok: { enabled: false }, "claude-desktop": { enabled: false } };
+}
+
+/**
  * Pure projection. Persisted policy is supplied explicitly by the management owner.
  *
  * On the Home itself (`deviceId === "home"`) the native clients follow the Home's own persisted
  * switches with their usual meaning (only an explicit `false` is off), never captured defaults or
  * a `devices.home` entry: ocx restore, Messages off and native toggles change those switches
- * without recording route intent. Children keep default and device precedence.
+ * without recording route intent. Children never read those switches: a device override, then the
+ * saved default, then the builtin (Codex and Claude Code on, everything else off).
  */
 export function projectHomeRouteIntent(
   config: OcxConfig, version: string, deviceId?: string, state: RouteIntentState = emptyRouteIntentState(),
@@ -104,14 +115,12 @@ export function projectHomeRouteIntent(
   const clients = {} as HomeRouteIntentDocument["clients"];
   const sources = {} as HomeRouteIntentDocument["sources"];
   for (const client of ROUTE_CLIENT_IDS) {
-    // An untouched Home's explicit native flags become the default Children inherit until captured.
-    const legacy = client === "claude" ? config.claudeCode?.enabled
-      : client === "codex" || client === "grok" || client === "claude-desktop" ? config.clientIntegrations?.[client] : undefined;
-    const home = state.defaults[client] ?? (typeof legacy === "boolean" ? { enabled: legacy } : undefined);
+    const home = state.defaults[client];
     if (deviceId === "home" && isHomeNativeRouteClient(client)) {
+      const live = client === "claude" ? config.claudeCode?.enabled : config.clientIntegrations?.[client];
       const decided = options.decidedClient === client;
       const enabled = decided ? options.decidedIntent?.enabled ?? home?.enabled ?? (client === "codex" || client === "claude")
-        : legacy !== false;
+        : live !== false;
       clients[client] = { enabled };
       sources[client] = "native";
       continue;

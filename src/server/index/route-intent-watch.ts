@@ -1,7 +1,7 @@
 import type { OcxConfig } from "../../types";
-import { projectHomeRouteIntent, routeIntentDigest, ROUTE_INTENT_DIGEST_PATTERN } from "../../link/route-intent";
+import { routeIntentDigest, ROUTE_INTENT_DIGEST_PATTERN } from "../../link/route-intent";
 import { homeRouteIntentWatch, ROUTE_INTENT_AFTER_HEADER, ROUTE_INTENT_WAKE_HEADER, ROUTE_INTENT_WATCH_HEADER } from "../../link/route-intent-watch";
-import { readHomeRouteIntentState } from "../../routing/home-route-intent";
+import { projectChildRouteIntent } from "../../routing/home-route-intent";
 import { linkStorePath } from "../../link/paths";
 import { readLinkStore } from "../../link/store";
 
@@ -27,7 +27,7 @@ export async function readLinkRouteIntent(req: Request, config: OcxConfig, versi
     };
     const linkId = ownedLink();
     if (!linkId) return refused(403, "link_mismatch");
-    const project = () => projectHomeRouteIntent(config, version, linkId, readHomeRouteIntentState(config));
+    const project = () => projectChildRouteIntent(config, version, linkId);
     let document = project();
     let wakeReason: "changed" | "notified" | "timeout" = "changed";
     if (watch === "1" && after === routeIntentDigest(document)) {

@@ -60,10 +60,11 @@ test("the Home's own Grok switch governs the Home; defaults govern Children and 
   expect(projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config)).sources.grok).toBe("native");
 });
 
-test.each(["grok", "claude-desktop"] as const)("a first Home %s decision pins the off Child builtin and records no Home entry", client => {
+test.each(["grok", "claude-desktop"] as const)("the first capture saves the off Child builtin for %s and a Home decision records no Home entry", client => {
   const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
   initializeHomeRouteIntentDefaults(config, "1", "opencode");
-  expect(readRouteIntentState().defaults[client]).toBeUndefined();
+  // Grok and Desktop are never captured on, whatever the Home's switch says.
+  expect(readRouteIntentState().defaults[client]).toEqual({ enabled: false });
   recordHomeNativeDecision(client);
   // The switch the decision wrote; a later capture must not spread it to Children.
   config.clientIntegrations = { [client]: true };

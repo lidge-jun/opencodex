@@ -118,12 +118,11 @@ export function dropHomeNativeOverrides(state: RouteIntentState, clients: readon
 
 /**
  * Bookkeeping for a Home decision about a native client, which itself is written to the Home's
- * native switch. No `devices.home` entry is kept. Grok and Desktop first capture the separate
- * off Child builtin so the Home's switch cannot later be captured as the Children's default.
+ * native switch. No `devices.home` entry is kept. The caller has already captured the Children's
+ * native defaults (src/routing/home-route-capture.ts), so the switch never becomes one.
  */
 export function recordHomeNativeDecision(client: HomeNativeRouteClientId): RouteIntentState {
   return updateRouteIntentState(state => {
-    if (client === "grok" || client === "claude-desktop") state.defaults[client] ??= { enabled: false };
     dropHomeNativeOverrides(state, [client]);
     return state;
   });

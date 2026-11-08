@@ -7,9 +7,9 @@ import { readLinkStore, type LinkRecord } from "../../link/store";
 import { linkStorePath } from "../../link/paths";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
-import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, projectHomeRouteIntent, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
+import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
 import { clearRouteClientIntent, recordHomeNativeDecision, setRouteClientIntent } from "../../routing/route-intent-state";
-import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
+import { initializeHomeRouteIntentDefaults, projectChildRouteIntent, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { routeToDeviceStatus, type RouteToStatus } from "../../routing/route-to-status";
 import { refreshRouteNativeSettings, withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
@@ -49,7 +49,7 @@ async function view(ctx: ManagementContext, selected?: string): Promise<RouteToS
   for (const link of links) {
     if (selection !== "all" && selection !== link.id) continue;
     const peer = homeLinkChildParity.get(link.id);
-    rows.push(routeToDeviceStatus(link.id, link.alias, projectHomeRouteIntent(ctx.config, ctx.version, link.id, readHomeRouteIntentState(ctx.config)),
+    rows.push(routeToDeviceStatus(link.id, link.alias, projectChildRouteIntent(ctx.config, ctx.version, link.id),
       peer.routeClientOutcomes ?? [], peer.appliedRouteIntentDigest ?? null));
   }
   return { schema: "ocx.route-to/1", devices: rows };

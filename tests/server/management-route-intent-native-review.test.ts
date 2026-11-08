@@ -54,7 +54,8 @@ test("legacy dashboard toggles durably decide Home intent without changing Child
     for (const row of result.rows) {
       expect(row.desired).toBe(false);
       expect(row.home).toBe(false);
-      expect(row.child).toBe(true);
+      // Captured once from the switches: Codex and Claude Code on; Grok and Desktop are never captured on.
+      expect(row.child).toBe(row.client === "codex" || row.client === "claude");
       expect(row.homeEntry).toBeNull();
     }
   } finally { home.remove(); }

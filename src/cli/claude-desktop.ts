@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { loadConfig, mutatePersistedConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../codex/desired-state";
+import { setHomeIntegrationEnabled } from "../routing/home-route-capture";
 import { readClientConnectionState, assertClientConnectionUnchanged, assertNoClientDisconnectPending, type ClientConnectionState } from "../client/state";
 import { downloadDesktop3pModels, HubClientError, normalizeHubOrigin } from "../client/hub-client";
 import { readServiceApiTokenState } from "../lib/service-secrets";
@@ -453,7 +454,7 @@ async function applyFirstPartyDesktopOffline(deps: ApplyProfileDeps, held: Clien
   assertNoClientDisconnectPending();
   if (readClientConnectionState().kind !== "disconnected") return { ok: false, path: "", reason: "client_connection_invalid" };
   const config = loadConfig();
-  const desired = await withFirstPartySecretsSettled(getConfigDir(), () => setIntegrationEnabled("claude-desktop", true));
+  const desired = await withFirstPartySecretsSettled(getConfigDir(), () => setHomeIntegrationEnabled("claude-desktop", true));
   if (!desired.ok) return "path" in desired ? desired : { ok: false, path: "", reason: desired.message };
   // Establish the replacement before deleting the working gateway. A refused
   // cleanup restores only our managed env keys, preserving unrelated settings.
@@ -539,7 +540,7 @@ export async function applyProfile(
   // so a process crash cannot leave a gateway profile that startup immediately removes.
   let committedIntent = false, savedProfile = false, gatewayApplied = false;
   try {
-    const desired = await settleConfigRoot(configRoot(), () => setIntegrationEnabled("claude-desktop", true));
+    const desired = await settleConfigRoot(configRoot(), () => setHomeIntegrationEnabled("claude-desktop", true));
     if (!desired.ok) return { ok: false, path: "", reason: desired.message };
     committedIntent = true;
     const config = loadConfig();

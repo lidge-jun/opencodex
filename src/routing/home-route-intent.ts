@@ -5,8 +5,9 @@ import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../integrations/store";
 import { listAsideProfileStores } from "../integrations/aside-profile-context";
 import { asideHomeDir } from "../clients/config-export";
-import { parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteIntentState } from "../link/route-intent";
+import { parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type HomeRouteIntentDocument, type RouteClientId, type RouteIntentState } from "../link/route-intent";
 import { dropHomeNativeOverrides, readRouteIntentState, updateRouteIntentState } from "./route-intent-state";
+import { captureHomeRouteDefaults, durableHomeNativeRouteDefaults, fillHomeNativeRouteDefaults } from "./home-route-capture";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import type { OcxConfig } from "../types";
 
@@ -62,24 +63,32 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
   }
 }
 
-/** Capture defaults before a local materializer changes legacy native switches or owners. */
+/**
+ * Capture defaults before a local materializer changes native switches or owners. The native
+ * defaults come from the shared one-time capture; every other client from ownership or builtin.
+ */
 export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: string, decidingDefault?: RouteClientId): void {
-  const prior = readRouteIntentState();
-  if (decidingDefault) prior.defaults[decidingDefault] = { enabled: false };
-  const inherited = projectHomeRouteIntent(config, version, undefined, readHomeRouteIntentState(config, { state: prior }));
-  updateRouteIntentState(state => {
-    for (const [client, intent] of Object.entries(inherited.clients)) {
-      // Leave untouched native Home intent implicit: recording an off builtin as
-      // a global default would remove legacy Home routing during an unrelated edit.
-      if ((client === "grok" || client === "claude-desktop")
-        && config.clientIntegrations?.[client] === undefined
-        && prior.defaults[client] === undefined && inherited.sources[client] === "builtin") continue;
-      state.defaults[client as keyof typeof state.defaults] ??= intent;
-    }
-    // A `devices.home` native entry from an earlier version no longer decides anything.
-    dropHomeNativeOverrides(state);
-    return state;
+  withConfigMutationLockSync(() => {
+    // Every default is derived before anything is written: an Aside refusal leaves the file as it was.
+    const native = durableHomeNativeRouteDefaults(config);
+    const prior = readRouteIntentState();
+    if (native) fillHomeNativeRouteDefaults(prior, native);
+    if (decidingDefault) prior.defaults[decidingDefault] = { enabled: false };
+    const inherited = projectHomeRouteIntent(config, version, undefined, readHomeRouteIntentState(config, { state: prior }));
+    updateRouteIntentState(state => {
+      if (native) fillHomeNativeRouteDefaults(state, native);
+      for (const [client, intent] of Object.entries(inherited.clients)) state.defaults[client as keyof typeof state.defaults] ??= intent;
+      // A `devices.home` native entry from an earlier version no longer decides anything.
+      dropHomeNativeOverrides(state);
+      return state;
+    });
   });
+}
+
+/** What a Child inherits. Never reads the Home's live native switches; see home-route-capture. */
+export function projectChildRouteIntent(config: OcxConfig, version: string, deviceId: string): HomeRouteIntentDocument {
+  captureHomeRouteDefaults(config);
+  return projectHomeRouteIntent(config, version, deviceId, readHomeRouteIntentState(config));
 }
 
 /** Provisioning runs under Home authority, before the read-only Child starts. */

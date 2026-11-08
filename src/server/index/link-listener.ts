@@ -11,6 +11,7 @@ import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { registerFallbackLinkResolver } from "../../routing/fallback-policy";
+import { captureHomeRouteDefaults } from "../../routing/home-route-capture";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 
@@ -36,6 +37,8 @@ export interface LinkListenerDeps {
   writeStore?: (path: string, store: LinkStore) => void;
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
   warn?: (message: string) => void;
+  /** Freezes the native defaults Children inherit before this listener can serve route intent. */
+  captureRouteDefaults?: () => void;
 }
 
 export type LinkListenerStatus = {
@@ -113,6 +116,11 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       setStatus("off", null, null);
       return;
     }
+    // Children read route intent through this listener. Capture their defaults from the Home's
+    // switches as they stand at startup, before any Home-only command can move one. A failure
+    // leaves the listener up: the route-intent read captures again before it projects.
+    try { (deps.captureRouteDefaults ?? (() => { captureHomeRouteDefaults(undefined, { whenLinked: true }); }))(); }
+    catch (error) { warn(`⚠ Child route defaults were not captured: ${error instanceof Error ? error.message : String(error)}`); }
     const requestedPort = store.listenerPort ?? 0;
     const sessions = createLinkRelaySessions({ peers, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId), fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];

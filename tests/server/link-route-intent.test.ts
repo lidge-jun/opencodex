@@ -8,6 +8,8 @@ import { linkRouteAllowed } from "../../src/link/routes";
 import { writeLinkStore } from "../../src/link/store";
 import { linkStorePath } from "../../src/link/paths";
 import { setRouteClientIntent, routeIntentStatePath } from "../../src/routing/route-intent-state";
+import { captureHomeRouteDefaults } from "../../src/routing/home-route-capture";
+import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let root: string;
 let previous: string | undefined;
@@ -15,6 +17,8 @@ const id = "lnk_0123456789abcdef";
 beforeEach(() => {
   previous = process.env.OPENCODEX_HOME; root = mkdtempSync(join(tmpdir(), "ocx-route-boundary-")); process.env.OPENCODEX_HOME = root;
   writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [{ id, alias: "child", direction: "client-initiated", hostKeyFingerprint: null, tunnelPort: 19200, apiKeyId: "own-key", createdAt: "2026-11-07T00:00:00.000Z" }] });
+  // A linked Home saved its Children's native defaults at enrollment or listener start.
+  captureHomeRouteDefaults({} as OcxConfig);
   setRouteClientIntent("aside", { enabled: true, accounts: "all" });
   setRouteClientIntent("aside", { enabled: false }, id);
   setRouteClientIntent("pi", { enabled: true }, "another-child");
