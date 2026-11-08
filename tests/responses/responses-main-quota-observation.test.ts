@@ -534,7 +534,7 @@ describe("credential-bound plain-main Responses quota", () => {
     });
   }
 
-  test("plaintext V2 deferred reset keeps original headers bound to their arrival dispatch", async () => {
+  test("plaintext V2 deferred reset refuses a replacement with different quota headers", async () => {
     observe();
     const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
     const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
@@ -566,16 +566,15 @@ describe("credential-bound plain-main Responses quota", () => {
       }), { ...config, defaultProvider: "openai", plaintextV2AgentMessages: true,
         providers: { openai: { ...provider, codexAccountMode: "direct", upstreamWebsocket: false, retryOnReset: {} } } },
       { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain("fixture-plaintext-reset");
+      expect(response.status).toBe(502);
+      expect(await response.text()).not.toContain("fixture-plaintext-reset");
       expect(httpCalls).toBe(2);
       expect(renewalSpy).toHaveBeenCalledTimes(2);
       const arrival = renewalSpy.mock.results[0]!.value as mainCache.MainQuotaDispatch;
       const successor = renewalSpy.mock.results[1]!.value as mainCache.MainQuotaDispatch;
       expect(successor).not.toBe(arrival);
       expect(successor).toEqual(arrival);
-      // The prefix probe awaits the replacement before publication; the original proof stays live.
-      // Its 17% may publish only under that proof. Replacement-header publication is a follow-up.
+      // Only the original response's quota may publish under its arrival proof.
       expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
       expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
       expect(claimSpy).toHaveBeenCalledTimes(1);

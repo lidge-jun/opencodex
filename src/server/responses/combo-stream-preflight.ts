@@ -617,6 +617,19 @@ export type ProtocolSafeResetRecovery = (
   signal: AbortSignal,
 ) => Promise<Response | null>;
 
+/** A deferred body cannot change the response head already returned to its caller. */
+export function sameDeferredResponseMetadata(original: Response, replacement: Response): boolean {
+  if (original.status !== replacement.status || original.statusText !== replacement.statusText) return false;
+  const first = original.headers.entries();
+  const second = replacement.headers.entries();
+  for (;;) {
+    const a = first.next();
+    const b = second.next();
+    if (a.done || b.done) return a.done === b.done;
+    if (a.value[0] !== b.value[0] || a.value[1] !== b.value[1]) return false;
+  }
+}
+
 /**
  * Defer protocol inspection until the downstream actually pulls the body.
  *
@@ -663,8 +676,13 @@ export function deferProtocolSafeResetRecovery(
     if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
       const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal);
       if (replacement) {
-        cancelBody(selected.body, "using protocol-safe replacement stream");
-        selected = replacement;
+        if (!closed && sameDeferredResponseMetadata(response, replacement)) {
+          cancelBody(selected.body, "using protocol-safe replacement stream");
+          selected = replacement;
+        } else {
+          cancelBody(replacement.body, "declining protocol-safe replacement stream");
+          if (!closed) console.warn("[upstream-retry] replacement response metadata differs; preserving original stream");
+        }
       }
     }
     if (closed) {

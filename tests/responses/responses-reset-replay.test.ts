@@ -5,6 +5,106 @@ import {
   selfContainedResponsesBody,
 } from "../../src/server/responses/reset-replay";
 import { authorizeResendForRecovery } from "../../src/lib/request-resend-gate";
+import { deferProtocolSafeResetRecovery } from "../../src/server/responses/combo-stream-preflight";
+
+const prelude = 'event: response.created\ndata: {"type":"response.created","response":{"id":"first","output":[]}}\n\n';
+const completed = 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"second","output":[]}}\n\n';
+const responseLog = { model: "test", provider: "test" };
+
+describe("deferred response metadata", () => {
+  const baseHeaders = { "content-type": "text/event-stream", "x-request-id": "id-one", "x-codex-turn-state": "turn-one", "x-ratelimit-remaining-requests": "7", "x-model": "model-one" };
+  test.each([
+    ["status", { status: 201, headers: baseHeaders }],
+    ["status text", { statusText: "Different", headers: baseHeaders }],
+    ["content type", { headers: { ...baseHeaders, "content-type": "application/json" } }],
+    ["turn state", { headers: { ...baseHeaders, "x-codex-turn-state": "turn-two" } }],
+    ["quota", { headers: { ...baseHeaders, "x-ratelimit-remaining-requests": "6" } }],
+    ["model", { headers: { ...baseHeaders, "x-model": "model-two" } }],
+    ["request id", { headers: { ...baseHeaders, "x-request-id": "id-two" } }],
+    ["missing header", { headers: { "content-type": "text/event-stream" } }],
+    ["extra header", { headers: { ...baseHeaders, "x-new-provider-field": "value" } }],
+    ["set-cookie", { headers: { ...baseHeaders, "set-cookie": "fixture=value" } }],
+  ])("refuses a replacement with different %s and cancels its body", async (_name, replacementInit) => {
+    let cancelled = false;
+    const original = new Response(prelude, { headers: baseHeaders });
+    const replacement = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new TextEncoder().encode(completed)); controller.close(); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }), replacementInit);
+    const result = deferProtocolSafeResetRecovery(original, responseLog, async () => replacement, { keepalive: "none" });
+    expect(await result.text()).toBe(prelude);
+    expect(result.status).toBe(200);
+    expect([...result.headers]).toEqual([...original.headers]);
+    expect(cancelled).toBe(true);
+  });
+
+  test("accepts equal metadata and leaves ordinary calls unchanged", async () => {
+    const original = new Response(prelude, { headers: baseHeaders });
+    const result = deferProtocolSafeResetRecovery(original, responseLog, async () => new Response(completed, { headers: baseHeaders }), { keepalive: "none" });
+    expect(await result.text()).toBe(completed);
+    expect([...result.headers]).toEqual([...original.headers]);
+    let recovered = false;
+    const ordinary = new Response(completed, { headers: baseHeaders });
+    const unchanged = deferProtocolSafeResetRecovery(ordinary, responseLog, async () => { recovered = true; return null; }, { keepalive: "none" });
+    expect(await unchanged.text()).toBe(completed);
+    expect([...unchanged.headers]).toEqual([...ordinary.headers]);
+    expect(recovered).toBe(false);
+  });
+
+  test("refuses a changed repeated header", async () => {
+    const first = new Headers(baseHeaders);
+    first.append("set-cookie", "a=1");
+    first.append("set-cookie", "b=2");
+    const second = new Headers(baseHeaders);
+    second.append("set-cookie", "a=1");
+    second.append("set-cookie", "b=3");
+    const result = deferProtocolSafeResetRecovery(new Response(prelude, { headers: first }), responseLog,
+      async () => new Response(completed, { headers: second }), { keepalive: "none" });
+    expect(await result.text()).toBe(prelude);
+  });
+
+  test("retains the original read error on metadata refusal", async () => {
+    const failure = new Error("original reset");
+    let sent = false;
+    const original = new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(prelude)); }
+      else controller.error(failure);
+    } }), { headers: baseHeaders });
+    const result = deferProtocolSafeResetRecovery(original, responseLog, async () => new Response(completed, {
+      headers: { ...baseHeaders, "x-request-id": "id-two" },
+    }), { keepalive: "none" });
+    const reader = result.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(prelude);
+    await expect(reader.read()).rejects.toBe(failure);
+  });
+
+  test("cancels a replacement arriving after the client disconnects", async () => {
+    let announce!: () => void;
+    let resolveReplacement!: (response: Response) => void;
+    let cancelled = false;
+    let aborted = false;
+    const started = new Promise<void>(resolve => { announce = resolve; });
+    const pending = new Promise<Response>(resolve => { resolveReplacement = resolve; });
+    const result = deferProtocolSafeResetRecovery(new Response(prelude, { headers: baseHeaders }), responseLog,
+      async (_error, _stage, signal) => {
+        signal.addEventListener("abort", () => { aborted = true; });
+        announce();
+        return pending;
+      }, { keepalive: "none" });
+    const reader = result.body!.getReader();
+    const read = reader.read();
+    await started;
+    await reader.cancel("client disconnected");
+    expect(aborted).toBe(true);
+    const cancelledBody = new Promise<void>(resolve => {
+      resolveReplacement(new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; resolve(); } },
+        { highWaterMark: 0 }), { headers: baseHeaders }));
+    });
+    await cancelledBody;
+    expect(cancelled).toBe(true);
+    await read;
+  });
+});
 
 const clientTurn = {
   store: false,

@@ -168,7 +168,7 @@ import {
   reasoningEffortRejectionText,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
-import { preflightComboStreamResponse } from "./combo-stream-preflight";
+import { preflightComboStreamResponse, sameDeferredResponseMetadata } from "./combo-stream-preflight";
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
@@ -1917,6 +1917,7 @@ export async function preparePassthroughExchange(
       && remainingTransientSendBudget(transientSendAttempts()) > 0
       && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && upstreamRequestsStream));
     if (protocolRecoveryCandidate) {
+      const originalResponse = upstreamResponse;
       upstreamResponse = deferPassthroughResetRecovery(
         upstreamResponse,
         { model: logCtx.model, provider: logCtx.provider },
@@ -1934,7 +1935,8 @@ export async function preparePassthroughExchange(
             authorize: () => authorizeResendForRecovery(stage, "connection-reset", ambiguousResend()).allowed,
             acceptResponse: candidate => {
               const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
-              return type.includes("text/event-stream") || (!type && upstreamRequestsStream);
+              return sameDeferredResponseMetadata(originalResponse, candidate)
+                && (type.includes("text/event-stream") || (!type && upstreamRequestsStream));
             },
           },
         ),

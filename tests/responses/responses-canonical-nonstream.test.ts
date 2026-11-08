@@ -381,6 +381,37 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     }
   });
 
+  test.each([[true, false], [false, false], [true, true], [false, true]] as const)("refuses replacement with different turn metadata (stream=%s, combo=%s)", async (stream, combo) => {
+    let sends = 0;
+    let replacementCancelled = false;
+    const first = sseEvent("response.created", { response: { id: "resp_original", status: "in_progress", output: [] } });
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return new Response(first, { headers: {
+        "content-type": "text/event-stream", "x-codex-turn-state": "first", "x-request-id": "first-id",
+      } });
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { controller.enqueue(new TextEncoder().encode(sseEvent("response.completed", {
+          response: { id: "resp_replacement", status: "completed", output: [] },
+        }))); controller.close(); },
+        cancel() { replacementCancelled = true; },
+      }, { highWaterMark: 0 }), { headers: {
+        "content-type": "text/event-stream", "x-codex-turn-state": "second", "x-request-id": "second-id",
+      } });
+    }) as typeof fetch;
+    const resetConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} },
+      ...(combo ? { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
+        baseUrl: "https://provider.example/v1", retryOnReset: {} } } : {}) },
+      ...(combo ? { combos: { metadata: { strategy: "failover", targets: [{ provider: "fixture", model: "gpt-5.6-sol" }] } } } : {}) };
+    const response = await call({ ...requestBody(stream, false), ...(combo ? { model: "combo/metadata" } : {}) }, {}, resetConfig);
+    const text = await response.text();
+    expect(sends).toBe(2);
+    expect(text).not.toContain("resp_replacement");
+    if (combo) expect(text).toContain("upstream_reset_replay_refused");
+    else if (stream) expect(text).toContain("resp_original");
+    expect(replacementCancelled).toBe(true);
+  });
+
   for (const ending of ["eof", "read-error"] as const) {
     test(`native streaming preserves lifecycle snapshot output after ${ending}`, async () => {
       let sends = 0;
