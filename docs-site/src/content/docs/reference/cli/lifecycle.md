@@ -1390,8 +1390,10 @@ empty after a Home restart. `GET /api/link/status` includes the field only when 
 After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
 that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
 already started after the apply is left alone, on a full `ocx` Child nothing is started when no client runtime is
-running (unlike an attached `ocx-child`, which starts `ocx-child serve` when absent), and on a full `ocx` Child a failed restart exits nonzero while the previous runtime keeps serving (whereas on `ocx-child`, rollover stops the prior `ocx-child serve` before binding the replacement, so a failed rollover exits nonzero with no relay running until `ocx-child sync` or `ocx-child restart` retries). Two applies on one Child never interleave: a second
-`ocx sync` while one is applying fails fast and changes nothing.
+running (unlike an attached `ocx-child`, which starts `ocx-child serve` when absent), and on a full `ocx` Child a failed restart exits nonzero while the previous runtime keeps serving (whereas on `ocx-child`, rollover stops the prior `ocx-child serve` before binding the replacement, so a failed rollover exits nonzero with no relay running until `ocx-child sync` or `ocx-child restart` retries). Two applies on one Child never interleave. On a full `ocx` Child, a second `ocx sync` while one is
+applying fails fast and changes nothing. On `ocx-child`, a second `ocx-child sync --expect-link <id>`
+(the form the Home's sync fan-out runs) exits `5` with reason `pending_operation` and changes
+nothing, while a plain `ocx-child sync` waits for the first apply to finish and then runs.
 
 ## Forced link revoke and remote recovery
 
