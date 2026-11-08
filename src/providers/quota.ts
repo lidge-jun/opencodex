@@ -32,7 +32,7 @@ import {
   isProviderQuotaReportCurrent,
   LAST_GOOD_MAX_AGE_MS,
   providerQuotaBeforePublishForTests, providerQuotaBeforeObservationForTests,
-  routingEvidence, publishCollectedDecisionQuota,
+  routingEvidence, keyScopedEvidence, publishCollectedDecisionQuota,
   keyReportCredentialIds, providerReportCurrentForConfig, validateJoinedReports, bindProviderReportProbe,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
@@ -109,7 +109,7 @@ export async function fetchProviderApiKeyQuotas(config: OcxConfig, name: string,
     const result = await maybeFetchProviderQuota(name, isolatedProvider, isolatedConfig, false);
     if (result === TERMINAL_QUOTA_FAILURE) return { kind: "terminal" };
     if (result === AUTHORITATIVE_EMPTY_QUOTA) return { kind: "empty" };
-    return result ? { kind: "quota", quota: result.quota, routing: routingEvidence.get(result) } : { kind: "unavailable" };
+    return result ? { kind: "quota", quota: result.quota, routing: routingEvidence.get(result) ?? keyScopedEvidence.get(result) } : { kind: "unavailable" };
   });
 }
 async function maybeFetchProviderQuota(

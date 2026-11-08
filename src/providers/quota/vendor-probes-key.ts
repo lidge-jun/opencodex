@@ -868,10 +868,8 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
     }
   }
   if (customWindows.length === 0) return null;
-  return keyReport(provider, "minimax:token-plan-remains", {
-    customWindows,
-    updatedAt: Date.now(),
-  }, config, apiKey);
+  const quota = { customWindows, updatedAt: Date.now() };
+  return keyReport(provider, "minimax:token-plan-remains", quota, config, apiKey, quota, "key");
 }
 
 /**

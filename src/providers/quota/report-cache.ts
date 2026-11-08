@@ -25,6 +25,8 @@ export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boole
 /** Probe-bound reset identity, held only in memory and never part of the report DTO. */
 export const accountReportObservationKeys = new WeakMap<ProviderQuotaReport, string>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
+/** Credential-scoped evidence that does not authorize provider-level routing. */
+export const keyScopedEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
 /** Credential identity captured by the probe; never serialized with the report. */
 export const keyReportCredentialIds = new WeakMap<ProviderQuotaReport, string>();
 type ProviderReportBinding = { name: string; authMode: string; adapter: string; baseUrl: string };
@@ -354,6 +356,8 @@ export function report(
  * the argument leaves the report display-only, so a new producer cannot inherit
  * provider-veto authority merely by calling this helper. Ownership alone is not the
  * scope decision: providerQuotaRoutingBinding resolving is necessary, never sufficient.
+ * Key-scoped evidence is usable for per-key ranking and the passive quota pool, but
+ * is never published as a provider-wide routing veto.
  */
 export function keyReport(
   provider: string,
@@ -362,6 +366,7 @@ export function keyReport(
   config: OcxProviderConfig,
   probedCredential: string,
   inferenceQuota?: ProviderQuota,
+  scope: "provider" | "key" = "provider",
 ): ProviderQuotaReport | null {
   const result = report(provider, source, quota);
   if (!result) return result;
@@ -371,7 +376,7 @@ export function keyReport(
   }
   if (!inferenceQuota) return result;
   const binding = providerQuotaRoutingBinding(provider, config, probedCredential);
-  if (binding) routingEvidence.set(result, { quota: inferenceQuota, binding });
+  if (binding) (scope === "key" ? keyScopedEvidence : routingEvidence).set(result, { quota: inferenceQuota, binding });
   return result;
 }
 

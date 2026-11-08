@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { clearProviderQuotaCache, fetchProviderApiKeyQuotas, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { clearKeyCooldowns, selectProactiveApiKey } from "../../src/providers/key-failover";
+import { saveConfig } from "../../src/config";
+import { ensureQuotaPoolIdentity, resetQuotaPoolIdentityMemoForTests } from "../../src/quota-pool/identity";
+import { readQuotaPool } from "../../src/quota-pool/assemble";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
+const originalHome = process.env.OPENCODEX_HOME;
+let testHome: string;
 const originalProxyEnv = Object.fromEntries(PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]).map(key => [key, process.env[key]]));
 
 function config(name: string, baseUrl: string): OcxConfig {
@@ -18,6 +28,9 @@ function response(modelRemains: unknown, statusCode = 0): Response {
 }
 
 beforeEach(() => {
+  testHome = mkdtempSync(join(tmpdir(), "ocx-minimax-quota-"));
+  process.env.OPENCODEX_HOME = testHome;
+  resetQuotaPoolIdentityMemoForTests();
   for (const key of Object.keys(originalProxyEnv)) delete process.env[key];
   clearProviderQuotaCache();
 });
@@ -27,10 +40,51 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  clearKeyCooldowns();
   clearProviderQuotaCache();
+  resetQuotaPoolIdentityMemoForTests();
+  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalHome;
+  removeTreeWithRetry(testHome);
 });
 
 describe("MiniMax Coding Plan quota", () => {
+  test("quota strategy selects the key with Coding Plan headroom", async () => {
+    const cfg = config("minimax", "https://api.minimax.io/v1");
+    Object.assign(cfg.providers.minimax!, {
+      apiKey: "not-active", apiKeyPoolStrategy: "quota",
+      apiKeyPool: [{ id: "first", key: "first-key" }, { id: "second", key: "second-key" }],
+    });
+    saveConfig(cfg);
+    clearKeyCooldowns();
+    globalThis.fetch = (async (_input, init) => response([{
+      model_name: "general",
+      current_interval_remaining_percent: new Headers(init?.headers).get("authorization") === "Bearer first-key" ? 0 : 80,
+    }])) as typeof fetch;
+    const rows = await fetchProviderApiKeyQuotas(cfg, "minimax", true);
+    expect(rows.map(row => row.quota?.customWindows?.[0]?.percent)).toEqual([100, 20]);
+    expect(selectProactiveApiKey(cfg, "minimax")?.apiKey).toBe("second-key");
+  });
+
+  test("quota pool includes the Coding Plan inference windows", async () => {
+    const cfg = config("minimax", "https://api.minimax.io/v1");
+    globalThis.fetch = (async () => response([{
+      model_name: "general", current_interval_remaining_percent: 0,
+      current_weekly_status: 1, current_weekly_remaining_percent: 60,
+    }])) as typeof fetch;
+    await fetchProviderQuotaReports(cfg, true);
+    ensureQuotaPoolIdentity();
+    const result = await readQuotaPool(cfg);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.pool.providers.find(row => row.provider === "minimax")?.pooled.windows.map(row => [row.label, row.usedPercent])).toEqual([
+      ["Coding Plan 5-hour", 100], ["Coding Plan weekly", 40],
+    ]);
+    cfg.providers.minimax!.apiKey = "replacement-key";
+    const replaced = await readQuotaPool(cfg);
+    if (!replaced.ok) throw new Error(replaced.error);
+    expect(replaced.pool.providers.find(row => row.provider === "minimax")?.pooled.windows ?? []).toEqual([]);
+  });
+
   test("CN uses current endpoint and reports general 5-hour and weekly consumed percentages with resets", async () => {
     let request: { url?: string; authorization?: string; redirect?: RequestRedirect } = {};
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

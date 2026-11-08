@@ -998,7 +998,8 @@ name at the same URL and Chat adapter. It does not follow a custom URL or anothe
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
-window; these are display observations and do not change model routing.
+window. These observations do not veto model routing; the quota key strategy can use them to rank
+keys, and the passive quota pool can expose the current key's windows.
 
 Ollama Cloud provider cards read quota from `/api/balance` first, with `/api/usage` as a
 fallback for older deployments. A parsed fallback report supersedes an earlier failure;

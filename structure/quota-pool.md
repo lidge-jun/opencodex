@@ -58,7 +58,8 @@ states remain independent. Dashboard reports and reset observations retain the o
 This applies regardless of provider or window kind.
 Credential-bound key reports contribute only the producer's inference projection, and a report
 without that projection contributes no windows. The binding must still match the current passive
-credential and destination, authentication headers and single-key configuration. OAuth account rows and untagged account reports
+credential and destination, authentication headers and single-key configuration. MiniMax key-scoped
+Coding Plan evidence contributes here without becoming a provider-level routing veto. OAuth account rows and untagged account reports
 retain their existing mapping. Anthropic normalization preserves display-only provenance; account
 decision reads exclude such quotas, and the account cache does not persist them without provenance.
 
