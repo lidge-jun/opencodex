@@ -646,6 +646,10 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     expect(key({ ...session, tk: "turn-1" })).toBe(key({ ...session, tk: "turn-2" }));
     expect(key({ ...session, tk: "turn-1" })).toBe(key(session));
     expect(key({ ...session, session_id: "t".repeat(36), tk: "turn-1" })).not.toBe(key(session));
+    // `user` still carries the hash of the raw user_id.
+    const raw = JSON.stringify({ ...session, tk: "turn-1" });
+    expect(anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, metadata: { user_id: raw } }).body.user)
+      .toBe(createHash("sha256").update(raw).digest("hex"));
   });
 
   test("metadata.user_id boundary: exactly 64 chars forwarded, 65 chars hashed", () => {

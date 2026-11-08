@@ -13,6 +13,7 @@ import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, markProxyError } from "../lib/client-e
  */
 import type { OcxClaudeCodeConfig } from "../types";
 import { createHash } from "node:crypto";
+import { claudeSessionUserId } from "../server/request-log-conversation";
 
 export { AnthropicRequestError, DesktopModelMappingUnavailableError } from "./inbound-records";
 export { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, extractOcxRouteDirective, extractOcxEffortDirective } from "./inbound-model-options";
@@ -387,14 +388,6 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function withoutTurnToken(userId: string): string {
-  try {
-    const parsed: unknown = JSON.parse(userId);
-    if (isRec(parsed) && "tk" in parsed) { const { tk: _tk, ...rest } = parsed; return JSON.stringify(rest); }
-  } catch { /* not JSON */ }
-  return userId;
-}
-
 /** Provenance of the generated prompt_cache_key (never serialized into the wire body). */
 export type ClaudeCacheKeySource = "metadata" | "system" | null;
 
@@ -609,7 +602,7 @@ function applyAnthropicSettings(
     // per-session key with a bounded length/charset. Remote Claude Code adds a per-turn
     // attribution token (`tk`) to that blob; it is dropped, as Claude Code itself drops it,
     // so every turn of one session keeps one key.
-    body.prompt_cache_key = createHash("sha256").update(withoutTurnToken(raw.metadata.user_id)).digest("hex").slice(0, 32);
+    body.prompt_cache_key = createHash("sha256").update(claudeSessionUserId(raw.metadata.user_id)).digest("hex").slice(0, 32);
     cacheKeySource = "metadata";
   } else if (typeof cacheSystem === "string" || cacheSystem.length > 0) {
     // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the
