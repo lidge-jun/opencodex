@@ -129,7 +129,6 @@ public static class TraeAcpJob {
             });
             outTask = Task.Run(() => {
                 try { output.CopyTo(Console.OpenStandardOutput()); }
-                catch { }
                 finally { stop.Set(); }
             });
             errTask = Task.Run(() => {
@@ -156,7 +155,8 @@ public static class TraeAcpJob {
             }
             if (job != IntPtr.Zero) CloseHandle(job);
             // Drain trailing stderr before reporting exit; every wait remains bounded.
-            try { if (outTask != null && errTask != null) Task.WaitAll(new Task[] { outTask, errTask }, joinMs); } catch { }
+            try { if (outTask != null && errTask != null) Task.WaitAll(new Task[] { outTask, errTask }, joinMs); }
+            catch (AggregateException) { Frame("OCX_TRAE_ERROR:transport:0"); }
             if (attributesInitialized) DeleteProcThreadAttributeList(attributes);
             if (attributes != IntPtr.Zero) Marshal.FreeHGlobal(attributes);
             if (handles != IntPtr.Zero) Marshal.FreeHGlobal(handles);

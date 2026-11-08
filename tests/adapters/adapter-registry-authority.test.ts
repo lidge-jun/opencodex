@@ -710,6 +710,25 @@ describe("TRAE CN ACP regression contract", () => {
     expect(invalid.processTreeExited).toBe(false);
   });
 
+  test("a Windows stdout forwarding failure reports transport failure and closes the Job", async () => {
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "session/prompt") return false;
+      (child.stderr as PassThrough).write("OCX_TRAE_ERROR:transport:0\n");
+      return true;
+    });
+    fixture.child.once("trae-stop-request", () => {
+      (fixture.child.stderr as PassThrough).write("OCX_TRAE_JOB_STOPPED\n");
+      fixture.child.kill();
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), { ...fixture.deps, platform: "win32", home: testHome.root, cwd: testHome.root })
+      .runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_acp_transport", status: 502,
+      message: "TRAE CN Windows supervisor failed during transport (Win32 0)." });
+    expect(fixture.child.killed).toBe(true);
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
   test("Windows launcher preserves cmd escaping and owns only its staging directory", async () => {
     const env = { COMSPEC: "D:\\Windows\\System32\\cmd.exe", SYSTEMROOT: "D:\\Windows" };
     const invocation = commandInvocation("C:\\Users\\test\\trae cli.cmd", ["a&b", "with space"], "win32", { env });
