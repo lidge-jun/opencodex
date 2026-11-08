@@ -85,7 +85,7 @@ export default function ProviderOverviewDashboard({
   };
 
   const allItems = useMemo(
-    () => [...sections.ready, ...sections.needsSetup, ...sections.disabled],
+    () => [...sections.ready, ...sections.needsSetup, ...sections.unverified, ...sections.disabled],
     [sections],
   );
   const knownNames = useMemo(() => new Set(allItems.map(p => p.name)), [allItems]);
@@ -163,13 +163,14 @@ export default function ProviderOverviewDashboard({
 
       {/* A calm stat strip (one surface, hairline dividers): the numbers stay neutral, a
           small dot carries the tone so colour never has to shout. */}
-      <dl className="pws-dashboard-summary">
+      <dl className={`pws-dashboard-summary${sections.unverified.length ? " pws-dashboard-summary--unverified" : ""}`}>
         <SummaryCard count={readyCount} label={t("pws.status.ready")} tone="ok" />
         <SummaryCard
           count={needsAttentionCount}
           label={readyReauthCount > 0 ? t("pws.status.needsAttention") : t("pws.status.needsSetup")}
           tone="warn"
         />
+        {sections.unverified.length > 0 && <SummaryCard count={sections.unverified.length} label={t("pws.vertexUnverified")} tone="warn" />}
         <SummaryCard count={sections.disabled.length} label={t("prov.disabledBadge")} tone="muted" />
       </dl>
 

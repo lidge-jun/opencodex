@@ -383,6 +383,14 @@ function applyProviderPatchFields(
     else delete next.defaultModel;
     touched = true;
   }
+  for (const field of ["project", "location"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (typeof value !== "string") return { error: `${field} must be a string` };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "authMode")) {
     if (typeof rawBody.authMode !== "string") return { error: "authMode must be a string" };
     const mode = rawBody.authMode.trim();
