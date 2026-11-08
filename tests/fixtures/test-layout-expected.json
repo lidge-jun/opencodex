@@ -1626,5 +1626,9 @@
   "messages-sse-baseline-contract.test.ts": "claude-integration",
   "messages-sse-control-fields.test.ts": "claude-integration",
   "messages-sse-continuation.test.ts": "claude-integration",
-  "sse-payload-rewrite-continuation.test.ts": "responses"
+  "sse-payload-rewrite-continuation.test.ts": "responses",
+  "link-ocx-child-conformance.test.ts": "clients",
+  "link-ephemeral-child-discovery.test.ts": "clients",
+  "link-enrollment-ephemeral-child.test.ts": "server",
+  "link-ocx-child-e2e.test.ts": "clients"
 }
