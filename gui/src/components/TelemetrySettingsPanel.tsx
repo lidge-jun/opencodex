@@ -9,6 +9,7 @@ import {
   isTelemetryConsentSessionRefused,
   putTelemetryDecision,
   subscribeModalDialogChanges,
+  TelemetrySaveError,
   type TelemetryDecision,
   type TelemetryStatusSnapshot,
 } from "../telemetry-api";
@@ -164,7 +165,14 @@ export function TelemetrySettingsPanel({
         refresh = true;
       }
     } catch (error) {
-      setSaveFailed(isTelemetryConsentSessionRefused(error) ? "session" : "failed");
+      if (error instanceof TelemetrySaveError) {
+        // The server answered and refused: nothing was saved.
+        setSaveFailed(isTelemetryConsentSessionRefused(error) ? "session" : "failed");
+      } else {
+        // The request dropped or timed out, and the server may still have saved it: read it back.
+        setSaveUnconfirmed(true);
+        refresh = true;
+      }
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -190,7 +198,7 @@ export function TelemetrySettingsPanel({
         control={
           readOnly ? undefined : (
             <div className="flex items-center gap-2">
-              {loadFailed && !status && (
+              {loadFailed && (!status || saveUnconfirmed) && (
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"

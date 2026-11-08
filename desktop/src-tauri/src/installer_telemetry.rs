@@ -25,7 +25,10 @@
 //! override a dashboard enable made in between; that errs toward privacy.
 //!
 //! An MSI install does not put `ocx.exe` on PATH; the terminal command is installed by this app.
-//! The app therefore runs before any proxy from that install can.
+//! On a first install the app therefore runs before any proxy from that install can. After the app
+//! has installed the terminal command, `ocx service install` can register a logon task that starts a
+//! proxy without the app; an opt-out recorded by a later manual upgrade reaches that proxy's config
+//! when the app next starts, and until then the service may still make its daily send.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

@@ -416,8 +416,10 @@ replace with an in-memory registry. If the decline did not persist, `sidecar::st
 (`RETRY_DELAYS`, up to about 13 minutes) and on the next launch; a proxy the app only attaches to
 follows the decline once a retry succeeds. If the stamp could not be recorded, the next launch saves
 the decline again, which can override a dashboard enable made in between; that errs toward
-privacy. An MSI install puts no `ocx.exe` on PATH; the terminal command comes from this app, so the
-app always runs before any proxy from that install.
+privacy. An MSI install puts no `ocx.exe` on PATH; the terminal command comes from this app, so on a
+first install the app runs before any proxy from that install. Once the app has installed the
+terminal command, `ocx service install` can register a logon task that starts a proxy without the
+app; an opt-out recorded by a later manual upgrade reaches that proxy when the app next starts.
 
 ### Linux packaged-shell acceptance
 
