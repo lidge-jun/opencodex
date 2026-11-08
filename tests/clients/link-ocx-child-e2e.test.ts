@@ -509,6 +509,12 @@ describe.skipIf(process.platform === "win32")("end-to-end Home <-> compiled ocx-
       if (!resolved) throw new Error(`missing POSIX utility: ${util}`);
       symlinkSync(resolved, join(privateUtils, util));
     }
+    // The plant script refuses to install a binary it cannot hash, so the bare host needs one tool.
+    const hashTool = ["sha256sum", "shasum", "openssl"]
+      .flatMap(tool => ["/bin", "/usr/bin", "/sbin", "/usr/sbin"].map(dir => ({ tool, path: join(dir, tool) })))
+      .find(candidate => existsSync(candidate.path));
+    if (!hashTool) throw new Error("missing SHA-256 tool (sha256sum, shasum, or openssl) for the plant E2E");
+    symlinkSync(hashTool.path, join(privateUtils, hashTool.tool));
     const resolvedSh = join(privateUtils, "sh");
     const homeConfig: OcxConfig = {
       port: 10100,
