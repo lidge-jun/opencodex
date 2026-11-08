@@ -405,7 +405,11 @@ function classifyDatabase(db: Database): "fresh" | "ours" | "foreign" {
     return "foreign";
   }
   if (names.length === 0) return "fresh";
-  return names.includes(META_TABLE) ? "ours" : "foreign";
+  // Require a data table as well as the meta table: a foreign database that happens to use the
+  // meta table's name is not this projection and must never have its tables dropped.
+  const ours = names.includes(META_TABLE)
+    && (names.includes("usage_rows") || names.includes("usage_attributions"));
+  return ours ? "ours" : "foreign";
 }
 
 function createSchema(db: Database): void {
@@ -953,8 +957,12 @@ async function refreshOnce(
     return rebuildOrRetry(db, dir, path, meta);
   }
   if (revision === null) return snapshotFrom(meta, 0, ingestPassesFor(path));
-  if (revision.size < meta.indexedOffset) return rebuildOrRetry(db, dir, path, meta);
-  if (revision.size === meta.indexedOffset) {
+  // Growth is measured against the physical size the snapshot recorded, not the processed
+  // boundary: a torn suffix leaves the file larger than the boundary without being new content,
+  // and treating that as growth would let a same-size rewrite masquerade as an append.
+  const recordedSize = meta.revision?.size ?? 0;
+  if (revision.size < recordedSize) return rebuildOrRetry(db, dir, path, meta);
+  if (revision.size === recordedSize) {
     if (meta.revision && usageLogRevisionKey(meta.revision) === usageLogRevisionKey(revision)) {
       return snapshotFrom(meta, 0, ingestPassesFor(path));
     }
@@ -1203,7 +1211,9 @@ async function readActive(
       const offsets = selectCandidates(db, snapshot, query);
       if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
         // The published generation claims rows it no longer has. Never serve that as a
-        // complete zero; drop the projection and rebuild.
+        // complete zero; drop the projection and rebuild. The refresh alone cannot see this
+        // (the cursor and identity still match), so the rebuild must be requested explicitly.
+        requestUsageFilterIndexRebuild();
         throw new UsageLedgerRebuildRequiredError("content_changed");
       }
       db.exec("COMMIT");
@@ -1304,6 +1314,7 @@ export async function readUsageFilterCandidatesPassive(
         expectedRevisionKey: usageLogRevisionKey(snapshot.revision),
         expectedProcessedThroughBytes: snapshot.indexedOffset,
         expectedProcessedThroughDigest: snapshot.processedThroughDigest,
+        expectedFileSize: snapshot.revision?.size,
       });
       const offsets = selectCandidates(db, snapshot, query);
       if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {

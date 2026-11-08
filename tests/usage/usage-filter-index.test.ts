@@ -977,6 +977,85 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       setUsageFilterIndexTestHooksForTests(null);
     }
   });
++
+  test("a torn suffix does not let a same-size rewrite masquerade as an append", async () => {
+    const rows = Array.from({ length: 1000 }, (_, index) => (
+      index === 0 ? { ...syntheticRow(index), provider: "kimi" } : syntheticRow(index)
+    ));
+    writeRows(rows);
+    // A torn final row: bytes after the last LF that never form a complete row.
+    appendFileSync(ledgerPath(), JSON.stringify({ ...syntheticRow(9999), requestId: "torn" }));
+
+    const built = await getFilteredUsageAggregate({ provider: "kimi" });
+    expect(built.filterIndex).toBeDefined();
+    // The snapshot's physical size now exceeds its processed boundary.
+    expect(publishedOffset()).toBeLessThan(statSync(ledgerPath()).size);
+    expect(totalIndexRows()).toBe(1000);
+    // An unchanged torn suffix settles as unchanged rather than rescanning or inflating counts.
+    const settled = await getFilteredUsageAggregate({ provider: "kimi" });
+    expect(settled.update).toBe("unchanged");
+    expect(totalIndexRows()).toBe(1000);
+
+    // Early row zero becomes a match at the same byte length, outside the digest window.
+    const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+    lines[0] = lines[0]!.replace('"provider":"kimi"', '"provider":"grok"');
+    writeFileSync(ledgerPath(), lines.join("\n"));
+
+    const result = await getFilteredUsageAggregate({ provider: "grok" });
+    expect(result.filterIndex).toBeDefined();
+    expect(summary(result).summary.requests)
+      .toBe(rows.filter(row => row.provider === "grok").length + 1);
+    const again = await getFilteredUsageAggregate({ provider: "grok" });
+    expect(again.update).toBe("unchanged");
+    expect(totalIndexRows()).toBe(1000);
+  });
+
+  test("a same-size rewrite after the refresh is caught with a torn suffix present", async () => {
+    const rows = Array.from({ length: 1000 }, (_, index) => (
+      index === 0 ? { ...syntheticRow(index), provider: "kimi" } : syntheticRow(index)
+    ));
+    writeRows(rows);
+    appendFileSync(ledgerPath(), JSON.stringify({ ...syntheticRow(9999), requestId: "torn" }));
+    await getFilteredUsageAggregate({ provider: "kimi" });
+
+    let rewritten = false;
+    setUsageFilterIndexTestHooksForTests({
+      afterRefresh: () => {
+        if (rewritten) return;
+        rewritten = true;
+        const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+        lines[0] = lines[0]!.replace('"provider":"kimi"', '"provider":"grok"');
+        writeFileSync(ledgerPath(), lines.join("\n"));
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "grok" });
+      expect(result.filterIndex).toBeDefined();
+      expect(summary(result).summary.requests)
+        .toBe(rows.filter(row => row.provider === "grok").length + 1);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
+  test("a published generation that lost its rows is rebuilt, not streamed forever", async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    const db = new Database(usageFilterIndexPath(testDir));
+    try {
+      db.query("DELETE FROM usage_rows").run();
+      db.query("DELETE FROM usage_attributions").run();
+    } finally {
+      db.close();
+    }
+
+    const result = await getFilteredUsageAggregate({ provider: "kimi" });
+    // Indexed mode is restored, not merely correct streamed totals.
+    expect(result.filterIndex).toBeDefined();
+    expect(summary(result).summary.requests).toBe(rows.filter(row => row.provider === "kimi").length);
+    expect(totalIndexRows()).toBe(rows.length);
+  });
 
 });
 

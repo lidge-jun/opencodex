@@ -484,6 +484,8 @@ async function accumulateCandidates(
       expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
       expectedProcessedThroughBytes: read.snapshot.indexedOffset,
       expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+      // The physical size at publish time; a torn suffix makes it larger than the boundary.
+      expectedFileSize: read.snapshot.revision?.size,
     });
     if (rows.unreadableOffsets.length > 0) {
       // Serving only the rows that happened to parse would silently under-report the filter.
@@ -662,6 +664,7 @@ async function refreshFilteredAggregate(
         expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
         expectedProcessedThroughBytes: read.snapshot.indexedOffset,
         expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+        expectedFileSize: read.snapshot.revision?.size,
       });
       state.retainedAt = Date.now();
       // Whole-ledger diagnostics can move without the boundary moving: a torn oversized or

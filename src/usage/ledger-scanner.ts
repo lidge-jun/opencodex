@@ -479,6 +479,11 @@ export interface ReadUsageLedgerRowsOptions {
   expectedProcessedThroughBytes?: number;
   /** Trailing digest at that boundary, verified when the revision moved. */
   expectedProcessedThroughDigest?: string;
+  /**
+   * Physical file size when the snapshot was published. A torn suffix makes this larger than
+   * the processed boundary, so growth is measured against it rather than the boundary.
+   */
+  expectedFileSize?: number;
   signal?: AbortSignal;
 }
 
@@ -549,14 +554,16 @@ export async function readUsageLedgerRowsAtOffsets(
     // here; an append past the boundary leaves it unchanged.
     const revisionMoved = options.expectedRevisionKey !== undefined
       && usageLogRevisionKey(openedRevision) !== options.expectedRevisionKey;
+    const physical = options.expectedFileSize ?? boundary;
     if (revisionMoved) {
       if (boundary === undefined || options.expectedProcessedThroughDigest === undefined) {
         throw rebuildRequired("content_changed");
       }
-      // At the snapshot boundary the file cannot have grown, so a moved revision is an
-      // in-place rewrite. The trailing digest cannot see a rewrite earlier than its 64 KiB
-      // window, so this must rebuild rather than trust the offsets.
-      if (size === boundary) throw rebuildRequired("content_changed");
+      // Growth is measured against the snapshot's physical size, not the processed boundary: a
+      // torn suffix leaves the file larger than the boundary without being new content. A file
+      // that did not grow cannot be an append, so a moved revision is an in-place rewrite and
+      // the trailing digest cannot see one earlier than its 64 KiB window.
+      if (physical === undefined || size <= physical) throw rebuildRequired("content_changed");
       const digest = digestRangeSync(
         fd,
         Math.max(0, boundary - USAGE_LEDGER_BOUNDARY_DIGEST_BYTES),
@@ -659,9 +666,9 @@ export async function readUsageLedgerRowsAtOffsets(
     const mutated = usageLogRevisionKey(endingRevision) !== usageLogRevisionKey(openedRevision)
       || usageLogRevisionKey(pathRevision) !== usageLogRevisionKey(openedRevision);
     if (mutated) {
-      // A write at an unchanged size is an in-place rewrite. Re-reading the selected rows
+      // A write that did not grow the file is an in-place rewrite. Re-reading the selected rows
       // cannot see a rewrite that turns a non-candidate into a match, so this must rebuild.
-      if (boundary !== undefined && endingRevision.size === boundary) {
+      if (physical !== undefined && endingRevision.size <= physical) {
         throw rebuildRequired("content_changed");
       }
       const verified = createHash("sha256");

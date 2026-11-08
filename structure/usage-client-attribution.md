@@ -54,11 +54,18 @@ window accompanied by growth remains the base aggregate's documented limit. An e
 performs this validation, so a query with no candidates cannot skip it, and a retained projection
 that reports "unchanged" validates the ledger the same way before returning.
 
+Growth is measured against the physical file size the snapshot recorded, not the processed byte
+boundary. A torn final row leaves the file larger than the boundary without being new content, so a
+snapshot taken with a torn suffix has a physical size above its cursor; a later same-size rewrite is
+therefore a rebuild rather than an append, while an unchanged torn suffix settles as "unchanged"
+without re-reading the ledger.
+
 Rows belong to a generation; a small registry lists every generation and meta names the one
 published. A rebuild stages a fresh generation under a writer lease and publishes it in one short
 transaction fenced on the generation and cursor it started from. A successful publish prunes every
-retired generation by equality, which can remove a concurrent writer's staging; that writer's own
-publish then fails the fence and retries, so a reader only ever sees one complete generation. A
+retired generation by equality; a generation whose writer is still alive is left alone, so that
+writer's own publish fails the fence and retries, and a reader only ever sees one complete
+generation. A
 crash before publish leaves the previously published generation complete. An append writes into the
 published generation and publishes its cursor, digest, counts and span in the same transaction,
 fenced on the cursor so a stale append cannot regress it. Readers take meta and the candidate
