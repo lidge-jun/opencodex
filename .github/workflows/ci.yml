@@ -34,10 +34,10 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: "all (default), release-gates, or macos-control"
+        description: "all (default), release-gates, macos-control, or windows-native-claim"
         type: choice
         default: all
-        options: [all, release-gates, macos-control]
+        options: [all, release-gates, macos-control, windows-native-claim]
 
 permissions:
   contents: read
@@ -103,6 +103,17 @@ jobs:
       runner: ${{ steps.pick.outputs.runner }}
       label: ${{ steps.pick.outputs.label }}
     steps:
+      # This job also runs when the diagnostic lane skips changes.
+      - name: Validate dispatch source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF" != refs/heads/dev ]; then
+            echo '::error::manual cross-platform CI must run from dev'
+            exit 1
+          fi
       - name: Pick runner
         id: pick
         env:
@@ -142,6 +153,7 @@ jobs:
   # in the `on:` block above.
   changes:
     name: changes
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # The workflow grants only `contents: read`, and specifying any permission
@@ -599,11 +611,17 @@ jobs:
   # Only the suite lives here. Typecheck, lint, build, and the scans run once in
   # `gates` rather than five times — they are fixed cost, and paying it per shard
   # would eat what the sharding saves.
+  # The heavy Linux jobs (test shards, test-changed, gates) take the lidge self-hosted pool on
+  # trusted runs while the repository variable LIDGE_RUNNERS is on: pushes, manual runs, branches of
+  # this repository, and pull requests by owners, members or collaborators. Everything else, and every
+  # run while the variable is off, stays on ubuntu-latest, so the hosted runners keep carrying the light
+  # jobs. As with the Windows box above, this routing is operational; the fork-PR approval policy and
+  # the box's scaler, which only creates runners for trusted runs, are the security boundary.
   test:
     name: test ${{ matrix.shard }}/5
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     # A fifth of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
     # longer runs here (see platform-windows).
@@ -667,7 +685,7 @@ jobs:
     name: test changed
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.fast == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -761,7 +779,7 @@ jobs:
     name: gates
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -986,6 +1004,39 @@ jobs:
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
+
+  # A diagnostic run deliberately bypasses changes and the full CI graph. Its
+  # title identifies it as a partial run, never release evidence.
+  windows-native-claim:
+    name: windows native-main claim diagnostic
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' && github.event.inputs.lane == 'windows-native-claim'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout workflow commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Isolate homes
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "ocx-claim-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $ocxHome = Join-Path $root 'opencodex'
+          $codexHome = Join-Path $root 'codex'
+          New-Item -ItemType Directory -Path $ocxHome, $codexHome -ErrorAction Stop | Out-Null
+          "OPENCODEX_HOME=$ocxHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CODEX_HOME=$codexHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run native-main claim diagnostics
+        env:
+          OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC: '1'
+        run: bun test tests/codex-integration/main-quota-provenance.test.ts --timeout 60000
 
   # Windows shards run only on a full manual dispatch. Pull requests retain
   # fast Ubuntu checks, including when the Windows-sensitive filter is set.
@@ -1683,7 +1734,7 @@ jobs:
 
   ci:
     name: ci
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')
     # Every producer, including the ones that only feed other jobs. `needs` holds
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report

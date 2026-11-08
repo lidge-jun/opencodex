@@ -115,9 +115,10 @@ GitHub Actions intentionally stay small:
   `lane=all`. A PR green is not full-platform release evidence. After a batch of merges,
   maintainers run one full dispatch on `dev` rather than one per PR.
 - **Release** (`.github/workflows/release.yml`) is a manual `dev` workflow that selects an exact
-  source with qualifying full-lane evidence and stamps the version in build checkouts. The new
-  release path is pre-cutover: publication is held and history reconciliation, independent
-  security review, and release validation remain outstanding. See
+  source with qualifying full-lane evidence, stamps the version in build checkouts, and checks
+  npm and GitHub release history before it publishes. Publication stays off until the maintainer
+  completes the cutover checks and enables it; an interrupted run is recovered by an
+  operator-attested resume that never republishes an npm version. See
   [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md) for the current procedure.
 - **Stale needs-info** (`.github/workflows/stale-needs-info.yml`) runs daily on the default branch.
   Open issues labeled `needs-info` with no activity for 14 days get a warning; after 7 more idle

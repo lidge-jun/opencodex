@@ -1359,6 +1359,8 @@
         "src/server/index/local-control-listener.ts",
         "src/lib/local-control-socket.ts",
         "src/cli/link-local-control.ts",
+        "src/server/management/link-enrollment.ts",
+        "native/ocx-child/",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"
