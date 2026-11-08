@@ -26,13 +26,18 @@ import { cn } from "./lib/utils";
  * `aria-describedby` is absent, so every untouched bare `Switch` would have been
  * announced twice with a description that repeats its own name.
  */
-export function Switch({ on, mixed = false, onClick, disabled, label, showLabel = false, title }: { on: boolean; mixed?: boolean; onClick: () => void; disabled?: boolean; label?: string; showLabel?: boolean; title?: string }) {
+export function Switch({ on, mixed, onClick, disabled, label, showLabel = false, title }: { on: boolean; mixed?: boolean; onClick: () => void; disabled?: boolean; label?: string; showLabel?: boolean; title?: string }) {
   const labeled = showLabel && !!label;
+  // ARIA switches are binary. Controls that can represent a mixed bulk selection
+  // retain toggle-button semantics for all three states.
+  const triState = mixed !== undefined;
   return (
     <button type="button"
       className={`switch${on ? " on" : ""}${mixed ? " mixed" : ""}${labeled ? " switch-labeled" : ""}`}
       onClick={onClick} disabled={disabled}
-      aria-pressed={mixed ? "mixed" : on}
+      role={triState ? undefined : "switch"}
+      aria-checked={triState ? undefined : on}
+      aria-pressed={triState ? (mixed ? "mixed" : on) : undefined}
       aria-label={labeled ? undefined : (label ?? (on ? "enabled" : "disabled"))}
       title={title}>
       <span className="knob" />

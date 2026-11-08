@@ -18,6 +18,12 @@ ChatGPT 로그인(`forward`) 프로바이더나 저장된 Anthropic OAuth 프로
 
 ## 웹 검색 사이드카
 
+라우팅된 Responses 요청에서는 Anthropic 검색 모델 호출과 연결 재설정 후 재시도도 요청 전체의
+모델 전송·토큰 한도에 포함됩니다. RunTurn 어댑터와 패스스루 검색 브리지에도 적용되며,
+`maxSearchesPerTurn`을 높여도 모델 전송 허용량이 추가되지는 않습니다. 한도가 소진되면
+Anthropic에 요청을 보내지 않고 해당 검색을 오류 결과로 반환합니다. 검색 보조 요청은
+원래 모델의 마지막 복구용 예산을 소모하지 않습니다. 독립 `/v1/alpha/search`는 기존 동작을 유지합니다.
+
 Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 요청하면 opencodex는 다음 순서로
 처리합니다.
 

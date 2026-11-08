@@ -1,3 +1,4 @@
+import { upstreamValidationIssues } from "../lib/upstream-validation-detail";
 import { clientFacingModelText, errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { knownModelIdentity } from "../lib/model-identity";
 /**
@@ -9,7 +10,7 @@ import { knownModelIdentity } from "../lib/model-identity";
  * upstreamError, which internal classifiers and status heuristics read and which never reaches a row.
  * Only proxy-composed text may be passed here.
  */
-import type { FailureDetail, FailureDetailCode } from "../lib/failure-detail";
+import { boundedFailureDetail, type FailureDetail, type FailureDetailCode } from "../lib/failure-detail";
 
 export type { FailureDetail };
 
@@ -77,4 +78,20 @@ export function projectLocalModelRefusalLog(
   if (decision && (!known(decision.requestedModel)
     || decision.candidates.some(candidate => !known(candidate.model) || !providerKnown(candidate.provider))
     || decision.selected && (!known(decision.selected.model) || !providerKnown(decision.selected.provider)))) logCtx.routeDecision = undefined;
+}
+
+/** Capture bounded schema facts before a 4xx is replaced by the client-facing error policy. */
+export function recordUpstreamValidationDetail(logCtx: { failureDetail?: FailureDetail }, status: number, payload: unknown): void {
+  if (status < 400 || status >= 500) return;
+  let parsed = payload;
+  if (typeof payload === "string") {
+    if (payload.length > 256 * 1024) return;
+    try { parsed = JSON.parse(payload); } catch { return; }
+  }
+  const validation = upstreamValidationIssues(parsed);
+  if (!validation) return;
+  const record = parsed as Record<string, unknown>;
+  const nested = record.error !== null && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown> : undefined;
+  logCtx.failureDetail = boundedFailureDetail({ code: "provider_error", type: nested?.type ?? record.type, validation });
 }

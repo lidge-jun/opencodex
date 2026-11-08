@@ -143,6 +143,67 @@ async function mountPage(): Promise<{ container: HTMLDivElement; root: Root }> {
   return { container, root };
 }
 
+test("an empty loaded routing list explains how to configure profiles", async () => {
+  let release!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { release = resolve; });
+  installFetch(url => {
+    if (url.endsWith("/api/routing-profiles")) return pending;
+    if (url.endsWith("/api/config")) return Response.json({ providers: {} });
+    if (url.endsWith("/api/models")) return Response.json([]);
+    if (url.endsWith("/api/lab/catalog")) return Response.json({ scenarios: [] });
+    return Response.json({});
+  });
+  const { container, root } = await mountPage();
+  expect(container.textContent).not.toContain("No routing profiles configured");
+  await act(async () => { release(Response.json({ profiles: [] })); });
+  await tick(3);
+  expect(container.textContent).toContain("No routing profiles configured");
+  await act(async () => root.unmount());
+});
+
+test("retry hides the empty state until the new load completes", async () => {
+  let calls = 0;
+  let release!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { release = resolve; });
+  installFetch(url => url.endsWith("/api/routing-profiles")
+    ? (++calls === 1 ? Response.json({ profiles: [] }) : pending)
+    : Response.json({}));
+  const { container, root } = await mountPage();
+  try {
+    expect(container.textContent).toContain("No routing profiles configured");
+    const retry = [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry")!;
+    await act(async () => { retry.click(); });
+    expect(container.textContent).not.toContain("No routing profiles configured");
+    await act(async () => { release(Response.json({ profiles: [] })); });
+    await tick(3);
+    expect(container.textContent).toContain("No routing profiles configured");
+  } finally {
+    release(Response.json({ profiles: [] }));
+    await act(async () => root.unmount());
+  }
+});
+
+test.each([{}, { profiles: [ { id: "invalid" } ] }])("invalid routing responses show a load error: %j", async payload => {
+  installFetch(url => url.endsWith("/api/routing-profiles") ? Response.json(payload) : Response.json({}));
+  const { container, root } = await mountPage();
+  try {
+    expect(container.textContent).toContain("Could not load routing data");
+    expect(container.textContent).not.toContain("No routing profiles configured");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test("a failed routing load shows an error instead of claiming the list is empty", async () => {
+  installFetch(url => url.endsWith("/api/routing-profiles")
+    ? new Response("unavailable", { status: 503 })
+    : Response.json({}));
+  const { container, root } = await mountPage();
+  expect(container.textContent).toContain("Could not load routing data");
+  expect(container.textContent).not.toContain("No routing profiles configured");
+  await act(async () => root.unmount());
+});
+
 /** The requirement's Select (ui.tsx) as `{ value }`, like the native select it replaced. */
 function requirementSelect(container: HTMLDivElement, key: string): { value: string } | null {
   // Scope the lookup to the "Hard requirements" fieldset so keys that also

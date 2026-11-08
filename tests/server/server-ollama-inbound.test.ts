@@ -234,6 +234,23 @@ describe("Ollama-compatible inbound routes", () => {
     });
   }
 
+  test("chat refuses aggregate tool-call overflow before any upstream send", async () => {
+    const calls = Array.from({ length: 1_025 }, (_, i) => ({ id: `call_${i}`, function: { name: "lookup", arguments: {} } }));
+    await withServer(async base => {
+      for (const stream of [false, true]) {
+        const res = await post(base, "/api/chat", { model: "fx/m1", stream, messages: [
+          { role: "assistant", content: "", tool_calls: calls.slice(0, 512) },
+          { role: "assistant", content: "", tool_calls: calls.slice(512) },
+        ] });
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: "Too many tool calls" });
+        expect(rowFor(res)!.status).toBe(400);
+      }
+      expect(seen).toHaveLength(0);
+      expect(newRows()).toHaveLength(2);
+    });
+  });
+
   test("chat tools round trip with stable call ids", async () => {
     mode = "tools";
     await withServer(async base => {

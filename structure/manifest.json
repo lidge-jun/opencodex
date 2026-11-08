@@ -195,7 +195,7 @@
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
-      "scope": "Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds.",
+      "scope": "Loaded-session Unix messaging and opt-in stored-queue MCP tools, explicit final-turn reads, receipts and owned helper bounds.",
       "documents": [
         "src/messaging/",
         "src/cli/"
@@ -550,6 +550,7 @@
         "src/lib/upstream-condition.ts",
         "src/lib/client-retry-after.ts",
         "src/lib/failure-detail.ts",
+        "src/lib/upstream-validation-detail.ts",
         "src/lib/response-service-tier.ts",
         "src/lib/model-identity.ts",
         "src/server/safe-response-headers.ts",
@@ -858,6 +859,13 @@
       "title": "LM Studio Chat instructions",
       "scope": "Preset-scoped single-leading-system normalization, configuration and editor policy.",
       "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
+    },
+    {
+      "path": "providers/mistral-chat.md",
+      "tier": 4,
+      "title": "Canonical Mistral Chat Wire Policy",
+      "scope": "Canonical Mistral request-field projection, native effort clamping and typed-content normalization.",
+      "documents": ["src/adapters/openai-chat/destination-policy.ts", "src/adapters/openai-chat/native-content.ts"]
     },
     {
       "path": "providers/chat-compat.md",
