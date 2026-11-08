@@ -77,7 +77,7 @@ Home의 Route to 의도는 Child에 기본으로 동기화됩니다. 각 기기�
 
 등록 시 클라이언트를 명시적으로 선택하지 않으면 Child는 Home 기본값과 이후 변경을 상속합니다. 클라이언트별 명령은 해당 클라이언트의 실패를 반환하고 다른 클라이언트의 미해결 충돌은 경고하며, 전체 sync는 모든 미해결 실패를 보고합니다. Claude Desktop first-party 모드는 이미 OpenCodex를 거치므로 켜기 의도는 아무것도 쓰지 않고 `current`로 표시합니다. 끄기 의도는 실행할 모드 전환 명령(Home에서는 `ocx integrations native claude-desktop off`, Child에서는 `ocx claude desktop apply --gateway` 후 `ocx route to sync`)을 알려 주는 충돌로 표시합니다.
 
-기존 Home에서 Grok 또는 Claude Desktop 통합 플래그를 설정하지 않았다면, 명시적으로 경로를 선택하기 전까지 그 Home의 기존 활성화 의도를 유지합니다. 이것만으로 Child의 해당 클라이언트가 켜지지는 않습니다. 이 암묵적 의도는 시작 시 동작과 같은 범위만 적용합니다. Grok은 시작 시 동기화 규칙을 따르고, Claude Desktop은 OpenCodex가 이미 소유한 gateway 프로필만 갱신하며 새로 만들거나 Desktop 모드를 바꾸지 않습니다. Desktop 프로필을 만들려면 `ocx route to claude-desktop on --device home`을 실행하거나 Home 기본값을 설정하세요.
+Home 자신에서 Codex, Claude Code, Grok, Claude Desktop은 Home의 켜기/끄기 스위치를 따릅니다. `ocx restore`, `ocx restore back`, `ocx claude desktop apply`, Messages API 끄기, 에이전트 설정, 대시보드 토글이 바꾸는 바로 그 스위치입니다. 명시적인 `false`만 꺼짐이고 설정하지 않은 스위치는 켜짐입니다. Home 기본값과 기기 override는 Home에서 이 네 클라이언트를 결정하지 않습니다. 어떤 route 쓰기도 결정하고 있지 않은 Grok·Claude Desktop 스위치가 설정되지 않았거나 켜져 있으면 시작 시 동작과 같은 범위만 적용합니다. Grok은 시작 시 동기화 규칙을 따르고, Claude Desktop은 OpenCodex가 이미 소유한 gateway 프로필만 갱신하며 새로 만들거나 Desktop 모드를 바꾸지 않습니다. Desktop 프로필을 만들려면 `ocx route to claude-desktop on --device home`(또는 `ocx route to claude-desktop on`)을 실행하세요. 이것만으로 Child의 Grok·Claude Desktop이 켜지지는 않습니다.
 
 ```sh
 ocx route to status --device all --json
@@ -88,17 +88,17 @@ ocx route to pi inherit --device my-child
 ocx route to sync --device my-child
 ```
 
-`--device` 없는 Home 쓰기는 기본값을 바꾸고 Home에는 지정한 클라이언트만 같은 적용 경로로 반영합니다. Home 자신의 Codex, Claude Code, Grok, Claude Desktop 스위치는 Home에서 우선합니다. 다른 클라이언트에 대한 이후의 route 쓰기가 `ocx restore`, Messages API 끄기, 대시보드 토글을 되돌리지 않으며, 이 클라이언트들의 Home 기본값은 계속 Child에 적용됩니다. Child는 다음 동기화 tick에 반영합니다. Home이 추가한 Child는 명시적 sync로 즉시 적용합니다. Child가 먼저 연결한 링크는 인증된 읽기 watch를 유지하며, Home sync가 이를 즉시 깨웁니다. 적용 보고가 도착하기 전에는 `pending`으로 표시하고, 활성 watch가 없으면 다음 tick을 기다린다고 안내합니다. 이 링크의 충돌 덮어쓰기는 Child에서 사람이 `ocx route to sync --overwrite-conflict`로 허용해야 합니다. Child의 로컬 sync는 즉시 적용합니다.
+`--device` 없는 Home 쓰기는 기본값을 바꾸고 Home에는 지정한 클라이언트만 같은 적용 경로로 반영합니다. Codex, Claude Code, Grok, Claude Desktop은 Home의 스위치를 써서 반영하므로 `ocx route to codex off`는 Home의 Codex를 끄고 Child가 상속하는 기본값도 바꿉니다. `--device home`(Home에서는 `this`)은 Home만 결정합니다. 이 네 클라이언트는 Home의 스위치만 쓰고 Child 기본값은 그대로 두며, `inherit`는 Home의 스위치를 현재 기본값으로 맞춥니다. 다른 클라이언트는 Home override를 기록합니다. 다른 클라이언트에 대한 route 쓰기, `ocx route to sync`, Home에서 실행한 일반 `ocx sync`는 Home의 native 스위치를 바꾸지 않고 각 스위치가 가리키는 상태만 갱신하므로 `ocx restore`, `ocx restore back`, Messages API 끄기, 대시보드 토글을 되돌리지 않습니다. Child는 다음 동기화 tick에 반영합니다. Home이 추가한 Child는 명시적 sync로 즉시 적용합니다. Child가 먼저 연결한 링크는 인증된 읽기 watch를 유지하며, Home sync가 이를 즉시 깨웁니다. 적용 보고가 도착하기 전에는 `pending`으로 표시하고, 활성 watch가 없으면 다음 tick을 기다린다고 안내합니다. 이 링크의 충돌 덮어쓰기는 Child에서 사람이 `ocx route to sync --overwrite-conflict`로 허용해야 합니다. Child의 로컬 sync는 즉시 적용합니다.
 
 Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `all`은 해당 기기의 모든 계정 프로필, `none`은 선택 없음입니다. Child의 일반 쓰기는 실행할 정확한 Home 명령을 안내하며 거부합니다. Child 사용자는 `ocx route to aside off --local`로 자신의 기기만 제외하고 `inherit --local`로 복귀할 수 있습니다. 로컬 `on`은 허용하지 않습니다. 연결된 Child에서 실행한 native 명령보다도 Home 의도가 우선합니다. 그곳의 `ocx restore`는 약 1분 뒤 다음 동기화가 Home 의도를 다시 적용할 때까지만 Codex 라우팅을 끕니다. 해당 Child에서 Codex를 계속 끄려면 `ocx route to codex off --local`을 사용하세요. Child는 1분마다 조정하며, 적용할 때마다 무엇을 바꾸기 전에 이전 적용 확인을 철회하므로 적용 중에 보낸 상태 보고는 다음 보고 전까지 잠시 미적용으로 보일 수 있습니다. 적용 중단이나 로컬 제외가 발생하면 Home의 이전 적용 확인을 철회합니다. 의도나 카탈로그 조회가 지연된 명시적 로컬 sync는 캐시된 off 상태가 정리되어 있어도 0이 아닌 종료 코드를 반환합니다. 토글에서 생략한 계정·모델 이름 정책은 유지됩니다. 소유 기록이 있는데 Aside 계정 명세에서 사라진 프로필은 소유권을 해결하기 전까지 완료로 표시하지 않습니다.
 
-상태 JSON은 `ocx.route-to/1`이며 의도·출처·적용 결과를 구분합니다. `not_installed`, `conflict`, `failed`는 성공으로 처리하지 않습니다. 충돌 덮어쓰기는 해당 실행의 명시적 `--overwrite-conflict`가 필요합니다. 자세한 동작은 [영문 가이드](/guides/remote-link/#route-clients-per-device)를 참고하세요.
+상태 JSON은 `ocx.route-to/1`이며 의도·출처·적용 결과를 구분합니다. 출처는 `builtin`, `default`, `device`, `local`(Child 제외)이며, Home의 Codex·Claude Code·Grok·Claude Desktop 행은 Home 자신의 스위치를 뜻하는 `native`로 표시합니다. `not_installed`, `conflict`, `failed`는 성공으로 처리하지 않습니다. 의도가 바뀌면 이전 충돌이나 실패를 포함한 이전 결과는 모두 `stale`이 됩니다. 충돌 덮어쓰기는 해당 실행의 명시적 `--overwrite-conflict`가 필요합니다. 자세한 동작은 [영문 가이드](/guides/remote-link/#route-clients-per-device)를 참고하세요.
 
 기존에 소유권 기록이 있는 연동은 Home 기본값으로 이전합니다. 명시적인 `connect --clients` 선택은 초기 기기 override로 유지하며, Home의 해당 기기 `on|off|inherit`가 그 선택을 대체합니다. Child 보고는 Home 정책을 변경하지 않습니다.
 
 연결된 Child는 Home의 실효 의도를 자신의 Codex, Claude Code, Claude Desktop, Grok 켜기/끄기 스위치에 기록합니다. Claude Code를 끄면 Messages API 설정도 고정될 수 있습니다. Child는 처음 바꾸기 전에 각 스위치의 독립형 값을, 설정되지 않았던 상태까지 포함해 기록합니다. `ocx disconnect`와 실패한 등록은 그 값을 되돌립니다. 실패한 등록이 값을 되돌리지 못하면 서비스 토큰을 유지하고 복원하지 못한 기록 파일을 알려 줍니다. 보고된 문제를 해결한 뒤 `ocx disconnect`를 실행하면 연결되지 않은 상태에서도 스위치를 복원하고 그 토큰을 제거합니다. 연결 중 사용자가 직접 바꾼 스위치는 그 값을 유지합니다. 다만 Home이 마지막으로 적용한 값과 정확히 같은 값으로 직접 설정한 스위치는 Home의 기록과 구별할 수 없어 복원됩니다. 로컬 제외(`--local`)는 해당 Child 사용자의 선택이므로 disconnect 후에도 유지됩니다.
 
-파일 연동도 같은 방식으로 되돌립니다. 링크 후 첫 적용 때 Child는 스스로 설정해 둔 파일 연동을 기록합니다(Aside 프로필은 제외). `ocx disconnect`는 아직 설정된 연동은 유지하고, Home이 끈 연동은 다시 설정하며, 링크가 추가한 연동만 제거합니다. 로컬 제외나 연결 중 직접 작성한 블록은 유지합니다. 복원된 연동은 처음에는 Child가 Home에서 마지막으로 받은 모델 목록을 쓰며, 다음 독립형 시작 때 로컬 카탈로그로 갱신됩니다.
+파일 연동도 같은 방식으로 되돌립니다. 링크 후 첫 적용 때 Child는 스스로 설정해 둔 파일 연동을 기록합니다(Aside 프로필은 제외). `ocx disconnect`는 아직 설정된 연동은 유지하고, Home이 끈 연동은 다시 설정하며, 링크가 추가한 연동만 제거합니다. 로컬 제외나 연결 중 직접 작성한 블록은 유지합니다. 복원된 연동은 처음에는 Child가 Home에서 마지막으로 받은 모델 목록을 쓰며, 다음 독립형 시작 때 로컬 카탈로그로 갱신됩니다. 이 기록을 남기는 버전을 실행하기 전에 이미 Home의 route 의도를 적용한 Child에는 기록이 없으므로, `ocx disconnect`는 링크가 소유한 연동만 제거하고 Home이 끈 연동을 다시 설정하지 않습니다. disconnect 후 직접 다시 설정하세요.
 
 disconnect는 소유한 키만 복구하므로 이후 편집한 모델·훅·신뢰 프로젝트·Computer Use 설정이 남습니다. 중단된 작업은 `ocx disconnect`로 재개하며 최초 사용한 `--keep-catalog`를 유지하세요. 소유 키 충돌이나 소유권 근거가 남은 이전 저널은 `ocx disconnect --recover-config --yes`로 현재 상태를 비공개 백업한 뒤 키 단위로 복구합니다. 소유권을 확인할 수 없거나 프로필이 편집되어 검증할 수 없으면 계속 거부합니다. 백업 경로를 보존하고, disconnect 후 `ocx service restart`로 독립형 런타임을 시작한 다음 다시 연결하세요.
 
@@ -120,7 +120,7 @@ ocx link reconnect --link-id <id> [--json]
 
 비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
 
-대시보드와 `ocx integrations native <client> on|off`의 native 토글은 Home 기기 override를 저장하고 해당 클라이언트의 전환(Claude Desktop first-party 전환 포함)을 실행하여 Child 기본값을 유지합니다. Child에서 CLI는 거부하고 해당 기기의 Home 명령을 출력합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존합니다. 켜기 의도는 쓰기 없이 `current`이며, 끄기 의도는 모드 전환을 마칠 때까지 conflict로 표시합니다.
+대시보드와 `ocx integrations native <client> on|off`의 native 토글은 Home의 스위치를 바꾸고 해당 클라이언트의 전환(Claude Desktop first-party 전환 포함)을 실행하여 Child 기본값을 유지하며, Home에 대한 route 의도는 기록하지 않습니다. 이전 버전이 저장한 이 네 클라이언트의 Home override는 무시하고 다음 route 변경 때 제거합니다. Child에서 CLI는 거부하고 해당 기기의 Home 명령을 출력합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존합니다. 켜기 의도는 쓰기 없이 `current`이며, 끄기 의도는 모드 전환을 마칠 때까지 conflict로 표시합니다.
 
 ## 관련 가이드
 

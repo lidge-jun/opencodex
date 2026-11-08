@@ -1363,6 +1363,7 @@ State-changing: yes. JSON mode: `payload`.
 
 - Clients: codex, claude, claude-desktop, grok and the supported file integrations. Without --device a Home updates its default and materializes itself; all is only for status/sync.
 - inherit requires --device unless clearing a Child --local opt-out. Child writes print the exact Home command with the Child link id; --local supports off/inherit only. --overwrite-conflict applies only to on or sync.
+- On the Home, codex, claude, grok and claude-desktop follow the Home's own native switches: a Home default or --device home write for them writes that switch (Home inherit sets it to the default).
 
 ### `ocx route to status`
 
@@ -1382,6 +1383,7 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
 
 - On a Child this reads local receipts without a Home management relay. Intent and applied state are distinct; null applied means no recorded outcome.
+- Sources: builtin, default, device, local (Child opt-out) and native (a Home row governed by the Home's own switch). An outcome recorded for an earlier intent reads stale.
 
 ### `ocx route to sync`
 
@@ -1402,3 +1404,4 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
 
 - No conflict retry or implicit overwrite. Child sync calls its local materializer and sends no Home management write.
+- Home sync never changes the Home's native switches for codex, claude, grok or claude-desktop; it refreshes what each switch says.

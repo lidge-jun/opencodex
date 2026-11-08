@@ -17,7 +17,8 @@ export const ROUTE_TO_CAPABILITIES: readonly Capability[] = [
     ],
     mutates: true, json: "payload",
     details: ["Clients: codex, claude, claude-desktop, grok and the supported file integrations. Without --device a Home updates its default and materializes itself; all is only for status/sync.",
-      "inherit requires --device unless clearing a Child --local opt-out. Child writes print the exact Home command with the Child link id; --local supports off/inherit only. --overwrite-conflict applies only to on or sync."],
+      "inherit requires --device unless clearing a Child --local opt-out. Child writes print the exact Home command with the Child link id; --local supports off/inherit only. --overwrite-conflict applies only to on or sync.",
+      "On the Home, codex, claude, grok and claude-desktop follow the Home's own native switches: a Home default or --device home write for them writes that switch (Home inherit sets it to the default)."],
   },
   {
     command: ["route", "to", "status"],
@@ -25,7 +26,8 @@ export const ROUTE_TO_CAPABILITIES: readonly Capability[] = [
     summary: "Read per-device route intent, its source and actual client apply outcomes.",
     routes: [{ method: "GET", path: "/api/route-to" }],
     flags: [device, json], mutates: false, json: "payload",
-    details: ["On a Child this reads local receipts without a Home management relay. Intent and applied state are distinct; null applied means no recorded outcome."],
+    details: ["On a Child this reads local receipts without a Home management relay. Intent and applied state are distinct; null applied means no recorded outcome.",
+      "Sources: builtin, default, device, local (Child opt-out) and native (a Home row governed by the Home's own switch). An outcome recorded for an earlier intent reads stale."],
   },
   {
     command: ["route", "to", "sync"],
@@ -33,6 +35,7 @@ export const ROUTE_TO_CAPABILITIES: readonly Capability[] = [
     summary: "Reapply route intent on selected devices, or locally on a Child.",
     routes: [{ method: "POST", path: "/api/route-to/sync" }],
     flags: [device, overwrite, json], mutates: true, json: "payload",
-    details: ["No conflict retry or implicit overwrite. Child sync calls its local materializer and sends no Home management write."],
+    details: ["No conflict retry or implicit overwrite. Child sync calls its local materializer and sends no Home management write.",
+      "Home sync never changes the Home's native switches for codex, claude, grok or claude-desktop; it refreshes what each switch says."],
   },
 ];
