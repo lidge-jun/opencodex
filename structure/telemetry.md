@@ -154,3 +154,38 @@ unfiltered, so suppressed values can still be approximated by subtraction.
 Reports are unauthenticated and self-reported by opencodex installs.
 
 `docs-site/src/content/docs/guides/telemetry.md` documents the payload schema, consent and agent boundaries, opt-out controls, payload preview, and collector retention.
+## Public profiles (opt-in leaderboard)
+
+Owned by `src/telemetry/profile/`, `src/cli/telemetry-profile.ts`, the profile modules of
+`services/telemetry-collector/` (`profiles.ts`, `leaderboard.ts`, `profile-http.ts`), `gui/src/components/telemetry-profile-card.tsx`
+with `gui/src/telemetry-profile-api.ts`, and `docs-site/src/components/TelemetryLeaderboard.astro` with
+`docs-site/src/components/telemetry-dashboard/leaderboard.ts`. Design: `devlog/_plan/261109_telemetry_personal_rank/`.
+
+- **Contract.** `src/telemetry/profile/contract.ts` imports only the anonymous contract's rosters. A profile day is
+  `{schemaVersion, day, requests, tokens{5 buckets}, families[{family, requests, tokens}]}` with exact keys, consistent
+  sums, closed `MODEL_FAMILIES`, a completed UTC day at most 7 days old and daily caps. The collector validates with the
+  same functions, so changes need a collector-first rollout.
+- **Separate consent.** Connecting is its own decision, never implied by the telemetry decision or notice:
+  `POST /api/telemetry/profile` requires `hasHumanDashboardSession` and `acknowledgePublic: true`;
+  `ocx telemetry profile connect` refuses `isAgentDriven()` (`agent_consent_required`) and non-TTY or `OCX_SERVICE`
+  (`tty_required`) and asks `[y/N]`. Connecting requires anonymous telemetry to be effective; it never writes
+  `config.json`, `telemetry-state.json` or `telemetry-id.json`. Disconnecting (`DELETE /api/telemetry/profile`,
+  `ocx telemetry profile disconnect`) is always permitted and never touches the telemetry decision.
+- **No linkage.** No file under `src/telemetry/profile/` imports `install-id`, `payload` or `sender` or names the install
+  id, install-day hash or batch id (`tests/usage/usage-telemetry-profile-sync.test.ts` scans for it). Profile calls go
+  to `/v1/profiles*` with a bearer secret on their own timer.
+- **State.** `<OPENCODEX_HOME>/telemetry-profile.json` (atomic no-follow write, `0600`, recorded for uninstall) holds the
+  handle, display name, avatar, secret, connect day, sent days and `pendingDelete`/`revoked`. An unreadable file
+  sends nothing. No API response, CLI output or GUI view carries the secret (`toPublicProfileState`).
+- **Sync.** `src/telemetry/profile/sync.ts` sends at most one day per tick, chosen by
+  `resolveNextEligibleTelemetryDay` with the profile's own sent days and the connect day folded into
+  `ineligibleThroughDay`, so every anonymous eligibility rule applies plus no day on or before the connect day.
+  Sending requires anonymous telemetry to be effective. `src/server/background-lifecycle.ts` starts the loop only
+  when the profile file exists, independently of the env opt-out gate, so a pending deletion is retried while
+  telemetry is off; `GET /api/telemetry/profile` starts it after a CLI connect. A `401` marks the profile revoked.
+- **Collector.** Profile endpoints, limits, ranking (`RANK()` among non-hidden profiles with a positive total; `rank:
+  null` outside that set; `of` is the set size), `x-robots-tag: noindex`, no preflight for bearer routes, and pruning are
+  described in `services/telemetry-collector/README.md`.
+- **Surfaces.** The Home card shows while telemetry is effective or a profile exists, hides when the route is refused
+  (Remote Link Child), and renders user strings as text. The docs-site leaderboard validates a handle before
+  building any request and writes names with `textContent` only (`tests/ci-workflows/docs-telemetry-leaderboard.test.ts`).
