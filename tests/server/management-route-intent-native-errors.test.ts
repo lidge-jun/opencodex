@@ -111,7 +111,7 @@ test("the config lock remains held after legacy publication until Home intent is
     } });
     expect(result.status).toBe(200);
     expect(acquired).toBe(false);
-    expect(readRouteIntentState().devices.home?.claude?.enabled).toBe(false);
+    expect(readRouteIntentState().devices).toEqual({});
   } finally { if (acquired) holder.exec("ROLLBACK"); holder.close(); }
 });
 
@@ -173,7 +173,7 @@ test("real contention during post-decision Claude reconcile never claims nothing
   let acquired = false;
   try {
     const result = await toggle("claude", {}, false, { syncClaudeAgentDefsBestEffort: async () => {
-      expect(readRouteIntentState().devices.home?.claude?.enabled).toBe(false);
+      expect(readRouteIntentState().devices).toEqual({});
       holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"); acquired = true;
       withConfigMutationLockSync(() => {});
     } });
@@ -208,5 +208,5 @@ test("Claude native OFF recomputes its decision after a competing ON during ACL 
   expect(result.body).toMatchObject({ changed: true, state: "absent", desiredEnabled: false });
   expect(config.claudeCode?.enabled).toBe(false);
   expect(JSON.parse(readFileSync(home.path("config.json"), "utf8")).claudeCode.enabled).toBe(false);
-  expect(readRouteIntentState().devices.home?.claude?.enabled).toBe(false);
+  expect(readRouteIntentState().devices).toEqual({});
 });

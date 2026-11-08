@@ -12,7 +12,7 @@ export interface RouteIntentReceipt {
   models?: readonly ExportModel[];
   document: HomeRouteIntentDocument;
   clients: Record<RouteClientId, RouteClientIntent>;
-  sources: Record<RouteClientId, "builtin" | "default" | "device" | "local">;
+  sources: Record<RouteClientId, "builtin" | "default" | "device" | "native" | "local">;
   selectedClients: RouteClientId[];
   outcomes: RouteClientOutcome[];
   /** Null if any client failed, conflicts, or is not installed. Never a partial success. */

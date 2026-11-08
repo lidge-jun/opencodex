@@ -7,8 +7,8 @@ import { readLinkStore, type LinkRecord } from "../../link/store";
 import { linkStorePath } from "../../link/paths";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
-import { ROUTE_CLIENT_IDS, parseRouteClientIntent, projectHomeRouteIntent, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
-import { clearRouteClientIntent, setRouteClientIntent } from "../../routing/route-intent-state";
+import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, projectHomeRouteIntent, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
+import { clearRouteClientIntent, recordHomeNativeDecision, setRouteClientIntent } from "../../routing/route-intent-state";
 import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { routeToDeviceStatus, type RouteToStatus } from "../../routing/route-to-status";
 import { refreshRouteNativeSettings, withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
@@ -56,13 +56,13 @@ async function view(ctx: ManagementContext, selected?: string): Promise<RouteToS
 }
 
 async function applyHome(ctx: ManagementContext, overwriteConflict: boolean, deps: RouteToRouteDeps, overwriteClient?: RouteClientId, commit?: () => void,
-  onlyClient?: RouteClientId): Promise<RouteClientOutcome[]> {
+  onlyClient?: RouteClientId, onlyIntent?: () => RouteClientIntent | undefined): Promise<RouteClientOutcome[]> {
   if (deps.applyHome) return withLinkApply(async () => { commit?.(); return deps.applyHome!(ctx, overwriteConflict, overwriteClient); });
   const { syncHomeRouteTo } = await import("../../routing/route-to-local");
   const local = { ...ctx.config, port: managementInferencePort(ctx) };
   const outcomes = deps.materializeHome
     ? await withLinkApply(async () => { commit?.(); return deps.materializeHome!(local, ctx.version, overwriteConflict, overwriteClient); })
-    : await syncHomeRouteTo(local, ctx.version, overwriteConflict, overwriteClient, commit, { onlyClient });
+    : await syncHomeRouteTo(local, ctx.version, overwriteConflict, overwriteClient, commit, { onlyClient, onlyIntent });
   refreshRouteNativeSettings(ctx.config);
   return outcomes;
 }
@@ -131,10 +131,13 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     const write = parseWrite(body);
     if (!write) return reply({ error: "invalid_request" }, 400);
     const selected = resolveDevice(write.device, devices(ctx));
+    // On the Home itself a native client's decision is its native switch, written by the apply below.
+    const homeNative = selected === "home" && isHomeNativeRouteClient(write.client) ? write.client : undefined;
     const commit = () => withConfigMutationLockSync(() => {
       reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
       initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined);
-      if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
+      if (homeNative) recordHomeNativeDecision(homeNative);
+      else if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
       else setRouteClientIntent(write.client, write.intent, selected);
       desiredCommitted = true;
       // Desired state remains committed if subsequent reconciliation fails.
@@ -142,7 +145,9 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       else if (selected !== "home") homeRouteIntentWatch.notify(selected);
     });
     // A default is also the Home's desired state. A device write waits for that Child's tick.
-    if (selected === undefined || selected === "home") await applyHome(ctx, write.overwriteConflict, deps, write.client, commit, write.client);
+    // A Home inherit for a native client sets its switch to the default Children inherit.
+    if (selected === undefined || selected === "home") await applyHome(ctx, write.overwriteConflict, deps, write.client, commit, write.client,
+      homeNative && write.action !== "inherit" ? () => write.intent : undefined);
     else commit();
     if (selected && selected !== "home" && write.overwriteConflict) {
       const link = devices(ctx).find(row => row.id === selected)!;

@@ -24,16 +24,25 @@ export interface LocalRouteIntentOptions extends Pick<RouteIntentApplyInput,
   /** Connect/sync already applied the Home's Codex settings through the existing injector. */
   codexApplied?: boolean;
   lifecycleLockDeps?: ClientLifecycleLockDeps;
+  /** The native client a Home write is deciding; only it may change a Home native switch. */
+  decidedClient?: RouteClientId;
 }
 
 /**
- * A Home Grok or Desktop intent nobody decided (no persisted default and no Home override) is the
- * legacy absent switch, so it gets exactly the startup behavior: Grok follows the startup gate and
- * Desktop only refreshes a gateway profile OpenCodex already owns. The outcome is "current": the
- * implicit intent is satisfied without creating anything.
+ * The Home's own native switch, read rather than decided by this apply (a sync, or a write for
+ * another client). It is never rewritten here; only the client's owned artifacts follow it.
  */
-function implicitHomeIntent(document: HomeRouteIntentDocument, client: RouteClientId, intent: RouteClientIntent): boolean {
-  return intent.enabled && document.sources[client] === "builtin" && readClientConnectionState().kind !== "connected";
+function liveHomeSwitch(document: HomeRouteIntentDocument, client: RouteClientId, options: LocalRouteIntentOptions): boolean {
+  return document.sources[client] === "native" && options.decidedClient !== client && readClientConnectionState().kind !== "connected";
+}
+
+/**
+ * An enabled Home Grok or Desktop switch nobody is deciding right now gets exactly the startup
+ * behavior: Grok follows the startup gate and Desktop only refreshes a gateway profile OpenCodex
+ * already owns. The outcome is "current": the switch is satisfied without creating anything.
+ */
+function implicitHomeIntent(document: HomeRouteIntentDocument, client: RouteClientId, intent: RouteClientIntent, options: LocalRouteIntentOptions): boolean {
+  return intent.enabled && liveHomeSwitch(document, client, options);
 }
 const IMPLICIT_DESKTOP_MESSAGE = "No OpenCodex-owned Claude Desktop profile to refresh; choose ocx route to claude-desktop on to create one";
 
@@ -105,6 +114,7 @@ async function applyNative(
   const home = input.home ?? homedir();
   const env = input.env ?? process.env;
   const desktopMode = client === "claude-desktop" ? await import("../claude/desktop-first-party") : undefined;
+  const homeSwitch = liveHomeSwitch(input.document, client, options);
   // The committed flag reaches the caller's working snapshot too. The management owner mirrors
   // these individual flags onto its live config; a copied request config cannot do that for it.
   const committedConfig = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
@@ -113,6 +123,7 @@ async function applyNative(
       const current = loadConfig();
       if (desktopMode.resolveClaudeDesktopMode(current, desktopMode.observeClaudeDesktopMode(current)) === "first-party") return null;
     }
+    if (homeSwitch) return loadConfig();
     // Only a connected Child's write displaces a standalone value; the Home owns its own flags.
     return persistNativeRouteIntent(client, intent.enabled, guard, input.config, readClientConnectionState().kind === "connected");
   }), options.lifecycleLockDeps);
@@ -159,7 +170,7 @@ async function applyNative(
     const { inspectGrokConfig } = await import("../grok/inspect");
     const grokHome = env.GROK_HOME || join(home, ".grok");
     const target = join(grokHome, "config.toml");
-    if (implicitHomeIntent(input.document, client, intent) && !localClientSyncAllowed(input.config)) {
+    if (implicitHomeIntent(input.document, client, intent, options) && !localClientSyncAllowed(input.config)) {
       return { client, target, outcome: "current", message: "Grok sync is gated on this Home, as it is at startup" };
     }
     return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
@@ -211,7 +222,7 @@ async function applyNative(
   }
   if (!intent.enabled && inspected.kind === "no_owned_state") return { client, target, outcome: "current" };
   const appliedFingerprint = committedConfig.claudeCode?.desktopProfile?.appliedFingerprint;
-  const refreshOnly = implicitHomeIntent(input.document, client, intent);
+  const refreshOnly = implicitHomeIntent(input.document, client, intent, options);
   if (refreshOnly && (inspected.kind !== "gateway_ours" || !appliedFingerprint)) return { client, target, outcome: "current", message: IMPLICIT_DESKTOP_MESSAGE };
   if (["unsafe", "broken", "gateway_drifted"].includes(inspected.kind)
     && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };

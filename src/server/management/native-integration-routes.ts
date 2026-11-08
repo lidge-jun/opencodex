@@ -7,7 +7,8 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal } from "./claude
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
 import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults } from "../../routing/home-route-intent";
-import { setRouteClientIntent } from "../../routing/route-intent-state";
+import { recordHomeNativeDecision } from "../../routing/route-intent-state";
+import { withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config/mutation-lock";
 /**
@@ -306,12 +307,15 @@ async function commitNativeDecision(
   let published = false;
   try {
     return await settleConfigRoot(configRoot(), () => withConfigMutationLockSync(() => {
-      initializeHomeRouteIntentDefaults(ctx.config, ctx.version);
+      // Capture the Children's defaults from the durable switches before this one changes;
+      // another process may have changed them since this server loaded its snapshot.
+      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version);
       const result = persist();
       if (result instanceof Response) return result;
       published = result;
       if (published && ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
-      setRouteClientIntent(clientId, { enabled }, "home");
+      // The switch just written is the Home's decision; route intent keeps no Home entry for it.
+      recordHomeNativeDecision(clientId);
       if (ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
       return null;
     }));

@@ -16,7 +16,11 @@ export interface HomeRouteIntentDocument {
   version: 1;
   home: { name: string; version: string };
   clients: Record<RouteClientId, RouteClientIntent>;
-  sources: Record<RouteClientId, "builtin" | "default" | "device">;
+  /**
+   * `native` appears only in the Home's own document: the Home's persisted native switch governs
+   * that client there. Documents sent to a Child never carry it.
+   */
+  sources: Record<RouteClientId, "builtin" | "default" | "device" | "native">;
   /** Device decisions (including inherit) invalidate matching enrollment overrides. */
   clientRevisions?: Partial<Record<RouteClientId, number>>;
 }
@@ -72,14 +76,27 @@ export function emptyRouteIntentState(): RouteIntentState {
 
 export interface HomeRouteProjectionOptions {
   /**
-   * The native client a Home write is deciding right now. Its Home default applies to the Home;
-   * every other native client on the Home follows the Home's own persisted switch.
+   * The native client a Home write is deciding right now. The decision is applied through the
+   * Home's native switch; every other native client on the Home reads that switch as it is.
    */
   decidedClient?: RouteClientId;
+  /** The decided Home value. Absent, the decided client takes the default Children inherit. */
+  decidedIntent?: RouteClientIntent;
 }
-const NATIVE_ROUTE_CLIENTS: readonly RouteClientId[] = ["codex", "claude", "grok", "claude-desktop"];
+export const HOME_NATIVE_ROUTE_CLIENTS = ["codex", "claude", "grok", "claude-desktop"] as const;
+export type HomeNativeRouteClientId = (typeof HOME_NATIVE_ROUTE_CLIENTS)[number];
+export function isHomeNativeRouteClient(client: RouteClientId): client is HomeNativeRouteClientId {
+  return (HOME_NATIVE_ROUTE_CLIENTS as readonly string[]).includes(client);
+}
 
-/** Pure projection. Persisted policy is supplied explicitly by the management owner. */
+/**
+ * Pure projection. Persisted policy is supplied explicitly by the management owner.
+ *
+ * On the Home itself (`deviceId === "home"`) the native clients follow the Home's own persisted
+ * switches with their usual meaning (only an explicit `false` is off), never captured defaults or
+ * a `devices.home` entry: ocx restore, Messages off and native toggles change those switches
+ * without recording route intent. Children keep default and device precedence.
+ */
 export function projectHomeRouteIntent(
   config: OcxConfig, version: string, deviceId?: string, state: RouteIntentState = emptyRouteIntentState(),
   options: HomeRouteProjectionOptions = {},
@@ -87,21 +104,20 @@ export function projectHomeRouteIntent(
   const clients = {} as HomeRouteIntentDocument["clients"];
   const sources = {} as HomeRouteIntentDocument["sources"];
   for (const client of ROUTE_CLIENT_IDS) {
-    // Preserve explicit native toggles. An untouched Home keeps the legacy native
-    // default without changing the builtin defaults inherited by other devices.
+    // An untouched Home's explicit native flags become the default Children inherit until captured.
     const legacy = client === "claude" ? config.claudeCode?.enabled
       : client === "codex" || client === "grok" || client === "claude-desktop" ? config.clientIntegrations?.[client] : undefined;
+    const home = state.defaults[client] ?? (typeof legacy === "boolean" ? { enabled: legacy } : undefined);
+    if (deviceId === "home" && isHomeNativeRouteClient(client)) {
+      const decided = options.decidedClient === client;
+      const enabled = decided ? options.decidedIntent?.enabled ?? home?.enabled ?? (client === "codex" || client === "claude")
+        : legacy !== false;
+      clients[client] = { enabled };
+      sources[client] = "native";
+      continue;
+    }
     const device = deviceId === undefined ? undefined : state.devices[deviceId]?.[client];
-    // Captured defaults drive Children. On the Home itself, a persisted native switch is the
-    // Home's own decision: ocx restore, Messages off and native toggles change it without
-    // recording route intent, and an unrelated route write must not undo them.
-    const liveHomeSwitch = deviceId === "home" && NATIVE_ROUTE_CLIENTS.includes(client) && device === undefined
-      && options.decidedClient !== client && typeof legacy === "boolean";
-    const home = liveHomeSwitch ? { enabled: legacy as boolean }
-      : state.defaults[client] ?? (typeof legacy === "boolean" ? { enabled: legacy } : undefined);
-    const implicitNativeHome = deviceId === "home" && (client === "grok" || client === "claude-desktop")
-      && home === undefined && device === undefined;
-    const chosen = { enabled: client === "codex" || client === "claude" || implicitNativeHome, ...home, ...device };
+    const chosen = { enabled: client === "codex" || client === "claude", ...home, ...device };
     clients[client] = { ...chosen, ...(Array.isArray(chosen.accounts) ? { accounts: [...chosen.accounts].sort() } : {}) };
     sources[client] = device ? "device" : home ? "default" : "builtin";
   }
@@ -110,7 +126,8 @@ export function projectHomeRouteIntent(
   return { version: 1, home: { name: label(name, 255) ? name : "Home", version }, clients, sources,
     ...(revisions && Object.keys(revisions).length ? { clientRevisions: { ...revisions } } : {}) };
 }
-export function parseHomeRouteIntentDocument(value: unknown): HomeRouteIntentDocument | null {
+/** `allowNative` is for the Home's own local receipt; a document from a Home never carries it. */
+export function parseHomeRouteIntentDocument(value: unknown, options: { allowNative?: boolean } = {}): HomeRouteIntentDocument | null {
   if (!keys(value, ["version", "home", "clients", "sources"], ["clientRevisions"]) || value.version !== 1
     || !keys(value.home, ["name", "version"]) || !label(value.home.name, 255) || !label(value.home.version, 64)
     || !keys(value.clients, ROUTE_CLIENT_IDS) || !keys(value.sources, ROUTE_CLIENT_IDS)) return null;
@@ -119,7 +136,8 @@ export function parseHomeRouteIntentDocument(value: unknown): HomeRouteIntentDoc
   for (const client of ROUTE_CLIENT_IDS) {
     const intent = parseRouteClientIntent(value.clients[client], client);
     const source = value.sources[client];
-    if (!intent || (source !== "builtin" && source !== "default" && source !== "device")) return null;
+    if (!intent || (source !== "builtin" && source !== "default" && source !== "device"
+      && !(source === "native" && options.allowNative === true && isHomeNativeRouteClient(client)))) return null;
     clients[client] = intent;
     sources[client] = source;
   }

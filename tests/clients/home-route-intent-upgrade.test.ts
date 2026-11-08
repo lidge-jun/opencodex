@@ -7,7 +7,7 @@ import { createIntegrationStateStore } from "../../src/integrations/store";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { projectHomeRouteIntent } from "../../src/link/route-intent";
 import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState, seedRouteDeviceClients } from "../../src/routing/home-route-intent";
-import { clearRouteClientIntent, routeIntentStatePath, setRouteClientIntent } from "../../src/routing/route-intent-state";
+import { readRouteIntentState, recordHomeNativeDecision, routeIntentStatePath, setRouteClientIntent, writeRouteIntentState } from "../../src/routing/route-intent-state";
 import { integrationEnabled } from "../../src/codex/desired-state";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 import { persistNativeRouteIntent } from "../../src/client/route-intent-apply";
@@ -38,34 +38,52 @@ test.each([undefined, false, true])("unrelated Home changes preserve existing na
   }
 });
 
-test("a later explicit default supersedes migrated Home intent but not a user Home override", () => {
+test("the Home's own Grok switch governs the Home; defaults govern Children and a decided Home write", () => {
   const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
   initializeHomeRouteIntentDefaults(config, "1", "opencode");
-  const homeIntent = (decided?: "grok") => projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config), { decidedClient: decided }).clients.grok.enabled;
+  const homeIntent = (decided?: "grok", decidedIntent?: { enabled: boolean }) => projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config),
+    { decidedClient: decided, ...(decidedIntent ? { decidedIntent } : {}) }).clients.grok.enabled;
+  const childIntent = () => projectHomeRouteIntent(config, "1", "lnk_0123456789abcdef", readHomeRouteIntentState(config)).clients.grok.enabled;
   expect(homeIntent()).toBe(true);
   setRouteClientIntent("grok", { enabled: false });
-  expect(homeIntent()).toBe(false);
-  setRouteClientIntent("grok", { enabled: true }, "home");
-  setRouteClientIntent("grok", { enabled: false });
-  expect(homeIntent()).toBe(true);
-  config.clientIntegrations = { grok: true };
-  clearRouteClientIntent("grok", "home");
-  // The Home's own switch stays authoritative until the inherit write that decides Grok applies.
+  // The absent switch is on; only the write deciding Grok applies the default to the Home.
   expect(homeIntent()).toBe(true);
   expect(homeIntent("grok")).toBe(false);
-  expect(projectHomeRouteIntent(config, "1", "lnk_0123456789abcdef", readHomeRouteIntentState(config)).clients.grok.enabled).toBe(false);
+  expect(childIntent()).toBe(false);
+  config.clientIntegrations = { grok: false };
+  expect(homeIntent()).toBe(false);
+  // A Home-only decision carries its own value, whatever the default.
+  expect(homeIntent("grok", { enabled: true })).toBe(true);
+  config.clientIntegrations = { grok: true };
+  expect(homeIntent()).toBe(true);
+  expect(childIntent()).toBe(false);
+  expect(projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config)).sources.grok).toBe("native");
 });
 
-test.each(["grok", "claude-desktop"] as const)("clearing a first Home %s override restores the off Child builtin", client => {
+test.each(["grok", "claude-desktop"] as const)("a first Home %s decision pins the off Child builtin and records no Home entry", client => {
   const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
   initializeHomeRouteIntentDefaults(config, "1", "opencode");
-  setRouteClientIntent(client, { enabled: true }, "home");
+  expect(readRouteIntentState().defaults[client]).toBeUndefined();
+  recordHomeNativeDecision(client);
+  // The switch the decision wrote; a later capture must not spread it to Children.
   config.clientIntegrations = { [client]: true };
-  clearRouteClientIntent(client, "home");
+  initializeHomeRouteIntentDefaults(config, "1");
   const state = readHomeRouteIntentState(config);
+  expect(state.defaults[client]).toEqual({ enabled: false });
+  expect(state.devices.home).toBeUndefined();
   expect(projectHomeRouteIntent(config, "1", "home", state).clients[client].enabled).toBe(true);
   expect(projectHomeRouteIntent(config, "1", "home", state, { decidedClient: client }).clients[client].enabled).toBe(false);
   expect(projectHomeRouteIntent(config, "1", "lnk_0123456789abcdef", state).clients[client].enabled).toBe(false);
+});
+
+test.each(["codex", "claude", "grok", "claude-desktop"] as const)("route intent refuses a devices.home entry for native %s and drops an old one", client => {
+  const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
+  expect(() => setRouteClientIntent(client, { enabled: false }, "home")).toThrow();
+  writeRouteIntentState({ version: 1, defaults: {}, devices: { home: { [client]: { enabled: false }, pi: { enabled: true } } } });
+  // An old entry never decides the Home: an absent switch is on.
+  expect(projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config)).clients[client].enabled).toBe(true);
+  initializeHomeRouteIntentDefaults(config, "1");
+  expect(readRouteIntentState().devices.home).toEqual({ pi: { enabled: true } });
 });
 
 test.each(["grok", "claude-desktop"] as const)("a no-op enable does not invent a persisted %s flag", client => {
@@ -116,7 +134,7 @@ test("a passive Home read preserves old owned intent; local overrides cannot rew
   expect(projectHomeRouteIntent(config, "1", undefined, inherited).clients.pi.enabled).toBe(true);
   expect(existsSync(routeIntentStatePath())).toBe(false);
   initializeHomeRouteIntentDefaults(config, "1");
-  setRouteClientIntent("codex", { enabled: false }, "home");
+  recordHomeNativeDecision("codex");
   const localMaterializedConfig = { ...config, clientIntegrations: { codex: false } };
   const state = readHomeRouteIntentState(localMaterializedConfig);
   expect(projectHomeRouteIntent(localMaterializedConfig, "1", "home", state).clients.codex.enabled).toBe(false);

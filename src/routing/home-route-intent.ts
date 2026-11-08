@@ -6,7 +6,7 @@ import { createIntegrationStateStore, type IntegrationStateStore } from "../inte
 import { listAsideProfileStores } from "../integrations/aside-profile-context";
 import { asideHomeDir } from "../clients/config-export";
 import { parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteIntentState } from "../link/route-intent";
-import { readRouteIntentState, updateRouteIntentState } from "./route-intent-state";
+import { dropHomeNativeOverrides, readRouteIntentState, updateRouteIntentState } from "./route-intent-state";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import type { OcxConfig } from "../types";
 
@@ -76,6 +76,8 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
         && prior.defaults[client] === undefined && inherited.sources[client] === "builtin") continue;
       state.defaults[client as keyof typeof state.defaults] ??= intent;
     }
+    // A `devices.home` native entry from an earlier version no longer decides anything.
+    dropHomeNativeOverrides(state);
     return state;
   });
 }

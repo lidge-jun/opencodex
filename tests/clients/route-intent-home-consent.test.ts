@@ -7,7 +7,7 @@ import { repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
-/** A Home whose Desktop or Grok intent was never decided may refresh owned state, never create it. */
+/** A Home Desktop or Grok switch no write is deciding may refresh owned state, never create it. */
 function scenario(body: string) {
   const home = mkdtempSync(join(tmpdir(), "ocx-home-consent-"));
   for (const dir of [".codex", ".claude", "desktop"]) mkdirSync(join(home, dir));
@@ -31,9 +31,9 @@ function scenario(body: string) {
       delete local.clientIntegrations;
       saveConfig(local);
       writeFileSync(join(library,'_meta.json'),JSON.stringify({entries:[],custom:'keep'}));
-      const homeDocument = () => projectHomeRouteIntent(loadConfig(),'1','home',readHomeRouteIntentState(loadConfig()));
-      async function reconcile(client, models=modelsA, document=homeDocument()) {
-        const receipt=await materializeLocalRouteIntent(loadConfig(),document,models,{onlyClients:[client],lifecycleLockDeps:lockDeps});
+      const homeDocument = (decidedClient) => projectHomeRouteIntent(loadConfig(),'1','home',readHomeRouteIntentState(loadConfig()),{decidedClient});
+      async function reconcile(client, models=modelsA, document=homeDocument(), decidedClient) {
+        const receipt=await materializeLocalRouteIntent(loadConfig(),document,models,{onlyClients:[client],lifecycleLockDeps:lockDeps,decidedClient});
         return receipt.outcomes.find(row=>row.client===client);
       }
       const meta = () => JSON.parse(readFileSync(join(library,'_meta.json'),'utf8'));
@@ -50,7 +50,7 @@ function scenario(body: string) {
 test("implicit Home Desktop intent never creates a gateway profile", () => scenario(`
   const document = homeDocument();
   expect(document.clients['claude-desktop'].enabled).toBe(true);
-  expect(document.sources['claude-desktop']).toBe('builtin');
+  expect(document.sources['claude-desktop']).toBe('native');
   const before = readFileSync(join(library,'_meta.json'),'utf8');
   expect((await reconcile('claude-desktop')).outcome).toBe('current');
   expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(before);
@@ -61,19 +61,20 @@ test("implicit Home Desktop intent never creates a gateway profile", () => scena
 
 test("implicit Home Desktop intent refreshes an owned gateway profile", () => scenario(`
   setRouteClientIntent('claude-desktop',{enabled:true});
-  expect(homeDocument().sources['claude-desktop']).toBe('default');
-  expect((await reconcile('claude-desktop')).outcome).toBe('current');
+  expect((await reconcile('claude-desktop', modelsA, homeDocument('claude-desktop'), 'claude-desktop')).outcome).toBe('current');
   const appliedId = meta().appliedId;
   expect(typeof appliedId).toBe('string');
-  const implicit = structuredClone(homeDocument()); implicit.sources['claude-desktop']='builtin';
-  expect((await reconcile('claude-desktop', modelsB, implicit)).outcome).toBe('current');
+  expect((await reconcile('claude-desktop', modelsB)).outcome).toBe('current');
   expect(meta().appliedId).toBe(appliedId);
   expect(readFileSync(join(library, appliedId+'.json'),'utf8')).toContain('Claude Opus 4 6');
 `), SPAWN_BUDGET_MS);
 
-test("explicit Home Desktop default still creates the gateway profile", () => scenario(`
+test("only a Home write deciding Desktop creates the gateway profile", () => scenario(`
   setRouteClientIntent('claude-desktop',{enabled:true});
+  // A default alone (a sync, or a write for another client) leaves the switch's startup scope.
   expect((await reconcile('claude-desktop')).outcome).toBe('current');
+  expect(meta().appliedId).toBeUndefined();
+  expect((await reconcile('claude-desktop', modelsA, homeDocument('claude-desktop'), 'claude-desktop')).outcome).toBe('current');
   expect(typeof meta().appliedId).toBe('string');
   expect(loadConfig().claudeCode?.desktopMode).toBe('gateway');
 `), SPAWN_BUDGET_MS);
@@ -81,7 +82,7 @@ test("explicit Home Desktop default still creates the gateway profile", () => sc
 test("implicit Home Grok intent matches the startup gate on a gated hub", () => scenario(`
   const c=loadConfig(); c.runtimeRole='hub'; saveConfig(c);
   mkdirSync(process.env.GROK_HOME,{recursive:true});
-  expect(homeDocument().sources.grok).toBe('builtin');
+  expect(homeDocument().sources.grok).toBe('native');
   expect((await reconcile('grok')).outcome).toBe('current');
   expect(existsSync(join(process.env.GROK_HOME,'config.toml'))).toBe(false);
 `), SPAWN_BUDGET_MS);

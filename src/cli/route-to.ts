@@ -131,7 +131,7 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
       || (row.alias !== undefined && typeof row.alias !== "string")
       || row.clients.some(client => !client || !isRouteClientId(client.client)
         || (client.intent !== "on" && client.intent !== "off")
-        || !["builtin", "default", "device", "local"].includes(client.source)
+        || !["builtin", "default", "device", "native", "local"].includes(client.source)
         || (client.applied !== null && !["current", "stale", "not_installed", "conflict", "failed"].includes(client.applied))
         || (client.target !== undefined && typeof client.target !== "string")))) {
     throw new RuntimeApiError("Invalid route-to status response; outcome is unverified. Read status before retrying.", 502, null);

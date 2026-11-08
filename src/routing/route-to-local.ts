@@ -1,7 +1,7 @@
 /** Local CLI reads/applies never relay management writes from a Child to its Home. */
 import { readClientConnectionState } from "../client/state";
 import { withLinkApply } from "../client/link-home";
-import { projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteClientOutcome } from "../link/route-intent";
+import { projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../link/route-intent";
 import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState } from "./home-route-intent";
 import { routeToDeviceStatus, type RouteToDeviceStatus, type RouteToStatus } from "./route-to-status";
 import { withDurableRouteNativeSettings } from "./route-to-live-settings";
@@ -18,22 +18,26 @@ export function readHomeRouteToStatus(config: OcxConfig, version: string): Route
 
 /**
  * `onlyClient` is the client a single Home write decides: only that client is materialized on the
- * Home, and only its Home default overrides the Home's own native switch. Sync passes none.
+ * Home. For a native client the decision (`onlyIntent`, else the default Children inherit) is
+ * written through the Home's native switch. A sync passes none and never writes a Home native
+ * switch: each native client is refreshed to match the switch as it is.
  */
 export async function syncHomeRouteTo(config: OcxConfig, version: string, overwriteConflict = false, overwriteClient?: RouteClientId, commit?: () => void,
   deps: { loadModels?: typeof import("../server/management/model-rows").loadExportModels; materialize?: typeof import("../client/route-intent-apply").materializeLocalRouteIntent;
-    onlyClient?: RouteClientId } = {}): Promise<RouteClientOutcome[]> {
+    onlyClient?: RouteClientId; onlyIntent?: () => RouteClientIntent | undefined } = {}): Promise<RouteClientOutcome[]> {
   return withLinkApply(async () => {
     commit?.();
     const local = withDurableRouteNativeSettings(config);
     initializeHomeRouteIntentDefaults(local, version);
-    const document = projectHomeRouteIntent(local, version, "home", readHomeRouteIntentState(local), { decidedClient: deps.onlyClient });
+    const decidedIntent = deps.onlyIntent?.();
+    const document = projectHomeRouteIntent(local, version, "home", readHomeRouteIntentState(local),
+      { decidedClient: deps.onlyClient, ...(decidedIntent ? { decidedIntent } : {}) });
     const { loadExportModels } = await import("../server/management/model-rows");
     const { materializeLocalRouteIntent } = await import("../client/route-intent-apply");
     const materialize = deps.materialize ?? materializeLocalRouteIntent;
     const only = deps.onlyClient === undefined ? undefined : [deps.onlyClient];
     // A single-client write keeps the other clients' last proven outcomes in the Home receipt.
-    const scope = only ? { retainSkippedOutcomes: true } : {};
+    const scope = only ? { retainSkippedOutcomes: true, decidedClient: deps.onlyClient } : {};
     const off = ROUTE_CLIENT_IDS.filter(client => !document.clients[client].enabled && (!only || only.includes(client)));
     await materialize(local, document, [], { overwriteConflict, overwriteClient, onlyClients: off, ...scope });
     const receipt = await materialize(local, document, await (deps.loadModels ?? loadExportModels)(local), { overwriteConflict, overwriteClient,

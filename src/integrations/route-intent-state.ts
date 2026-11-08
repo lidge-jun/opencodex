@@ -52,7 +52,7 @@ export function readRouteIntentReceipt(statePath = routeIntentStatePath()): Rout
 export function readRouteIntentReceiptStrict(statePath = routeIntentStatePath()): RouteIntentReceipt | null {
   const raw = readJson(join(statePath, "receipt.json")) as RouteIntentReceipt | undefined;
   if (raw === undefined) return null;
-  if (!raw || raw.version !== 1 || !parseHomeRouteIntentDocument(raw.document) || !Array.isArray(raw.outcomes)
+  if (!raw || raw.version !== 1 || !parseHomeRouteIntentDocument(raw.document, { allowNative: true }) || !Array.isArray(raw.outcomes)
     || raw.outcomes.length !== ROUTE_CLIENT_IDS.length || new Set(raw.outcomes.map(row => row?.client)).size !== ROUTE_CLIENT_IDS.length
     || !raw.clients || !raw.sources || !Array.isArray(raw.selectedClients) || new Set(raw.selectedClients).size !== raw.selectedClients.length
     || raw.selectedClients.some(id => !isRouteClientId(id)) || typeof raw.appliedAt !== "string" || !Number.isFinite(Date.parse(raw.appliedAt))
@@ -60,7 +60,7 @@ export function readRouteIntentReceiptStrict(statePath = routeIntentStatePath())
     || (raw.models !== undefined && (!Array.isArray(raw.models) || raw.models.some(row => !row || typeof row.namespaced !== "string" || typeof row.provider !== "string" || typeof row.id !== "string")))
     || !(raw.appliedRouteIntentDigest === null || (typeof raw.appliedRouteIntentDigest === "string" && /^[0-9a-f]{64}$/.test(raw.appliedRouteIntentDigest)))
     || raw.outcomes.some(row => !row || !isRouteClientId(row.client) || !["current", "stale", "not_installed", "conflict", "failed"].includes(row.outcome))
-    || ROUTE_CLIENT_IDS.some(id => !parseRouteClientIntent(raw.clients[id], id) || !["builtin", "default", "device", "local"].includes(raw.sources[id])
+    || ROUTE_CLIENT_IDS.some(id => !parseRouteClientIntent(raw.clients[id], id) || !["builtin", "default", "device", "native", "local"].includes(raw.sources[id])
       || raw.selectedClients.includes(id) !== raw.clients[id].enabled)) throw new Error("Route intent receipt is malformed; preserve it and repair before disconnect");
   return raw;
 }

@@ -6,7 +6,7 @@ test("legacy dashboard toggles durably decide Home intent without changing Child
   const home = createTempHome("native-route-review-");
   try {
     const script = `
-      const { getDefaultConfig, saveConfig } = await import(${JSON.stringify(repoPath("src/config.ts"))});
+      const { getDefaultConfig, loadConfig, saveConfig } = await import(${JSON.stringify(repoPath("src/config.ts"))});
       const { handleNativeIntegrationRoutes } = await import(${JSON.stringify(repoPath("src/server/management/native-integration-routes.ts"))});
       const { readHomeRouteIntentState, initializeHomeRouteIntentDefaults } = await import(${JSON.stringify(repoPath("src/routing/home-route-intent.ts"))});
       const { projectHomeRouteIntent } = await import(${JSON.stringify(repoPath("src/link/route-intent.ts"))});
@@ -25,9 +25,11 @@ test("legacy dashboard toggles durably decide Home intent without changing Child
         const response = await handleNativeIntegrationRoutes({ req, url: new URL(req.url), config, version: "test", deps: {} });
         const body = await response.json();
         const state = readHomeRouteIntentState(config);
+        // The Home reads its durable switch (route-to status does the same); Children read defaults.
         result.push({ client, status: response.status, desired: body.desiredEnabled,
-          home: projectHomeRouteIntent(config, "test", "home", state).clients[client].enabled,
-          child: projectHomeRouteIntent(config, "test", "lnk_0123456789abcdef", state).clients[client].enabled });
+          home: projectHomeRouteIntent(loadConfig(), "test", "home", state).clients[client].enabled,
+          child: projectHomeRouteIntent(config, "test", "lnk_0123456789abcdef", state).clients[client].enabled,
+          homeEntry: state.devices.home?.[client] ?? null });
       }
       const { withLinkApply } = await import(${JSON.stringify(repoPath("src/client/link-home.ts"))});
       const before = JSON.stringify(readHomeRouteIntentState(config));
@@ -53,6 +55,7 @@ test("legacy dashboard toggles durably decide Home intent without changing Child
       expect(row.desired).toBe(false);
       expect(row.home).toBe(false);
       expect(row.child).toBe(true);
+      expect(row.homeEntry).toBeNull();
     }
   } finally { home.remove(); }
 });

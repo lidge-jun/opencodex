@@ -3,7 +3,8 @@ import { ROUTE_CLIENT_IDS, routeClientIntentDigest, routeIntentDigest, type Home
 export interface RouteToClientStatus {
   client: RouteClientId;
   intent: "on" | "off";
-  source: "builtin" | "default" | "device" | "local";
+  /** `native`: a Home row governed by the Home's own persisted native switch. */
+  source: "builtin" | "default" | "device" | "native" | "local";
   applied: RouteClientOutcome["outcome"] | null;
   target?: string;
 }
