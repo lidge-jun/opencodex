@@ -6,7 +6,8 @@ model roster and one selected-model turn. The JSON-RPC reader bounds frames, upd
 and request time; cancellation and cleanup terminate the child. Text and thought chunks retain their
 distinct adapter events. Tool input/replay and non-text media are rejected, permission requests are
 denied and terminate the session. Tool notifications fail with `trae_tool_call_unsupported`; only a
-normal `end_turn` or `max_tokens` completion without text fails with `trae_empty_response`. Refusals
+normal `end_turn` or `max_tokens` completion without text fails with `trae_empty_response`.
+Empty completions and unsupported stop reasons retain reported usage in their terminal error. Refusals
 emit a non-retryable `content_filter` incomplete event with usage. The CLI uses
 an empty temporary workspace with disallow rules and no session MCP/skills. `src/codex/catalog/trae-cn-models.ts` publishes discovered
 models as text-only with verbosity disabled, including configured ids outside the seed list. All
@@ -33,7 +34,9 @@ On Windows 10+, `src/adapters/trae-cn/windows-job.ts` launches a PowerShell 5.1 
 atomic Job List and handle-list process attributes. It owns descendants even after a dispatcher
 exits, denies breakaway, and kills members when its private Job handle closes. CLI stderr travels
 as bounded base64 frames; only supervisor frames can attest that the Job has no active members.
-Unsupported supervision fails before launching an unowned CLI. No numeric PID is reopened.
+Scoped Windows environment keys are matched case-insensitively, and the native launch receives an
+absolute executable/dispatcher path. Unsupported supervision fails before launching an unowned CLI.
+No numeric PID is reopened.
 Unconfirmed shutdown is an error and retains owned temporary files; the adapter publishes its terminal
 event after cleanup, preserving received usage even when cleanup fails. A failed workspace allocation removes an
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send; startup

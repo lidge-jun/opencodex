@@ -359,8 +359,13 @@ export async function openTraeSession(
             }
           }
           const result = await completion;
-          const stop = traeStopReason(result);
           const usage = traeUsage(result);
+          let stop: string;
+          try { stop = traeStopReason(result); } catch {
+            emit({ type: "error", message: "TRAE CN ACP ended with an invalid protocol response.", code: "trae_acp_protocol_error",
+              status: 502, errorType: "upstream_error", retryable: false, ...(usage ? { usage } : {}) });
+            return;
+          }
           if (stop === "cancelled") {
             if (!signal?.aborted) emit({ type: "incomplete", reason: "upstream_cancelled", retryable: false,
               message: "TRAE CN cancelled the turn.", ...(usage ? { usage } : {}) });
@@ -371,8 +376,14 @@ export async function openTraeSession(
               message: "TRAE CN refused the turn.", ...(usage ? { usage } : {}) });
             return;
           }
-          if (stop !== "stop" && stop !== "max_tokens") throw new TraeAcpError(`TRAE CN stopped the turn: ${stop}`, "trae_turn_stopped");
-          if (!output) throw new TraeAcpError("TRAE CN ended without a text response.", "trae_empty_response");
+          const terminalError = stop !== "stop" && stop !== "max_tokens"
+            ? { message: "TRAE CN stopped the turn: " + stop, code: "trae_turn_stopped" }
+            : !output ? { message: "TRAE CN ended without a text response.", code: "trae_empty_response" } : undefined;
+          if (terminalError) {
+            emit({ type: "error", ...terminalError,
+              status: 502, errorType: "upstream_error", retryable: false, ...(usage ? { usage } : {}) });
+            return;
+          }
           emit({ type: "done", stopReason: stop, ...(usage ? { usage } : {}) });
         } catch (error) {
           if (error instanceof TraeAcpError && error.code === "trae_acp_closed") {

@@ -8,7 +8,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:c
 import { createTraeCnAdapter } from "../../src/adapters/trae-cn/adapter";
 import * as traeClient from "../../src/adapters/trae-cn/client";
 import { traePosixInvocation, traeStopPipe } from "../../src/adapters/trae-cn/process";
-import { prepareTraeWindowsJob, TraeWindowsJobFrames, traeWindowsCommandLine } from "../../src/adapters/trae-cn/windows-job";
+import { prepareTraeWindowsJob, TraeWindowsJobFrames, traeWindowsCommandLine, traeWindowsJobExecutable } from "../../src/adapters/trae-cn/windows-job";
 import { commandInvocation } from "../../src/lib/win-exec";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
@@ -466,12 +466,20 @@ describe("TRAE CN ACP regression contract", () => {
   test("shutdown remains bounded when the process and its pipe never close", async () => {
     const fixture = traeFixture(request => request.method === "session/prompt");
     fixture.child.kill = () => true;
-    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, home: testHome.root, cwd: testHome.root });
+    const allocated: string[] = [];
+    const makeTempDir = (async () => {
+      const directory = await mkdtemp(testHome.path("owned-"));
+      allocated.push(directory);
+      return directory;
+    }) as typeof mkdtemp;
+    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, makeTempDir });
     const turn = session.prompt("test-model", "hello", () => undefined).catch(error => error);
     await expect(session.close()).rejects.toThrow("shutdown was not confirmed");
     expect(await turn).toBeInstanceOf(Error);
     expect(fixture.child.stdout!.destroyed).toBe(true);
     expect(existsSync(String(fixture.options()!.cwd))).toBe(true);
+    expect(allocated).toHaveLength(2);
+    expect(allocated.every(directory => existsSync(directory))).toBe(true);
   });
 
   test("a cleanup failure preserves already-received terminal usage", async () => {
@@ -483,6 +491,24 @@ describe("TRAE CN ACP regression contract", () => {
     expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_shutdown_timeout", usage: { inputTokens: 10, outputTokens: 2 } });
     expect(events.some(event => event.type === "done")).toBe(false);
   });
+
+  for (const stopReason of ["end_turn", "max_tokens", "max_turn_requests"]) {
+    test("a failed reasoning-only completion preserves usage: " + stopReason, async () => {
+      const fixture = traeFixture(request => {
+        if (request.method !== "session/prompt") return false;
+        fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+          sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" },
+        } } });
+        fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason, usage: { inputTokens: 123, outputTokens: 456, totalTokens: 579 } } });
+        return true;
+      });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "error", code: stopReason === "max_turn_requests" ? "trae_acp_protocol_error" : "trae_empty_response", retryable: false,
+        usage: { inputTokens: 123, outputTokens: 456, totalTokens: 579 } });
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+  }
 
   for (const consumer of ["adapter", "probe"]) {
     test("stderr overflow suppresses a split authorization value in " + consumer, async () => {
@@ -623,14 +649,21 @@ describe("TRAE CN ACP regression contract", () => {
   });
 
   test("Windows launcher preserves cmd escaping and owns only its staging directory", async () => {
-    const invocation = commandInvocation("C:\\Users\\test\\trae cli.cmd", ["a&b", "with space"], "win32");
+    const env = { COMSPEC: "D:\\Windows\\System32\\cmd.exe", SYSTEMROOT: "D:\\Windows" };
+    const invocation = commandInvocation("C:\\Users\\test\\trae cli.cmd", ["a&b", "with space"], "win32", { env });
+    expect(invocation.file).toBe("cmd.exe");
+    expect(traeWindowsJobExecutable(invocation.file, env)).toBe(env.COMSPEC);
+    expect(traeWindowsJobExecutable("cmd.exe", { SYSTEMROOT: "D:\\Windows" })).toBe("D:\\Windows\\System32\\cmd.exe");
+    expect(() => traeWindowsJobExecutable("unknown.exe", env)).toThrow("absolute executable path");
     expect(traeWindowsCommandLine(invocation)).toEndWith(invocation.args.join(" "));
-    const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, {});
+    const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, env);
     try {
       expect(job.options.windowsVerbatimArguments).toBeUndefined();
+      expect(job.file).toBe("D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
       const loader = Buffer.from(job.args.at(-1)!, "base64").toString("utf16le");
       expect(loader).not.toContain("ExecutionPolicy");
       expect(loader).toContain("Add-Type");
+      expect(loader).toContain(env.COMSPEC);
       expect(loader.length).toBeLessThan(10000);
     } finally { await job.cleanup(); }
     expect(existsSync(testHome.root)).toBe(true);
@@ -650,9 +683,10 @@ describe("TRAE CN ACP regression contract", () => {
         "fs.writeFileSync(" + JSON.stringify(dispatcher) + ",'exited');process.exit(0);",
       ].join("\n"));
       writeFileSync(shim, '@"' + process.execPath + '" "' + script + '" %*\r\n');
-      const invocation = commandInvocation(shim, ["acp", "serve"], "win32");
-      const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, process.env as Record<string, string>);
-      const child = nodeSpawn(job.file, job.args, { ...job.options, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      const env = traeCnChildEnv(process.env, "win32");
+      const invocation = commandInvocation(shim, ["acp", "serve"], "win32", { env });
+      const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, env);
+      const child = nodeSpawn(job.file, job.args, { ...job.options, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       const closed = once(child, "close");
       let diagnostic = "";
       const failures: string[] = [];

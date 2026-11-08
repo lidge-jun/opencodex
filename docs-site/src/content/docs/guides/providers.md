@@ -1495,7 +1495,7 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   cannot enable native image input or verbosity. Images require the vision sidecar to describe them first.
   Permission requests fail with `trae_client_request_unsupported`; internal tool notifications fail
   with `trae_tool_call_unsupported`. A normal `end_turn` or `max_tokens` completion with no text
-  fails with `trae_empty_response`. Refusals preserve usage and terminate without retry.
+  fails with `trae_empty_response`. Empty responses and refusals preserve usage and terminate without retry.
   Client cancellation is silent; cancellation initiated by the CLI returns an incomplete turn.
   Requests with an output-token limit fail with `unsupported_max_output_tokens` because this
   adapter has no verified ACP field for that limit.

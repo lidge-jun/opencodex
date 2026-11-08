@@ -3,6 +3,21 @@ import { join, win32 } from "node:path";
 import type { SpawnInvocation } from "../../lib/win-exec";
 import { TRAE_WINDOWS_JOB_SOURCE } from "./windows-job-source";
 
+/** Scoped env keys are uppercase; native CreateProcess does not search for lpApplicationName. */
+function windowsEnv(env: Record<string, string>, name: string): string | undefined {
+  return Object.entries(env).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+}
+
+export function traeWindowsJobExecutable(file: string, env: Record<string, string>): string {
+  if (win32.isAbsolute(file)) return file;
+  if (/^cmd(?:\.exe)?$/i.test(file)) {
+    const comspec = windowsEnv(env, "ComSpec");
+    if (comspec && win32.isAbsolute(comspec)) return comspec;
+    return win32.join(windowsEnv(env, "SystemRoot") ?? "C:\\Windows", "System32", "cmd.exe");
+  }
+  throw Object.assign(new Error("Native TRAE CN supervision requires an absolute executable path."), { code: "ENOENT" });
+}
+
 /** Quote the native command line once; cmd/bat arguments already carry cmd escaping. */
 export function traeWindowsCommandLine(invocation: SpawnInvocation): string {
   const quote = (value: string): string => '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1') + '"';
@@ -16,6 +31,7 @@ export async function prepareTraeWindowsJob(invocation: SpawnInvocation, home: s
   const directory = await mkdtemp(join(home, "supervisor-"));
   const cleanup = () => rm(directory, { recursive: true, force: true });
   try {
+    invocation = { ...invocation, file: traeWindowsJobExecutable(invocation.file, env) };
     const source = join(directory, "TraeAcpJob.cs");
     await writeFile(source, TRAE_WINDOWS_JOB_SOURCE, { mode: 0o600 });
     const literal = (value: string): string => "'" + value.replaceAll("'", "''") + "'";
@@ -27,7 +43,7 @@ export async function prepareTraeWindowsJob(invocation: SpawnInvocation, home: s
       "} catch { [Console]::Error.WriteLine('OCX_TRAE_ERROR:loader:0');",
       "if (-not $entered) { [Console]::Error.WriteLine('OCX_TRAE_JOB_STOPPED') };exit 1 }",
     ].join("\n");
-    return { file: win32.join(env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    return { file: win32.join(windowsEnv(env, "SystemRoot") ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
       args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(loader, "utf16le").toString("base64")],
       options: {}, cleanup };
   } catch (error) { await cleanup().catch(() => undefined); throw error; }
