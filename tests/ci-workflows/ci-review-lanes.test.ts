@@ -45,8 +45,13 @@ describe("CI review lanes", () => {
       };
       const trigger = workflow.on?.pull_request ?? {};
       if (expectedKeys.includes("branches")) {
+        // `main` was deleted and `dev` is the only integration line. A PR base
+        // filter can only name integration lines, so the list is exactly
+        // `dev` — stacked child PRs are still covered because their base is a
+        // parent PR head, which no allowlist could enumerate and which this
+        // workflow did not cover before either.
         const branches = (trigger.branches as string[] | undefined) ?? [];
-        expect([...branches].sort()).toEqual(["dev", "main"]);
+        expect([...branches].sort()).toEqual(["dev"]);
       }
 
       // Narrowing a default is a mutation that deletes nothing. Omitting
@@ -72,6 +77,29 @@ describe("CI review lanes", () => {
       jobs?: Record<string, Record<string, unknown> | undefined>;
     };
     expect(ci.on?.push).toBeUndefined();
+
+    // Workflows that used to run on the deleted `main`/`preview` branches shed
+    // those pushes instead of retargeting them. A `dev` push trigger is
+    // explicitly forbidden by the CI policy and would also turn a per-merge
+    // event into the expensive path this repository deliberately keeps manual.
+    for (const relPath of [
+      ".github/workflows/codex-queue-helpers.yml",
+      ".github/workflows/issue-quality-tests.yml",
+      ".github/workflows/cleanup-orphaned-workflows.yml",
+      ".github/workflows/react-doctor.yml",
+    ]) {
+      const workflow = Bun.YAML.parse(await readText(relPath)) as {
+        on?: Record<string, unknown> & {
+          push?: { branches?: string[]; paths?: string[] };
+        };
+      };
+      expect(workflow.on?.push, `${relPath} must not push on a deleted branch`).toBeUndefined();
+      // The remaining useful coverage must survive the removal.
+      const triggerNames = Object.keys(workflow.on ?? {});
+      expect(triggerNames.length, `${relPath} must keep a trigger`).toBeGreaterThan(0);
+      expect(triggerNames.includes("pull_request") || triggerNames.includes("schedule"),
+        `${relPath} must keep PR or scheduled coverage`).toBe(true);
+    }
 
     // The PR trigger must carry NO base-branch filter, and the two triggers
     // differ on purpose. GitHub matches `branches:` against the BASE ref, so

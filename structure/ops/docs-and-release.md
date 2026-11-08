@@ -137,14 +137,14 @@ commit SHA before checkout. The build has read-only contents access; only the de
 Pages and OIDC write permissions. There are no push triggers. The scoped `docs-site-build` PR
 job validates the site before merge, including the internal-link integration.
 
-Before cutover, a maintainer must configure Pages to use GitHub Actions and restrict the
-`github-pages` environment to the protected `dev` branch, with required reviewers according to
-repository policy. Do not allow arbitrary branches or tags in that environment: a branch-selected
-workflow can replace its own guards. Protect `dev` and release tags, and verify these settings
-before deploying. Changing the repository default branch from `main` to `dev` is a separate
-maintainer-controlled operation; until then default-branch automation still loads from `main`.
-The legacy `main` and `preview` branches are retained for recovery and migration. No repository
-setting change or production deploy is implied by this documentation.
+A maintainer configures Pages to use GitHub Actions and restricts the `github-pages`
+environment to the protected `dev` branch, with required reviewers according to repository
+policy. Do not allow arbitrary branches or tags in that environment: a branch-selected workflow
+can replace its own guards. Protect `dev` and release tags, and verify these settings before
+deploying. The repository default branch is `dev`, so default-branch automation loads from it.
+The legacy `main` and `preview` branches were deleted once the single-branch model was in place;
+released history remains reachable through tags. No repository setting change or production
+deploy is implied by this documentation.
 
 Service lifecycle evidence includes the legacy CLI entrypoint `src/cli.ts` as well as the
 service implementation and desktop packaging paths.
@@ -225,15 +225,15 @@ cannot supply a write-job PR number. If no unique local current-head candidate r
 | `.github/workflows/deploy-docs.yml` | Manual dispatch from `dev` | Builds a published stable release at its resolved commit and deploys to Pages; the PR build gate is `docs-site-build`. |
 | `.github/workflows/service-lifecycle.yml` | Filtered pull requests and manual dispatch | Linux, macOS and Windows service checks; manual dispatch validates an exact `dev` ancestor source SHA. |
 | `.github/workflows/catalog-async-contracts.yml` | Filtered pull requests and manual dispatch | Read-only catalog contracts; PRs run Ubuntu and manual dispatch from `dev` runs all three platforms. |
-| `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. `labeled`/`unlabeled` wake the gate only for `gui-screenshot-waived` and the `HYGIENE_GATE_LABELS` exported by `.github/scripts/pr-hygiene.cjs`; `tests/ci-workflows/ci-workflows.test.ts` pins the two lists together. Head-specific exception labels (`test-exception-approved`, `suppression-approved`, `generated-change-approved`, `dependency-change-approved`, `attribution-approved`) count only while the head and head-rewrite count that `pr-hygiene.yml` last recorded in its comment section are unchanged; both gates read that record and only the hygiene workflow writes it or removes the labels. |
+| `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose base is not `dev` (stacked children excepted), rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. `labeled`/`unlabeled` wake the gate only for `gui-screenshot-waived` and the `HYGIENE_GATE_LABELS` exported by `.github/scripts/pr-hygiene.cjs`; `tests/ci-workflows/ci-workflows.test.ts` pins the two lists together. Head-specific exception labels (`test-exception-approved`, `suppression-approved`, `generated-change-approved`, `dependency-change-approved`, `attribution-approved`) count only while the head and head-rewrite count that `pr-hygiene.yml` last recorded in its comment section are unchanged; both gates read that record and only the hygiene workflow writes it or removes the labels. |
 | `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
-| `.github/workflows/issue-quality-tests.yml` | `pull_request` and `push` to `main`/`preview` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
+| `.github/workflows/issue-quality-tests.yml` | `pull_request` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
 | `.github/workflows/issue-triage.yml` | `issues` (opened) | Duplicate detection and triage labeling for new issues. |
 | `.github/workflows/pr-labeler.yml` | `pull_request_target` (opened, edited, synchronize, labeled, unlabeled) | Type and path labeling plus title sync; `labeled`/`unlabeled` let a human override enqueue a fresher run in the per-PR concurrency group. |
-| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) touching `gui/**` or the workflow, and every `push` to `main` | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
+| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) touching `gui/**` or the workflow | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
 | `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
 
-`pull_request_target`, `issues`, and `schedule` workflows load from the repository default branch. Until a maintainer changes the default to `dev`, landing a change on `dev` alone does not change their live behavior.
+`pull_request_target`, `issues`, and `schedule` workflows load from the repository default branch, which is `dev`.
 
 CI setup uses the [Bun runtime and test-runner pins](../runtime.md#bun-runtime-and-test-runner): test jobs (including development-version validation) choose `test-runner`, while release packaging, desktop/widget compilation and runtime smokes keep the default `runtime` role. Local layout verification resolves that test pin, and `gui/package.json` runs `scripts/test-with-pinned-bun.ts` to preserve its working directory, configuration and arguments on the same pin. The wrapper forwards SIGINT, SIGTERM and SIGHUP, waits for child exit and preserves interruption status (130, 143 or 129).
 
@@ -298,10 +298,11 @@ changed source area even when no text edit is needed.
 [`AGENTS.md`](../../AGENTS.md) and [`MAINTAINERS.md`](../../MAINTAINERS.md) are authoritative; this section
 exists so the repository-shape source of truth does not omit the shape of its own history.
 
-- `dev` is the single integration and release-source branch. `main` and `preview` remain protected
-  historical branches for migration and recovery. One documented
-  exception: a stacked child PR may target another **open** PR's head branch as a review workflow, and
-  is retargeted to `dev` once the parent lands or closes.
+- `dev` is the single integration and release-source branch and the repository default branch.
+  `main` and `preview` were deleted after the single-branch model was in place; released history
+  remains reachable through tags. One documented exception: a stacked child PR may target another
+  **open** PR's head branch as a review workflow, and is retargeted to `dev` once the parent lands
+  or closes.
 - Bun-native TypeScript on `dev` is the only runtime line. The former Go native-runtime experiment is
   retired and archived, and no `go/` tree is tracked in this repository; a local `go/` directory is
   untracked leftovers. If native code returns, the expectation is an incremental module landing on
@@ -329,7 +330,7 @@ enforcement. For `dev`, a current maintainer with live `maintain` or `admin` acc
 explicitly integrate a PR without a second maintainer approval. The optional merge-review
 helper validates this actor/base exception separately from its default contributor-approval
 path; it does not certify CI or security review. The PR-only bypass leaves direct pushes,
-force-pushes and deletion blocked. `main` and `preview` retain their existing review rules.
+force-pushes and deletion blocked.
 
 A new dashboard management operation ships with its `ocx` command in the same change, declared in
 `src/cli/capabilities.ts`, or with an explicit note that it is visual-only (theme, language,
