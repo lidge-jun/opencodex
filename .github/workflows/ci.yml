@@ -611,11 +611,17 @@ jobs:
   # Only the suite lives here. Typecheck, lint, build, and the scans run once in
   # `gates` rather than five times — they are fixed cost, and paying it per shard
   # would eat what the sharding saves.
+  # The heavy Linux jobs (test shards, test-changed, gates) take the lidge self-hosted pool on
+  # trusted runs while the repository variable LIDGE_RUNNERS is on: pushes, manual runs, branches of
+  # this repository, and pull requests by owners, members or collaborators. Everything else, and every
+  # run while the variable is off, stays on ubuntu-latest, so the hosted runners keep carrying the light
+  # jobs. As with the Windows box above, this routing is operational; the fork-PR approval policy and
+  # the box's scaler, which only creates runners for trusted runs, are the security boundary.
   test:
     name: test ${{ matrix.shard }}/5
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     # A fifth of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
     # longer runs here (see platform-windows).
@@ -679,7 +685,7 @@ jobs:
     name: test changed
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.fast == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -773,7 +779,7 @@ jobs:
     name: gates
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Checkout
