@@ -59,6 +59,7 @@ import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
 import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
+import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -181,6 +182,18 @@ export async function executeResponsesRunTurn(
   // Publish the known subscription pause before headers or a CLI turn, preserving its reset
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
   if (transportState.runTurnAdapter.name === "claude-cli") {
+    if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
+      || parsed.context.messages.some(message => message.role === "developer"
+        && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
+      cancelResponseCompletion();
+      releaseSearchProbeLease();
+      const refusal = new Response(JSON.stringify({ error: {
+        type: "invalid_request_error", code: "unsupported_input_modality", param: null,
+        message: "Claude Code CLI does not support images in developer instructions.",
+      } }), { status: 400, headers: { "Content-Type": "application/json" } });
+      markResponseNonReplayable(refusal);
+      return refusal;
+    }
     let usage: Awaited<ReturnType<typeof claudeUsagePreflight>>;
     try {
       usage = await claudeUsagePreflight(parsed.modelId);

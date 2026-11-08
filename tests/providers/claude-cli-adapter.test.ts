@@ -128,11 +128,8 @@ describe("claude-cli is an official-harness provider, not a Messages relay", () 
     expect(entry!.modelContextWindows?.[entry!.defaultModel!]).toBeGreaterThan(0);
     // Static roster: a live discovery request against this route answers 404 and is pure noise.
     expect(entry!.liveModels).toBe(false);
-    // The CLI parses an image frame, but no headless turn was shown to hand those bytes to the
-    // model, so the row publishes text-only models instead of the Messages API rows' image
-    // modality: an advertised input the route cannot honour is how a picture gets answered blind.
-    expect(entry!.noVisionModels).toEqual(entry!.models ?? []);
-    expect(entry!.modelInputModalities).toBeUndefined();
+    expect(entry!.noVisionModels).toBeUndefined();
+    expect(entry!.modelInputModalities?.[entry!.defaultModel!]).toEqual(["text", "image"]);
   });
 
   test("the row is a keyless key provider, not a local runtime, and needs no dashboardPreset flag", () => {
@@ -371,20 +368,56 @@ describe("claude-cli runTurn fails closed before any spawn", () => {
     expect(String((events[0] as { message: string }).message)).toContain("npm install -g @anthropic-ai/claude-code");
   });
 
-  test("an image is refused rather than handed to a harness that was never shown to carry it", async () => {
+  test("developer images fail explicitly before discovery or spawn", async () => {
+    let discovered = 0;
     let spawned = 0;
     const adapter = createClaudeCliAdapter(provider(), {
+      which: () => { discovered++; return "/usr/bin/claude"; },
       spawn: () => { spawned++; return fakeChild([]) as unknown as ChildProcess; },
+    });
+    const events = await run(adapter, parsed({ context: { messages: [{ role: "developer",
+      content: [{ type: "text", text: "Follow this" }, { type: "image", imageUrl: "data:image/png;base64,U0VDUkVU" }], timestamp: 0 }] } }));
+    expect(discovered).toBe(0);
+    expect(spawned).toBe(0);
+    expect(events).toEqual([expect.objectContaining({ type: "error", status: 400, code: "unsupported_input_modality", retryable: false })]);
+    expect(JSON.stringify(events)).not.toContain("U0VDUkVU");
+  });
+
+  test("unsupported image projection delivers one error and reaps the owned child", async () => {
+    const child = fakeChild([]);
+    let promptFile = "";
+    const adapter = createClaudeCliAdapter(provider(), {
+      which: () => "/usr/bin/claude",
+      spawn: (_command, args) => { promptFile = args[args.indexOf("--system-prompt-file") + 1]!; return child as unknown as ChildProcess; },
+      killGraceMs: 20,
+    });
+    const events = await run(adapter, parsed({ context: { messages: [{ role: "user",
+      content: [{ type: "image", imageUrl: "file:///private-do-not-echo.png" }], timestamp: 0 }] } }));
+    expect(events).toEqual([expect.objectContaining({ type: "error", message: "Claude replay contains an unsupported image reference." })]);
+    expect(JSON.stringify(events)).not.toContain("private-do-not-echo");
+    expect(child.written).toEqual([]);
+    expect(child.killed).toBe(true);
+    expect(child.exitCode).not.toBeNull();
+    expect(existsSync(promptFile)).toBe(false);
+  });
+
+  test("native image bytes reach the CLI stdin without granting vendor tools", async () => {
+    const terminal = enc.encode(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "seen", usage: { input_tokens: 1, output_tokens: 1 } }) + "\n");
+    const child = fakeChild([terminal]);
+    let args: string[] = [];
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: (_command, value) => { args = [...value]; return child as unknown as ChildProcess; },
       which: () => "/opt/homebrew/bin/claude",
     });
     const events = await run(adapter, parsed({
       context: { messages: [{ role: "user", content: [{ type: "text", text: "what is this?" }, { type: "image", imageUrl: "data:image/png;base64,iVBORw0KGgo=" }], timestamp: 0 }] },
     }));
-    // Same refusal the Qoder presets make: a dropped image answers the wrong question confidently,
-    // and no headless Claude Code turn was shown to deliver image bytes to the model.
-    expect(spawned).toBe(0);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: "error", status: 400, code: "unsupported_input_modality", retryable: false });
+    const frame = JSON.parse(child.written.join("").trim());
+    expect(frame.message.content).toContainEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } });
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(args).toContain("--strict-mcp-config");
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(events.some(event => event.type === "done")).toBe(true);
   });
 });
 
