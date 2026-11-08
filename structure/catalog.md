@@ -471,8 +471,8 @@ this can exceed the 120,000-byte `McpTools` ceiling and drop `exec` and `wait` (
 non-Cursor routes keep `web_search_tool_type: "text_and_image"`; Cursor omits it because runTurn bypasses the sidecar.
 
 Canonical Codex identities or Codex turn metadata activate a diagnostic, never a refusal: at `EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD` (64) eager MCP
-definitions in top-level `tools`, current-turn Responses Lite `additional_tools` (directly ahead of or after the last user input; a resumed
-thread's earlier declarations are history) or rendered Code Mode `exec` sections, one warning per session logs only the count and threshold and the
+definitions in top-level `tools`, current-turn Responses Lite `additional_tools` (after the last model output item; a resumed thread's earlier
+declarations are history) or rendered Code Mode `exec` sections (bare or in `functions`), one warning per session logs only the count and threshold and the
 request is forwarded unchanged. Deferred definitions are excluded; compaction (V1 handoff, V2 `compaction_trigger`) counts top-level `tools` only.
 Helper: `src/server/responses/codex-tool-catalog.ts`; test: `tests/responses/codex-eager-tool-catalog.test.ts`.
 

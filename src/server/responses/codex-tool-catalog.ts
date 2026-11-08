@@ -30,8 +30,9 @@ function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: 
     if (tool.defer_loading === true || typeof tool.name !== "string") continue;
     const name = namespace ? `${namespace}__${tool.name}` : tool.name;
     if (name.startsWith("mcp__")) names.add(name);
-    // Code Mode renders each enabled, non-deferred nested tool into the exec description.
-    if (!namespace && spec.type === "custom") {
+    // Code Mode renders each enabled, non-deferred nested tool into the exec description. Codex
+    // sends exec bare or, on Responses Lite, inside its `functions` namespace.
+    if ((namespace === undefined || namespace === "functions") && spec.type === "custom") {
       for (const nested of codeModeRenderedToolNames(tool.name, tool.description)) {
         if (nested.startsWith("mcp__")) names.add(nested);
       }
@@ -39,26 +40,25 @@ function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: 
   }
 }
 
-/** A message that opens a Responses turn ahead of its user input, such as instructions. */
-function isTurnPreamble(item: unknown): boolean {
+/** An item the model produced: assistant text, reasoning, a tool call or a compaction. */
+function isModelOutput(item: unknown): boolean {
   if (!isRecord(item)) return false;
-  if (item.type === "additional_tools") return true;
-  return (item.type === undefined || item.type === "message") && (item.role === "developer" || item.role === "system");
+  if (item.role === "assistant") return true;
+  const type = typeof item.type === "string" ? item.type : "";
+  return type.endsWith("_call") || type === "reasoning"
+    || type === "compaction" || type === "compaction_summary" || type === "context_compaction";
 }
 
 /**
  * Responses Lite `additional_tools` declared by the current turn. A resumed thread resends its
- * whole history, including earlier turns' declarations, so only the declarations directly ahead of
- * the last user input, or after it, belong to this request. Without user input every item counts.
+ * whole history, including earlier turns' declarations, so only items after the last model output
+ * belong to this request. A first turn has none, so its catalog at the head of `input` counts even
+ * behind Codex's developer and environment-context messages.
  */
 function currentTurnAdditionalTools(input: unknown[]): unknown[][] {
   let start = 0;
   for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (!isRecord(item) || item.role !== "user") continue;
-    start = index;
-    while (start > 0 && isTurnPreamble(input[start - 1])) start -= 1;
-    break;
+    if (isModelOutput(input[index])) { start = index + 1; break; }
   }
   const groups: unknown[][] = [];
   for (const item of input.slice(start)) {

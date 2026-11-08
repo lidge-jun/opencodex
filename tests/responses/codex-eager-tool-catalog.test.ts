@@ -46,6 +46,24 @@ function catalogWarnings(): string[] {
   return warn.mock.calls.map(call => String(call[0])).filter(text => text.startsWith("[codex-catalog]"));
 }
 
+function message(role: string, text: string): Record<string, unknown> {
+  return { type: "message", role, content: [{ type: role === "assistant" ? "output_text" : "input_text", text }] };
+}
+
+/**
+ * A Responses Lite first turn as codex-rs sends it (incremental_tools / responses_lite): the tool
+ * catalog, two developer messages, a user-role environment context, then the user's prompt.
+ */
+function liteFirstTurn(tools: unknown[]): unknown[] {
+  return [
+    { type: "additional_tools", role: "developer", tools },
+    message("developer", "<permissions instructions>fixture</permissions instructions>"),
+    message("developer", "<collaboration_mode>fixture</collaboration_mode>"),
+    message("user", "<environment_context><cwd>/fixture</cwd></environment_context>"),
+    message("user", "hello"),
+  ];
+}
+
 beforeEach(() => {
   home = createTempHome("ocx-codex-tool-catalog-");
   upstreamCalls = 0;
@@ -150,13 +168,23 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
     expect(catalogWarnings()).toHaveLength(0);
   });
 
-  test("current Responses Lite additional_tools declarations are diagnosed", async () => {
-    const result = await send("/v1/responses", [], codexHeaders(), {
-      input: [{ type: "additional_tools", role: "developer", tools: mcpTools() }, { role: "user", content: "hello" }],
-    });
+  test.each([
+    ["directly ahead of the prompt", [{ type: "additional_tools", role: "developer", tools: mcpTools() }, { role: "user", content: "hello" }]],
+    ["in the codex-rs first-turn layout", liteFirstTurn(mcpTools())],
+  ])("current Responses Lite additional_tools declarations are diagnosed (%s)", async (_label, input) => {
+    const result = await send("/v1/responses", [], codexHeaders(), { input });
     expect(result.status, result.text).toBe(200);
     expect(upstreamCalls).toBe(1);
     expect(catalogWarnings()).toHaveLength(1);
+  });
+
+  test("a resumed codex-rs thread's first-turn catalog is history", async () => {
+    const result = await send("/v1/responses", [], codexHeaders(), {
+      input: [...liteFirstTurn(mcpTools()), message("assistant", "Earlier response"), message("user", "Current request")],
+    });
+    expect(result.status, result.text).toBe(200);
+    expect(upstreamCalls).toBe(1);
+    expect(catalogWarnings()).toHaveLength(0);
   });
 
   test.each([
@@ -217,9 +245,14 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
     expect(catalogWarnings()).toHaveLength(0);
   });
 
-  test("an expanded code-mode exec description is diagnosed", async () => {
+  test.each([
+    ["bare", false],
+    ["inside the Responses Lite functions namespace", true],
+  ])("an expanded code-mode exec description is diagnosed (%s)", async (_label, namespaced) => {
     const names = Array.from({ length: EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD }, (_value, index) => `mcp__fixture__tool_${index}`);
-    const result = await send("/v1/responses", [renderedExec(names)], codexHeaders());
+    const exec = renderedExec(names);
+    const tools = namespaced ? [{ type: "namespace", name: "functions", description: "", tools: [exec] }] : [exec];
+    const result = await send("/v1/responses", tools, codexHeaders());
     expect(result.status, result.text).toBe(200);
     expect(upstreamCalls).toBe(1);
     expect(catalogWarnings()).toHaveLength(1);
@@ -241,10 +274,7 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
         socket.addEventListener("open", () => resolve(), { once: true });
         socket.addEventListener("error", () => reject(new Error("socket handshake failed")), { once: true });
       });
-      socket.send(JSON.stringify({ type: "response.create", model: "fixture/model", input: [
-        { type: "additional_tools", role: "developer", tools: mcpTools() },
-        { type: "message", role: "user", content: "hello" },
-      ] }));
+      socket.send(JSON.stringify({ type: "response.create", model: "fixture/model", input: liteFirstTurn(mcpTools()) }));
       expect(await terminal).toBe("response.completed");
       expect(upstreamCalls).toBe(1);
       expect(catalogWarnings()).toHaveLength(1);
