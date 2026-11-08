@@ -1,0 +1,87 @@
+import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { repoRoot } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+/** A Home whose Desktop or Grok intent was never decided may refresh owned state, never create it. */
+function scenario(body: string) {
+  const home = mkdtempSync(join(tmpdir(), "ocx-home-consent-"));
+  for (const dir of [".codex", ".claude", "desktop"]) mkdirSync(join(home, dir));
+  try {
+    const child = spawnSync(process.execPath, ["--eval", `
+      import { expect } from 'bun:test';
+      import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+      import { join } from 'node:path';
+      import { getDefaultConfig, saveConfig, loadConfig } from './src/config';
+      import { materializeLocalRouteIntent } from './src/client/route-intent-apply';
+      import { projectHomeRouteIntent } from './src/link/route-intent';
+      import { readHomeRouteIntentState } from './src/routing/home-route-intent';
+      import { setRouteClientIntent } from './src/routing/route-intent-state';
+      const root = process.env.HOME;
+      const library = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+      const lockDeps = {lockPath:join(root,'lifecycle.sqlite')};
+      const modelsA = [{namespaced:'fixture/claude-sonnet-4-6',provider:'fixture',id:'claude-sonnet-4-6'}];
+      const modelsB = [...modelsA, {namespaced:'fixture/claude-opus-4-6',provider:'fixture',id:'claude-opus-4-6'}];
+      const local = getDefaultConfig(); local.port=18274; local.hostname='127.0.0.1';
+      local.defaultProvider='fixture';local.providers={fixture:{adapter:'openai-chat',baseUrl:'http://127.0.0.1:1/v1',allowPrivateNetwork:true,liveModels:false,models:['fixture-model']}};
+      delete local.clientIntegrations;
+      saveConfig(local);
+      writeFileSync(join(library,'_meta.json'),JSON.stringify({entries:[],custom:'keep'}));
+      const homeDocument = () => projectHomeRouteIntent(loadConfig(),'1','home',readHomeRouteIntentState(loadConfig()));
+      async function reconcile(client, models=modelsA, document=homeDocument()) {
+        const receipt=await materializeLocalRouteIntent(loadConfig(),document,models,{onlyClients:[client],lifecycleLockDeps:lockDeps});
+        return receipt.outcomes.find(row=>row.client===client);
+      }
+      const meta = () => JSON.parse(readFileSync(join(library,'_meta.json'),'utf8'));
+      ${body}
+    `], { cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: join(home, ".codex"),
+        CODEX_SQLITE_HOME: join(home, ".codex"), OPENCODEX_HOME: join(home, ".opencodex"),
+        CLAUDE_CONFIG_DIR: join(home, ".claude"), GROK_HOME: join(home, ".grok"), XDG_CONFIG_HOME: join(home, ".config"),
+        OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(home, "desktop"), OCX_TEST_HOME_GUARD: "1" } });
+    expect({ status: child.status, stderr: child.stderr, error: child.error?.message }).toMatchObject({ status: 0 });
+  } finally { removeTreeWithRetry(home); }
+}
+
+test("implicit Home Desktop intent never creates a gateway profile", () => scenario(`
+  const document = homeDocument();
+  expect(document.clients['claude-desktop'].enabled).toBe(true);
+  expect(document.sources['claude-desktop']).toBe('builtin');
+  const before = readFileSync(join(library,'_meta.json'),'utf8');
+  expect((await reconcile('claude-desktop')).outcome).toBe('current');
+  expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(before);
+  expect(loadConfig().claudeCode?.desktopMode).toBeUndefined();
+  expect(loadConfig().claudeCode?.desktopProfile?.appliedFingerprint).toBeUndefined();
+  expect(loadConfig().clientIntegrations?.['claude-desktop']).toBeUndefined();
+`), SPAWN_BUDGET_MS);
+
+test("implicit Home Desktop intent refreshes an owned gateway profile", () => scenario(`
+  setRouteClientIntent('claude-desktop',{enabled:true});
+  expect(homeDocument().sources['claude-desktop']).toBe('default');
+  expect((await reconcile('claude-desktop')).outcome).toBe('current');
+  const appliedId = meta().appliedId;
+  expect(typeof appliedId).toBe('string');
+  const implicit = structuredClone(homeDocument()); implicit.sources['claude-desktop']='builtin';
+  expect((await reconcile('claude-desktop', modelsB, implicit)).outcome).toBe('current');
+  expect(meta().appliedId).toBe(appliedId);
+  expect(readFileSync(join(library, appliedId+'.json'),'utf8')).toContain('Claude Opus 4 6');
+`), SPAWN_BUDGET_MS);
+
+test("explicit Home Desktop default still creates the gateway profile", () => scenario(`
+  setRouteClientIntent('claude-desktop',{enabled:true});
+  expect((await reconcile('claude-desktop')).outcome).toBe('current');
+  expect(typeof meta().appliedId).toBe('string');
+  expect(loadConfig().claudeCode?.desktopMode).toBe('gateway');
+`), SPAWN_BUDGET_MS);
+
+test("implicit Home Grok intent matches the startup gate on a gated hub", () => scenario(`
+  const c=loadConfig(); c.runtimeRole='hub'; saveConfig(c);
+  mkdirSync(process.env.GROK_HOME,{recursive:true});
+  expect(homeDocument().sources.grok).toBe('builtin');
+  expect((await reconcile('grok')).outcome).toBe('current');
+  expect(existsSync(join(process.env.GROK_HOME,'config.toml'))).toBe(false);
+`), SPAWN_BUDGET_MS);

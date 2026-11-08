@@ -77,7 +77,7 @@ Home의 Route to 의도는 Child에 기본으로 동기화됩니다. 각 기기�
 
 등록 시 클라이언트를 명시적으로 선택하지 않으면 Child는 Home 기본값과 이후 변경을 상속합니다. 클라이언트별 명령은 해당 클라이언트의 실패를 반환하고 다른 클라이언트의 미해결 충돌은 경고하며, 전체 sync는 모든 미해결 실패를 보고합니다. Claude Desktop first-party 모드를 바꾸거나 끄는 요청은 기존 모드 전환을 거칠 때까지 충돌로 표시합니다.
 
-기존 Home에서 Grok 또는 Claude Desktop 통합 플래그를 설정하지 않았다면, 명시적으로 경로를 선택하기 전까지 그 Home의 기존 활성화 의도를 유지합니다. 이것만으로 Child의 해당 클라이언트가 켜지지는 않습니다.
+기존 Home에서 Grok 또는 Claude Desktop 통합 플래그를 설정하지 않았다면, 명시적으로 경로를 선택하기 전까지 그 Home의 기존 활성화 의도를 유지합니다. 이것만으로 Child의 해당 클라이언트가 켜지지는 않습니다. 이 암묵적 의도는 시작 시 동작과 같은 범위만 적용합니다. Grok은 시작 시 동기화 규칙을 따르고, Claude Desktop은 OpenCodex가 이미 소유한 gateway 프로필만 갱신하며 새로 만들거나 Desktop 모드를 바꾸지 않습니다. Desktop 프로필을 만들려면 `ocx route to claude-desktop on --device home`을 실행하거나 Home 기본값을 설정하세요.
 
 ```sh
 ocx route to status --device all --json

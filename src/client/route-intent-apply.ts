@@ -8,6 +8,8 @@ import { readConfigForAdmittedMutation } from "../config/persisted-mutation";
 import { commitClaudeCodeBlock } from "../claude/claude-code-block";
 import { localInferenceDestination } from "../lib/local-destinations";
 import { persistCommittedDesktopGateway } from "../claude/desktop-gateway-state";
+import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../claude/desktop-applied-marker";
+import { localClientSyncAllowed } from "../codex/desired-state";
 import { materializeRouteIntent, type RouteClientOutcome, type RouteIntentApplyInput, type RouteIntentReceipt } from "../integrations/route-intent";
 import type { HomeRouteIntentDocument, RouteClientId, RouteClientIntent } from "../link/route-intent";
 import type { OcxConfig } from "../types";
@@ -23,6 +25,17 @@ export interface LocalRouteIntentOptions extends Pick<RouteIntentApplyInput,
   codexApplied?: boolean;
   lifecycleLockDeps?: ClientLifecycleLockDeps;
 }
+
+/**
+ * A Home Grok or Desktop intent nobody decided (no persisted default and no Home override) is the
+ * legacy absent switch, so it gets exactly the startup behavior: Grok follows the startup gate and
+ * Desktop only refreshes a gateway profile OpenCodex already owns. The outcome is "current": the
+ * implicit intent is satisfied without creating anything.
+ */
+function implicitHomeIntent(document: HomeRouteIntentDocument, client: RouteClientId, intent: RouteClientIntent): boolean {
+  return intent.enabled && document.sources[client] === "builtin" && readClientConnectionState().kind !== "connected";
+}
+const IMPLICIT_DESKTOP_MESSAGE = "No OpenCodex-owned Claude Desktop profile to refresh; choose ocx route to claude-desktop on to create one";
 
 /**
  * Caller holds the lifecycle fence; the config coordinator rechecks guard before each commit.
@@ -133,6 +146,9 @@ async function applyNative(
     const { inspectGrokConfig } = await import("../grok/inspect");
     const grokHome = env.GROK_HOME || join(home, ".grok");
     const target = join(grokHome, "config.toml");
+    if (implicitHomeIntent(input.document, client, intent) && !localClientSyncAllowed(input.config)) {
+      return { client, target, outcome: "current", message: "Grok sync is gated on this Home, as it is at startup" };
+    }
     return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       guard();
       const state = inspectGrokConfig({ grokHome });
@@ -181,6 +197,9 @@ async function applyNative(
     }), options.lifecycleLockDeps);
   }
   if (!intent.enabled && inspected.kind === "no_owned_state") return { client, target, outcome: "current" };
+  const appliedFingerprint = committedConfig.claudeCode?.desktopProfile?.appliedFingerprint;
+  const refreshOnly = implicitHomeIntent(input.document, client, intent);
+  if (refreshOnly && (inspected.kind !== "gateway_ours" || !appliedFingerprint)) return { client, target, outcome: "current", message: IMPLICIT_DESKTOP_MESSAGE };
   if (["unsafe", "broken", "gateway_drifted"].includes(inspected.kind)
     && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };
   if (!intent.enabled) {
@@ -196,13 +215,21 @@ async function applyNative(
     guard();
     const config = loadConfig();
     if (firstParty(config)) return modeConflict;
+    const profile = config.claudeCode?.desktopProfile;
     const result = desktop.writeDesktop3pConfig(input.config.port,
       input.models.filter(model => model.native).map(model => model.id),
       input.models.filter(model => !model.native).map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })),
-      undefined, "static", config.claudeCode?.desktopProfile, undefined, options.lifecycleLockDeps, undefined, held);
+      undefined, "static", profile, undefined, options.lifecycleLockDeps,
+      refreshOnly ? { appliedFingerprint: appliedFingerprint!, admit: () => !firstParty(loadConfig()) } : undefined, held);
+    if (refreshOnly && result.reason === "desktop_refresh_only_skipped") return { client, target, outcome: "current", message: IMPLICIT_DESKTOP_MESSAGE };
     if (!result.written) return { client, target, outcome: "failed", message: result.reason ?? "Claude Desktop writer refused" };
     guard();
     if (firstParty(loadConfig())) return modeConflict;
+    if (refreshOnly) {
+      // A refresh keeps the existing mode; only the applied marker follows the new bytes.
+      const marked = commitDesktopAppliedMarker(captureDesktopAppliedMarker(profile), result.fingerprint!);
+      return { client, target, outcome: marked.status !== "unavailable" && marked.value ? "current" : "failed" };
+    }
     const recorded = persistCommittedDesktopGateway(config, config.claudeCode?.desktopProfile, result.fingerprint, current => !firstParty(current));
     return { client, target, outcome: recorded.ok ? "current" : "failed" };
   }), options.lifecycleLockDeps), { config: committedConfig });
