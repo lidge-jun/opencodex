@@ -127,6 +127,22 @@ function runProbeButton(): HTMLButtonElement {
 }
 
 describe("first-response progression states on ProviderOverview", () => {
+  test("keyless Vertex reports host credentials as unverified rather than missing", async () => {
+    const item = { ...baseItem, name: "google-vertex", adapter: "google", baseUrl: "https://aiplatform.googleapis.com",
+      authMode: "key", googleMode: "vertex", hasApiKey: false } as WorkspaceItem;
+    await render(<ProviderOverview item={item} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Credentials unverified");
+    expect(stepText("provider")).toContain("proxy credentials unverified");
+    expect(stepText("provider")).not.toContain("credentials required");
+    await render(<ProviderOverview item={{ ...item, hasApiKey: true, vertexCredentialKind: "marker" }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Credentials unverified");
+    await render(<ProviderOverview item={{ ...item, hasApiKey: true }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Ready");
+    await render(<ProviderOverview item={{ ...item, googleMode: "ai-studio" }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Needs setup");
+    await render(<ProviderOverview item={{ ...item, disabled: true }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Disabled");
+  });
   test("distinguishes provider saved, models ready, client routing guidance, and untested probe without claiming Connected", async () => {
     const rows: ModelRow[] = [{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }];
     let openedConnect = 0;

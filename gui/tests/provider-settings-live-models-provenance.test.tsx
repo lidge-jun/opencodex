@@ -118,6 +118,20 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
   await act(async () => { root.unmount(); });
 });
 
+test("a static Vertex provider can enable live discovery", async () => {
+  const { root, container, patches } = await mountSettings({
+    name: "google-vertex", adapter: "google", baseUrl: "https://aiplatform.googleapis.com",
+    googleMode: "vertex", authMode: "key", liveModels: false,
+  } as WorkspaceItem);
+  const toggle = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!;
+  expect(toggle.disabled).toBe(false);
+  expect(toggle.checked).toBe(false);
+  await act(async () => { toggle.click(); });
+  await save(container);
+  expect(patches[0]?.liveModels).toBe(true);
+  await act(async () => { root.unmount(); });
+});
+
 test("canonical ClinePass shows the static catalog as disabled even with stale liveModels true", async () => {
   const { root, container } = await mountSettings({
     name: "cline-pass",
