@@ -1445,7 +1445,7 @@
   "types-barrel-identity.test.ts": "config", "ultrafast-tier-honesty.test.ts": "codex-integration",
   "configured-ultrafast-picker.test.ts": "codex-integration", "ultrafast-live-catalog.test.ts": "codex-integration",
   "umans-provider.test.ts": "providers", "uninstall.test.ts": "cli",
-  "update-async-routes.test.ts": "server", "update-badge.test.ts": "update",
+  "update-async-routes.test.ts": "server", "update-badge.test.ts": "update", "update-bounded-json.test.ts": "update", "update-checkpoint-codec.test.ts": "update", "update-contracts.test.ts": "update", "update-candidate-id.test.ts": "update", "update-external-metadata.test.ts": "update", "update-minisign.test.ts": "update", "update-root-snapshot.test.ts": "update", "update-signed-supply.test.ts": "update", "update-signed-version.test.ts": "update", "update-trust-root.test.ts": "update",
   "update-bun-ownership-lease.test.ts": "update", "update-desktop-badge.test.ts": "update",
   "update-desktop-owner.test.ts": "update", "update-supervised-recovery.test.ts": "update",
   "update-job.test.ts": "update", "update-recovery-host-free.test.ts": "update", "update-job-supervised-restart.test.ts": "update",
