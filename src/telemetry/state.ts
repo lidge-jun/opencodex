@@ -16,6 +16,11 @@ import { deleteTelemetryInstallId } from "./install-id";
 export const TELEMETRY_STATE_FILE = "telemetry-state.json";
 const DAY_MS = 86_400_000;
 const STATE_RETENTION_DAYS = 30;
+/**
+ * How often a proxy running under an env opt-out records itself again, so a state file rebuilt after
+ * corruption (which forgets every owner) learns that the proxy is still opted out.
+ */
+export const TELEMETRY_ENV_OPT_OUT_REFRESH_MS = 6 * 60 * 60 * 1000;
 
 /** A proxy that started under an env opt-out and has not stopped cleanly yet. */
 export interface TelemetryEnvOptOutOwner {
@@ -154,11 +159,12 @@ export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
 
 /**
  * Read the state for a rewrite. A file that exists but cannot be read may have held opt-out days
- * or sent days, so the rewrite starts from "nothing through today may be sent".
+ * or sent days and opted-out proxies that are still running, so the rewrite starts from "nothing
+ * may be sent through the UTC day those proxies have recorded themselves again by".
  */
 function readTelemetryStateForWrite(configDir: string, now: number): TelemetryState {
   const { state, unreadable } = readTelemetryStateFile(configDir);
-  if (unreadable) extendIneligibleThroughToday(state, now);
+  if (unreadable) extendIneligibleThroughToday(state, now + TELEMETRY_ENV_OPT_OUT_REFRESH_MS);
   return state;
 }
 
@@ -197,10 +203,14 @@ export function recordPendingTelemetryDecision(
   writeTelemetryState(state, configDir, now);
 }
 
-/** Drop the pending decision once a decision is written into `config.json`. */
+/**
+ * Drop the pending decision once a decision is written into `config.json`. A person's decision also
+ * rebuilds an unreadable state file, which otherwise pauses sending for good.
+ */
 export function clearPendingTelemetryDecision(configDir = getConfigDir(), now = Date.now()): void {
-  const state = readTelemetryState(configDir);
-  if (!state.pendingDecision) return;
+  const { state: current, unreadable } = readTelemetryStateFile(configDir);
+  if (!unreadable && !current.pendingDecision) return;
+  const state = unreadable ? readTelemetryStateForWrite(configDir, now) : current;
   state.pendingDecision = null;
   writeTelemetryState(state, configDir, now);
 }

@@ -65,9 +65,11 @@ Only a human can transition an undecided install to active sending:
   (`src/config/telemetry-carry.ts`) makes both whole-config saves (`saveConfig` and
   `saveConfigPreservingClaudeCode`) write the validated on-disk block instead of the caller's
   snapshot, so a decision written by another process is never dropped or rolled back, and a
-  malformed hand edit is dropped as a load would drop it. A `config.json` that exists but cannot be
-  read may hold a decline the snapshot never saw, so only a snapshot decline survives a save over
-  it; any other block is dropped and the install waits for the notice again.
+  malformed hand edit is dropped as a load would drop it. Without a readable `config.json` a save
+  never introduces a decision: before the file exists the decision is held in
+  `telemetry-state.json`, where another process may have replaced it, and a file that cannot be read
+  may hold a decline the snapshot never saw. Only a snapshot decline survives; any other block is
+  dropped, and the held decision or the notice applies.
 
 ## Identity, aggregation, and scheduling
 
@@ -99,9 +101,10 @@ which ends it only once no recorded owner pid is still alive and otherwise exten
 `telemetry-state.json` that exists but cannot be read (symlink, oversized, malformed) stops sending
 (`state-unreadable`) rather than being read as empty: the tick checks it before choosing a day and
 again just before sending, the bookkeeping writes after a send or a `Retry-After` leave such a file
-alone, other writers rebuild it as ineligible through today, and the status snapshot reports
+alone, other writers (including every recorded decision, so sending does not stay paused) rebuild
+it as ineligible through the UTC day six hours from now, and the status snapshot reports
 `stateUnreadable`. A rebuild forgets `envOptOutOwners`, so an opted-out proxy records itself again
-every 6 hours. The state code lives in
+every 6 hours (`TELEMETRY_ENV_OPT_OUT_REFRESH_MS`), within that window. The state code lives in
 `src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
 aggregation and sender stay behind the dynamic import. Each tick sends at most one completed UTC
 day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
