@@ -1485,11 +1485,10 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   After switching CLI accounts, enable live discovery and run **Test connection**. It
   replaces the roster and refreshes Codex and connected clients. It reports pending or failed
   publication separately; restart running Codex sessions after publication.
-- **Transport:** Each turn creates a fresh ACP session, selects the requested model with
-  `session/set_model`, and maps `agent_message_chunk` and `agent_thought_chunk` to OpenCodex text
-  and reasoning events. Conversation history is replayed as labelled text.
-  Replays longer than 1,000,000 UTF-16 code units (JavaScript string length) are rejected so
-  system instructions cannot be silently lost. A supplementary character such as an emoji uses two units.
+  If the provider changes during the probe, its roster is not replaced; run **Test connection** again.
+- **Transport:** Each turn opens a fresh ACP session for the selected model and streams text and reasoning.
+  Conversation history is replayed as labelled text. The limit is 1,000,000 UTF-16 code units
+  (JavaScript string length); an emoji may use two units. Oversized replay is rejected.
 - **Capability boundary:** This initial provider supports text conversations only. It rejects
   client tools, tool replay, images, audio, video and attached documents. Model capability overrides
   cannot enable native image input or verbosity. Images require the vision sidecar to describe them first.
@@ -1500,7 +1499,8 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   Requests with an output-token limit fail with `unsupported_max_output_tokens` because this
   adapter has no verified ACP field for that limit.
 - **CLI process:** The CLI uses an empty temporary workspace, no session MCP/skills and a finite tool denylist.
-  OpenCodex terminates its process tree after the turn, cancellation or protocol failure.
+  Shutdown targets the owned POSIX process group or the Windows process tree. POSIX descendants
+  that detach into another group can survive; this mechanism does not contain untrusted hooks or tools.
   Use a trusted CLI and configuration: its hooks and unlisted tools are outside OpenCodex's
   client-capability controls. Temporary directories and tool denial do not provide an OS sandbox.
 - **Destination:** `https://www.trae.cn` identifies this provider; OpenCodex does not call it

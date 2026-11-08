@@ -53,11 +53,12 @@ function errorEvent(error: unknown): Extract<AdapterEvent, { type: "error" }> {
   const auth = acp && /invalid token|unauthorized|not logged in|authentication/i.test(error.message);
   const message = acp ? error.message : "TRAE CN ACP ended with an invalid protocol response.";
   const invalid = code === "trae_model_unavailable" || code === "trae_replay_too_large" || code === "trae_proxy_unsupported";
+  const startup = code.startsWith("trae_startup_");
   return {
     type: "error",
     message: auth ? `${message} Sign in through TRAE CN and retry.` : message.slice(0, 512),
-    status: invalid ? 400 : auth ? 401 : 502,
-    errorType: invalid ? "invalid_request_error" : auth ? "authentication_error" : "upstream_error",
+    status: invalid ? 400 : auth ? 401 : startup ? 500 : 502,
+    errorType: invalid ? "invalid_request_error" : auth ? "authentication_error" : startup ? "server_error" : "upstream_error",
     code: auth ? "trae_cn_not_logged_in" : code,
     retryable: false,
   };
@@ -87,8 +88,12 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
         permit = decision?.allowed ? decision.permit : undefined;
         const session = await openTraeSession(provider.baseUrl, deps, incoming.abortSignal, provider);
+        let terminal: AdapterEvent | undefined;
         try {
-          await session.prompt(parsed.modelId, replay, emit, incoming.abortSignal, {
+          await session.prompt(parsed.modelId, replay, event => {
+            if (event.type === "done" || event.type === "incomplete" || event.type === "error") terminal = event;
+            else emit(event);
+          }, incoming.abortSignal, {
             beforeSend: () => {
               incoming.beforePhysicalSend?.();
               if (permit && !permit.use()) throw new SendBudgetExhaustedError();
@@ -98,6 +103,7 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         } finally {
           await session.close();
         }
+        if (terminal && !incoming.abortSignal?.aborted) emit(terminal);
       } catch (error) {
         if (incoming.abortSignal?.aborted) return;
         if (error instanceof SendBudgetExhaustedError) throw error;

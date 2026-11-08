@@ -1,19 +1,25 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { EventEmitter, once } from "node:events";
+import { existsSync, readFileSync } from "node:fs";
+import { posix } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { PassThrough, Writable } from "node:stream";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createTraeCnAdapter } from "../../src/adapters/trae-cn/adapter";
 import * as traeClient from "../../src/adapters/trae-cn/client";
+import { traePosixInvocation, traeStopPipe } from "../../src/adapters/trae-cn/process";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
 import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
-import { captureModelCacheGeneration, clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
+import { captureModelCacheGeneration, clearModelCache, getFreshCached, observeModelCacheRevision, setCached } from "../../src/codex/model-cache";
 import { probeTraeCnProvider } from "../../src/server/management/trae-cn-provider-probe";
 import { handleProviderRoutes } from "../../src/server/management/provider-routes";
 import { customRowInputModalities, isModelVisionSidecarConsumer, isVisionSidecarConsumer, modelAcceptsImageInput } from "../../src/vision/eligibility";
 import { requiresVisionPreprocessing } from "../../src/vision/plan";
+import { gatherRoutedModels } from "../../src/codex/catalog/routed-gather";
+import { refreshTraeCnCatalogSources } from "../../src/codex/catalog/trae-cn-models";
+import * as managementConvergence from "../../src/codex/management-convergence";
+import * as catalogAdmission from "../../src/codex/catalog-admission";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../src/types";
@@ -174,6 +180,8 @@ function traeFixture(intercept?: (request: AcpRequest, child: ChildProcess) => b
     queueMicrotask(() => { stdout.end(); child.emit("close", 0); });
     return true;
   };
+  const stopPipe = new Writable({ write(_chunk, _encoding, callback) { callback(); child.kill("SIGTERM"); } });
+  Object.assign(child, { stdio: [child.stdin, stdout, child.stderr, stopPipe] });
   const deps: traeClient.TraeAcpDeps = {
     resolveBinary: () => "/fixture/traecli", timeoutMs: 300, killGraceMs: 2, reapTimeoutMs: 5,
     spawn: (_command, _args, opts) => { options = opts; return child; },
@@ -362,6 +370,25 @@ describe("TRAE CN ACP regression contract", () => {
     expect(fixture.child.killed).toBe(true);
   });
 
+  test("a local ENOSPC startup failure reports its stage without arbitrary error text", async () => {
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), { resolveBinary: () => "/fixture/traecli",
+      makeTempDir: (async () => { throw Object.assign(new Error("private path and diagnostic"), { code: "ENOSPC" }); }) as typeof mkdtemp,
+    }).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events).toMatchObject([{ type: "error", status: 500, code: "trae_startup_home_enospc", message: "TRAE CN startup failed during home (ENOSPC)." }]);
+  });
+
+  test("a stdout byte ceiling has a distinct safe diagnostic", async () => {
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "initialize") return false;
+      (child.stdout as PassThrough).write("x".repeat(1024 * 1024 + 1));
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events).toMatchObject([{ type: "error", code: "trae_stdout_limit", message: "TRAE CN ACP stdout exceeded its size limit." }]);
+  });
+
   for (let fragmentLength = 1; fragmentLength <= 7; fragmentLength++) {
     test(`probe hides a ${fragmentLength}-character bearer fragment at the parser boundary`, async () => {
       const fixture = traeFixture((request, child) => {
@@ -411,7 +438,7 @@ describe("TRAE CN ACP regression contract", () => {
 
   test("relative PATH entries resolve before the CLI changes its working directory", () => {
     expect(resolveTraeCli({ platform: "linux", env: { PATH: "./node_modules/.bin" }, exists: () => true }))
-      .toBe(`${process.cwd()}/node_modules/.bin/traecli`);
+      .toBe(posix.resolve("./node_modules/.bin/traecli"));
   });
 
   for (const kind of ["tool_call", "session/request_permission"]) {
@@ -436,26 +463,86 @@ describe("TRAE CN ACP regression contract", () => {
     fixture.child.kill = () => true;
     const session = await traeClient.openTraeSession(config().baseUrl, fixture.deps);
     const turn = session.prompt("test-model", "hello", () => undefined).catch(error => error);
-    await session.close();
+    await expect(session.close()).rejects.toThrow("shutdown was not confirmed");
     expect(await turn).toBeInstanceOf(Error);
     expect(fixture.child.stdout!.destroyed).toBe(true);
     expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
   });
 
-  test("POSIX shutdown kills remaining group members after the leader exits", async () => {
+  test("POSIX shutdown uses the owned pipe without signalling a possibly reused PID", async () => {
     const fixture = traeFixture();
     Object.assign(fixture.child, { pid: 424242 });
-    const signals: NodeJS.Signals[] = [];
-    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, platform: "linux",
-      signalPosixProcessGroup: (pid, signal) => {
-        expect(pid).toBe(424242);
-        signals.push(signal);
-        if (signal === "SIGTERM") fixture.child.kill();
-      },
-    });
+    const signalGroup = spyOn(process, "kill").mockImplementation(() => { throw new Error("must not signal PID"); });
+    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, platform: "linux" });
     await session.close();
-    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(signalGroup).not.toHaveBeenCalled();
+    expect(traeStopPipe(fixture.child)!.destroyed).toBe(true);
   });
+
+  (process.platform === "win32" ? test.skip : test)("the live supervisor terminates a TERM-ignoring descendant after the CLI exits", async () => {
+    const heartbeat = testHome.path("descendant-heartbeat");
+    const worker = "const fs=require('node:fs');process.on('SIGTERM',()=>{});const beat=()=>fs.writeFileSync(" + JSON.stringify(heartbeat) + ",String(Date.now()));beat();setInterval(beat,10);setTimeout(()=>process.exit(0),5000);";
+    const cli = "const p=require('node:child_process').spawn(process.execPath,['-e'," + JSON.stringify(worker) + "],{stdio:'ignore'});p.unref();process.stdout.write(String(p.pid));";
+    const invocation = traePosixInvocation(process.execPath, ["-e", cli], 20);
+    const child = nodeSpawn(invocation.file, invocation.args, { detached: true, stdio: ["pipe", "pipe", "pipe", "pipe"] });
+    const closed = once(child, "close");
+    const watchdog = setTimeout(() => { traeStopPipe(child)?.end("stop\n"); }, 2000);
+    try {
+      let output = "";
+      for await (const chunk of child.stdout!) output += String(chunk);
+      expect(Number(output)).toBeGreaterThan(0);
+      expect(child.exitCode).toBeNull();
+      const until = Date.now() + 1000;
+      while (!existsSync(heartbeat) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 10));
+      const before = readFileSync(heartbeat, "utf8");
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(readFileSync(heartbeat, "utf8")).not.toBe(before);
+      traeStopPipe(child)!.end("stop\n");
+      await closed;
+      const after = readFileSync(heartbeat, "utf8");
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(readFileSync(heartbeat, "utf8")).toBe(after);
+    } finally {
+      clearTimeout(watchdog);
+      traeStopPipe(child)?.end();
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await closed;
+    }
+  }, 5000);
+
+  test("a long pending prompt does not retain completion reactions for consumed chunks", async () => {
+    let ready!: () => void;
+    const drained = new Promise<void>(resolve => { ready = resolve; });
+    let finish!: () => void;
+    const release = new Promise<void>(resolve => { finish = resolve; });
+    let before = 0;
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/prompt") return false;
+      Bun.gc(true);
+      before = process.memoryUsage().heapUsed;
+      void (async () => {
+        for (let i = 0; i < 100_000; i++) {
+          fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } } } });
+          if (i % 128 === 0) await new Promise(resolve => setImmediate(resolve));
+        }
+        await release;
+        fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } });
+      })();
+      return true;
+    });
+    let chunks = 0;
+    const turn = createTraeCnAdapter(config(), { ...fixture.deps, timeoutMs: 12_000 }).runTurn!(traeRequest(), traeMeta(), event => {
+      if (event.type === "text_delta" && ++chunks === 100_000) ready();
+    });
+    let growth = 0;
+    try {
+      await Promise.race([drained, turn.then(() => { if (chunks !== 100_000) throw new Error("stream ended before the fixture drained"); })]);
+      Bun.gc(true);
+      growth = process.memoryUsage().heapUsed - before;
+    } finally { finish(); await turn; }
+    expect(chunks).toBe(100_000);
+    expect(growth).toBeLessThan(16 * 1024 * 1024);
+  }, 15000);
 
   test("Windows dispatchers use process-tree termination", async () => {
     const fixture = traeFixture();
@@ -476,11 +563,11 @@ describe("TRAE CN ACP regression contract", () => {
       owned = await mkdtemp(prefix);
       return owned;
     }) as typeof mkdtemp;
-    await expect(traeClient.openTraeSession(config().baseUrl, { resolveBinary: () => "/fixture/traecli", makeTempDir })).rejects.toThrow("workspace unavailable");
+    await expect(traeClient.openTraeSession(config().baseUrl, { resolveBinary: () => "/fixture/traecli", makeTempDir })).rejects.toThrow("startup failed during workspace");
     expect(existsSync(owned)).toBe(false);
     await expect(traeClient.openTraeSession(config().baseUrl, { home: testHome.root, resolveBinary: () => "/fixture/traecli",
       makeTempDir: (async () => { throw new Error("workspace unavailable"); }) as typeof mkdtemp,
-    })).rejects.toThrow("workspace unavailable");
+    })).rejects.toThrow("startup failed during workspace");
     expect(existsSync(testHome.root)).toBe(true);
   });
 
@@ -496,7 +583,7 @@ describe("TRAE CN ACP regression contract", () => {
     expect(traeCnChildEnv({ HOME: "/fixture/operator" }, "linux").TRAE_HOME).toBe("/fixture/operator/.trae");
     expect(traeCnChildEnv({ USERPROFILE: "C:\\Users\\operator" }, "win32").TRAE_HOME).toBe("C:\\Users\\operator\\.trae");
     expect(traeCnChildEnv({ HOME: "/fixture/operator", TRAE_HOME: "./selected-trae" }, "linux").TRAE_HOME)
-      .toBe(`${process.cwd()}/selected-trae`);
+      .toBe(posix.resolve("./selected-trae"));
   });
 
   test("static catalogs never open ACP and retain unknown text-only models", async () => {
@@ -524,6 +611,55 @@ describe("TRAE CN ACP regression contract", () => {
     expect(modelAcceptsImageInput(visionConfig, { provider: "trae-cn", id: "test-model" })).toBe(false);
     expect(requiresVisionPreprocessing(visionConfig, row, "test-model", "trae-cn")).toBe(true);
   });
+
+  for (const enabled of [false, true]) {
+    test("the final custom catalog row applies the wire ceiling before sidecar publication: " + enabled, async () => {
+      const models = await gatherRoutedModels({ port: 10100, defaultProvider: "trae-cn",
+        providers: { "trae-cn": { ...config(), liveModels: false } }, visionSidecar: { enabled },
+        customModels: [{ provider: "trae-cn", modelId: "test-model", inputModalities: ["text", "image"] }],
+      });
+      expect(models.find(model => model.provider === "trae-cn" && model.id === "test-model"))
+        .toMatchObject({ inputModalities: enabled ? ["text", "image"] : ["text"], supportsVerbosity: false });
+    });
+  }
+
+  test("management convergence refreshes CLI evidence before catalog admission without an initial selection", async () => {
+    const fixture = traeFixture();
+    const realOpen = traeClient.openTraeSession;
+    const open = spyOn(traeClient, "openTraeSession").mockImplementation((baseUrl, _deps, signal) => realOpen(baseUrl, fixture.deps, signal));
+    const admission = spyOn(catalogAdmission, "captureCatalogAdmissionSnapshot").mockImplementation(() => {
+      expect(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id)).toEqual(["test-model"]);
+      throw new Error("fixture stops before any catalog write");
+    });
+    const next = { port: 10100, defaultProvider: "trae-cn", providers: { "trae-cn": { ...config(), models: [] } } };
+    await managementConvergence.createManagementConvergeCodex(next)(catalogAdmission.createCatalogConvergeRequest({ deadlineMs: 1000 }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledTimes(1);
+    await refreshTraeCnCatalogSources(next);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  for (const failed of [false, true]) {
+    test("discovery losing its generation returns the replacement roster on " + (failed ? "failure" : "success"), async () => {
+      let opened!: () => void;
+      const entered = new Promise<void>(resolve => { opened = resolve; });
+      let resolve!: (session: traeClient.TraeSession) => void;
+      let reject!: (error: Error) => void;
+      spyOn(traeClient, "openTraeSession").mockImplementation(() => { opened(); return new Promise((yes, no) => { resolve = yes; reject = no; }); });
+      setCached("trae-cn", [{ id: "old-account-model", provider: "trae-cn" }], 1, captureModelCacheGeneration("trae-cn"));
+      const captured = captureProviderGather("trae-cn", config(), refreshingModelsAuthResolver);
+      const pending = fetchProviderModelsWithAuth(captured, 60_000, undefined, refreshingModelsAuthResolver);
+      await entered;
+      clearModelCache("trae-cn");
+      setCached("trae-cn", [{ id: "new-account-model", provider: "trae-cn" }], Date.now(), captureModelCacheGeneration("trae-cn"));
+      if (failed) reject(new Error("old discovery failed"));
+      else resolve({ models: ["old-account-model"], prompt: async () => undefined, close: async () => undefined });
+      const result = await pending;
+      expect(result.models.map(model => model.id)).toContain("new-account-model");
+      expect(result.models.map(model => model.id)).not.toContain("old-account-model");
+      expect(result.contentRevision).toBe(observeModelCacheRevision("trae-cn"));
+    });
+  }
 
   test("discovered models do not advertise unsupported verbosity or native image input", async () => {
     const fixture = traeFixture();
@@ -600,7 +736,9 @@ describe("TRAE CN ACP regression contract", () => {
     clearModelCache("trae-cn");
     setCached("trae-cn", [{ id: "new-account-model", provider: "trae-cn" }], Date.now(), captureModelCacheGeneration("trae-cn"));
     fixture.send({ jsonrpc: "2.0", id: requestId, result: { sessionId: "fixture-session", models: { availableModels: [{ modelId: "old-account-model" }] } } });
-    expect(await (await probe).json()).toMatchObject({ ok: true, catalogRefresh: { status: "skipped", reason: "stale" } });
+    const body = await (await probe).json();
+    expect(body).toMatchObject({ ok: true, rosterReplaced: false, catalogRefresh: { status: "skipped", reason: "stale" } });
+    expect(body.message).toContain("Run Test connection again");
     expect(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id)).toEqual(["new-account-model"]);
     expect(converge).not.toHaveBeenCalled();
   });

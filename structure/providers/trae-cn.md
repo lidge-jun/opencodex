@@ -18,17 +18,25 @@ The CLI inherits an absolute `TRAE_HOME` when selected by the operator, otherwis
 user home plus `.trae`, before HOME isolation. Provider `proxy`/`noProxy` overrides
 are refused before CLI startup, including explicit direct routing.
 Observed-auth gathers use only cached evidence; only refreshing gathers and explicit connection
-probes may launch the CLI. Relative PATH entries resolve before the child changes its cwd.
+probes may launch the CLI. Management convergence refreshes CLI-owned evidence before catalog
+admission, so a cold automatic tick can populate it. Lost-generation discovery rereads the current
+cache before attaching its revision. Relative PATH entries resolve before the child changes its cwd.
+Custom catalog rows receive the wire modality/verbosity ceiling before optional sidecar publication.
 
 Cancellation is bound before the first initialization RPC. Pending RPCs fail as shutdown starts;
 stdin errors enter the same failure path. Shutdown terminates the POSIX process group or Windows
-process tree and bounds both process and stream waits. A final SIGKILL terminates surviving POSIX
-group members even after the leader exits. A failed workspace allocation removes an
+process tree and bounds both process and stream waits. The POSIX supervisor in
+`src/adapters/trae-cn/process.ts` keeps its group leader alive after the CLI exits. The parent requests
+shutdown through a private pipe; live group members signal group 0, so numeric group-ID reuse cannot
+target an unrelated group. Descendants that detach into another group are outside this cleanup scope.
+Unconfirmed shutdown is an error; the adapter publishes its terminal event after cleanup. A failed workspace allocation removes an
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send; startup
 failure or unavailable models return unused reservations. Replay over 1,000,000 UTF-16 code units is
 rejected before startup. Unexpected EOF diagnostics retain bounded, redacted stderr after process
 cleanup, including stderr that arrives after stdout closes.
 Malformed stdout produces fixed protocol diagnostics, never the shared JSONL parser's snippets.
+Byte-limit failures retain `trae_stdout_limit`; startup failures retain a stage and allowlisted errno.
+Prompt completion closes the bounded update stream once, without a new promise reaction per chunk.
 Client cancellation emits no provider error; an upstream cancellation without client abort emits
 an incomplete event with usage. Explicit output-token limits are refused before startup.
 Model-selection notifications must match the requested model. The finite CLI tool denylist and
@@ -38,7 +46,8 @@ disabled ACP client capabilities do not sandbox CLI-side hooks or unlisted vendo
 connection test and replaces the unchanged generation's cached roster after success. It requests
 catalog convergence and refreshes previously connected clients through the owned integration writer.
 The response separates connectivity from catalog/client publication and notes the running Codex
-session restart requirement. A probe overtaken by a cache invalidation cannot replace the new roster.
+session restart requirement. An overtaken probe reports `rosterReplaced: false` and asks for another
+connection test; it cannot replace the new roster.
 It never probes the vendor
 website or accepts a cached roster as login evidence. The cache remains provider-scoped, so account
 switches require this explicit refresh. Each prompt still checks its model against a new session roster.

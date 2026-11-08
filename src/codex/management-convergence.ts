@@ -165,6 +165,11 @@ export function createManagementConvergeCodex(
           catalogRefresh: { status: "skipped", reason: "refused", retryable: false },
         });
       }
+      if (Object.values(retainedConfig.providers).some(provider =>
+        provider.adapter === "trae-cn" && !provider.disabled && provider.liveModels !== false)) {
+        const { refreshTraeCnCatalogSources } = await import("./catalog/trae-cn-models");
+        await refreshTraeCnCatalogSources(retainedConfig);
+      }
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },

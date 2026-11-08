@@ -2,6 +2,7 @@ import { openTraeSession } from "../../adapters/trae-cn/client";
 import { traeCnDestinationMatches } from "../../adapters/trae-cn/profile";
 import {
   captureModelCacheGeneration,
+  DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
   isModelCacheGenerationCurrent,
@@ -16,6 +17,19 @@ import { applyProviderConfigHints } from "./model-hints";
 import type { CapturedProviderGather } from "./gather-capture";
 import type { ProviderModelsResult } from "./provider-models";
 import type { CatalogModel } from "./parsing";
+import type { OcxConfig } from "../../types";
+import { providerContextCap } from "../../providers/context-cap";
+
+/** Refresh CLI-owned evidence before an observed catalog admission freezes its authority. */
+export async function refreshTraeCnCatalogSources(config: Readonly<OcxConfig>): Promise<void> {
+  const { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } = await import("./provider-models");
+  const { captureProviderGather } = await import("./gather-capture");
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
+    await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
+      config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
+  }
+}
 
 /** Discover an account roster with bounded failure retries and current hints on every cached return. */
 export async function fetchTraeCnProviderModels(
@@ -44,14 +58,15 @@ export async function fetchTraeCnProviderModels(
   if (!allowDiscovery) return observed(stale ?? configured, "degraded");
   if (isModelsFetchCoolingDown(name)) return observed(stale ?? configured, "degraded");
   const generation = captureModelCacheGeneration(name);
+  const currentFallback = (): ProviderModelsResult => observed(getStaleCached(name) ?? configured, "degraded");
   try {
     const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 }, undefined, provider);
     await session.close();
-    if (!isModelCacheGenerationCurrent(name, generation)) return observed(stale ?? configured, "degraded");
+    if (!isModelCacheGenerationCurrent(name, generation)) return currentFallback();
     const models = session.models.map(id => applyProviderConfigHints(name, provider,
       { id, provider: name, inputModalities: ["text"] }, contextCap, metadataModelIdCaseFold,
       captured.effectiveAlias, metadataConfigDir, false));
-    if (!setCached(name, models, Date.now(), generation)) return observed(stale ?? configured, "degraded");
+    if (!setCached(name, models, Date.now(), generation)) return currentFallback();
     markProviderDiscoveryOk(name, models.length);
     return observed(models, "authoritative");
   } catch {
@@ -59,6 +74,6 @@ export async function fetchTraeCnProviderModels(
       markModelsFetchFailure(name);
       markProviderDiscoveryFailed(name, { reason: "provider" });
     }
-    return observed(stale ?? configured, "degraded");
+    return currentFallback();
   }
 }

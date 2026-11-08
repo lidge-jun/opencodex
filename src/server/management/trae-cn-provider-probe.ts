@@ -22,12 +22,14 @@ export async function probeTraeCnProvider(
     const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000, ...deps }, signal, provider);
     await session.close();
     let catalogRefresh: CatalogDisposition = { status: "skipped", reason: "stale", retryable: true };
+    let rosterReplaced = false;
     let clientIntegrations: OwnedIntegrationRefreshOutcome[] = [];
     let clientRefreshPending = false;
     if (isModelCacheGenerationCurrent(name, generation)) {
       clearModelCache(name);
       setCached(name, session.models.map(id => ({ id, provider: name, inputModalities: ["text"], supportsVerbosity: false })),
         Date.now(), captureModelCacheGeneration(name));
+      rosterReplaced = true;
       markProviderDiscoveryOk(name, session.models.length);
       clearGatherRoutedModelsInflight();
       const publishedGeneration = captureModelCacheGeneration(name);
@@ -44,8 +46,11 @@ export async function probeTraeCnProvider(
       }
     }
     const published = catalogRefresh.status === "committed" && !catalogRefresh.degraded;
-    return jsonResponse({ ok: true, models: session.models.length, latencyMs: Date.now() - started, catalogRefresh, clientIntegrations, clientRefreshPending,
-      message: `Connected. ${session.models.length} models. ${published && !clientRefreshPending
+    const staleProbe = !rosterReplaced;
+    return jsonResponse({ ok: true, models: session.models.length, latencyMs: Date.now() - started, rosterReplaced, catalogRefresh, clientIntegrations, clientRefreshPending,
+      message: `Connected. ${session.models.length} models. ${staleProbe
+        ? "The provider changed during the probe; this roster was not published. Run Test connection again."
+        : published && !clientRefreshPending
         ? "Catalog refreshed; restart running Codex sessions to load it."
         : "Catalog refresh is pending; sync the catalog before restarting running Codex sessions."}` });
   } catch (error) {

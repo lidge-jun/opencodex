@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { commandInvocation } from "../../lib/win-exec";
 import { redactSecretString } from "../../lib/redact";
 import type { AdapterEvent, OcxProviderConfig } from "../../types";
-import { readJsonLines } from "../coding-agent/protocol";
+import { CodingAgentStreamLimitError, readJsonLines } from "../coding-agent/protocol";
 import { resolveTraeCli, traeCnChildEnv, traeCnDestinationMatches } from "./profile";
+import { traePosixInvocation, traeStopPipe } from "./process";
 import { parseTraeAcpMessage, parseTraeModels, traePromptEvents, traeSessionId, traeStopReason, traeUsage, TraeAcpProtocolError, type TraeAcpFrame } from "./protocol";
 
 export type SpawnTraeCli = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -20,7 +21,6 @@ export interface TraeAcpDeps {
   killGraceMs?: number;
   reapTimeoutMs?: number;
   killWindowsProcessTree?: (pid: number) => void;
-  signalPosixProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
   makeTempDir?: typeof mkdtemp;
 }
 
@@ -29,6 +29,13 @@ export class TraeAcpError extends Error {
     super(message);
     this.name = "TraeAcpError";
   }
+}
+
+/** Keep actionable local errno values without forwarding paths or arbitrary error text. */
+function startupFailure(stage: "resolve_cli" | "environment" | "home" | "workspace" | "spawn", error: unknown): TraeAcpError {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  const safeCode = typeof code === "string" && ["ENOSPC", "EACCES", "EPERM", "EROFS", "ENOENT", "EMFILE", "ENFILE", "EAGAIN", "EINVAL"].includes(code) ? code : "UNKNOWN";
+  return new TraeAcpError(`TRAE CN startup failed during ${stage} (${safeCode}).`, `trae_startup_${stage}_${safeCode.toLowerCase()}`);
 }
 
 type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
@@ -59,15 +66,17 @@ class TraeAcpClient {
   private readonly lifecycle: Promise<void>;
   private failure?: Error;
   private closed = false;
+  private updatesEnded = false;
   private closing?: Promise<void>;
 
   constructor(private readonly child: ChildProcess, private readonly timeoutMs: number, private readonly deps: TraeAcpDeps) {
     this.lifecycle = new Promise(resolve => {
-      child.once("error", error => { this.failure ??= error; this.fail(error); });
+      child.once("error", error => this.fail(startupFailure("spawn", error)));
       child.once("close", resolve);
       if (child.exitCode !== null) resolve();
     });
     child.stdin?.on("error", error => this.fail(error));
+    traeStopPipe(child)?.on("error", () => undefined);
     child.stderr?.on("data", (chunk: Uint8Array) => {
       this.stderr.push(new TextDecoder().decode(chunk));
       while (this.stderr.join("").length > 8192) this.stderr.shift();
@@ -112,7 +121,9 @@ class TraeAcpClient {
       this.fail(this.failure ?? new TraeAcpError("TRAE CN ACP closed before the turn completed", "trae_acp_closed"));
     } catch (error) {
       // The shared JSONL parser includes stdout snippets, which can contain partial secrets.
-      this.fail(error instanceof TraeAcpError ? error
+      this.fail(error instanceof CodingAgentStreamLimitError
+        ? new TraeAcpError("TRAE CN ACP stdout exceeded its size limit.", "trae_stdout_limit")
+        : error instanceof TraeAcpError ? error
         : new TraeAcpProtocolError("TRAE CN ACP returned malformed or unsupported protocol data."));
     }
   }
@@ -146,8 +157,14 @@ class TraeAcpClient {
   nextUpdate(): Promise<TraeAcpFrame | null> {
     const queued = this.updates.shift();
     if (queued) return Promise.resolve(queued);
-    if (this.closed) return Promise.resolve(null);
+    if (this.closed || this.updatesEnded) return Promise.resolve(null);
     return new Promise(resolve => this.waiters.push(resolve));
+  }
+
+  /** Settle the one update consumer without subscribing again for every streamed chunk. */
+  endUpdates(): void {
+    this.updatesEnded = true;
+    for (const waiter of this.waiters.splice(0)) waiter(null);
   }
 
   /** Expose only a bounded, redacted diagnostic when the CLI closes unexpectedly. */
@@ -160,37 +177,39 @@ class TraeAcpClient {
     if (this.closing) return this.closing;
     this.fail(new TraeAcpError("TRAE CN ACP session closed", "trae_acp_closed"));
     this.closing = (async () => {
-      const signalGroup = (pid: number, signal: NodeJS.Signals): void => {
-        if (this.deps.signalPosixProcessGroup) this.deps.signalPosixProcessGroup(pid, signal);
-        else process.kill(-pid, signal);
-      };
-      const terminate = (signal: NodeJS.Signals): void => {
+      const terminateWindows = (signal: NodeJS.Signals): void => {
         const pid = this.child.pid;
-        if (pid && (this.deps.platform ?? process.platform) === "win32") {
+        if (this.child.exitCode !== null || this.child.signalCode) return;
+        if (pid) {
           try {
             if (this.deps.killWindowsProcessTree) this.deps.killWindowsProcessTree(pid);
             else execFileSync(`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"],
               { stdio: "ignore", windowsHide: true, timeout: 1000 });
             return;
           } catch { /* Fall back to the direct child if tree termination is unavailable. */ }
-        } else if (pid) {
-          try { signalGroup(pid, signal); return; } catch { /* The process group may already be gone. */ }
         }
         try { this.child.kill(signal); } catch { /* Already exited. */ }
       };
-      terminate("SIGTERM");
       const reapTimeoutMs = this.deps.reapTimeoutMs ?? 2250;
-      if (!await waitBounded(this.lifecycle, this.deps.killGraceMs ?? 2000)) {
-        terminate("SIGKILL");
-        await waitBounded(this.lifecycle, reapTimeoutMs);
-      } else if (this.child.pid && (this.deps.platform ?? process.platform) !== "win32") {
-        // The group can outlive its leader, even when the leader closed every pipe.
-        try { signalGroup(this.child.pid, "SIGKILL"); } catch { /* The group has already exited. */ }
+      const graceMs = this.deps.killGraceMs ?? 2000;
+      let stopped: boolean;
+      if ((this.deps.platform ?? process.platform) === "win32") {
+        terminateWindows("SIGTERM");
+        stopped = await waitBounded(this.lifecycle, graceMs);
+        if (!stopped) {
+          terminateWindows("SIGKILL");
+          stopped = await waitBounded(this.lifecycle, reapTimeoutMs);
+        }
+      } else {
+        try { traeStopPipe(this.child)?.end("stop\n"); } catch { /* An exited supervisor already closed the descriptor. */ }
+        stopped = await waitBounded(this.lifecycle, graceMs + reapTimeoutMs);
       }
+      traeStopPipe(this.child)?.destroy();
       this.child.stdin?.destroy();
       this.child.stdout?.destroy();
       this.child.stderr?.destroy();
       await waitBounded(this.reader, reapTimeoutMs);
+      if (!stopped) throw new TraeAcpError("TRAE CN process shutdown was not confirmed before its deadline.", "trae_shutdown_timeout");
     })();
     return this.closing;
   }
@@ -212,16 +231,19 @@ export async function openTraeSession(
     throw new TraeAcpError("TRAE CN ACP cannot honor provider proxy/noProxy overrides; the official CLI owns its network route.", "trae_proxy_unsupported");
   }
   if (!traeCnDestinationMatches(baseUrl)) throw new TraeAcpError("TRAE CN requires its canonical provider destination", "non_canonical_destination");
-  const binary = (deps.resolveBinary ?? resolveTraeCli)();
+  let binary: string | undefined;
+  try { binary = (deps.resolveBinary ?? resolveTraeCli)(); } catch (error) { throw startupFailure("resolve_cli", error); }
   if (!binary) throw new TraeAcpError("TRAE CN CLI not found. Install traecli and sign in through TRAE CN.", "cli_not_found");
-  const env = traeCnChildEnv(process.env, deps.platform ?? process.platform);
+  let env: Record<string, string>;
+  try { env = traeCnChildEnv(process.env, deps.platform ?? process.platform); } catch (error) { throw startupFailure("environment", error); }
   const ownHome = deps.home === undefined;
   const makeTempDir = deps.makeTempDir ?? mkdtemp;
-  const home = deps.home ?? await makeTempDir(join(tmpdir(), "ocx-trae-cn-"));
+  let home: string;
+  try { home = deps.home ?? await makeTempDir(join(tmpdir(), "ocx-trae-cn-")); } catch (error) { throw startupFailure("home", error); }
   let work: string;
   try { work = deps.cwd ?? await makeTempDir(join(tmpdir(), "ocx-trae-cn-work-")); } catch (error) {
     if (ownHome) await rm(home, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    throw startupFailure("workspace", error);
   }
   const cleanup = async (): Promise<void> => {
     await Promise.all([
@@ -233,21 +255,24 @@ export async function openTraeSession(
   if ((deps.platform ?? process.platform) === "win32") env.USERPROFILE = home;
   const disabledTools = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoWrite", "AskUserQuestion"];
   const args = [...disabledTools.flatMap(tool => ["--disallowed-tool", tool]), "acp", "serve"];
-  const invocation = commandInvocation(binary, args, deps.platform ?? process.platform, { env });
   let child: ChildProcess;
   try {
     signal?.throwIfAborted();
-    child = (deps.spawn ?? nodeSpawn)(invocation.file, invocation.args, {
-      ...invocation.options, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
-      detached: (deps.platform ?? process.platform) !== "win32",
+    const invocation = commandInvocation(binary, args, deps.platform ?? process.platform, { env });
+    const windows = (deps.platform ?? process.platform) === "win32";
+    const owned = windows ? invocation : traePosixInvocation(invocation.file, invocation.args, deps.killGraceMs ?? 2000);
+    child = (deps.spawn ?? nodeSpawn)(owned.file, owned.args, {
+      ...invocation.options, env, stdio: windows ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"], windowsHide: true,
+      detached: !windows,
       cwd: deps.cwd ?? work,
     });
   } catch (error) {
     await cleanup();
-    throw error;
+    if (signal?.aborted) throw error;
+    throw startupFailure("spawn", error);
   }
   const client = new TraeAcpClient(child, deps.timeoutMs ?? 300_000, deps);
-  const abort = () => { void client.close(); };
+  const abort = () => { void client.close().catch(() => undefined); };
   signal?.addEventListener("abort", abort, { once: true });
   let opened = false;
   try {
@@ -268,7 +293,7 @@ export async function openTraeSession(
       async prompt(modelId, text, emit, signal, dispatch) {
         if (signal?.aborted) return;
         if (!models.includes(modelId)) throw new TraeAcpError(`TRAE CN model is not available to this account: ${modelId}`, "trae_model_unavailable");
-        const abort = () => { void client.close(); };
+        const abort = () => { void client.close().catch(() => undefined); };
         signal?.addEventListener("abort", abort, { once: true });
         let completion: Promise<unknown> | undefined;
         try {
@@ -276,11 +301,9 @@ export async function openTraeSession(
           if (signal?.aborted) return;
           let output = false;
           completion = client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, dispatch);
+          void completion.then(() => client.endUpdates(), () => client.endUpdates());
           while (true) {
-            const frame = await Promise.race([
-              client.nextUpdate(),
-              completion.then(() => null, () => null),
-            ]);
+            const frame = await client.nextUpdate();
             if (!frame) break;
             if (frame.kind !== "update" || frame.sessionId !== sessionId) continue;
             if (frame.update.sessionUpdate === "current_model_update") {

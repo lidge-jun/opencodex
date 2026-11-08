@@ -32,8 +32,10 @@ class accompany every inferred value. These are bundled estimates, not live gate
 `src/codex/catalog/parsing.ts` defines `CatalogModel.contextWindowInference`;
 `src/codex/catalog/routed-gather.ts` preserves it through custom-row gap filling and cache projection; explicit
 custom windows clear it. Re-hinting recomputes inferred windows and cap annotations rather than
-promoting the old estimate to an observation. Custom-only rows fill only missing context fields,
-leaving explicit modalities and reasoning unchanged. `src/codex/catalog/effort.ts` writes the
+promoting the old estimate to an observation. Custom-only rows fill only missing context fields.
+Explicit modalities and reasoning retain their precedence within adapter wire ceilings; TRAE CN
+custom rows are text-only with verbosity disabled before optional vision-sidecar publication.
+`src/codex/catalog/effort.ts` writes the
 estimate under `inferred_context_window` / `context_window_inference` in capability provenance,
 not `context_window`, so routing requirements still see unknown capacity. Existing asserted
 modality/tool evidence remains usable. Shared client catalogs, Claude context markers and exports
