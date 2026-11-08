@@ -1,4 +1,3 @@
-import { isPlainObject } from "../../lib/plain-data";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
@@ -166,7 +165,7 @@ import {
   resetStreamedOpaqueBlobLogContext,
   consoleGoUploadRejectionBody,
   CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
-  reasoningEffortRejectionText,
+  refusedReasoningEffortDowngrade, withRawBodyReasoningEffort,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
 import { deferProtocolSafeResetRecovery, preflightComboStreamResponse } from "./combo-stream-preflight";
@@ -174,7 +173,6 @@ import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
-import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { createNativeContinuationDispatch } from "./native-continuation-send";
 import { guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
@@ -1099,6 +1097,7 @@ export async function preparePassthroughExchange(
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
+      preserveFailureResponse?: Response,
     ): Promise<Response | { failed: Response | PassthroughAdapterHandoff }> => {
       const retryAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -1149,6 +1148,8 @@ export async function preparePassthroughExchange(
         { allowFinalRecoveryReserve: transientSendPolicy() === null },
       );
       if (recovery === "empty-completion") allowance.attempts = Math.min(1, allowance.attempts);
+      // An unfunded combo rung keeps the upstream refusal for combo failover instead of a budget 429.
+      if (preserveFailureResponse && allowance.attempts < 1) { request.releaseBodyObservation?.(); return { failed: preserveFailureResponse }; }
       const recoveryAccounting = copilotSendAccounting(allowance.permit);
       try {
         return await fetchWithTransientRetry(
@@ -1833,57 +1834,20 @@ export async function preparePassthroughExchange(
     // model's ladder, not this account's entitlement. Learn each refusal so later turns clamp
     // before dispatch. Direct requests repair once; combo candidates may retry the next lower
     // published rung until it works, the ladder ends, or the send budget is spent.
-    if (options.comboAttempt || !reasoningEffortDowngradeGuard.attempted) {
-      const rejectionText = await reasoningEffortRejectionText(
-        upstreamResponse,
-        false,
-        upstream.signal,
-      );
-      const downgrade = rejectionText === undefined
-        ? undefined
-        : planReasoningEffortDowngrade({
-            provider: route.provider,
-            modelId: parsed.modelId,
-            requested: parsed.options.reasoning,
-            rejectionText,
-          });
-      if (downgrade && !configuredTransientSendBudgetExhausted()) {
-        const allowance = recoverySendAllowance(
-          transientSendAttempts(),
-          recoveryClassFor("reasoning-effort-downgrade"),
-          `${route.providerName}|${route.modelId}|reasoning-effort-downgrade`,
-          { allowFinalRecoveryReserve: transientSendPolicy() === null },
-        );
-        if (allowance.attempts < 1) {
-          allowance.permit?.release();
-          return upstreamResponse;
-        }
-        sendBudgetState.pendingHopPermit = allowance.permit;
-        reasoningEffortDowngradeGuard.attempted = true;
-        parsed.options.reasoning = downgrade.effort;
-        if (isPlainObject(parsed._rawBody)) {
-          const rawBody = parsed._rawBody as Record<string, unknown>;
-          const rawReasoning = isPlainObject(rawBody.reasoning)
-            ? { ...(rawBody.reasoning as Record<string, unknown>), effort: downgrade.effort }
-            : { effort: downgrade.effort };
-          parsed._rawBody = {
-            ...rawBody,
-            reasoning: rawReasoning,
-            ...("reasoning_effort" in rawBody ? { reasoning_effort: downgrade.effort } : {}),
-          };
-        }
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        try {
-          const result = await rebuildAndRefetch("reasoning-effort-downgrade");
-          sendBudgetState.pendingHopPermit = undefined;
-          if ("failed" in result) return result.failed;
-          upstreamResponse = result;
-          continue passthroughRecovery;
-        } finally {
-          if (sendBudgetState.pendingHopPermit === allowance.permit) sendBudgetState.pendingHopPermit = undefined;
-          allowance.permit?.release();
-        }
-      }
+    const downgrade = await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
+      options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
+    if (downgrade && !configuredTransientSendBudgetExhausted()) {
+      reasoningEffortDowngradeGuard.attempted = true;
+      parsed.options.reasoning = downgrade.effort;
+      parsed._rawBody = withRawBodyReasoningEffort(parsed._rawBody, downgrade.effort);
+      // A combo keeps the refusal, so an unfunded rung still reaches combo failover as the original 400.
+      const refusal = options.comboAttempt ? upstreamResponse : undefined;
+      if (!refusal) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      const result = await rebuildAndRefetch("reasoning-effort-downgrade", refusal);
+      if ("failed" in result) return result.failed;
+      if (refusal) try { void refusal.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      upstreamResponse = result;
+      continue passthroughRecovery;
     }
 
     // The WebSocket row of the same table (#4191). A Codex socket that closed or failed under its

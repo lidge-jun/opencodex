@@ -96,7 +96,7 @@ import {
   attemptOpaqueBlobRecovery,
   consoleGoUploadRejectionBody,
   CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
-  reasoningEffortRejectionText,
+  refusedReasoningEffortDowngrade,
   anthropicFastRefused,
 } from "./core-opaque-recovery";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
@@ -105,7 +105,6 @@ import {
   isTransientConsoleGoUploadRejection,
   enrichOpenCodeZenUpstreamMessage,
 } from "../../providers/opencode-zen-rate-limit";
-import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { consumeComboFailure } from "./core-combo-failure";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
@@ -1831,35 +1830,24 @@ export async function prepareAdapterExchange(
       }
       // Learn a refused rung and retry at the next published one. Direct requests are limited
       // to one repair; combo candidates may continue down the finite ladder within the send budget.
-      if (options.comboAttempt || !reasoningEffortDowngradeGuard.attempted) {
-        const rejectionText = await reasoningEffortRejectionText(
-          upstreamResponse,
-          false,
-          upstream.signal,
-        );
-        const downgrade = rejectionText === undefined
-          ? undefined
-          : planReasoningEffortDowngrade({
-              provider: route.provider,
-              modelId: parsed.modelId,
-              requested: parsed.options.reasoning,
-              rejectionText,
-            });
-        if (downgrade) {
-          reasoningEffortDowngradeGuard.attempted = true;
-          parsed.options.reasoning = downgrade.effort;
-          // The same-target cache keys on parsed identity, so a mutated effort needs a token bump.
-          invalidateSameTargetRequest();
-          const failedResponse = await retainFailureResponse();
-          const result = await rebuildAndRefetch("reasoning-effort-downgrade", undefined, failedResponse);
-          if ("failed" in result) {
-            if (result.failed !== failedResponse) return result.failed;
-            break recovery;
-          }
-          try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-          upstreamResponse = result;
-          continue recovery;
+      const downgrade = await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
+        options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
+      if (downgrade) {
+        reasoningEffortDowngradeGuard.attempted = true;
+        parsed.options.reasoning = downgrade.effort;
+        // The same-target cache keys on parsed identity, so a mutated effort needs a token bump.
+        invalidateSameTargetRequest();
+        // A combo keeps the refusal, so an unfunded rung still reaches combo failover as the original 400.
+        const refusal = options.comboAttempt ? await retainFailureResponse() : undefined;
+        if (!refusal) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        const result = await rebuildAndRefetch("reasoning-effort-downgrade", undefined, refusal);
+        if ("failed" in result) {
+          if (result.failed !== refusal) return result.failed;
+          break recovery;
         }
+        if (refusal) try { void refusal.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        upstreamResponse = result;
+        continue recovery;
       }
       break;
     }
