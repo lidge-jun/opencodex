@@ -33,7 +33,7 @@ SignPath Foundation policy forbids signing them with the project certificate.
 OpenCodex sends one anonymous daily usage summary (version, platform, counts; never prompts,
 outputs, keys, accounts, hosts or paths) to `telemetry.opencodex.me` only after the person
 installing or operating it has seen the notice (dashboard popup or interactive CLI prompt) and
-has not declined; it can be turned off at install time in that prompt and anytime with
+has not declined; it can be turned off in that notice and anytime with
 `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` or Proxy details; project-wide
 aggregates are public; otherwise data goes only where the user configures. In practice,
 OpenCodex forwards requests to the providers you configure. To look for new versions it also
