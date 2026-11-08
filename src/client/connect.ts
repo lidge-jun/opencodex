@@ -107,7 +107,7 @@ import type { RouteIntentReceipt } from "../integrations/route-intent-contract";
 import { clearHomeRouteIntentRecord } from "./link-home";
 import { clearInitialRouteIntent, recordInitialRouteIntent } from "../integrations/route-intent-initial";
 import { cleanupConnectedRouteIntent } from "../integrations/route-intent-disconnect";
-import { restoreNativeIntentOriginals } from "./route-intent-native-originals";
+import { nativeIntentOriginalsPath, readNativeIntentOriginals, restoreNativeIntentOriginals } from "./route-intent-native-originals";
 import { clearFileIntentOriginals } from "./route-intent-file-originals";
 
 class RotationRecoveryRequiredError extends Error {
@@ -870,15 +870,21 @@ async function connectClientUnlocked(
           try { clearInitialRouteIntent(linkMetadata.linkId); }
           catch { rollbackFailures.push("initial route selection rollback unavailable"); }
         }
+        let nativeRestoreFailed = false;
         if (restoreNativeIntent && !committed && pendingConnectFingerprint) {
           const fingerprint = pendingConnectFingerprint;
           try { restoreNativeIntentOriginals(() => assertConnectingState(fingerprint)); }
-          catch { rollbackFailures.push("Codex intent rollback ownership unavailable"); }
+          catch {
+            // Like disconnect, keep the token (and the marker proving it is this attempt's) until the
+            // standalone switches are back; ocx disconnect finishes this rollback.
+            nativeRestoreFailed = true;
+            rollbackFailures.push(`Standalone native switches were not restored, so the enrollment token was kept. Repair the config or ${nativeIntentOriginalsPath()}, then run ocx disconnect to finish the rollback.`);
+          }
         }
         if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
           rollbackFailures.push("catalog rollback did not match the written artifact");
         }
-        if (pendingConnectFingerprint) {
+        if (pendingConnectFingerprint && !nativeRestoreFailed) {
           const removed = removeServiceApiTokenFileIfOwned(pendingConnectFingerprint);
           if (removed === "changed") rollbackFailures.push("service token changed during rollback");
           // Final commit may fail after this attempt already cleared its marker under the same lock.
@@ -1206,6 +1212,42 @@ function restoreConnectedCodex(connection: OcxClientConnectionConfig, receipt: D
   }
 }
 
+/**
+ * A disconnected machine with no unfinished disconnect can still hold the standalone native
+ * switches an interrupted or failed enrollment displaced, and the token that enrollment kept
+ * because it could not restore them. Plain `ocx disconnect` restores the switches, then removes
+ * that token only while the pending-connect marker proves it is the enrollment's own.
+ * `ocx disconnect --orphaned-token` never touches the record.
+ */
+function drainLoneNativeIntentOriginals(lifecycleLockDeps?: ClientLifecycleLockDeps): {
+  restored: true; tokenRemoved: boolean; catalogRemoved: false; catalogRestored: false; apiKeyId: string; restartRequired: false; nativeIntentOnly: true;
+} | null {
+  const refused = (error: unknown) => new Error(`disconnect refused: the standalone native switches recorded in ${nativeIntentOriginalsPath()} were not restored (${error instanceof Error ? error.message : String(error)}). Repair the config or that record (remove it only after setting the switches by hand), then rerun ocx disconnect.`);
+  return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    const read = readDesktopDisconnectReceipt();
+    if (read.kind === "unsafe" || (read.kind === "valid" && read.value.phase !== "complete")) return null;
+    if (readClientConnectionState().kind !== "disconnected") return null;
+    let present: boolean;
+    try { present = readNativeIntentOriginals() !== null; } catch (error) { throw refused(error); }
+    if (!present) return null;
+    try {
+      restoreNativeIntentOriginals(() => {
+        assertNoClientDisconnectPending();
+        if (readClientConnectionState().kind !== "disconnected") throw new Error("client_connection_changed");
+      });
+    } catch (error) { throw refused(error); }
+    const token = readServiceApiTokenState();
+    let tokenRemoved = false;
+    if (token.kind === "present" && pendingClientConnectMayOwnToken(token.fingerprint)) {
+      const removed = removeServiceApiTokenFileIfOwned(token.fingerprint);
+      if (removed === "changed") throw new Error("client_token_changed");
+      tokenRemoved = removed === "removed";
+      clearClientConnectPending(token.fingerprint);
+    }
+    return { restored: true, tokenRemoved, catalogRemoved: false, catalogRestored: false, apiKeyId: "", restartRequired: false, nativeIntentOnly: true };
+  }), lifecycleLockDeps);
+}
+
 export async function disconnectClient(
   options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner; recoverConfig?: boolean } = {},
   deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
@@ -1214,8 +1256,14 @@ export async function disconnectClient(
   desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
   restartRequired: boolean;
   recoveryBackupDir?: string;
+  /** Only standalone native switches an interrupted enrollment displaced were restored. */
+  nativeIntentOnly?: true;
 }> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
+  if (!options.expectedOwner) {
+    const drained = drainLoneNativeIntentOriginals(deps.lifecycleLockDeps);
+    if (drained) return drained;
+  }
   const keepCatalog = options.keepCatalog === true;
   const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();

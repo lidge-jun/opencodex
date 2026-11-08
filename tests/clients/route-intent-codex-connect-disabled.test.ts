@@ -8,7 +8,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 // Run the real enrollment and injector with every native path bound to a disposable home.
-function scenario(setup = "", testRunner = false) {
+function scenario(setup = "", testRunner = false, after = "") {
   const home = mkdtempSync(join(tmpdir(), "ocx-route-codex-connect-disabled-"));
   mkdirSync(join(home, ".codex"));
   try {
@@ -55,11 +55,13 @@ function scenario(setup = "", testRunner = false) {
       const before=readFileSync(configPath,'utf8');
       let connection, error;
       try {connection=await connectClient(options,deps);} catch(e) {error=e.message;} finally {cleanup();}
+      let afterError, tokenAfterFailure; ${after}
       console.log(JSON.stringify({error,selected:connection?.selectedClients,enabled:loadConfig().clientIntegrations.codex,
         fastMode:loadConfig().fastMode,after:existsSync(configPath)?readFileSync(configPath,'utf8'):null,before,original,owner:journalOwner(),
         journal:existsSync(join(process.env.CODEX_HOME,'opencodex-journal.json')),
         token:readServiceApiTokenState().kind,state:readClientConnectionState().kind,
-        settings:readHomeCodexSettingsRecord(options.link.linkId),receipt:readRouteIntentReceipt(),requests,observedEnabled,observedInjected}));
+        settings:readHomeCodexSettingsRecord(options.link.linkId),receipt:readRouteIntentReceipt(),requests,observedEnabled,observedInjected,
+        afterError,tokenAfterFailure,pending:existsSync(join(process.env.OPENCODEX_HOME,'client-connect-pending'))}));
     `;
     let args = ["--eval", script];
     if (testRunner) {
@@ -261,5 +263,32 @@ test("a local opt-out arriving with Home settings fences the early Codex enable"
   expect(result.after).toBe(result.original);
   expect(result.journal).toBe(false);
   expect(result.token).toBe("absent");
+  expect(result.state).toBe("disconnected");
+}, SPAWN_BUDGET_MS);
+
+test("a failed native restore keeps the enrollment token, and ocx disconnect finishes the rollback", () => {
+  const result = scenario(`
+    deps.now = () => {
+      // The write-ahead record is unreadable, so the rollback cannot restore the standalone switch.
+      writeFileSync(join(process.env.OPENCODEX_HOME,'link','native-intent-originals.json'), '{');
+      throw new Error('fixture enrollment commit failed');
+    };
+  `, false, `
+    tokenAfterFailure = readServiceApiTokenState().kind;
+    const recordPath = join(process.env.OPENCODEX_HOME,'link','native-intent-originals.json');
+    const { disconnectClient } = await import('./src/client/connect');
+    try { await disconnectClient({}, deps); } catch (e) { afterError = e.message; }
+    if (!afterError?.includes(recordPath)) throw new Error('disconnect did not name the record: ' + afterError);
+    writeFileSync(recordPath, JSON.stringify({ version: 1, fields: { codex: { original: false, published: true } } }));
+    afterError = undefined;
+    try { await disconnectClient({}, deps); } catch (e) { afterError = e.message; }
+  `);
+  expect(result.error).toContain("fixture enrollment commit failed");
+  expect(result.error).toContain("native-intent-originals.json");
+  expect(result.tokenAfterFailure).toBe("present");
+  expect(result.afterError).toBeUndefined();
+  expect(result.enabled).toBe(false);
+  expect(result.token).toBe("absent");
+  expect(result.pending).toBe(false);
   expect(result.state).toBe("disconnected");
 }, SPAWN_BUDGET_MS);

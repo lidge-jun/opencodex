@@ -573,6 +573,13 @@ export async function handleDisconnectCommand(
       timeoutMs: deps.linkTeardownDeps?.timeoutMs,
     });
     const result = await disconnectClient({ keepCatalog, recoverConfig }, deps);
+    if (result.nativeIntentOnly) {
+      printData(result, wantsJson, [
+        "Not connected; restored the standalone native switches an interrupted Remote Link enrollment had changed.",
+        ...(result.tokenRemoved ? ["Removed the service token that enrollment left behind."] : []),
+      ]);
+      return;
+    }
     const payload = {
       ...result,
       homeRevoke: teardown.homeRevoke,
