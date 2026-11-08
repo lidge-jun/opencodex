@@ -10,6 +10,7 @@ import {
   putTelemetryDecision,
   shouldShowTelemetryConsentPrompt,
   subscribeModalDialogChanges,
+  TelemetrySaveError,
   type TelemetryStatusSnapshot,
 } from "../telemetry-api";
 import { Notice } from "../ui";
@@ -142,6 +143,16 @@ function TelemetryConsentDialog({
       await putTelemetryDecision(apiBase, checked ? "accepted" : "declined", status);
       onClose();
     } catch (error) {
+      if (!(error instanceof TelemetrySaveError)) {
+        // The request dropped or timed out, and the server may still have saved the choice.
+        const saved = await fetchTelemetryStatus(apiBase)
+          .then(snapshot => snapshot.decision !== null)
+          .catch(() => false);
+        if (saved) {
+          onClose();
+          return;
+        }
+      }
       busyRef.current = false;
       setSubmitting(false);
       setSaveError(isTelemetryConsentSessionRefused(error) ? "session" : "failed");
