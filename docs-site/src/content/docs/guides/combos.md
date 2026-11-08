@@ -805,8 +805,10 @@ immediately to the client. A zero-output `response.incomplete` follows the same 
 is missing or is `adapter_eof`, `missing_terminal_event`, `upstream_stall_timeout`, or an explicit
 `max_output_tokens` limit before any output is emitted. Other explicit semantic reasons such as
 `content_filter` remain terminal, as do post-output `max_output_tokens` limits and an explicit null reason.
-A reasonless final snapshot that already contains output items is also kept. Once any output event
-begins or the reasoning hold deadline is reached, the target is committed: a later stream failure is
+A reasonless final snapshot that already contains output items is also kept. The rate-limit and
+response-metadata frames that a native Codex (ChatGPT account) target sends over its WebSocket are
+not output, so an overload error that follows them with no output still moves to the next target.
+Once any output event begins or the reasoning hold deadline is reached, the target is committed: a later stream failure is
 returned to the client and is never replayed on another provider, which prevents duplicate text and tool
 execution. If the pre-output buffer reaches its safety cap without a terminal or output boundary,
 OpenCodex also commits the current target instead of growing memory without a bound.

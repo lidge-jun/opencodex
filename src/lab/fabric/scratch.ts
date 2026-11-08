@@ -12,9 +12,11 @@ import {
   statSync,
   writeSync,
   type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { randomBytes } from "node:crypto";
+import { fileIdentityKey, type FileIdentity } from "../../lib/file-identity";
 import { ensureLabDirs, ensureRestrictedDir, labRoot, labScratchDir } from "../paths";
 import { FABRIC_LIMITS, SYNTHETIC_BEFORE_UTF8, SYNTHETIC_VALUE_PATH } from "./constants";
 import { FabricTaskError } from "./types";
@@ -35,22 +37,22 @@ interface TrustedScratchDir {
 // inside producer-writable scratch nor its age grants later deletion authority.
 
 /** Require stats to describe a regular file, not a symlink or special node. */
-function assertRegularFile(stats: Stats, label: string): void {
+function assertRegularFile(stats: Stats | BigIntStats, label: string): void {
   if (!stats.isFile() || stats.isSymbolicLink() || stats.isDirectory() || stats.isFIFO() || stats.isSocket() || stats.isCharacterDevice() || stats.isBlockDevice()) {
     throw new FabricTaskError(`${label} must be a regular file`, "sandbox_violation", "harness");
   }
 }
 
 /** Require stats to describe a real directory, not a symlink. */
-function assertRealDirectory(stats: Stats, label: string): void {
+function assertRealDirectory(stats: Stats | BigIntStats, label: string): void {
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new FabricTaskError(`${label} must be a real directory`, "sandbox_violation", "harness");
   }
 }
 
 /** Stable device/inode identity string for a filesystem node. */
-function identityOf(stats: Stats): string {
-  return `${stats.dev}:${stats.ino}`;
+function identityOf(stats: FileIdentity): string {
+  return fileIdentityKey(stats);
 }
 
 /** Whether the host supports O_NOFOLLOW for scratch open operations. */
@@ -73,7 +75,7 @@ function assertScratchName(name: string): void {
 
 /** Confirm the scratch root path still refers to the same directory inode. */
 function revalidateScratchDir(dir: TrustedScratchDir): void {
-  const stats = lstatSync(dir.path);
+  const stats = lstatSync(dir.path, { bigint: true });
   assertRealDirectory(stats, "scratch dir");
   if (identityOf(stats) !== dir.identity) {
     throw new FabricTaskError("scratch directory identity changed", "sandbox_violation", "harness");
@@ -93,12 +95,12 @@ function openAtScratch(dir: TrustedScratchDir, name: string, flags: number, mode
   assertScratchName(name);
   const path = childScratchPath(dir, name);
   const fd = openSync(path, openFlags(flags), mode);
-  const opened = fstatSync(fd);
+  const opened = fstatSync(fd, { bigint: true });
   if (expectDirectory) {
     assertRealDirectory(opened, name);
   } else {
     assertRegularFile(opened, name);
-    const pathEntry = lstatSync(path);
+    const pathEntry = lstatSync(path, { bigint: true });
     if (identityOf(opened) !== identityOf(pathEntry)) {
       throw new FabricTaskError("scratch path redirection detected", "sandbox_violation", "harness");
     }
@@ -115,7 +117,7 @@ function openTrustedScratchRoot(scratchRoot: string): TrustedScratchDir {
   } else {
     fd = openSync(abs, fsConstants.O_RDONLY);
   }
-  const stats = fstatSync(fd);
+  const stats = fstatSync(fd, { bigint: true });
   assertRealDirectory(stats, "scratch root");
   return { path: abs, fd, identity: identityOf(stats) };
 }
@@ -149,7 +151,7 @@ function openScratchRelativePath(
           : openFlags(fsConstants.O_RDONLY, true);
         const subFd = openAtScratch(current, part, dirFlags, 0, true);
         intermediateFds.push(subFd);
-        const subStats = fstatSync(subFd);
+        const subStats = fstatSync(subFd, { bigint: true });
         assertRealDirectory(subStats, part);
         current = { path: join(current.path, part), fd: subFd, identity: identityOf(subStats) };
         continue;
