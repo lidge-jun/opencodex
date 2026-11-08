@@ -47,7 +47,7 @@ The wire surfaces a client actually talks to.
 | --- | --- |
 | [`transports/timeouts.md`](transports/timeouts.md) | Local header and JSON body deadlines, cancellation and optional OpenCode timeout export. |
 | [`remote-messaging.md`](remote-messaging.md) | Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies. |
-| [`local-messaging.md`](local-messaging.md) | Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds. |
+| [`local-messaging.md`](local-messaging.md) | Loaded-session Unix messaging and opt-in stored-queue MCP tools, explicit final-turn reads, receipts and owned helper bounds. |
 | [`transports/byte-accounting.md`](transports/byte-accounting.md) | Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission. |
 | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
 | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) | Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization. |
@@ -111,6 +111,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/kiro.md`](providers/kiro.md) | Kiro parallel-tool hints, Responses text controls, structured-output emulation, and reasoning round-trip. |
 | [`providers/xai-grok.md`](providers/xai-grok.md) | Grok Build contract parity and hardening. |
 | [`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) | Preset-scoped single-leading-system normalization, configuration and editor policy. |
+| [`providers/mistral-chat.md`](providers/mistral-chat.md) | Canonical Mistral request-field projection, native effort clamping and typed-content normalization. |
 | [`providers/chat-compat.md`](providers/chat-compat.md) | Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools. |
 | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) | Explicit response-only block completion, ordered safe-call delivery and terminal ownership. |
 | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) | Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation. |
@@ -129,6 +130,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`gui-and-management-api.md`](gui-and-management-api.md) | Dashboard serving, authentication boundaries, /api/* ownership, and startup safety. |
 | [`provider-completion-diagnostic.md`](provider-completion-diagnostic.md) | Explicit single-model completion test: consent, applicability gate, send-time authority fingerprint, bounded streaming and metadata comparison. |
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
+| [`usage-client-attribution.md`](usage-client-attribution.md) | Privacy-bounded client labels carried from request ingress into usage records. |
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
 | [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
 | [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
@@ -218,6 +220,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/openai-chat.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md)<br>[`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-chat/` | [`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-chat/completed-tool-blocks.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
+| `src/adapters/openai-chat/destination-policy.ts` | [`providers/mistral-chat.md`](providers/mistral-chat.md) |
+| `src/adapters/openai-chat/native-content.ts` | [`providers/mistral-chat.md`](providers/mistral-chat.md) |
 | `src/adapters/openai-chat/required-tool-result.ts` | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) |
 | `src/adapters/openai-chat/serialized-tool-call-content.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/openai-responses/` | [`transports/response-citations.md`](transports/response-citations.md) |
@@ -254,8 +258,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/update-restart.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
+| `src/client/hub-client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/client/link-connection.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
+| `src/client/link-management-relay.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
@@ -355,6 +361,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/tool-argument-integers.ts` | [`providers-and-adapters.md`](providers-and-adapters.md) |
 | `src/lib/upstream-condition.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/upstream-retry.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/upstream-validation-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/windows-owner-acl.ts` | [`codex-cli-update.md`](codex-cli-update.md)<br>[`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-messaging.md`](remote-messaging.md)<br>[`remote-link.md`](remote-link.md) |
 | `src/local-credentials/` | [`remote-link.md`](remote-link.md) |
@@ -402,6 +409,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/remote/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
@@ -420,8 +428,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/claude-messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/context-history.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/images.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
+| `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
@@ -435,8 +445,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
+| `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/messages-native-tool-guard.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/messages-native.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/messages-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -447,6 +459,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/ollama-native-paths.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/ollama-route-policy.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/request-log-failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/request-log.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
@@ -513,8 +526,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/update/restart-ownership.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/update/supervised-recovery.mjs` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`companion.md`](companion.md) |
+| `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/usage/summary.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/usage/user-cost-overlays.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/user-cost-validation.ts` | [`pricing.md`](pricing.md) |

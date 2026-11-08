@@ -55,12 +55,29 @@ function successfulDeps() {
       // Matches the /healthz fixture version below so the skew guard stays out of the way;
       // the dedicated skew tests override it explicitly.
       cliVersion: "test",
-      readUpdateHome: () => ({ config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } }),
+      readUpdateHome: () => ({ config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) }, diagnosedHostname: "127.0.0.1" }),
     },
   };
 }
 
 describe("bound system restart client", () => {
+  test("rejects a changed diagnosed hostname after asynchronous discovery", async () => {
+    const setup = successfulDeps();
+    const home = setup.deps.readUpdateHome();
+    let changed = false;
+    setup.deps.readUpdateHome = () => ({ ...home, diagnosedHostname: changed ? "::1" : "127.0.0.1" });
+    setup.deps.findLive = async () => { changed = true; return target; };
+    setup.deps.cliVersion = "2.77.0";
+    setup.deps.fetchImpl = (async () => {
+      const response = successfulDepsResponse(setup.secret, setup.challenge);
+      const body = await response.json() as Record<string, unknown>;
+      body.version = "2.76.0";
+      return new Response(JSON.stringify(body), { status: 200, headers: response.headers });
+    }) as typeof fetch;
+    const result = await requestBoundSystemRestart(target, 10_000, setup.deps);
+    expect(result.accepted).toBe(false);
+    if (!result.accepted) expect((result.error as Error).message).toBe("update_restart_home_changed");
+  });
   test("rejects an unattested discovery result without network access", async () => {
     let fetches = 0;
     const outcome = await requestBoundSystemRestart(

@@ -408,12 +408,14 @@ function createAnthropicMessageWriter(
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
       const deterministic = error.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
-      const overflow = isContextOverflowError(error, message);
+      const transportFailure = isEncoderTransportFailure(terminal);
+      const classified = transportFailure ? { ...error, code: "upstream_stream_error", status: 502 } : error;
+      const overflow = isContextOverflowError(classified, message);
       const original = encoderOriginalErrorEvidence(terminal);
-      fail(anthropicFailedStatus(error, message), message, !deterministic,
+      fail(anthropicFailedStatus(classified, message), message, !deterministic,
         deterministic ? error.code as string : overflow ? "context_length_exceeded" : undefined,
-        hasProxyErrorMessage(options.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), isEncoderTransportFailure(terminal) ? "transport_failed" : undefined,
-        { ...(original ?? { message, type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), status: original?.status ?? anthropicFailedStatus(error, message) });
+        hasProxyErrorMessage(options.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), transportFailure ? "transport_failed" : undefined,
+        { ...(original ?? { message, type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), status: original?.status ?? anthropicFailedStatus(classified, message) });
     },
     overflow() {
       fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit", true);

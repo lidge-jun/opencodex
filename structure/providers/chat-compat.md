@@ -47,7 +47,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Reasoning and tool-result compatibility
 
-For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
+The [canonical Mistral wire policy](mistral-chat.md) also covers native Chat request fields and response strings. For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
 On that same host, `src/adapters/openai-chat/messages.ts` reconstructs historical thinking as native `content` chunks before assistant text, for every hosted model family. An explicit `preserveReasoningContentModels` list, including `[]`, still controls enrollment; the default preserves supplied thinking. The shared prompt projection counts that thinking. Replay can recover actual text from the existing scoped tool-call cache, but never invents placeholders or forwards generic IR signatures. Original chunk metadata and exact chunk boundaries are not retained by this text-only reconstruction. Native Chat passthrough and other destinations retain their existing behavior.
 Tests: `tests/adapters/openai/openai-chat-mistral-content.test.ts`; byte budgets retain their existing limits.
 
@@ -112,7 +112,7 @@ Passthrough and routed-compaction raw-body repairs emit it as a user turn (`exte
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
-Native Chat passthrough and translated Chat share `src/adapters/openai-chat/reasoning-wire.ts` after provider resolution. Explicit reasoning/effort false declarations and empty strength ladders remove unsupported effort; toggle false removes the switch without declaring an unknown strength axis unsupported. A declared toggle wire serializes the independent thinking choice without treating enabled/disabled/adaptive discriminators as strengths. Dual-control requests still pass through gateway-object projection and tool-bearing effort omission; a legacy toggle configuration gains a second serialized control only with explicit effort support; unknown declarations preserve legacy raw forwarding. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
+Native Chat passthrough and translated Chat share `src/adapters/openai-chat/reasoning-wire.ts` after provider resolution. Explicit reasoning/effort false declarations and empty strength ladders remove unsupported effort; toggle false removes the switch without declaring an unknown strength axis unsupported. A declared toggle wire serializes the independent thinking choice without treating enabled/disabled/adaptive discriminators as strengths. On a dual-control wire, an explicit `__omit__` effort alias removes the strength while the caller's effort still selects the thinking switch. Native `ultra` honors the `max` omission alias before ladder clamping, unless the declared ladder supports native `ultra` itself. Dual-control requests still pass through gateway-object projection and tool-bearing effort omission; a legacy toggle configuration gains a second serialized control only with explicit effort support; unknown declarations preserve legacy raw forwarding. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
 It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —
@@ -230,7 +230,11 @@ Calls emitted before the first matched output stay together as one assistant bat
 their outputs in call order; hook-injected messages that split the batch move after it without being
 dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
 batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
-and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
+and missing, reused-call-id, or backwards call/result pairs are left for the upstream to reject rather
+than guessed.
+
+Codex code mode may record a yield marker and later `notify()`/wait outputs for one `call_id`. `mergeRepeatedResponsesToolOutputs` joins these at the first output in arrival order only when exactly one call precedes all results; strings stay strings and mixed outputs become content parts.
+The Chat route folds repeats into the first tool reply, including synthetic orphan calls, only while that reply is the last emitted message and no barrier is deferred. An emitted media carrier ends that opportunity even for adjacent input results; later repeats retain text and media together in an identified user carrier, deferred until an open tool block closes. OpenGateway merges before adjacency projection to avoid tool-role errors.
 
 That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider name. Kimi's Code Plan
 Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),

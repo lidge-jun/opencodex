@@ -2,7 +2,7 @@ import { getConfigDir } from "../../config/paths";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import { failoverAccountSnapshot, rotateAntigravityAccountOnModelNotFound } from "../../oauth/generic-account-failover";
 import { captureAntigravityModelObservation, recordAntigravityModelDenial } from "../../providers/antigravity-account-roster";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import type { OcxConfig } from "../../types";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { isAntigravityModelNotFoundRefusal } from "./antigravity-validation-refusal";
@@ -25,7 +25,9 @@ export async function recoverAntigravityAccount(options: {
     if ((await options.applyFailoverSnapshot(snapshot))?.accountId !== options.nextId) return null;
     options.prepare();
     options.setPermit(hop.permit);
-    const result = await options.refetch(() => { if (!options.adapterOwnsDispatch) hop.permit?.use(); });
+    const result = await options.refetch(() => {
+      if (!options.adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError();
+    });
     if ("failed" in result) return result.failed === options.failedResponse ? null : result.failed;
     options.complete();
     try { void options.failedResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }

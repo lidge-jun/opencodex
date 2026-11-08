@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -123,6 +132,15 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Không thể lưu giới hạn quy trình.",
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
+  ...shellV2Copy("vi"),
+  ...modelsV2Copy("vi"),
+  ...accountsV2Copy("vi"),
+  ...subagentsV2Copy("vi"),
+  ...usageV2Copy("vi"),
+  ...logsV2Copy("vi"),
+  ...connectV2Copy("vi"),
+  ...startupV2Copy("vi"),
+  ...proxyV2Copy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",
@@ -328,6 +346,9 @@ export const vi: Record<TKey, string> = {
   "common.remove": "Xóa",
   "common.loading": "Đang tải…",
   "common.retry": "Thử lại",
+  "prov.affinityResetPending": "Thay đổi tài khoản đã được lưu nhưng chưa cập nhật xong định tuyến cuộc trò chuyện. Hãy thử lại để hoàn tất.",
+  "prov.affinityResetComplete": "Đã cập nhật định tuyến cuộc trò chuyện.",
+  "prov.affinityResetRetryUnavailable": "Hiện không thể thử lại với tài khoản này. Hãy làm mới danh sách tài khoản và, nếu cần, tiếp tục sử dụng tài khoản hoặc đăng nhập lại.",
   "common.undo": "Hoàn tác",
   "auth.adminTokenTitle": "Token quản trị OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Tài khoản",
@@ -480,6 +501,11 @@ export const vi: Record<TKey, string> = {
   "startup.viable": "Sẵn sàng",
   "startup.unhealthy": "Đã cài đặt nhưng không khoẻ mạnh",
   "startup.desktopLoginUnverified": "Đang chạy · chưa xác minh khởi động khi đăng nhập",
+  "startup.loginUnverifiedTitle": "Chưa xác minh khởi động khi đăng nhập",
+  "startup.unverified": "Chưa xác minh",
+  "startup.loginUnverifiedAction": "Kiểm tra khởi động khi đăng nhập trong menu OpenCodex. Trên Linux không có khay hệ thống, hãy kiểm tra ~/.config/autostart/OpenCodex.desktop.",
+  "startup.loginDisabled": "Đang chạy · tắt khởi động khi đăng nhập",
+  "startup.desktopRunning": "OpenCodex Desktop đang chạy proxy này.",
   "startup.conflict": "Xung đột service",
   "startup.installedDisabled": "Đã cài đặt nhưng bị vô hiệu hoá",
   "startup.shimActivationPending": "Đã cài đặt · chưa xác nhận kích hoạt",
@@ -823,6 +849,8 @@ export const vi: Record<TKey, string> = {
   "subagentSurface.learnMore": "Vì sao việc này thất bại",
   "prov.logoutOk": "Đã đăng xuất khỏi {provider}.",
   "prov.logoutFail": "Không thể đăng xuất khỏi {provider}. Trạng thái tài khoản của bạn vẫn không thay đổi.",
+  "prov.logoutBusy": "Đang thay đổi tài khoản. Hãy đợi hoàn tất rồi thử đăng xuất lại.",
+  "prov.accountRemoveUnverified": "Không thể xác nhận {email} đã được xóa hay chưa. Hãy tải lại danh sách tài khoản trước khi thử lại.",
   "prov.removed": "Đã xóa \"{name}\".",
   "prov.removedDefault": "Đã xoá \"{name}\". Provider mặc định hiện tại là \"{defaultProvider}\".",
   "prov.removedShadowTarget": "Đã xóa \"{name}\". Shadow Call Intercept vẫn trỏ tới \"{model}\", nên các lệnh gọi phụ sẽ thất bại cho đến khi bạn chọn mục tiêu khác.",
@@ -2112,6 +2140,13 @@ export const vi: Record<TKey, string> = {
   "modal.localHint": "Không lưu trữ API key. Thao tác này sẽ thêm danh mục model công khai tĩnh của Cursor cho Codex, nhưng transport trực tiếp của Cursor và tính năng thực thi file/shell native vẫn bị vô hiệu hoá cho đến khi được kiểm toán.",
   "modal.getApiKey": "Lấy API key {label} của bạn",
   "modal.apiKey": "API key",
+  "modal.vertexProject": "ID dự án (tùy chọn)",
+  "modal.vertexStaticHint": "Dùng danh sách mô hình đã cấu hình; kiểm tra kết nối không xác minh thông tin Vertex.",
+  "modal.vertexLocation": "Vị trí (tùy chọn)",
+  "pws.vertexUnverified": "Chưa xác minh thông tin xác thực",
+  "pws.vertexSavedUnverified": "Đã lưu — chưa xác minh thông tin của proxy",
+  "pws.vertexHostAuth": "Thông tin máy chủ hoặc API key",
+  "modal.vertexAdcHint": "Để trống API key để dùng Application Default Credentials trên máy chủ proxy khi chưa đặt GOOGLE_CLOUD_API_KEY. Dự án và vị trí cũng có thể lấy từ môi trường proxy.",
   "modal.apiKeyTransport": "API key header",
   "modal.apiKeyTransportNative": "x-api-key (Anthropic native)",
   "modal.apiKeyTransportBearer": "Authorization: Bearer",
@@ -2122,7 +2157,7 @@ export const vi: Record<TKey, string> = {
   "modal.adding": "Đang thêm…",
   "modal.useOauthLogin": "← Sử dụng đăng nhập OAuth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Kết nối",
+  "nav.connect": "Định tuyến",
   "nav.usageLogs": "Mức dùng & nhật ký",
   "nav.sectionNavigation": "Trang trong mục",
   "codexSet.tab.multiauth": "Đa xác thực",
@@ -3462,7 +3497,7 @@ export const vi: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Bị thiếu khỏi danh mục model (model catalog) — các khả năng của thành viên bị thiếu hoặc không tương thích (thiếu cửa sổ ngữ cảnh / metadata, hoặc giao điểm phương thức bị rỗng). Tính năng định tuyến qua bí danh (alias) vẫn hoạt động",
   "cws.attention.allTargetsExhausted": "Tất cả các mục tiêu được bật đều đã hết hạn ngạch (quota)",
   "cws.emptyTitle": "Tạo combo đầu tiên của bạn",
-  "cws.empty.createDesc": "Đặt tên cho một model ảo và liên kết hai hoặc nhiều backend với nhau.",
+  "cws.empty.createDesc": "Thêm ít nhất một đích; dùng từ hai đích trở lên để chuyển dự phòng.",
   "cws.backToAll": "Quay lại tất cả combo",
   "cws.allCombos": "Tất cả combo",
   "cws.copyModel": "Sao chép id",
@@ -3819,6 +3854,7 @@ export const vi: Record<TKey, string> = {
   "models.aliasStale": "cũ (stale)",
   "connection.discovering": "Đang khám phá các mục tiêu cục bộ (local) và được chia sẻ…",
   "connection.machineUnavailable": "Mặt phẳng máy cục bộ (local machine plane) không khả dụng. Các yêu cầu chia sẻ đã không được chuyển hướng cục bộ.",
+  "connection.clientStateChanged": "Kết nối Remote Link đã lưu của Child này bị thiếu hoặc nay trỏ đến chủ sở hữu hoặc liên kết khác, nên không còn khớp với Child đang chạy. Hãy dừng hoặc khởi động lại Child này và kiểm tra kết nối trước khi liên kết lại.",
   "connection.linkManaged": "Được quản lý bởi Home {home} qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.linkManagedUnnamed": "Được quản lý bởi Home của nó qua Remote Link ({linkId}). Bảng điều khiển này hiển thị cài đặt và hạn mức của Home ở chế độ chỉ đọc; hãy thay đổi trên Home.",
   "connection.disconnect": "Ngắt kết nối khỏi hub",
@@ -4196,6 +4232,7 @@ export const vi: Record<TKey, string> = {
   "quotaSummary.warn": "Đã dùng trên 70%",
   "quotaSummary.critical": "Đã dùng trên 90%",
   "quotaSummary.credits": "Tín dụng",
+  "quotaSummary.creditsUnavailable": "Tín dụng không khả dụng",
   "quotaSummary.refreshFailed": "Lần làm mới gần nhất thất bại; đang hiển thị số liệu trước đó",
   "quotaSummary.scrollPrev": "Cuộn nhà cung cấp sang trái",
   "quotaSummary.scrollNext": "Cuộn nhà cung cấp sang phải",

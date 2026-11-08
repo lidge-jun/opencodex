@@ -1,6 +1,8 @@
 /* ============================================================================
    compatibility-matrix — CL-05 read-only lab verdict matrix
    Namespace: lab-matrix-
+   Design system v2 (React Bits application UI): stat tiles, a filter bar, and
+   tables in a 12px surface card with an 8px inset body, ruled by hairlines.
    ============================================================================ */
 
 /*
@@ -20,270 +22,340 @@
 .lab-page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 16px;
   min-width: 0;
 }
 
 .lab-page .page-head { margin-bottom: 2px; }
 .lab-page .page-sub { margin: 0 0 0.5rem; }
 
+/* ---- stat tiles ---------------------------------------------------------- */
 .lab-status-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-  gap: var(--space-2);
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .lab-status-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 0.65rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
 }
 
 .lab-status-card .label {
   display: block;
-  font-size: var(--text-label);
-  color: var(--muted);
-  margin-bottom: 0.2rem;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ocx-fg-subtle);
 }
 
 .lab-status-card .value {
+  overflow: hidden;
+  color: var(--ocx-fg);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  font-weight: var(--weight-semibold);
 }
 
+/* the build time is a date, not a count: smaller, and allowed to wrap */
+.lab-status-card:nth-child(5) .value { font-size: 14px; line-height: 20px; }
+
+/* ---- filter bar ---------------------------------------------------------- */
 .lab-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: 10px 16px;
   align-items: flex-end;
+  margin-bottom: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
 }
 
 .lab-filter-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 6px;
   min-width: 10rem;
 }
 
 .lab-filter-field label {
-  font-size: var(--text-label);
-  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ocx-fg-subtle);
 }
 
 .lab-filter-field input,
 .lab-filter-field select {
   min-height: 2rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
+  border: 1px solid var(--ocx-line-strong);
+  border-radius: 10px;
+  background: var(--ocx-raised);
+  color: var(--ocx-fg);
   padding: 0.25rem 0.5rem;
   font: inherit;
 }
 
+.lab-protocol-status { margin-bottom: 16px; color: var(--ocx-fg-muted); font-size: 12.5px; }
+.lab-protocol-status p { margin: 2px 0; }
+
+/* ---- table cards: surface card, inset body, hairline rows ------------------ */
 .lab-matrix-block {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 0.75rem;
+  margin-bottom: 16px;
+  padding: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
 }
 
 .lab-matrix-title {
-  margin: 0 0 0.65rem;
-  font-size: var(--text-control);
-  font-weight: var(--weight-semibold);
+  margin: 0;
+  padding: 12px 16px 10px;
+  color: var(--ocx-fg);
+  font-size: 13.5px;
+  font-weight: 600;
 }
+
+.lab-matrix-block > p,
+.lab-matrix-block > .lab-detail-meta { margin: 0; padding: 0 16px 12px; }
 
 .lab-matrix-scroll {
   overflow: auto;
   max-width: 100%;
+  margin: 0 4px 4px;
+  border-radius: 9px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
 }
 
-.lab-matrix {
+.lab-matrix,
+.lab-detail-table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-control);
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
 }
 
 .lab-matrix th,
-.lab-matrix td {
-  border: 1px solid var(--border-soft);
-  padding: 0.45rem 0.55rem;
+.lab-matrix td,
+.lab-detail-table th,
+.lab-detail-table td {
+  border: 0;
+  border-bottom: 1px solid var(--ocx-line);
+  padding: 9px 12px;
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
-.lab-matrix th {
-  background: var(--raised);
-  font-weight: var(--weight-semibold);
+.lab-matrix th,
+.lab-detail-table th {
+  height: 34px;
+  padding-block: 0;
+  background: transparent;
+  color: var(--ocx-fg-subtle);
+  font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
+.lab-matrix tbody tr:last-child td,
+.lab-detail-table tbody tr:last-child td { border-bottom: 0; }
+
+.lab-matrix tbody tr,
+.lab-detail-table tbody tr { transition: background-color 0.12s; }
+.lab-matrix tbody tr:hover,
+.lab-detail-table tbody tr:hover { background: light-dark(rgb(9 9 11 / 0.025), rgb(255 255 255 / 0.025)); }
+
 .lab-matrix td.subject {
+  min-width: 12rem;
+  max-width: 18rem;
   font-family: var(--font-code);
-  font-size: var(--text-label);
-  max-width: 14rem;
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
 .lab-matrix td.kind {
-  color: var(--muted);
-  font-size: var(--text-label);
+  color: var(--ocx-fg-muted);
+  font-size: 12.5px;
   white-space: nowrap;
 }
 
+.lab-detail-table td.mono {
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.lab-detail-table td.mono .btn-ghost {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  box-shadow: none;
+}
+.lab-detail-table td.mono .btn-ghost:hover { background: var(--ocx-accent-soft); }
+
+.lab-detail-table td:last-child { color: var(--ocx-fg-muted); white-space: nowrap; }
+.lab-detail-table tbody tr.selected { background: var(--ocx-accent-soft); }
+
+/* ---- verdict badges: quiet status plates, the word carries the meaning ------ */
 .lab-verdict-stack {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .lab-verdict-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  border-radius: var(--radius-pill);
-  padding: 0.1rem 0.45rem;
+  gap: 6px;
+  max-width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 8px;
   font: inherit;
-  font-size: var(--text-label);
-  font-weight: var(--weight-semibold);
-  color: inherit;
-  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--ocx-fg);
+  background: var(--ocx-accent-soft);
   white-space: nowrap;
 }
 
 button.lab-verdict-badge {
   appearance: none;
   cursor: pointer;
+  transition: box-shadow 0.15s;
 }
+button.lab-verdict-badge:hover { box-shadow: inset 0 0 0 1px var(--ocx-line-strong); }
+button.lab-verdict-badge:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 2px; }
 
 .lab-verdict-badge .suite {
-  font-weight: var(--weight-regular);
-  color: var(--muted);
+  overflow: hidden;
+  font-weight: 400;
+  color: var(--ocx-fg-muted);
   font-family: var(--font-code);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
 }
 
 .lab-verdict-badge[data-verdict="VERIFIED"],
 .lab-verdict-badge[data-verdict="PROBED"] {
-  background: color-mix(in srgb, var(--green) 14%, transparent);
-  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+  background: var(--ocx-success-soft);
+  color: var(--ocx-success);
 }
 
 .lab-verdict-badge[data-verdict="CLAIMED"],
 .lab-verdict-badge[data-verdict="UNKNOWN"] {
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  border-color: color-mix(in srgb, var(--muted) 30%, transparent);
+  background: var(--ocx-accent-soft);
+  color: var(--ocx-fg-muted);
 }
 
 .lab-verdict-badge[data-verdict="DEGRADED"] {
-  background: color-mix(in srgb, #c47a00 14%, transparent);
-  border-color: color-mix(in srgb, #c47a00 35%, transparent);
+  background: var(--ocx-warning-soft);
+  color: var(--ocx-warning);
 }
 
 .lab-verdict-badge[data-verdict="BLOCKED"],
 .lab-verdict-badge[data-verdict="UNSUPPORTED"] {
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  border-color: color-mix(in srgb, var(--red) 35%, transparent);
+  background: var(--ocx-danger-soft);
+  color: var(--ocx-danger);
 }
 
-.lab-detail-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-control);
-}
+.lab-verdict-badge--selected { box-shadow: inset 0 0 0 1.5px currentColor; }
 
-.lab-detail-table th,
-.lab-detail-table td {
-  border-bottom: 1px solid var(--border-soft);
-  padding: 0.45rem 0.55rem;
-  text-align: left;
-  vertical-align: top;
-}
-
-.lab-detail-table th {
-  color: var(--muted);
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-label);
-}
-
-.lab-detail-table td.mono {
-  font-family: var(--font-code);
-  font-size: var(--text-label);
-  overflow-wrap: anywhere;
-}
-
+/* ---- toolbar + layout ------------------------------------------------------ */
 .lab-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: 8px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .lab-toolbar .btn-ghost {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--ocx-line-strong);
+  border-radius: 10px;
+  background: var(--ocx-raised);
+  font-size: 13px;
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.12);
 }
+.lab-toolbar .btn-ghost svg { width: 15px; height: 15px; }
 
+/* The detail column exists only while a verdict is open; without one the matrix takes the
+   full width instead of leaving a 220-320px gutter empty. */
 .lab-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
 }
+.lab-layout:has(> .lab-detail-pane) { grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); }
 
 .lab-main { min-width: 0; }
 
 .lab-detail-pane {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-3);
-  background: var(--surface);
+  position: sticky;
+  top: calc(var(--ocx-sticky-top-h, 0) * 1px + 12px);
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
 }
 
 .lab-detail-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .lab-detail-meta {
   display: grid;
-  gap: var(--space-1);
-  margin: 0 0 var(--space-3);
+  gap: 4px;
+  margin: 0 0 12px;
 }
 
 .lab-detail-meta dt {
-  font-size: var(--text-label);
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--ocx-fg-subtle);
 }
 
-.lab-detail-section h4 { margin: 0 0 var(--space-1); }
+.lab-detail-meta dd { margin: 0 0 4px; }
+
+.lab-detail-section h4 { margin: 0 0 4px; font-size: 13px; }
 
 .lab-detail-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--space-1);
+  gap: 4px;
 }
 
 .lab-load-more {
   display: flex;
   justify-content: center;
-  margin-top: var(--space-2);
+  margin-top: 8px;
 }
 
-.lab-verdict-badge--selected { outline: 2px solid var(--accent); }
-.lab-detail-table tbody tr.selected { background: var(--raised); }
-
 @media (max-width: 960px) {
-  .lab-layout { grid-template-columns: 1fr; }
+  .lab-layout:has(> .lab-detail-pane) { grid-template-columns: 1fr; }
+  .lab-detail-pane { position: static; }
 }
 
 @media (max-width: 720px) {

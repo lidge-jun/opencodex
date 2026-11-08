@@ -45,7 +45,7 @@ import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureAdmissionPolicy } from "./capture-admission-policy";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
-import { declaredAnthropicServerTools, replayedAnthropicServerBlocks } from "../claude/inbound-content-options";
+import { declaredAnthropicServerTools, replayedAnthropicServerBlocks, systemCachePrefix } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
@@ -97,6 +97,7 @@ import { clientWireOf } from "./inference/client-wire";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import type { ClientEncoderOption } from "./responses/core-options";
 import { handleResponses } from "./responses";
+import { resolveComboId } from "../combos";
 import { previewXaiOauthWireModel } from "./responses/core-normalize";
 import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
@@ -650,6 +651,7 @@ async function handleClaudeMessagesWithBudget(
   }
   // Model resolution reads this view; every other claudeCode setting keeps reading `config`.
   const cc = claudeCodeForIngress(config.claudeCode, ingress.claudeIntercept === true);
+  let nativeComboSource = false;
 
   let anthropicBody: unknown;
   let internalBody: Rec;
@@ -742,7 +744,12 @@ async function handleClaudeMessagesWithBudget(
     // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
     // silently skipped. Translation reaches the adapter, which owns both.
     const messagesBody = anthropicBody;
-    if (isRec(messagesBody) && resolveProtocolSettings(config).unrepresentable === "reject") {
+    // An effort override rewrites the body below, so only an unrewritten body is a replay source;
+    // the envelope then keeps it by reference and charges no ingress copy.
+    nativeComboSource = !effortOverride && isRec(messagesBody) && typeof messagesBody.model === "string"
+      && resolveComboId(config, resolveInboundModel(messagesBody.model, cc)) !== null
+      && Object.keys(config.providers).some(name => resolveProtocolSettings(config, name).rollout.managedMessagesNative);
+    if (isRec(messagesBody) && (resolveProtocolSettings(config).unrepresentable === "reject" || nativeComboSource)) {
       envelope = createProtocolEnvelope({ inbound: "messages", body: messagesBody, translatorBudget });
     }
     const sourceEnvelope = envelope;
@@ -1127,7 +1134,8 @@ async function handleClaudeMessagesWithBudget(
     });
   }
   // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
-  if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
+  if (envelope && resolveProtocolSettings(config).unrepresentable === "reject"
+    && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
     const verdict = checkRepresentable({
       inbound: "messages",
       requestPath: requestPathForLane(
@@ -1147,7 +1155,8 @@ async function handleClaudeMessagesWithBudget(
   }
   // PF-10: opaque thinking state reaches only first-party Anthropic; under `reject` a native
   // route to anyone else refuses the request instead of sending it without that state.
-  if (envelope && nativeMessagesRoute && !credentialDomainFor(nativeMessagesRoute.provider)?.firstPartyAnthropic
+  if (envelope && resolveProtocolSettings(config).unrepresentable === "reject"
+    && nativeMessagesRoute && !credentialDomainFor(nativeMessagesRoute.provider)?.firstPartyAnthropic
     && messagesBodyHasOpaqueState(anthropicBody as Rec)) {
     markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["feature-unrepresentable", "opaque-state-stripped"], features: messagesFeatures });
     logCtx.errorCode = "unsupported_feature";
@@ -1262,6 +1271,22 @@ async function handleClaudeMessagesWithBudget(
     // over, and TTL-less breakpoints take the destination default.
     cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
   }, logCtx, {
+    ...(nativeComboSource && envelope && settledRoute?.combo ? {
+      protocolSource: (await import("./messages-native")).createNativeMessagesComboSource({
+        req, config, logCtx, envelope, requestedModel, translatorBudget, selector: nativeSelector,
+        echoModel: clientFacingModelText(clientModelLabel),
+        modelScope: resolveAdmissionModelScope(config, logIds?.admission),
+        callerAnthropicBeta: req.headers.get("anthropic-beta"),
+        clientIdentity: captureAnthropicClientIdentity(req.headers),
+        sessionKey: anthropicSessionKeyFromParts({
+          sessionIdHeader: req.headers.get("session_id")?.trim() || req.headers.get("x-claude-code-session-id"),
+          threadIdHeader: req.headers.get("thread_id"),
+          clientThreadId: logCtx.conversationId,
+          promptCacheKey: typeof internalBody.prompt_cache_key === "string" ? internalBody.prompt_cache_key : null,
+          promptCacheKeyIsSharedCohort: cacheKeySource === "system",
+        }),
+      }),
+    } : {}),
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
@@ -1286,6 +1311,7 @@ async function handleClaudeMessagesWithBudget(
     // Out of body like the replay above: the core hands these to an Anthropic destination only.
     anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
+    anthropicSystemCachePrefix: isRec(anthropicBody) ? systemCachePrefix(anthropicBody.system) : undefined,
     // Preserve the original catalog through late fallback; only the physical adapter projects it.
     anthropicToolLoadingSource: cacheKeySource === "metadata" && isRec(anthropicBody)
       && Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0
@@ -1308,6 +1334,8 @@ async function handleClaudeMessagesWithBudget(
       ? { directRequest: messagesDirectRequestOption(directPlan, anthropicBody, cc, translatorBudget) }
       : {}),
   });
+  // Native combo children report through gated callbacks, not the Responses log inspector.
+  if (clientWireOf(upstream) === "messages" && upstream.ok && settledRoute?.combo) return upstream;
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
   // Already in the Messages wire (direct encoder): no conversion.
   if (clientWireOf(upstream) === "messages") return response;
@@ -1338,7 +1366,12 @@ async function handleClaudeMessagesWithBudget(
           || (![401, 403, 429].includes(response.status) && Boolean(nested || flat)
             && isContextOverflowError(errorObject, message));
       } catch {
-        if (text) message = `upstream error (${response.status}): ${text.slice(0, 400)}`;
+        // A plain-text gateway body carries the same verdict with no envelope to read a code from.
+        const inspected = text.trim().slice(0, 16_384);
+        const plain = inspected.slice(0, 400);
+        contextError = Boolean(inspected) && ![401, 402, 403, 429].includes(response.status)
+          && isContextOverflowError({}, inspected);
+        if (text) message = contextError ? plain : `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
     } catch { /* keep fallback message */ }
     const upstreamRetryAfter = response.headers.get("retry-after");
