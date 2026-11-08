@@ -390,10 +390,14 @@ function filterQuery(
   };
 }
 
-function filterStats(read: UsageFilterCandidateRead): UsageFilterQueryStats {
+function filterStats(
+  read: UsageFilterCandidateRead,
+  update: UsageAggregateResult["update"],
+): UsageFilterQueryStats {
   return {
     totalRows: read.snapshot.indexedRows,
     candidateRows: read.offsets.length,
+    scope: update,
     ingestedRows: read.snapshot.ingestedRows,
     ingestPasses: read.snapshot.ingestPasses,
   };
@@ -470,6 +474,12 @@ async function accumulateCandidates(
     const rows = await readUsageLedgerRowsAtOffsets({
       offsets: read.offsets.slice(start, start + FILTER_ROW_READ_BATCH),
       expectedIdentityKey: read.snapshot.identityKey,
+      // The offsets belong to this index snapshot. If the ledger moved since the snapshot,
+      // the reader re-validates the boundary before trusting any of them, and a rewrite of
+      // the indexed tail becomes a rebuild instead of a silently different row set.
+      expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
+      expectedProcessedThroughBytes: read.snapshot.indexedOffset,
+      expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
     });
     if (rows.unreadableOffsets.length > 0) {
       // Serving only the rows that happened to parse would silently under-report the filter.
@@ -524,7 +534,7 @@ function publishFilteredAggregate(
   trimRetainedFilteredAggregates();
   enforceAppOwnedMemoryBudget();
   return read
-    ? { ...resultFrom(state, update), filterIndex: filterStats(read) }
+    ? { ...resultFrom(state, update), filterIndex: filterStats(read, update) }
     : resultFrom(state, update);
 }
 

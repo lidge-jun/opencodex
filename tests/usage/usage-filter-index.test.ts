@@ -23,6 +23,7 @@ import {
 } from "../../src/server/management/usage-aggregate-cache";
 import * as ledgerScannerModule from "../../src/usage/ledger-scanner";
 import {
+  readUsageLedgerRowsAtOffsets,
   scanUsageLedgerCooperatively,
   USAGE_LEDGER_MAX_LINE_BYTES,
 } from "../../src/usage/ledger-scanner";
@@ -37,7 +38,12 @@ import {
   usageFilterCandidatePlan,
   usageFilterIndexPath,
 } from "../../src/usage/filter-index";
-import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
+import {
+  currentUsageLogRevision,
+  resetUsageReadCacheForTests,
+  usageLogIdentityKey,
+  type PersistedUsageEntry,
+} from "../../src/usage/log";
 import {
   createUsageSummaryAccumulator,
   type UsageSummaryAccumulator,
@@ -222,6 +228,7 @@ describe("filtered usage candidate index", () => {
     expect(next.filterIndex).toMatchObject({
       totalRows: SYNTHETIC_ROWS + appended.length,
       candidateRows: appendedKimi,
+      scope: "append",
       ingestedRows: appended.length,
       ingestPasses: 1,
     });
@@ -432,6 +439,29 @@ function indexGenerations(): string[] {
   }
 }
 
+function totalIndexRows(): number {
+  const db = indexDatabase();
+  try {
+    return (db.query("SELECT COUNT(*) AS c FROM usage_rows").get() as { c: number }).c;
+  } finally {
+    db.close();
+  }
+}
+
+function publishedOffset(): number {
+  const db = indexDatabase();
+  try {
+    return Number((db.query("SELECT value FROM usage_filter_index_meta WHERE key = 'indexed_offset'")
+      .get() as { value: string }).value);
+  } finally {
+    db.close();
+  }
+}
+
+function ledgerRowCount(): number {
+  return readFileSync(ledgerPath(), "utf8").split("\n").filter(line => line.trim() !== "").length;
+}
+
 describe("filtered usage index crash and multi-writer safety", () => {
   test("a crash between staging and publish keeps the published projection", async () => {
     const rows = Array.from({ length: 12 }, (_, index) => syntheticRow(index));
@@ -471,8 +501,14 @@ describe("filtered usage index crash and multi-writer safety", () => {
     await getFilteredUsageAggregate({ provider: "openai" });
     const published = publishedGeneration();
 
-    // A second process has staged rows and is still ingesting.
+    // A second process has staged rows and is still ingesting: its lease records a live pid.
     const db = new Database(usageFilterIndexPath(testDir));
+    db.query(
+      "INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES ('other-writer', ?)",
+    ).run(NOW);
+    db.query(
+      "INSERT OR REPLACE INTO usage_filter_index_writers (generation, pid, started_at, heartbeat_at) VALUES ('other-writer', ?, ?, ?)",
+    ).run(process.pid, NOW, NOW);
     db.query(
       "INSERT OR REPLACE INTO usage_rows (generation, byte_offset, timestamp, api_key_id, client, surface, admission_kind, unattributable) VALUES ('other-writer', 1, ?, NULL, NULL, NULL, NULL, 0)",
     ).run(NOW);
@@ -530,6 +566,9 @@ describe("filtered usage index crash and multi-writer safety", () => {
           other.query(
             "INSERT OR REPLACE INTO usage_attributions SELECT 'other-writer', byte_offset, provider, model FROM usage_attributions WHERE generation = ?",
           ).run(stagedGeneration);
+          other.query(
+            "INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES ('other-writer', ?)",
+          ).run(Date.now());
           other.query("UPDATE usage_filter_index_meta SET value = 'other-writer' WHERE key = 'generation'").run();
           other.exec("COMMIT");
         } finally {
@@ -579,6 +618,167 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     expect(indexGenerations()).toHaveLength(1);
     expect(indexRowCount(publishedGeneration())).toBe(rows.length);
   });
+
+  test("crashed and abandoned staging never accumulates", async () => {
+    const rows = Array.from({ length: 3000 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    expect(totalIndexRows()).toBe(ledgerRowCount());
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // A rebuild that dies before publishing must clean its own staging in the finally.
+      writeRows(rows.slice(0, 1000 + attempt));
+      setUsageFilterIndexTestHooksForTests({
+        beforePublish: () => { throw new Error("simulated crash"); },
+      });
+      try {
+        await getFilteredUsageAggregate({ provider: "kimi" });
+      } finally {
+        setUsageFilterIndexTestHooksForTests(null);
+        resetUsageAggregateCacheForTests();
+      }
+      appendRows([{ ...syntheticRow(9_000 + attempt), requestId: `append-${attempt}` }]);
+      await getFilteredUsageAggregate({ provider: "kimi" });
+      expect(totalIndexRows()).toBe(ledgerRowCount());
+    }
+
+    // A writer that vanished without running its finally leaves a lease with a dead pid.
+    const db = new Database(usageFilterIndexPath(testDir));
+    db.query(
+      "INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES ('crashed-writer', ?)",
+    ).run(NOW);
+    db.query(
+      "INSERT OR REPLACE INTO usage_filter_index_writers (generation, pid, started_at, heartbeat_at) VALUES ('crashed-writer', 999999, ?, ?)",
+    ).run(NOW, NOW);
+    db.query(
+      "INSERT OR REPLACE INTO usage_rows (generation, byte_offset, timestamp, api_key_id, client, surface, admission_kind, unattributable) VALUES ('crashed-writer', 1, ?, NULL, NULL, NULL, NULL, 0)",
+    ).run(NOW);
+    db.close();
+    expect(totalIndexRows()).toBe(ledgerRowCount() + 1);
+
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    expect(totalIndexRows()).toBe(ledgerRowCount());
+    expect(indexGenerations()).toHaveLength(1);
+  });
+
+  test("a stale append cannot regress the published cursor", async () => {
+    const rows = Array.from({ length: 10 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    const generation = publishedGeneration();
+    const firstAppend = syntheticRow(100);
+    appendRows([firstAppend]);
+    const afterFirst = statSync(ledgerPath()).size;
+    const secondAppend = { ...syntheticRow(101), requestId: "second-append" };
+
+    let simulated = false;
+    setUsageFilterIndexTestHooksForTests({
+      beforePublish: ({ dbPath, stagedGeneration, publishedGeneration: published }) => {
+        // Only the append path (staged === published) is being raced.
+        if (simulated || stagedGeneration !== published) return;
+        simulated = true;
+        // Another appender publishes a newer watermark while this one is still in flight.
+        appendRows([secondAppend]);
+        const grown = statSync(ledgerPath()).size;
+        const other = new Database(dbPath);
+        try {
+          other.exec("BEGIN IMMEDIATE");
+          other.query(
+            "INSERT OR REPLACE INTO usage_rows (generation, byte_offset, timestamp, api_key_id, client, surface, admission_kind, unattributable) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+          ).run(generation, afterFirst, secondAppend.timestamp, secondAppend.apiKeyId ?? null,
+            secondAppend.client ?? null, secondAppend.surface ?? null, secondAppend.admissionKind ?? null);
+          other.query(
+            "INSERT OR REPLACE INTO usage_attributions (generation, byte_offset, provider, model) VALUES (?, ?, ?, ?)",
+          ).run(generation, afterFirst, secondAppend.provider, secondAppend.model);
+          other.query("UPDATE usage_filter_index_meta SET value = ? WHERE key = 'indexed_offset'").run(String(grown));
+          other.query("UPDATE usage_filter_index_meta SET value = ? WHERE key = 'indexed_rows'").run("12");
+          other.exec("COMMIT");
+        } finally {
+          other.close();
+        }
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({});
+      expect(result.filterIndex?.totalRows).toBe(12);
+      expect(summary(result).summary.requests).toBe(12);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+    // The stale appender's fence rejected its older cursor; the retry kept the newer one.
+    expect(publishedOffset()).toBe(statSync(ledgerPath()).size);
+  });
+
+  test("a candidate that no longer normalizes is reported unreadable", async () => {
+    const rows = Array.from({ length: 50 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const lines = readFileSync(ledgerPath(), "utf8").split("\n").filter(line => line !== "");
+    const offsets: number[] = [];
+    let cursor = 0;
+    for (const line of lines) {
+      offsets.push(cursor);
+      cursor += Buffer.byteLength(line) + 1;
+    }
+    // One byte longer in row zero shifts every later offset onto the wrong row.
+    const mutated = lines[0]!.replace('"req-0"', '"req-0x"');
+    expect(Buffer.byteLength(mutated)).toBe(Buffer.byteLength(lines[0]!) + 1);
+    writeFileSync(ledgerPath(), [mutated, ...lines.slice(1)].join("\n") + "\n");
+
+    const read = await readUsageLedgerRowsAtOffsets({
+      offsets,
+      expectedIdentityKey: usageLogIdentityKey(currentUsageLogRevision()),
+    });
+    expect(read.entries).toHaveLength(1);
+    expect(read.unreadableOffsets).toHaveLength(49);
+  });
++
+  test("a rewritten indexed row makes the next append rebuild instead of streaming forever", async () => {
+    const rows = Array.from({ length: 200 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    appendRows([syntheticRow(500)]);
+    // Same-length edit of the last indexed row: the append's boundary digest no longer matches.
+    const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+    lines[199] = lines[199]!.replace('"req-199"', '"req-1x9"');
+    writeFileSync(ledgerPath(), lines.join("\n"));
+
+    // A restart must recover through one rebuild, not fall back to a full scan forever.
+    resetUsageAggregateCacheForTests();
+    const result = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(result.filterIndex).toBeDefined();
+    expect(result.filterIndex?.scope).toBe("rebuild");
+    expect(summary(result).summary.requests)
+      .toBe(rows.filter(row => row.provider === "openai").length);
+  });
+
+  test("a rewrite between the index refresh and the read is caught before any row is trusted", async () => {
+    const rows = Array.from({ length: 40 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    let rewritten = false;
+    setUsageFilterIndexTestHooksForTests({
+      afterPublish: () => {
+        if (rewritten) return;
+        rewritten = true;
+        // Swap two equal-length providers in place, after the projection was published. The
+        // file keeps its size, so only the snapshot revision and boundary can see it.
+        const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+        lines[0] = lines[0]!.replace('"provider":"openai"', '"provider":"google"');
+        lines[2] = lines[2]!.replace('"provider":"google"', '"provider":"openai"');
+        writeFileSync(ledgerPath(), lines.join("\n"));
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      // The stale projection would have selected the pre-swap row and dropped it during
+      // filtering, under-reporting by one. The read detects the move and rebuilds.
+      expect(result.filterIndex).toBeDefined();
+      expect(summary(result).summary.requests).toBe(expected);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
 });
 
 describe("filtered usage index availability", () => {
@@ -651,6 +851,72 @@ describe("filtered usage index availability", () => {
       lock.close();
     }
   });
+
+  test("a projection that vanishes before the read is not recreated", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const indexPath = usageFilterIndexPath(testDir);
+    setUsageFilterIndexTestHooksForTests({
+      afterPublish: ({ dbPath }) => { rmSync(dbPath, { force: true }); },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests)
+        .toBe(rows.filter(row => row.provider === "openai").length);
+      expect(result.filterIndex).toBeUndefined();
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+    expect(existsSync(indexPath)).toBe(false);
+  });
+
+  test("a home change during a refresh never mixes installations", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    const offsetBefore = publishedOffset();
+    appendRows([syntheticRow(50)]);
+
+    const otherHome = mkdtempSync(join(tmpdir(), "ocx-other-home-"));
+    let changed = false;
+    setUsageFilterIndexTestHooksForTests({
+      beforePublish: () => {
+        if (changed) return;
+        changed = true;
+        process.env.OPENCODEX_HOME = otherHome;
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      // The fallback reads the new home, which has no ledger at all.
+      expect(summary(result).summary.requests).toBe(0);
+      expect(result.filterIndex).toBeUndefined();
+    } finally {
+      process.env.OPENCODEX_HOME = testDir;
+      setUsageFilterIndexTestHooksForTests(null);
+      rmSync(otherHome, { recursive: true, force: true });
+    }
+    // The original home's projection was not advanced with another home's ledger.
+    expect(publishedOffset()).toBe(offsetBefore);
+  });
++
+  test("a passive read does not report a published generation that lost its rows", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    const db = new Database(usageFilterIndexPath(testDir));
+    try {
+      db.query("DELETE FROM usage_rows").run();
+      db.query("DELETE FROM usage_attributions").run();
+    } finally {
+      db.close();
+    }
+    const passive = await runPassiveRead(async () => getFilteredUsageAggregate({ provider: "openai" }));
+    expect(passive.filterIndex).toBeUndefined();
+    expect(summary(passive).summary.requests)
+      .toBe(rows.filter(row => row.provider === "openai").length);
+  });
+
 });
 
 describe("filtered usage index row tolerance", () => {

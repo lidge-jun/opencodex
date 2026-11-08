@@ -44,15 +44,28 @@ observed during a row read re-verifies the selected bytes before publishing them
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
 
-Rows belong to a generation and meta names the one published generation. A rebuild stages a fresh
-generation and publishes it in one short transaction fenced on the generation it started from;
-nothing deletes another writer's staged rows, only a successful publish prunes other generations.
-Two writers that stage concurrently therefore cannot mix rows, the loser retries, and a crash before
-publish leaves the previously published generation complete. An append writes into the published
-generation and publishes its cursor, digest, counts and span in the same transaction. Readers take
-meta and the candidate select in one read transaction and reject a generation that changed under
-them. A published generation that claims rows it no longer holds is rebuilt rather than served as a
-complete zero, which is why an interrupted rebuild cannot produce empty totals that look final.
+The reader also receives the snapshot's revision, boundary offset and trailing digest. When the
+revision moved since the snapshot it re-verifies that boundary before trusting any offset, so a
+rewrite between the index refresh and the row read becomes a rebuild rather than a silently
+different row set; a candidate that no longer normalizes is reported unreadable for the same reason.
+
+Rows belong to a generation; a small registry lists every generation and meta names the one
+published. A rebuild stages a fresh generation under a writer lease and publishes it in one short
+transaction fenced on the generation and cursor it started from. A successful publish prunes every
+retired generation by equality, which can remove a concurrent writer's staging; that writer's own
+publish then fails the fence and retries, so a reader only ever sees one complete generation. A
+crash before publish leaves the previously published generation complete. An append writes into the
+published generation and publishes its cursor, digest, counts and span in the same transaction,
+fenced on the cursor so a stale append cannot regress it. Readers take meta and the candidate
+select in one read transaction and reject a generation that changed under them. A published
+generation that claims rows it no longer holds is rebuilt rather than served as a complete zero, in
+both the active and the passive read.
+
+A staging generation registers itself and its writer pid before its first row. A failed attempt
+discards its own generation in a finally; a process that dies without running it leaves a lease
+whose pid is no longer alive, and the next refresh reclaims that generation. A generation whose
+writer is alive is never reclaimed. The registry is the complete set of generations, so reclamation
+and pruning delete by equality instead of scanning the row table under the write lock.
 
 The projection is created 0600 through the shared private-SQLite path, its WAL and shared-memory
 sidecars are registered for uninstall only when this module creates them, and a file at that path
@@ -62,8 +75,9 @@ and it never creates, writes or registers anything. Any other index-side failure
 full disk, contention, a corrupt or foreign file -- falls back to the authoritative streaming scan
 instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
 propagated. A nonselective filter (`client=all`, `device=all`, no provider/model/key) still reads
-every row in its window; `candidateRows` counts the rows selected and normalized, not the SQL index
-entries examined. `tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole
+every row in its window; `candidateRows` counts the rows selected and normalized for that call and
+`scope` says whether that is the whole candidate set or only the appended suffix, not how many SQL
+index entries were examined. `tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole
 ledger, the append cursor, crash and two-writer generation handling, passive and fallback behavior,
 row tolerance, query plans, and parity with a full-scan oracle.
 

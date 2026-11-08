@@ -213,6 +213,19 @@ async function digestRangeCooperatively(
   return hash.digest("hex");
 }
 
+/** Synchronous digest of a short range; used to re-validate a 64 KiB boundary. */
+function digestRangeSync(fd: number, from: number, to: number, buffer: Buffer): string {
+  const hash = createHash("sha256");
+  for (let position = from; position < to;) {
+    const requested = Math.min(buffer.byteLength, to - position);
+    const read = readSync(fd, buffer, 0, requested, position);
+    if (read === 0) throw rebuildRequired("shrink");
+    hash.update(buffer.subarray(0, read));
+    position += read;
+  }
+  return hash.digest("hex");
+}
+
 /**
  * Cooperatively scans a full ledger or validated append suffix with bounded memory.
  *
@@ -460,6 +473,12 @@ export interface ReadUsageLedgerRowsOptions {
   offsets: readonly number[];
   /** Identity those offsets were captured under; a replaced file invalidates all of them. */
   expectedIdentityKey: string;
+  /** Revision the offsets were captured under. Any movement re-validates the boundary. */
+  expectedRevisionKey?: string;
+  /** Snapshot boundary the offsets belong to; every offset must fall before it. */
+  expectedProcessedThroughBytes?: number;
+  /** Trailing digest at that boundary, verified when the revision moved. */
+  expectedProcessedThroughDigest?: string;
   signal?: AbortSignal;
 }
 
@@ -516,6 +535,34 @@ export async function readUsageLedgerRowsAtOffsets(
       throw rebuildRequired("identity_mismatch");
     }
     const size = openedRevision.size;
+    const boundary = options.expectedProcessedThroughBytes;
+    if (boundary !== undefined) {
+      if (size < boundary) throw rebuildRequired("shrink");
+      for (const offset of options.offsets) {
+        // An offset at or past the boundary belongs to a different snapshot than the one the
+        // caller validated.
+        if (offset < 0 || offset >= boundary) throw rebuildRequired("content_changed");
+      }
+    }
+    // The revision moved since the index snapshot: verify the boundary the offsets were
+    // captured at before trusting any of them. A same-size rewrite of that tail is caught
+    // here; an append past the boundary leaves it unchanged.
+    const revisionMoved = options.expectedRevisionKey !== undefined
+      && usageLogRevisionKey(openedRevision) !== options.expectedRevisionKey;
+    if (revisionMoved) {
+      if (boundary === undefined || options.expectedProcessedThroughDigest === undefined) {
+        throw rebuildRequired("content_changed");
+      }
+      const digest = digestRangeSync(
+        fd,
+        Math.max(0, boundary - USAGE_LEDGER_BOUNDARY_DIGEST_BYTES),
+        boundary,
+        row,
+      );
+      if (digest !== options.expectedProcessedThroughDigest) {
+        throw rebuildRequired("content_changed");
+      }
+    }
 
     const lineAt = (offset: number): Buffer | null => {
       if (offset >= windowStart && offset < windowStart + windowLength) {
@@ -553,7 +600,7 @@ export async function readUsageLedgerRowsAtOffsets(
       return null;
     };
 
-    const walk = (visit: (bytes: Buffer, offset: number) => void): number[] => {
+    const walk = (visit: (bytes: Buffer, offset: number) => boolean): number[] => {
       const unreadableOffsets: number[] = [];
       for (const offset of options.offsets) {
         throwIfAborted(options.signal);
@@ -566,7 +613,7 @@ export async function readUsageLedgerRowsAtOffsets(
           unreadableOffsets.push(offset);
           continue;
         }
-        visit(bytes, offset);
+        if (!visit(bytes, offset)) unreadableOffsets.push(offset);
       }
       return unreadableOffsets;
     };
@@ -583,7 +630,12 @@ export async function readUsageLedgerRowsAtOffsets(
       } catch {
         entry = undefined;
       }
-      if (entry) entries.push(entry);
+      // The index only holds rows the scanner normalized. A candidate that no longer parses or
+      // normalizes means the ledger moved under the projection, so it is unreadable rather than
+      // silently dropped: the caller rebuilds instead of reporting a smaller complete result.
+      if (!entry) return false;
+      entries.push(entry);
+      return true;
     });
     const capturedDigest = captured.digest("hex");
 
@@ -608,6 +660,7 @@ export async function readUsageLedgerRowsAtOffsets(
         verified.update(bytes);
         verified.update("\0");
         verified.update(String(offset));
+        return true;
       });
       if (recheck.length !== unreadableOffsets.length
         || verified.digest("hex") !== capturedDigest) {
