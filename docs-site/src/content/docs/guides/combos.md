@@ -173,12 +173,12 @@ each request starts with Anthropic. A retryable Anthropic failure moves that req
 retryable OpenAI failure can move it to Google. A terminal error stops immediately instead of
 trying the remaining targets.
 
-A provider's HTTP 400 response can still be target-specific. When its error explicitly has type
-`upstream_error` and carries no structured error code, the combo can try the next target without
-cooling the failed one. OpenRouter's opaque provider wrapper (`Provider returned error` with
-numeric `code: 400` and `metadata.raw: "ERROR"`) is treated the same way. Known malformed
-`response_format` schema errors and structured `invalid_request_error` codes on this opaque 400 path
-remain terminal. Recognized target incompatibilities described later in this guide still advance.
+A provider's HTTP 400 response can still be target-specific. OpenRouter's opaque provider wrapper
+(`Provider returned error` with numeric `code: 400`, no `type`, and `metadata.raw: "ERROR"`) is
+treated as target-local and allows the combo to try the next target without cooling the failed one.
+Typed uncoded 400s, known malformed `response_format` schema errors, and structured
+`invalid_request_error` codes on this opaque 400 path remain terminal. Recognized target
+incompatibilities described later in this guide still advance.
 
 ### Round-robin: smooth weighted batches
 

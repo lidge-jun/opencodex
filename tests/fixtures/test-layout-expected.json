@@ -1335,7 +1335,7 @@
   "server-background-lifecycle.test.ts": "server", "server-clickjacking-headers.test.ts": "server",
   "server-combo-cooldown-fallback.test.ts": "server", "server-combo-failover-e2e.test.ts": "server",
   "server-combo-held-response.test.ts": "server", "server-combo-reasoning-replay-eligibility.test.ts": "server", "server-combo-tool-loop-continuation.test.ts": "server",
-  "server-combo-zero-output-failover.test.ts": "server", "server-google-antigravity-oauth-401-replay.test.ts": "server",
+  "server-combo-zero-output-failover.test.ts": "server", "server-combo-opaque-error-failover.test.ts": "server", "server-google-antigravity-oauth-401-replay.test.ts": "server",
   "server-antigravity-web-search-validation.test.ts": "server", "server-google-antigravity-oauth-429-budget.test.ts": "server", "server-gui-bundle-freshness.test.ts": "server",
   "server-images-bodyless-content-length.test.ts": "server", "server-images-pool-admission.test.ts": "server",
   "server-images.test.ts": "server", "server-key-failover-e2e.test.ts": "server", "distributed-key-401.test.ts": "server",

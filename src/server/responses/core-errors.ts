@@ -63,9 +63,7 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
     const source = candidates.find((candidate): candidate is Record<string, unknown> => {
       if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
       const record = candidate as Record<string, unknown>;
-      return [record.message, record.type].some(value => typeof value === "string")
-        || typeof record.code === "string"
-        || (typeof record.code === "number" && Number.isFinite(record.code));
+      return [record.message, record.type, record.code].some(value => typeof value === "string");
     });
     if (!source) return { safeText, cyberPolicy: isCyberPolicyMessage(safeText) };
     if (typeof source.message === "string" && source.message.trim()) {
@@ -74,8 +72,6 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
     if (typeof source.type === "string" && source.type.trim()) type = source.type.trim();
     if (typeof source.code === "string" && source.code.trim()) {
       code = source.code.trim();
-    } else if (typeof source.code === "number" && Number.isFinite(source.code)) {
-      code = String(source.code);
     }
   } catch {
     /* non-JSON upstream body — retain the bounded display-safe text */

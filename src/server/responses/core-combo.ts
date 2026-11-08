@@ -1410,7 +1410,6 @@ export async function executeComboResponses(
       : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
-        upstreamType: failure.upstreamType,
         codexModelRefusal: failure.codexModelRefusal,
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
         malformedResponseFormat: failure.malformedResponseFormat,
@@ -1485,7 +1484,6 @@ export async function executeComboResponses(
     const attemptedTargets = pick.attempted;
     const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
-      upstreamType: failure.upstreamType,
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
     });

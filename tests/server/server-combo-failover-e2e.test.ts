@@ -796,52 +796,6 @@ describe("server combo failover 030 activation matrix", () => {
     expect(hits).toEqual(["a:false", "b:false", "a:true", "b:true"]);
   });
 
-  test("opaque OpenRouter numeric-code 400 hops to the next combo target", async () => {
-    const hits: string[] = [];
-    const openrouter = serve(() => {
-      hits.push("a");
-      return Response.json({
-        error: {
-          message: "Provider returned error",
-          code: 400,
-          metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
-        },
-        user_id: "user_test",
-      }, { status: 400 });
-    });
-    const backup = serve(() => {
-      hits.push("backup");
-      return chatSuccess("healthy fallback", "m2");
-    });
-    const config = comboConfig({
-      a: provider("openai-chat", baseUrl(openrouter), "key-openrouter"),
-      backup: provider("openai-chat", baseUrl(backup), "key-backup"),
-    }, [
-      { provider: "a", model: "stealth/crouton-alpha" },
-      { provider: "backup", model: "m2" },
-    ]);
-
-    const response = await postLogged(config);
-
-    expect(response.status).toBe(200);
-    expect(JSON.stringify(await response.json())).toContain("healthy fallback");
-    expect(hits).toEqual(["a", "backup"]);
-    expect(isComboTargetInCooldown("free", { provider: "a", model: "stealth/crouton-alpha" })).toBe(false);
-
-    const { log, usage } = await latestAttemptReceipts(config);
-    for (const receipt of [log, usage]) {
-      expect(receipt).toMatchObject({
-        provider: "combo",
-        model: "combo/free",
-        resolvedModel: "m2",
-        attempts: [
-          { ordinal: 1, provider: "a", model: "stealth/crouton-alpha", status: 400 },
-          { ordinal: 2, provider: "backup", model: "m2", status: 200 },
-        ],
-      });
-    }
-  });
-
   test("zero-output terminal SSE failure hops before committing the child stream", async () => {
     const hits: string[] = [];
     const a = serve(() => {

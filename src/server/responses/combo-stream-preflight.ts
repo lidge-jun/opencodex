@@ -135,7 +135,7 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
   const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400Record(rawRecord) : undefined;
   return comboFailureDecision(status, message, {
-    code, upstreamType, codexModelRefusal: terminalModelRefusal(status, event),
+    code, codexModelRefusal: terminalModelRefusal(status, event),
     malformedResponseFormat, openRouterOpaque400,
   }) === "hop";
 }

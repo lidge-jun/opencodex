@@ -122,51 +122,49 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureDecision(400, envelopeWithDetail)).toBe("stop");
   });
 
-  test("a wrapped invalid_request_error 400 with upstreamType upstream_error still stops and cools the target", () => {
+  test("a wrapped invalid_request_error 400 still stops and cools the target", () => {
     const wrapped = 'Provider error 400: {"type":"error","error":{"type":"invalid_request_error","message":"tools.0.custom.name: String should match pattern ..."}}';
-    expect(comboFailureDecision(400, wrapped, { upstreamType: "upstream_error" })).toBe("stop");
-    expect(comboFailureCooldownScope(400, wrapped, { upstreamType: "upstream_error" })).toBe("target");
+    expect(comboFailureDecision(400, wrapped)).toBe("stop");
+    expect(comboFailureCooldownScope(400, wrapped)).toBe("target");
 
     const plain = "Invalid 'input[3].content': expected a string, got null.";
-    expect(comboFailureDecision(400, plain, { upstreamType: "upstream_error" })).toBe("stop");
-    expect(comboFailureCooldownScope(400, plain, { upstreamType: "upstream_error" })).toBe("target");
+    expect(comboFailureDecision(400, plain)).toBe("stop");
+    expect(comboFailureCooldownScope(400, plain)).toBe("target");
   });
 
-  test("preserves numeric codes in normalizeUpstreamErrorText and consumes them as structured evidence", async () => {
-    // Numeric exhaustion code 1308
+  test("leaves numeric codes undefined in normalizeUpstreamErrorText and accepts them directly in classification inputs", async () => {
+    // Numeric exhaustion code 1308 is not coerced to string by normalizeUpstreamErrorText
     const exhaustionBody = JSON.stringify({
       error: { message: "Usage limit reached", code: 1308 },
     });
     const normalized1308 = normalizeUpstreamErrorText(exhaustionBody, "fallback");
-    expect(normalized1308.code).toBe("1308");
+    expect(normalized1308.code).toBeUndefined();
 
     const failure1308 = await consumeComboFailure(new Response(exhaustionBody, {
       status: 400,
       headers: { "content-type": "application/json" },
     }));
-    expect(failure1308.upstreamCode).toBe("1308");
-    expect(comboFailureDecision(400, failure1308.classificationText, { code: failure1308.upstreamCode })).toBe("hop");
-    expect(comboFailureCooldownScope(400, failure1308.classificationText, { code: failure1308.upstreamCode })).toBe("target");
+    expect(failure1308.upstreamCode).toBeUndefined();
+    expect(comboFailureDecision(400, failure1308.classificationText, { code: 1308 })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failure1308.classificationText, { code: 1308 })).toBe("target");
 
     // Non-400 numeric code (e.g. 404) in an HTTP 400 response must not take the uncoded hop or skip cooldown
     const non400CodeBody = JSON.stringify({
       error: { message: "Resource not found", code: 404, type: "upstream_error" },
     });
     const normalized404 = normalizeUpstreamErrorText(non400CodeBody, "fallback");
-    expect(normalized404.code).toBe("404");
+    expect(normalized404.code).toBeUndefined();
 
     const failure404 = await consumeComboFailure(new Response(non400CodeBody, {
       status: 400,
       headers: { "content-type": "application/json" },
     }));
-    expect(failure404.upstreamCode).toBe("404");
+    expect(failure404.upstreamCode).toBeUndefined();
     expect(comboFailureDecision(400, failure404.classificationText, {
-      code: failure404.upstreamCode,
-      upstreamType: failure404.upstreamType,
+      code: 404,
     })).toBe("stop");
     expect(comboFailureCooldownScope(400, failure404.classificationText, {
-      code: failure404.upstreamCode,
-      upstreamType: failure404.upstreamType,
+      code: 404,
     })).toBe("target");
 
     // Numeric 400 code in OpenRouter opaque envelope retains numeric 400 code and takes the hop
@@ -178,12 +176,12 @@ describe("combo failure cooldown scope", () => {
       },
     });
     const normalizedOR = normalizeUpstreamErrorText(openRouterOpaque400, "fallback");
-    expect(normalizedOR.code).toBe("400");
+    expect(normalizedOR.code).toBeUndefined();
     const failureOR = await consumeComboFailure(new Response(openRouterOpaque400, {
       status: 400,
       headers: { "content-type": "application/json" },
     }));
-    expect(failureOR.upstreamCode).toBe("400");
+    expect(failureOR.upstreamCode).toBeUndefined();
     expect(failureOR.openRouterOpaque400).toBe(true);
     expect(comboFailureDecision(400, failureOR.classificationText, {
       code: failureOR.upstreamCode,
@@ -191,6 +189,16 @@ describe("combo failure cooldown scope", () => {
     })).toBe("hop");
     expect(comboFailureCooldownScope(400, failureOR.classificationText, {
       code: failureOR.upstreamCode,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("none");
+
+    // Accepts numeric code directly in classification options
+    expect(comboFailureDecision(400, failureOR.classificationText, {
+      code: 400,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failureOR.classificationText, {
+      code: 400,
       openRouterOpaque400: failureOR.openRouterOpaque400,
     })).toBe("none");
   });
@@ -217,13 +225,11 @@ describe("combo failure cooldown scope", () => {
     expect(openRouterFailure.classificationText.length).toBeLessThanOrEqual(500);
     expect(comboFailureDecision(400, openRouterFailure.classificationText, {
       code: openRouterFailure.upstreamCode,
-      upstreamType: openRouterFailure.upstreamType,
       openRouterOpaque400: openRouterFailure.openRouterOpaque400,
       malformedResponseFormat: openRouterFailure.malformedResponseFormat,
     })).toBe("hop");
     expect(comboFailureCooldownScope(400, openRouterFailure.classificationText, {
       code: openRouterFailure.upstreamCode,
-      upstreamType: openRouterFailure.upstreamType,
       openRouterOpaque400: openRouterFailure.openRouterOpaque400,
       malformedResponseFormat: openRouterFailure.malformedResponseFormat,
     })).toBe("none");

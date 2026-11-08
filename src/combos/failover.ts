@@ -727,7 +727,6 @@ export function comboFailureCooldownScope(
   message: string,
   options?: {
     code?: string | number | null;
-    upstreamType?: string | null;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
   },
@@ -877,7 +876,6 @@ export function comboFailureDecision(
   message: string,
   options?: {
     code?: string | number | null;
-    upstreamType?: string | null;
     codexModelRefusal?: CodexAccountModelRefusal;
     failedAdapter?: string;
     /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
