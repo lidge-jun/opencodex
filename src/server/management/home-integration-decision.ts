@@ -10,7 +10,6 @@ import { isRouteClientId, type RouteClientIntent } from "../../link/route-intent
 import { captureRefusal } from "../../routing/home-route-capture";
 import { deriveHomeAsideIntent, HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults, recordHomeAsideDecision } from "../../routing/home-route-intent";
 import { homeRouteIntentInUse, readRouteIntentState, recordHomeFileIntegrationDecision, routeIntentStatePath, RouteIntentStateUnreadableError } from "../../routing/route-intent-state";
-import { withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import type { OcxConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
@@ -43,7 +42,9 @@ export function prepareHomeIntegrationDecision(ctx: ManagementContext, clientId:
   asideEnabling?: readonly number[] | "all"): Response | null {
   try {
     readRouteIntentState();
-    initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, undefined, { whenLinked: true });
+    // The durable config already carries the switches another process may have changed; the live
+    // one is never cloned here (it can hold runtime-only values).
+    initializeHomeRouteIntentDefaults(durableConfig(ctx.config), ctx.version, undefined, { whenLinked: true });
     if (asideEnabling !== undefined && homeRouteIntentInUse(readRouteIntentState())) {
       deriveHomeAsideIntent(durableConfig(ctx.config), { extraProfileIds: asideEnabling });
     }
