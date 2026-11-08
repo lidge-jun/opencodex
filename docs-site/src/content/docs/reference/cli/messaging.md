@@ -141,7 +141,8 @@ and do not add automatic reply delivery or a reverse Claude transport.
 them. The time budget includes all helpers and pauses; each snapshot reuses the
 existing scoped read validation and text limits. At most nine sequential helper
 invocations are possible per wait. Waits share the host's four-operation limit.
-Each wait holds a slot for its entire lifetime, up to 20 seconds. Four concurrent
+Each wait holds a slot for its entire lifetime: up to 20 seconds of waiting, plus
+time to terminate its helper. Four concurrent
 waits can make sends and metadata calls return busy; excess calls are rejected,
 not queued. Use fewer parallel waits when send capacity must remain available.
 

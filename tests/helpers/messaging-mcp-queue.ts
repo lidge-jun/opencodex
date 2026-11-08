@@ -35,6 +35,11 @@ rl.on("line", line => {
   if(mode === "missing-error-message") return emit({id:2,error:{code:-32602}});
   if(mode === "mixed-error-result") return emit({id:2,error:{code:-32602,message:"private"},result:{}});
   if(mode === "reject") return emit({id:2,error:{code:-32602,message:"PRIVATE_NATIVE_ERROR"}});
+  if(mode === "reply-reject-delayed-close") {
+    process.on("SIGTERM", () => {});
+    setInterval(() => {}, 1000);
+    return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
+  }
   if(mode.startsWith("reply-") && ["thread/items/list","thread/items/read","thread/turns/list"].includes(f.method)) {
     const turnId = ${JSON.stringify(REPLY_MCP_TURN)};
     const user = {turnId,item:{type:"userMessage",id:"user-1",clientId:${JSON.stringify(REPLY_MCP_CLIENT)},content:[{type:"text",text:"PRIVATE_USER"}]}};

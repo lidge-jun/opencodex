@@ -88,6 +88,15 @@ describe.skipIf(process.platform === "win32")("bounded stored reply waiting", ()
     } finally {await f.close();}
   },15_000);
 
+  test("a read rejection observed before the deadline survives delayed helper shutdown", async () => {
+    const f = queueMcpFixture("reply-reject-delayed-close");
+    try {
+      const result = await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs: 500 });
+      expect(methods(f)).toHaveLength(1);
+      expect(result).toEqual({ available: false, error: { code: "reply_read_unavailable" } });
+    } finally { await f.close(); }
+  }, 10_000);
+
   test("a later hanging snapshot inherits the original deadline and preserves the aged observation",async()=>{
     const f=queueMcpFixture("reply-wait-hang-second");
     try {

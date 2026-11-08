@@ -36,8 +36,10 @@ export async function queueMcpWaitReply(options: QueueMcpOptions, raw: ReplyInpu
     for (let index = 0; index < 3; index++) {
       budget.throwIfEnded();
       attempts++;
-      const result = await queueMcpReadReply(options, position, budget.signal);
+      let observedFailure = false;
+      const result = await queueMcpReadReply(options, position, budget.signal, () => { observedFailure = true; });
       if (signal?.aborted) return unavailable("reply_wait_cancelled");
+      if (!result.available && observedFailure) return result;
       if (budget.signal.aborted) return exhausted();
       if (!result.available) return result;
       last = result; observedAt = performance.now();

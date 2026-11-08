@@ -42,7 +42,7 @@ function finalReplies(rows: Entry[]) {
 }
 
 /** Read one bounded history page; matching proves shared turn membership, never exclusive reply ownership. */
-export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInput, signal?: AbortSignal) {
+export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInput, signal?: AbortSignal, onObservedFailure?: () => void) {
   const unavailable = (code: string) => ({ available: false as const, error: { code } });
   if (!options.allowReplyRead) return unavailable("reply_read_disabled");
   const parsed = z.object(replyInput).strict().safeParse(raw);
@@ -54,7 +54,11 @@ export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInpu
   const read = async (method: "thread/items/list" | "thread/items/read" | "thread/turns/list", params: Record<string, unknown>) => {
     budget.throwIfEnded();
     const result = await queueMcpRpc(options, method, { threadId: input.threadId, ...params }, budget.signal);
-    if (result.status !== "response") throw new Error("read unavailable");
+    if (result.status !== "response") {
+      if (!["queue_mcp_cancelled", "queue_mcp_timeout"].includes(result.error.code)
+        && !(result.error.code === "queue_mcp_preflight_failed" && signal?.aborted)) onObservedFailure?.();
+      throw new Error("read unavailable");
+    }
     return result.result;
   };
   try {
