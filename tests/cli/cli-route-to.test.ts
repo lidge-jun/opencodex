@@ -211,10 +211,12 @@ test.each([
   expect(resolved.capability.routes).toEqual([{ method, path: endpoint }]);
 });
 
-test.each(["enable", "disable"])("client %s discovery includes the new alias endpoint", action => {
+// A plain toggle is a Home-only decision on the client-integration route, never a route-to default write.
+test.each(["enable", "disable"])("client %s discovery names the Home-only toggle route", action => {
   const resolved = resolveHelpPath(["integration", "client", action]);
   if (resolved.kind !== "capability") throw new Error("Missing alias capability");
-  expect(resolved.capability.routes).toContainEqual({ method: "PUT", path: "/api/route-to" });
+  expect(resolved.capability.routes).toContainEqual({ method: "PUT", path: "/api/client-integrations/{clientId}" });
+  expect(resolved.capability.routes).not.toContainEqual({ method: "PUT", path: "/api/route-to" });
 });
 
 test.each(["restore", "preview", "sync"])("client %s discovery preserves its legacy endpoints", action => {
