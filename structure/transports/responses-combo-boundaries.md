@@ -140,15 +140,25 @@ status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
-owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior. A
-replacement with a different status, status text, or header set is cancelled and the original
-stream is preserved because the response head may already be committed.
-The deferred native hold emits SSE comment heartbeats for direct streaming clients. Combo streaming
+owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
+Native passthrough starts this preflight at dispatch, before it returns a head
+(`selectProtocolSafeResetResponse` in `src/server/responses/combo-stream-preflight.ts`). Dispatch
+waits for whichever comes first: the selection, an abort, or a deadline of one 15-second heartbeat
+interval capped by the stall timeout. A selection that finishes first publishes the selected
+response, including a replacement with its own status and headers. If the deadline wins, the
+original head is returned and the same preflight continues behind it. From then on a replacement
+with a different status, status text, or header set is cancelled and the original bytes and error
+are preserved; the check runs when the recovery accepts the replacement and again when it lands.
+`src/server/responses/passthrough-completion.ts` binds the published head to the main quota proof
+of the attempt that produced it ([OpenAI tiers](../providers/openai-tiers.md)). Direct streaming
+clients get an SSE comment on their first read after a deadline commit and then once per heartbeat
+interval while the hold lasts. Combo streaming
 children omit those timer-generated comments while their parent holds the headers, so those comments
 cannot consume the retained-chunk cap. For canonical buffered JSON, the hold emits a comment
 only when it reads non-empty upstream bytes: this reports real prelude activity to the collector's
 inactivity clock without making a silent provider appear active. The byte and chunk caps remain in force.
-Downstream cancellation aborts the hold or an in-flight replacement.
+Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
+in-flight replacement, and never awaits upstream cleanup.
 
 - a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;

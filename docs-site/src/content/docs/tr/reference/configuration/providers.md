@@ -192,7 +192,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor eski boolean değeri, yalnızca daha yeni alan ayarlanmadığında `nativeLocalExec: "on"` değerine eşdeğerdir. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor yerel yürütme politikası. `off` varsayılandır; `codex-sandbox` şu anda `off` gibi kapalı olarak başarısız olur. |
 
-Yerel Responses için aynı tercih, yalnızca yaşam döngüsü olaylarından sonra gelen normal EOF durumunu da kapsar. Kendi kendine yeterli istek ve değiştirme sınırları geçerlidir. Yalnızca HTTP durumu, durum metni ve tüm yanıt başlıkları orijinalle eşleşen yanıt kullanılır; aksi halde orijinal akış korunur.
+Yerel Responses için aynı tercih, yalnızca yaşam döngüsü olaylarından sonra gelen normal EOF durumunu da kapsar. Kendi kendine yeterli istek ve değiştirme sınırları geçerlidir. Sıfırlama veya EOF yanıt başlığı döndürülmeden önce, 15 saniye içinde ya da daha kısaysa takılma zaman aşımı içinde olursa istemci yedek yanıtı kendi durumu ve başlıklarıyla alır. Başlık döndürüldükten sonra yalnızca HTTP durumu, durum metni ve tüm yanıt başlıkları o başlıkla eşleşen yanıt kullanılır; aksi halde orijinal akış korunur.
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

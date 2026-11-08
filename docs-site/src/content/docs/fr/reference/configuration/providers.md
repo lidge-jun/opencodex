@@ -188,7 +188,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `unsafeAllowNativeLocalExec?` | `boolean` | Ancien booléen de Cursor, équivalent à `nativeLocalExec: "on"` uniquement lorsque le champ plus récent n'est pas défini. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Politique d'exécution locale de Cursor. `off` est la valeur par défaut ; actuellement, `codex-sandbox` échoue de manière sûre comme `off`. |
 
-Pour Responses natif, la même option couvre aussi une fin de flux normale après les seuls événements de cycle de vie. Les limites de requête autonome et de remplacement restent applicables. Le remplacement n'est utilisé que si son statut HTTP, son texte de statut et tous ses en-têtes correspondent à l'original ; sinon, le flux original est conservé.
+Pour Responses natif, la même option couvre aussi une fin de flux normale après les seuls événements de cycle de vie. Les limites de requête autonome et de remplacement restent applicables. Si la réinitialisation ou la fin de flux survient avant le renvoi de l'en-tête de réponse, dans les 15 secondes ou dans le délai d'inactivité s'il est plus court, le client reçoit le remplacement avec son propre statut et ses propres en-têtes. Une fois l'en-tête renvoyé, le remplacement n'est utilisé que si son statut HTTP, son texte de statut et tous ses en-têtes correspondent à cet en-tête ; sinon, le flux original est conservé.
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

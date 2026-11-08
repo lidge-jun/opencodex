@@ -534,7 +534,7 @@ describe("credential-bound plain-main Responses quota", () => {
     });
   }
 
-  test("plaintext V2 deferred reset refuses a replacement with different quota headers", async () => {
+  test("plaintext V2 pre-head reset publishes the replacement under its own attempt proof", async () => {
     observe();
     const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
     const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
@@ -566,20 +566,131 @@ describe("credential-bound plain-main Responses quota", () => {
       }), { ...config, defaultProvider: "openai", plaintextV2AgentMessages: true,
         providers: { openai: { ...provider, codexAccountMode: "direct", upstreamWebsocket: false, retryOnReset: {} } } },
       { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
-      expect(response.status).toBe(502);
-      expect(await response.text()).not.toContain("fixture-plaintext-reset");
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("fixture-plaintext-reset");
       expect(httpCalls).toBe(2);
       expect(renewalSpy).toHaveBeenCalledTimes(2);
       const arrival = renewalSpy.mock.results[0]!.value as mainCache.MainQuotaDispatch;
       const successor = renewalSpy.mock.results[1]!.value as mainCache.MainQuotaDispatch;
       expect(successor).not.toBe(arrival);
       expect(successor).toEqual(arrival);
-      // Only the original response's quota may publish under its arrival proof.
+      // The reset preceded the head, so the client receives the replacement's head and only its
+      // quota publishes, under the proof of the attempt that produced it.
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(99);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(claimSpy.mock.calls[0]![0]).toBe(successor);
+      expect(claimSpy.mock.calls[0]![0]).not.toBe(arrival);
+    } finally {
+      claimSpy.mockRestore();
+      renewalSpy.mockRestore();
+    }
+  });
+
+  const resetQuotaConfig = (stallTimeoutSec?: number): OcxConfig => ({ ...config, defaultProvider: "openai",
+    ...(stallTimeoutSec === undefined ? {} : { stallTimeoutSec }),
+    providers: { openai: { ...provider, codexAccountMode: "direct", upstreamWebsocket: false, retryOnReset: {} } } });
+  const resetQuotaRequest = () => new Request("http://localhost/v1/responses", {
+    method: "POST", headers: new Headers({ ...Object.fromEntries(caller()), "content-type": "application/json" }),
+    body: JSON.stringify({ model: "gpt-5.5", stream: true, store: false, input: "fixture self-contained turn" }),
+  });
+  const sseQuotaHeaders = (percent: string, contentType = "text/event-stream"): Headers => {
+    const headers = quotaHeaders(percent);
+    headers.set("content-type", contentType);
+    return headers;
+  };
+  const completedFrame = (id: string) => new TextEncoder().encode(`event: response.completed\ndata: ${JSON.stringify({
+    type: "response.completed", response: { id, status: "completed", output: [] },
+  })}\n\n`);
+
+  test("heartbeat-committed reset keeps the arrival head and never publishes replacement quota", async () => {
+    observe();
+    const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
+    const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
+    const gate = Promise.withResolvers<void>();
+    let httpCalls = 0;
+    let replacementCancelled = false;
+    globalThis.fetch = (async () => {
+      httpCalls++;
+      if (httpCalls === 1) {
+        let sent = false;
+        return new Response(new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (!sent) {
+              sent = true;
+              controller.enqueue(new TextEncoder().encode(`event: response.created\ndata: ${JSON.stringify({
+                type: "response.created", response: { id: "fixture-original", status: "in_progress", output: [] },
+              })}\n\n`));
+              return;
+            }
+            await gate.promise;
+            controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+          },
+        }, { highWaterMark: 0 }), { status: 200, headers: sseQuotaHeaders("17") });
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { controller.enqueue(completedFrame("fixture-replacement")); controller.close(); },
+        cancel() { replacementCancelled = true; },
+      }, { highWaterMark: 0 }), { status: 200, headers: sseQuotaHeaders("99") });
+    }) as typeof fetch;
+    try {
+      // A one-second stall budget bounds the pre-head wait, so the head commits before the reset.
+      const response = await handleResponses(resetQuotaRequest(), resetQuotaConfig(1),
+        { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      expect(httpCalls).toBe(1);
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+      gate.resolve();
+      const text = await response.text();
+      expect(httpCalls).toBe(2);
+      expect(replacementCancelled).toBe(true);
+      expect(text).toContain("fixture-original");
+      expect(text).not.toContain("fixture-replacement");
       expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
       expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
+      expect(renewalSpy).toHaveBeenCalledTimes(2);
+      // Renewed proofs are structurally equal; ownership is identity.
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(claimSpy.mock.calls[0]![0]).toBe(renewalSpy.mock.results[0]!.value);
+      expect(claimSpy.mock.calls[0]![0]).not.toBe(renewalSpy.mock.results[1]!.value);
+    } finally {
+      gate.resolve();
+      claimSpy.mockRestore();
+      renewalSpy.mockRestore();
+    }
+  });
+
+  test("a refused pre-head replacement leaves the original head bound to its arrival proof", async () => {
+    observe();
+    const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
+    const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
+    let httpCalls = 0;
+    globalThis.fetch = (async () => {
+      httpCalls++;
+      if (httpCalls === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+          },
+        }), { status: 200, headers: sseQuotaHeaders("17") });
+      }
+      // Not the stream the request asked for, so recovery refuses it after the send renewed the proof.
+      return new Response(JSON.stringify({ id: "fixture-json" }), { status: 200, headers: sseQuotaHeaders("99", "application/json") });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(resetQuotaRequest(), resetQuotaConfig(),
+        { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      const text = await response.text();
+      expect(httpCalls).toBe(2);
+      expect(text).not.toContain("fixture-json");
+      expect(renewalSpy).toHaveBeenCalledTimes(2);
+      const arrival = renewalSpy.mock.results[0]!.value as mainCache.MainQuotaDispatch;
+      // Renewed proofs are structurally equal; ownership is identity.
       expect(claimSpy).toHaveBeenCalledTimes(1);
       expect(claimSpy.mock.calls[0]![0]).toBe(arrival);
-      expect(claimSpy.mock.calls[0]![0]).not.toBe(successor);
+      expect(claimSpy.mock.calls[0]![0]).not.toBe(renewalSpy.mock.results[1]!.value);
+      expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(17);
     } finally {
       claimSpy.mockRestore();
       renewalSpy.mockRestore();

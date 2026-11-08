@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { getDefaultConfig } from "../../src/config";
@@ -381,35 +381,181 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     }
   });
 
-  test.each([[true, false], [false, false], [true, true], [false, true]] as const)("refuses replacement with different turn metadata (stream=%s, combo=%s)", async (stream, combo) => {
+  const selectionMatrix = (["eof", "reset"] as const).flatMap(ending => ([[true, false], [false, false], [true, true], [false, true]] as const)
+    .map(([stream, combo]) => [ending, stream, combo] as const));
+  const metadataHeaders = (turn: string, requestId: string, remaining: string): Record<string, string> => ({
+    "content-type": "text/event-stream", "x-codex-turn-state": turn, "x-request-id": requestId,
+    "x-ratelimit-remaining-requests": remaining,
+  });
+  const metadataConfig = (combo: boolean): OcxConfig => ({ ...config, providers: { openai: { ...provider, retryOnReset: {} },
+    ...(combo ? { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
+      baseUrl: "https://provider.example/v1", retryOnReset: {} } } : {}) },
+    ...(combo ? { combos: { metadata: { strategy: "failover", targets: [{ provider: "fixture", model: "gpt-5.6-sol" }] } } } : {}) });
+  const metadataBody = (stream: boolean, combo: boolean) => ({ ...requestBody(stream, false), ...(combo ? { model: "combo/metadata" } : {}) });
+  /** A created prelude, then a pre-output EOF or connection reset once `gate` opens. */
+  const preludeThenEnd = (ending: "eof" | "reset", headers: Record<string, string>, waiting?: () => void, gate?: Promise<void>,
+    cancel?: () => unknown) => {
+    let sent = false;
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode(sseEvent("response.created", { response: { id: "resp_original", status: "in_progress", output: [] } })));
+          return;
+        }
+        waiting?.();
+        await gate;
+        if (ending === "eof") controller.close();
+        else controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" }));
+      },
+      cancel,
+    }, { highWaterMark: 0 }), { headers });
+  };
+  const trackedReplacement = (state: { cancelled: boolean }) => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new TextEncoder().encode(sseEvent("response.completed", {
+      response: { id: "resp_replacement", status: "completed", output: [] },
+    }))); controller.close(); },
+    cancel() { state.cancelled = true; },
+  }, { highWaterMark: 0 }), { headers: metadataHeaders("second", "second-id", "6") });
+  const flushMicrotasks = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+
+  test.each(selectionMatrix)("publishes a pre-head %s replacement with its own metadata (stream=%s, combo=%s)", async (ending, stream, combo) => {
     let sends = 0;
-    let replacementCancelled = false;
-    const first = sseEvent("response.created", { response: { id: "resp_original", status: "in_progress", output: [] } });
+    const replacement = { cancelled: false };
+    const outboundTurnState: (string | null)[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sends++;
+      outboundTurnState.push(new Headers(init?.headers).get("x-codex-turn-state"));
+      if (sends === 1) return preludeThenEnd(ending, metadataHeaders("first", "first-id", "7"));
+      if (sends === 2) return trackedReplacement(replacement);
+      return new Response(sseEvent("response.completed", { response: { id: "resp_follow_up", status: "completed", output: [] } }),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const resetConfig = metadataConfig(combo);
+    const response = await call(metadataBody(stream, combo), {}, resetConfig);
+    const text = await response.text();
+    expect(sends).toBe(2);
+    expect(response.status).toBe(200);
+    expect(text).toContain("resp_replacement");
+    expect(text).not.toContain("resp_original");
+    expect(replacement.cancelled).toBe(false);
+    expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("6");
+    const handle = response.headers.get("x-codex-turn-state");
+    expect(handle).not.toBeNull();
+    // A key-auth combo target never receives a client turn state; the direct route redeems it.
+    if (combo) return;
+    // The client echoes the published turn state; it must redeem to the replacement's token.
+    const followUp = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer fixture-forward-token", "x-codex-turn-state": handle! },
+      body: JSON.stringify(metadataBody(true, combo)),
+    }), resetConfig, { model: "", provider: "" });
+    await followUp.text();
+    expect(sends).toBe(3);
+    expect(outboundTurnState[2]).toBe("second");
+  });
+
+  test.each(selectionMatrix)("a heartbeat commits the original head before a later %s (stream=%s, combo=%s)", async (ending, stream, combo) => {
+    jest.useFakeTimers();
+    let sends = 0;
+    const replacement = { cancelled: false };
+    const gate = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
     globalThis.fetch = (async () => {
       sends++;
-      if (sends === 1) return new Response(first, { headers: {
-        "content-type": "text/event-stream", "x-codex-turn-state": "first", "x-request-id": "first-id",
-      } });
+      return sends === 1
+        ? preludeThenEnd(ending, metadataHeaders("first", "first-id", "7"), waiting.resolve, gate.promise)
+        : trackedReplacement(replacement);
+    }) as typeof fetch;
+    const pending = call(metadataBody(stream, combo), {}, metadataConfig(combo));
+    try {
+      // Selection is still open: the prelude is held and the upstream has not ended.
+      await waiting.promise;
+      await flushMicrotasks();
+      expect(sends).toBe(1);
+      jest.advanceTimersByTime(15_000);
+      await flushMicrotasks();
+      let text = "";
+      let response: Response;
+      if (stream && !combo) {
+        // The direct client already holds the original head and an immediate keepalive.
+        response = await pending;
+        const reader = response.body!.getReader();
+        const first = await reader.read();
+        expect(new TextDecoder().decode(first.value)).toBe(": keepalive\n\n");
+        gate.resolve();
+        for (;;) {
+          const next = await reader.read().catch(() => ({ done: true as const, value: undefined }));
+          if (next.done) break;
+          text += new TextDecoder().decode(next.value);
+        }
+      } else {
+        gate.resolve();
+        response = await pending;
+        text = await response.text();
+      }
+      expect(sends).toBe(2);
+      expect(replacement.cancelled).toBe(true);
+      expect(text).not.toContain("resp_replacement");
+      if (stream && !combo) {
+        expect(text).toContain("resp_original");
+        expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("7");
+      }
+    } finally {
+      gate.resolve();
+      await pending.then(response => response.body?.cancel().catch(() => undefined), () => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  // Pre-head selection publishes a replacement's own status, so the existing 2xx refetch gate matters.
+  test.each([true, false])("a failed pre-head replacement never replaces the original (stream=%s)", async stream => {
+    let sends = 0;
+    const replacement = { cancelled: false };
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return preludeThenEnd("reset", metadataHeaders("first", "first-id", "7"));
       return new Response(new ReadableStream<Uint8Array>({
         pull(controller) { controller.enqueue(new TextEncoder().encode(sseEvent("response.completed", {
           response: { id: "resp_replacement", status: "completed", output: [] },
         }))); controller.close(); },
-        cancel() { replacementCancelled = true; },
-      }, { highWaterMark: 0 }), { headers: {
-        "content-type": "text/event-stream", "x-codex-turn-state": "second", "x-request-id": "second-id",
-      } });
+        cancel() { replacement.cancelled = true; },
+      }, { highWaterMark: 0 }), { status: 503, headers: metadataHeaders("second", "second-id", "6") });
     }) as typeof fetch;
-    const resetConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} },
-      ...(combo ? { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
-        baseUrl: "https://provider.example/v1", retryOnReset: {} } } : {}) },
-      ...(combo ? { combos: { metadata: { strategy: "failover", targets: [{ provider: "fixture", model: "gpt-5.6-sol" }] } } } : {}) };
-    const response = await call({ ...requestBody(stream, false), ...(combo ? { model: "combo/metadata" } : {}) }, {}, resetConfig);
+    const response = await call(metadataBody(stream, false), {}, metadataConfig(false));
     const text = await response.text();
     expect(sends).toBe(2);
+    expect(replacement.cancelled).toBe(true);
+    expect(response.status).not.toBe(503);
     expect(text).not.toContain("resp_replacement");
-    if (combo) expect(text).toContain("upstream_reset_replay_refused");
-    else if (stream) expect(text).toContain("resp_original");
-    expect(replacementCancelled).toBe(true);
+    expect(response.headers.get("x-ratelimit-remaining-requests")).not.toBe("6");
+  });
+
+  test("client abort ends pre-head selection although upstream cancellation never settles", async () => {
+    let sends = 0;
+    let sourceCancels = 0;
+    const waiting = Promise.withResolvers<void>();
+    globalThis.fetch = (async () => {
+      sends++;
+      return preludeThenEnd("reset", metadataHeaders("first", "first-id", "7"), waiting.resolve, new Promise<void>(() => {}), () => {
+        sourceCancels++;
+        return new Promise<void>(() => {});
+      });
+    }) as typeof fetch;
+    releaseSpendHome = acquireOwnedSpendHome();
+    const client = new AbortController();
+    const pending = handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", signal: client.signal,
+      headers: { "content-type": "application/json", authorization: "Bearer fixture-forward-token" },
+      body: JSON.stringify(metadataBody(true, false)),
+    }), metadataConfig(false), { model: "", provider: "" });
+    await waiting.promise;
+    client.abort(new Error("client left"));
+    const response = await pending;
+    await response.body?.cancel().catch(() => undefined);
+    expect(sends).toBe(1);
+    expect(sourceCancels).toBe(1);
   });
 
   for (const ending of ["eof", "read-error"] as const) {

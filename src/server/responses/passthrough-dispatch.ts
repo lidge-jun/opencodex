@@ -176,7 +176,7 @@ import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-ze
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { createNativeContinuationDispatch } from "./native-continuation-send";
-import { acceptsDeferredReplacement, deferPassthroughResetRecovery, guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
+import { guardPassthroughCompletion, isResetReplacementStream, parseOutboundRequestBody, selectPassthroughResetResponse } from "./passthrough-completion";
 
 /** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
 export interface PassthroughAdapterHandoff { kind: "adapter-handoff" }
@@ -1917,11 +1917,11 @@ export async function preparePassthroughExchange(
       && remainingTransientSendBudget(transientSendAttempts()) > 0
       && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && upstreamRequestsStream));
     if (protocolRecoveryCandidate) {
-      const originalResponse = upstreamResponse;
-      upstreamResponse = deferPassthroughResetRecovery(
-        upstreamResponse,
+      // Selection may publish the replacement's own head until one is committed; see the helper.
+      upstreamResponse = await selectPassthroughResetResponse(
+        upstreamResponse, admissionState,
         { model: logCtx.model, provider: logCtx.provider },
-        (error, stage, signal) => refetchAfterProtocolSafeReset(
+        (error, stage, signal, accepts) => refetchAfterProtocolSafeReset(
           (signal = upstream.signal) => sendAmbiguousReplacement(signal).then(adoptObservedResponse),
           error,
           {
@@ -1933,7 +1933,7 @@ export async function preparePassthroughExchange(
             // allowance, which is what keeps a turn that already emitted output from draining
             // the replacement a later ambiguous reset would have been entitled to.
             authorize: () => authorizeResendForRecovery(stage, "connection-reset", ambiguousResend()).allowed,
-            acceptResponse: candidate => acceptsDeferredReplacement(originalResponse, candidate, upstreamRequestsStream),
+            acceptResponse: candidate => accepts(candidate) && isResetReplacementStream(candidate, upstreamRequestsStream),
           },
         ),
         { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, keepalive: canonicalBufferedJson ? "upstream-activity" : options.comboAttempt ? "none" : "periodic" },

@@ -180,7 +180,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
 
-ネイティブ Responses では、ライフサイクルイベントだけを受信して正常 EOF で終了した場合にも同じオプトインが適用されます。自己完結したリクエストと置換回数の制限は変わりません。置換応答の HTTP ステータス、ステータステキスト、全ヘッダーが元の応答と一致しない場合は、元のストリームを保持します。
+ネイティブ Responses では、ライフサイクルイベントだけを受信して正常 EOF で終了した場合にも同じオプトインが適用されます。自己完結したリクエストと置換回数の制限は変わりません。応答ヘッダーを返す前（15 秒以内、ストールタイムアウトの方が短い場合はその時間内）にリセットまたは EOF が起きた場合、クライアントは置換応答をそのステータスとヘッダーのまま受け取ります。ヘッダーを返した後は、置換応答の HTTP ステータス、ステータステキスト、全ヘッダーが返したヘッダーと一致しない場合、元のストリームを保持します。
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

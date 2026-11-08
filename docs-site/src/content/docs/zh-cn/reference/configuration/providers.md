@@ -182,7 +182,7 @@ selector，而不是分配一个新名称。
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
 
-对于原生 Responses，同一开关也涵盖仅收到生命周期事件后正常结束的 EOF。自包含请求和替换次数限制仍然适用。仅当替换响应的 HTTP 状态、状态文本和所有响应头与原响应一致时才会替换；否则保留原始流。
+对于原生 Responses，同一开关也涵盖仅收到生命周期事件后正常结束的 EOF。自包含请求和替换次数限制仍然适用。如果重置或 EOF 发生在返回响应头之前（15 秒内，若停滞超时更短则在其时限内），客户端会收到带有其自身状态和响应头的替换响应。返回响应头之后，仅当替换响应的 HTTP 状态、状态文本和所有响应头与已返回的响应头一致时才会替换；否则保留原始流。
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

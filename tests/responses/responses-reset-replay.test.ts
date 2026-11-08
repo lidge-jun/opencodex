@@ -1,15 +1,207 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import {
   ambiguousResendAllowanceFor,
   selfContainedChatBody,
   selfContainedResponsesBody,
 } from "../../src/server/responses/reset-replay";
 import { authorizeResendForRecovery } from "../../src/lib/request-resend-gate";
-import { deferProtocolSafeResetRecovery } from "../../src/server/responses/combo-stream-preflight";
+import { deferProtocolSafeResetRecovery, selectProtocolSafeResetResponse, type ResetSelectionOwner } from "../../src/server/responses/combo-stream-preflight";
 
 const prelude = 'event: response.created\ndata: {"type":"response.created","response":{"id":"first","output":[]}}\n\n';
 const completed = 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"second","output":[]}}\n\n';
 const responseLog = { model: "test", provider: "test" };
+
+describe("early reset selection", () => {
+  const originalHeaders = { "content-type": "text/event-stream", "x-request-id": "id-one", "x-codex-turn-state": "turn-one" };
+  const replacementHeaders = { "content-type": "text/event-stream", "x-request-id": "id-two", "x-codex-turn-state": "turn-two" };
+  const decoder = new TextDecoder();
+  const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
+  let fakeTimers = false;
+  const useFakeTimers = () => { fakeTimers = true; jest.useFakeTimers(); };
+  afterEach(() => {
+    if (fakeTimers) jest.clearAllTimers();
+    fakeTimers = false;
+    jest.useRealTimers();
+  });
+
+  /** A prelude, then a connection reset once `gate` opens. */
+  function gatedOriginal(gate: Promise<void>, state: { waiting?: () => void; cancels: number; hangCancel?: boolean }) {
+    let sent = false;
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(prelude)); return; }
+        state.waiting?.();
+        await gate;
+        controller.error(Object.assign(new Error("fixture reset"), { code: "ECONNRESET" }));
+      },
+      cancel() { state.cancels++; return state.hangCancel ? new Promise<void>(() => {}) : undefined; },
+    }, { highWaterMark: 0 }), { headers: originalHeaders });
+  }
+  function trackedReplacement(state: { cancelled: boolean }, headers: Record<string, string> = replacementHeaders, status = 200) {
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new TextEncoder().encode(completed)); controller.close(); },
+      cancel() { state.cancelled = true; },
+    }, { highWaterMark: 0 }), { status, headers });
+  }
+  async function readAll(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<{ text: string; error?: unknown }> {
+    let text = "";
+    for (;;) {
+      try {
+        const next = await reader.read();
+        if (next.done) return { text };
+        text += decoder.decode(next.value);
+      } catch (error) { return { text, error }; }
+    }
+  }
+
+  test("publishes a replacement selected before the deadline with its own status and headers", async () => {
+    const original = { cancels: 0 };
+    const replacement = { cancelled: false };
+    const commits: [Response, ResetSelectionOwner][] = [];
+    let recoveries = 0;
+    const published = await selectProtocolSafeResetResponse(gatedOriginal(Promise.resolve(), original), responseLog,
+      async (_error, stage, _signal, accepts) => {
+        recoveries++;
+        expect(stage).toBe("protocol-prelude");
+        const candidate = trackedReplacement(replacement, replacementHeaders, 201);
+        expect(accepts(candidate)).toBe(true);
+        return candidate;
+      }, { heartbeatIntervalMs: 60_000, onCommit: (response, owner) => commits.push([response, owner]) });
+    expect(recoveries).toBe(1);
+    expect(published.status).toBe(201);
+    expect([...published.headers]).toEqual([...new Headers(replacementHeaders)]);
+    expect(commits).toEqual([[published, "replacement"]]);
+    expect(await published.text()).toBe(completed);
+    expect(replacement.cancelled).toBe(false);
+  });
+
+  test("a deadline commits the original head; a later mismatched replacement is refused", async () => {
+    useFakeTimers();
+    const gate = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    const original = { cancels: 0, waiting: waiting.resolve };
+    const replacement = { cancelled: false };
+    const commits: ResetSelectionOwner[] = [];
+    let acceptedAfterCommit: boolean | undefined;
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(gate.promise, original), responseLog,
+      async (_error, _stage, _signal, accepts) => {
+        const candidate = trackedReplacement(replacement);
+        acceptedAfterCommit = accepts(candidate);
+        return candidate;
+      }, { heartbeatIntervalMs: 15_000, onCommit: (_response, owner) => commits.push(owner) });
+    await waiting.promise;
+    await flush();
+    expect(commits).toEqual([]);
+    jest.advanceTimersByTime(15_000);
+    const published = await selected;
+    expect(commits).toEqual(["original"]);
+    expect([...published.headers]).toEqual([...new Headers(originalHeaders)]);
+    const reader = published.body!.getReader();
+    // The client already waited one heartbeat interval for this head.
+    expect(decoder.decode((await reader.read()).value)).toBe(": keepalive\n\n");
+    gate.resolve();
+    const rest = await readAll(reader);
+    expect(acceptedAfterCommit).toBe(false);
+    expect(replacement.cancelled).toBe(true);
+    expect(rest.text).toBe(prelude);
+    expect(String(rest.error)).toContain("fixture reset");
+  });
+
+  test("a matching replacement still continues behind a committed head", async () => {
+    useFakeTimers();
+    const gate = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    const replacement = { cancelled: false };
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(gate.promise, { cancels: 0, waiting: waiting.resolve }), responseLog,
+      async () => trackedReplacement(replacement, originalHeaders), { keepalive: "none" });
+    await waiting.promise;
+    jest.advanceTimersByTime(15_000);
+    const published = await selected;
+    const reader = published.body!.getReader();
+    const read = readAll(reader);
+    gate.resolve();
+    // No timer-generated comment for a caller that owns its own keepalive policy.
+    expect((await read).text).toBe(completed);
+    expect(replacement.cancelled).toBe(false);
+  });
+
+  test("the stall budget narrows the pre-head wait", async () => {
+    useFakeTimers();
+    const waiting = Promise.withResolvers<void>();
+    const commits: ResetSelectionOwner[] = [];
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(new Promise<void>(() => {}), { cancels: 0, waiting: waiting.resolve }),
+      responseLog, async () => null, { maxSelectionMs: 2_000, keepalive: "none", onCommit: (_r, owner) => commits.push(owner) });
+    await waiting.promise;
+    jest.advanceTimersByTime(1_999);
+    await flush();
+    expect(commits).toEqual([]);
+    jest.advanceTimersByTime(1);
+    const published = await selected;
+    expect(commits).toEqual(["original"]);
+    await published.body?.cancel();
+  });
+
+  test("abort ends the pre-head wait at once although upstream cancellation never settles", async () => {
+    const waiting = Promise.withResolvers<void>();
+    const original = { cancels: 0, waiting: waiting.resolve, hangCancel: true };
+    const abort = new AbortController();
+    let recoveries = 0;
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(new Promise<void>(() => {}), original), responseLog,
+      async () => { recoveries++; return null; }, { signal: abort.signal, heartbeatIntervalMs: 60_000 });
+    await waiting.promise;
+    const reason = new Error("client left");
+    abort.abort(reason);
+    const published = await selected;
+    await expect(published.body!.getReader().read()).rejects.toBe(reason);
+    expect(original.cancels).toBe(1);
+    expect(recoveries).toBe(0);
+  });
+
+  test("abort during an in-flight replacement cancels it when it finally arrives", async () => {
+    const started = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<Response>();
+    const replacement = { cancelled: false };
+    const abort = new AbortController();
+    let recoverySignal: AbortSignal | undefined;
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(Promise.resolve(), { cancels: 0 }), responseLog,
+      async (_error, _stage, signal) => { recoverySignal = signal; started.resolve(); return pending.promise; },
+      { signal: abort.signal, heartbeatIntervalMs: 60_000 });
+    await started.promise;
+    abort.abort(new Error("client left"));
+    const published = await selected;
+    expect(recoverySignal?.aborted).toBe(true);
+    await expect(published.body!.getReader().read()).rejects.toThrow("client left");
+    pending.resolve(trackedReplacement(replacement));
+    await flush();
+    expect(replacement.cancelled).toBe(true);
+  });
+
+  test("a replacement in flight when the deadline fires must then match the committed head", async () => {
+    useFakeTimers();
+    const started = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<Response>();
+    const replacement = { cancelled: false };
+    const commits: ResetSelectionOwner[] = [];
+    let accepts!: (candidate: Response) => boolean;
+    const selected = selectProtocolSafeResetResponse(gatedOriginal(Promise.resolve(), { cancels: 0 }), responseLog,
+      async (_error, _stage, _signal, accept) => { accepts = accept; started.resolve(); return pending.promise; },
+      { keepalive: "none", onCommit: (_r, owner) => commits.push(owner) });
+    await started.promise;
+    const candidate = trackedReplacement(replacement);
+    expect(accepts(candidate)).toBe(true);
+    jest.advanceTimersByTime(15_000);
+    const published = await selected;
+    expect(commits).toEqual(["original"]);
+    expect(accepts(candidate)).toBe(false);
+    const read = readAll(published.body!.getReader());
+    pending.resolve(candidate);
+    const rest = await read;
+    expect(replacement.cancelled).toBe(true);
+    expect(rest.text).toBe(prelude);
+    expect(String(rest.error)).toContain("fixture reset");
+    expect(commits).toEqual(["original"]);
+  });
+});
 
 describe("deferred response metadata", () => {
   const baseHeaders = { "content-type": "text/event-stream", "x-request-id": "id-one", "x-codex-turn-state": "turn-one", "x-ratelimit-remaining-requests": "7", "x-model": "model-one" };

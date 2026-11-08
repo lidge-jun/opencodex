@@ -442,7 +442,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
-For native Responses, the same opt-in also covers a clean EOF after only lifecycle events. The self-contained-request and replacement limits still apply. A replacement is used only when its HTTP status, status text and complete response headers match the original; otherwise the original stream is retained. Direct streams can receive SSE keepalive comments during inspection; combo preflight holds these comments until it selects a response.
+For native Responses, the same opt-in also covers a clean EOF after only lifecycle events. The self-contained-request and replacement limits still apply. If the reset or EOF happens before the response head is returned, within 15 seconds or the stall timeout if that is shorter, the client receives the replacement with its own status and headers. After the head is returned, a replacement is used only when its HTTP status, status text and complete response headers match that head; otherwise the original stream is retained. Direct streams still being inspected after that point receive SSE keepalive comments; combo preflight holds these comments until it selects a response.
 
 Command Code's shipped per-model effort defaults include live API measurements. DeepSeek
 v4/v4.1 Flash (including v4 Flash Vision), GLM-5.3 and GLM-5.3-Flash, Qwen3.8-Flash,

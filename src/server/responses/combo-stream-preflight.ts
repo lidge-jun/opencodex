@@ -615,6 +615,8 @@ export type ProtocolSafeResetRecovery = (
   error: unknown,
   stage: RequestFailureStage,
   signal: AbortSignal,
+  /** Whether the selection can still publish this candidate; it narrows once a head is committed. */
+  accepts: (candidate: Response) => boolean,
 ) => Promise<Response | null>;
 
 /** A deferred body cannot change the response head already returned to its caller. */
@@ -630,32 +632,59 @@ export function sameDeferredResponseMetadata(original: Response, replacement: Re
   }
 }
 
+export interface DeferredResetRecoveryOptions {
+  allowMissingContentType?: boolean;
+  heartbeatIntervalMs?: number;
+  keepalive?: "periodic" | "upstream-activity" | "none";
+}
+
+/** Which physical attempt produced the head a reset selection published. */
+export type ResetSelectionOwner = "original" | "replacement";
+
+export interface ResetSelectionOptions extends DeferredResetRecoveryOptions {
+  /** Upper bound on the pre-head wait. The wait never exceeds one heartbeat interval either. */
+  maxSelectionMs?: number;
+  /** Ends the selection, the committed hold and an in-flight replacement without awaiting cleanup. */
+  signal?: AbortSignal;
+  /** Called once, synchronously, before the caller receives the published response. */
+  onCommit?: (published: Response, owner: ResetSelectionOwner) => void;
+}
+
+const positiveMs = (value: number | undefined): number | undefined =>
+  value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+
+// A fresh chunk per enqueue: a consumer may transfer the buffer it receives.
+const resetPreflightKeepalive = (): Uint8Array => new TextEncoder().encode(": keepalive\n\n");
+
 /**
- * Defer protocol inspection until the downstream actually pulls the body.
- *
- * Direct passthrough must return response headers before the first SSE event arrives, so the
- * inspection cannot be awaited at the dispatch site the way combo routing awaits it. Wrapping
- * the body moves it to the first pull, which is the earliest moment the client is willing to
- * wait anyway.
+ * One protocol preflight and at most one replacement for a native SSE body, behind a head that is
+ * either still open (`early`) or already committed. While the head is open, any replacement the
+ * caller's recovery accepts can be published with its own status and headers. Once a head is
+ * committed, a replacement must match it exactly, and the original keeps its bytes and error.
  */
-export function deferProtocolSafeResetRecovery(
+function createResetSelection(
   response: Response,
   logCtx: RequestLogContext,
   recover: ProtocolSafeResetRecovery,
-  options?: { allowMissingContentType?: boolean; heartbeatIntervalMs?: number; keepalive?: "periodic" | "upstream-activity" | "none" },
-): Response {
-  if (!response.body) return response;
-
+  options: ResetSelectionOptions | undefined,
+  early: boolean,
+): { held: Response; selected?: Promise<Response> } {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let selection: { response: Response; owner: ResetSelectionOwner } | undefined;
   let initialization: Promise<void> | undefined;
   let initializationResult: { kind: "ready" } | { kind: "failed"; error: unknown } | undefined;
   let notifyInitialization: (() => void) | undefined;
+  let commitEarly: ((published: Response, owner: ResetSelectionOwner) => void) | undefined;
   let activityPending = false;
+  let heartbeatDue = false;
   let closed = false;
+  let headCommitted = !early;
+  let output!: ReadableStreamDefaultController<Uint8Array>;
   const preflightAbort = new AbortController();
-  const requestedHeartbeatMs = options?.heartbeatIntervalMs;
-  const heartbeatMs = requestedHeartbeatMs !== undefined && Number.isFinite(requestedHeartbeatMs) && requestedHeartbeatMs > 0
-    ? requestedHeartbeatMs : RESET_PREFLIGHT_HEARTBEAT_MS;
+  const heartbeatMs = positiveMs(options?.heartbeatIntervalMs) ?? RESET_PREFLIGHT_HEARTBEAT_MS;
+  const keepalive = options?.keepalive ?? "periodic";
+  const signal = options?.signal;
+  const accepts = (candidate: Response): boolean => !headCommitted || sameDeferredResponseMetadata(response, candidate);
 
   const cancelBody = (body: ReadableStream<Uint8Array> | null, reason?: unknown): void => {
     try { void body?.cancel(reason).catch(() => {}); } catch { /* already locked or closed */ }
@@ -667,42 +696,72 @@ export function deferProtocolSafeResetRecovery(
       () => false,
       { allowMissingContentType: options?.allowMissingContentType === true, replayReadErrors: true,
         replayCleanEof: true, signal: preflightAbort.signal,
-        onUpstreamActivity: options?.keepalive === "upstream-activity" ? () => {
+        onUpstreamActivity: keepalive === "upstream-activity" ? () => {
           activityPending = true;
           notifyInitialization?.();
         } : undefined },
     );
-    let selected = preflight.response;
+    let chosen: { response: Response; owner: ResetSelectionOwner } = { response: preflight.response, owner: "original" };
     if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
-      const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal);
+      const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal, accepts);
       if (replacement) {
-        if (!closed && sameDeferredResponseMetadata(response, replacement)) {
-          cancelBody(selected.body, "using protocol-safe replacement stream");
-          selected = replacement;
+        // Checked again here: the head may have been committed while the replacement was in flight.
+        if (!closed && accepts(replacement)) {
+          cancelBody(chosen.response.body, "using protocol-safe replacement stream");
+          chosen = { response: replacement, owner: "replacement" };
         } else {
           cancelBody(replacement.body, "declining protocol-safe replacement stream");
-          if (!closed) console.warn("[upstream-retry] replacement response metadata differs; preserving original stream");
+          if (!closed) console.warn("[upstream-retry] replacement response metadata differs from the committed head; preserving original stream");
         }
       }
     }
     if (closed) {
-      cancelBody(selected.body, "downstream cancelled before protocol preflight completed");
+      cancelBody(chosen.response.body, "downstream cancelled before protocol preflight completed");
       return;
     }
-    reader = selected.body?.getReader();
+    selection = chosen;
   };
+  const start = (): Promise<void> => initialization ??= initialize().then(
+    () => { initializationResult = { kind: "ready" }; notifyInitialization?.(); },
+    error => { initializationResult = { kind: "failed", error }; notifyInitialization?.(); },
+  );
+  const detach = (): void => signal?.removeEventListener("abort", onAbort);
+  const release = (reason: unknown): boolean => {
+    if (closed) return false;
+    closed = true;
+    detach();
+    preflightAbort.abort(reason);
+    notifyInitialization?.();
+    if (reader) {
+      try { void reader.cancel(reason).catch(() => {}); } catch { /* already closed */ }
+      try { reader.releaseLock(); } catch { /* already released */ }
+      reader = undefined;
+    } else if (selection) {
+      cancelBody(selection.response.body, reason);
+    } else if (initialization === undefined) {
+      // Nothing has read the upstream yet, so this body is still ours to cancel.
+      cancelBody(response.body, reason);
+    }
+    // Otherwise aborting cancels the preflight's locked reader or the in-flight replacement, and
+    // initialization releases whichever body it ends up choosing. Nothing here awaits cleanup.
+    return true;
+  };
+  function onAbort(): void {
+    const reason = signal?.reason;
+    if (release(reason)) {
+      try { output.error(reason); } catch { /* already closed */ }
+    }
+    commitEarly?.(held, "original");
+  }
 
   const body = new ReadableStream<Uint8Array>({
+    start(controller) { output = controller; },
     async pull(controller) {
       try {
-        initialization ??= initialize().then(
-          () => { initializationResult = { kind: "ready" }; notifyInitialization?.(); },
-          error => { initializationResult = { kind: "failed", error }; notifyInitialization?.(); },
-        );
+        void start();
         // Keep only one waiter on the initialization; racing it afresh for every heartbeat
         // would retain one promise callback per interval until a quiet upstream settles.
-        const keepalive = options?.keepalive ?? "periodic";
-        if (initializationResult === undefined && !(keepalive === "upstream-activity" && activityPending)) {
+        if (initializationResult === undefined && !heartbeatDue && !(keepalive === "upstream-activity" && activityPending)) {
           await new Promise<void>(resolve => {
             const timer = keepalive === "periodic"
               ? setTimeout(() => { notifyInitialization = undefined; resolve(); }, heartbeatMs)
@@ -713,12 +772,15 @@ export function deferProtocolSafeResetRecovery(
         if (closed) return;
         if (initializationResult === undefined) {
           activityPending = false;
-          controller.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+          heartbeatDue = false;
+          controller.enqueue(resetPreflightKeepalive());
           return;
         }
-        if (initializationResult?.kind === "failed") throw initializationResult.error;
+        if (initializationResult.kind === "failed") throw initializationResult.error;
+        reader ??= selection?.response.body?.getReader();
         if (!reader) {
           closed = true;
+          detach();
           controller.close();
           return;
         }
@@ -726,6 +788,7 @@ export function deferProtocolSafeResetRecovery(
         if (closed) return;
         if (next.done) {
           closed = true;
+          detach();
           try { reader.releaseLock(); } catch { /* already released */ }
           reader = undefined;
           controller.close();
@@ -735,32 +798,88 @@ export function deferProtocolSafeResetRecovery(
       } catch (error) {
         if (closed) return;
         closed = true;
+        detach();
         try { reader?.releaseLock(); } catch { /* errored reader */ }
         reader = undefined;
         controller.error(error);
       }
     },
     cancel(reason) {
-      if (closed) return;
-      closed = true;
-      preflightAbort.abort(reason);
-      notifyInitialization?.();
-      if (reader) {
-        try { void reader.cancel(reason).catch(() => {}); } catch { /* already closed */ }
-        try { reader.releaseLock(); } catch { /* already released */ }
-        reader = undefined;
-      } else if (initialization === undefined) {
-        // Nothing has read the upstream yet, so this body is still ours to cancel.
-        cancelBody(response.body, reason);
-      }
-      // Aborting cancels the preflight's locked reader or the in-flight replacement. Once
-      // initialization settles, it releases whichever body was selected.
+      release(reason);
     },
   }, { highWaterMark: 0 });
-
-  return new Response(body, {
+  const held = carryResponseToolOwnership(response, new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
+  }));
+
+  if (!early) {
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    return { held };
+  }
+  const selected = new Promise<Response>(resolve => {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    commitEarly = (published, owner) => {
+      commitEarly = undefined;
+      headCommitted = true;
+      if (deadline !== undefined) clearTimeout(deadline);
+      // A published selection owns its own body; the hold and its abort hook are finished.
+      if (published !== held) detach();
+      try { options?.onCommit?.(published, owner); } finally { resolve(published); }
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    deadline = setTimeout(() => {
+      // The client has waited one heartbeat interval for a head; its first read gets a keepalive.
+      if (keepalive === "periodic") heartbeatDue = true;
+      commitEarly?.(held, "original");
+    }, Math.min(heartbeatMs, positiveMs(options?.maxSelectionMs) ?? Infinity));
+    void start().then(() => {
+      if (selection && !closed) commitEarly?.(selection.response, selection.owner);
+      else commitEarly?.(held, "original");
+    });
   });
+  return { held, selected };
+}
+
+/**
+ * Defer protocol inspection behind a head the caller has already committed.
+ *
+ * The inspection starts at the first pull. A replacement is published only when its status and
+ * headers match the committed head exactly.
+ */
+export function deferProtocolSafeResetRecovery(
+  response: Response,
+  logCtx: RequestLogContext,
+  recover: ProtocolSafeResetRecovery,
+  options?: DeferredResetRecoveryOptions,
+): Response {
+  if (!response.body) return response;
+  return createResetSelection(response, logCtx, recover, options, false).held;
+}
+
+/**
+ * Choose the native response before its head is committed, within one heartbeat interval.
+ *
+ * Inspection starts immediately. If selection finishes first, the caller receives the selected
+ * response, a replacement included, with its own status and headers. If the deadline wins, the
+ * caller receives the original head and the same preflight continues behind it, where a
+ * replacement must match that head. `onCommit` names which attempt owns the published head.
+ */
+export function selectProtocolSafeResetResponse(
+  response: Response,
+  logCtx: RequestLogContext,
+  recover: ProtocolSafeResetRecovery,
+  options: ResetSelectionOptions = {},
+): Promise<Response> {
+  if (!response.body) {
+    options.onCommit?.(response, "original");
+    return Promise.resolve(response);
+  }
+  return createResetSelection(response, logCtx, recover, options, true).selected!;
 }

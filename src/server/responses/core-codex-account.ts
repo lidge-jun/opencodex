@@ -221,14 +221,25 @@ export class PoolPreOutputRefusals {
 }
 
 
+// A recovery that can publish either of two physical attempts binds the proof to the published head.
+const publishedMainQuotaDispatches = new WeakMap<Response, MainQuotaDispatch | null>();
+
+/** Bind the quota proof of the attempt whose head `published` carries; none means no proof. */
+export function bindPublishedMainQuotaDispatch(published: Response, dispatch: MainQuotaDispatch | undefined): void {
+  publishedMainQuotaDispatches.set(published, dispatch ?? null);
+}
+
 /** Live proof that this plain-main response used the observed main credential. */
 export function liveMainQuotaDispatch(
-  authCtx: CodexAuthContext, provider: OcxProviderConfig,
+  authCtx: CodexAuthContext, provider: OcxProviderConfig, published?: Response,
 ): MainQuotaDispatch | undefined {
-  if (authCtx.kind !== "main" || !authCtx.mainQuotaDispatch) return undefined;
+  if (authCtx.kind !== "main") return undefined;
+  const dispatch = published && publishedMainQuotaDispatches.has(published)
+    ? publishedMainQuotaDispatches.get(published) : authCtx.mainQuotaDispatch;
+  if (!dispatch) return undefined;
   if (!isCanonicalOpenAiForwardProvider(provider)
     || provider.authMode !== "forward" || provider.adapter !== "openai-responses") return undefined;
-  return isMainQuotaDispatchLive(authCtx.mainQuotaDispatch) ? authCtx.mainQuotaDispatch : undefined;
+  return isMainQuotaDispatchLive(dispatch) ? dispatch : undefined;
 }
 
 export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig, modelId?: string): CodexWsQuotaObserver | undefined {
