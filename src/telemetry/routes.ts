@@ -21,6 +21,7 @@ import {
   latestCompletedUtcDay,
   nudgeTelemetryScheduler,
   readTelemetryState,
+  readTelemetryStateFile,
   recordPendingTelemetryDecision,
   resolveNextEligibleTelemetryDay,
   withPendingTelemetryDecision,
@@ -62,8 +63,12 @@ export async function buildTelemetryStatusSnapshot(
   const configDir = options.configDir ?? getConfigDir();
   const status = resolveTelemetryStatus(withPendingTelemetryDecision(config, configDir), env);
   const installChannel = resolveInstallChannel({ env });
-  const state = readTelemetryState(configDir);
-  const { day: nextEligibleDay } = resolveNextEligibleTelemetryDay(status, state, now);
+  const stateFile = readTelemetryStateFile(configDir);
+  const state = stateFile.state;
+  // An unreadable state file blocks every send (state-unreadable), so nothing is eligible to preview.
+  const { day: nextEligibleDay } = stateFile.unreadable
+    ? { day: null }
+    : resolveNextEligibleTelemetryDay(status, state, now);
   const previewEligible = nextEligibleDay !== null;
   const day = nextEligibleDay ?? latestCompletedUtcDay(now);
   const aggregate = await previewAggregate(day, configDir, now, options.cachePreview === true);
