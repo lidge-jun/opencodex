@@ -845,7 +845,6 @@ export const zh: Record<TKey, string> = {
   "subagentSurface.learnMore": "为什么失败",
   "prov.logoutOk": "已退出 {provider}。",
   "prov.logoutFail": "无法退出 {provider}。账户状态保持不变。",
-  "prov.accountOperationBusy": "另一项账户操作正在进行。请等待完成后重试。",
   "prov.logoutBusy": "账户更改正在进行。请等待完成后重试退出登录。",
   "prov.accountRemoveUnverified": "无法确认是否已移除 {email}。请刷新账户列表后再试。",
   "prov.removed": "已移除 \"{name}\"。",

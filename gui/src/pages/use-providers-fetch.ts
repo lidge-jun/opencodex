@@ -49,6 +49,11 @@ export function useProvidersFetch({
     if (blocked === false) oauthBlocked.current.delete(provider);
     return true;
   }, [target]);
+  const captureOauthStatusRead = useCallback((provider: string) => {
+    const revision = oauthWrites.current.get(provider) ?? 0;
+    return () => activeTarget.current === target && !oauthBlocked.current.has(provider)
+      && (oauthWrites.current.get(provider) ?? 0) === revision;
+  }, [target]);
   const fetchConfig = useCallback(async (): Promise<ProvidersConfigRefreshResult> => {
     const request = ++configRequest.current;
     try {
@@ -105,5 +110,5 @@ export function useProvidersFetch({
     invalidateProviderQuotas(refresh);
   }, [invalidateProviderQuotas]);
 
-  return { fetchConfig, fetchOauth, fetchProviderQuotas, invalidateOauthStatusReads };
+  return { fetchConfig, fetchOauth, fetchProviderQuotas, invalidateOauthStatusReads, captureOauthStatusRead };
 }

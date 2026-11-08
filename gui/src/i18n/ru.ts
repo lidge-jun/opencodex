@@ -850,7 +850,6 @@ export const ru: Record<TKey, string> = {
   "subagentSurface.learnMore": "Почему возникает сбой",
   "prov.logoutOk": "Выполнен выход из {provider}.",
   "prov.logoutFail": "Не удалось выйти из {provider}. Состояние аккаунта не изменилось.",
-  "prov.accountOperationBusy": "Выполняется другая операция с аккаунтом. Дождитесь её завершения и повторите попытку.",
   "prov.logoutBusy": "Изменение учётной записи выполняется. Дождитесь завершения и повторите выход.",
   "prov.accountRemoveUnverified": "Не удалось проверить, удалена ли учётная запись {email}. Обновите список перед повторной попыткой.",
   "prov.removed": "Провайдер \"{name}\" удалён.",

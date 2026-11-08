@@ -839,7 +839,6 @@ export const de: Record<TKey, string> = {
   "subagentSurface.learnMore": "Warum das fehlschlägt",
   "prov.logoutOk": "Von {provider} abgemeldet.",
   "prov.logoutFail": "Abmeldung von {provider} fehlgeschlagen. Der Kontostatus bleibt unverändert.",
-  "prov.accountOperationBusy": "Ein anderer Kontovorgang läuft bereits. Warten Sie, bis er abgeschlossen ist, und versuchen Sie es erneut.",
   "prov.logoutBusy": "Eine Kontoänderung läuft. Warten Sie bis zum Abschluss und versuchen Sie die Abmeldung erneut.",
   "prov.accountRemoveUnverified": "Es konnte nicht geprüft werden, ob {email} entfernt wurde. Aktualisieren Sie vor einem erneuten Versuch die Kontoliste.",
   "prov.removed": "\"{name}\" entfernt.",

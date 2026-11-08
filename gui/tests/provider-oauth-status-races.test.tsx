@@ -207,3 +207,61 @@ test("a deletion settling after a target change cannot clear or refresh the new 
     expect(requests.filter(path => path === "/old/api/oauth/providers")).toHaveLength(oldReads);
   } finally { consent.mockRestore(); }
 });
+
+test("a login status read predating account deletion cannot restore the deleted identity", async () => {
+  const { spyOn } = await import("bun:test");
+  const dialogs = await import("../src/action-dialogs");
+  const { useProviderAccountPools } = await import("../src/hooks/useProviderAccountPools");
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  const oldStatus = Promise.withResolvers<Response>();
+  const statusStarted = Promise.withResolvers<void>();
+  const freshStatus = Promise.withResolvers<Response>();
+  const freshStarted = Promise.withResolvers<void>();
+  let statusReads = 0;
+  let statuses: Record<string, OAuthStatus> = {};
+  const events: string[] = [];
+  let actions!: ReturnType<typeof useProvidersOAuth>;
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    events.push(`${init?.method ?? "GET"} ${url.pathname}`);
+    if (url.pathname === "/api/oauth/login") return Response.json({ url: "https://example.test/login" });
+    if (url.pathname === "/api/oauth/status") {
+      if (statusReads++ === 0) { statusStarted.resolve(); return oldStatus.promise; }
+      freshStarted.resolve(); return freshStatus.promise;
+    }
+    if (url.pathname === "/api/oauth/providers") return Response.json({ providers: [] });
+    if (init?.method === "DELETE") return Response.json({});
+    return Response.json({ activeAccountId: null, accounts: [] });
+  } });
+  function Harness() {
+    const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
+    statuses = state;
+    const aliveRef = useRef(true);
+    const [, setBusy] = useState<string | null>(null);
+    const [, setLoginInfo] = useState<Parameters<typeof useProvidersOAuth>[0]["setLoginInfo"] extends React.Dispatch<React.SetStateAction<infer S>> ? S : never>(null);
+    const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+      notify: () => {}, invalidateProviderQuotas: () => {} });
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    actions = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets, setAccountSets: pools.setAccountSets,
+      setBusy, setStatus: () => {}, setLoginInfo, setOauthStatus, invalidateOauthStatusReads: loader.invalidateOauthStatusReads, captureOauthStatusRead: loader.captureOauthStatusRead,
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets,
+      fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return null;
+  }
+  try {
+    await render(<Harness />);
+    let login!: Promise<void>;
+    await act(async () => { login = actions.loginOAuth("anthropic", true); });
+    await act(async () => { await statusStarted.promise; });
+    await act(async () => { await pools.removeAccount("anthropic", { id: "old", email: "old@example.test", active: true }); });
+    await act(async () => { oldStatus.resolve(Response.json({ loggedIn: true, done: true, email: "old@example.test", accounts: [{ id: "old", active: true }] })); await freshStarted.promise; });
+    expect(events).toContain("DELETE /api/oauth/accounts");
+    expect(statuses.anthropic?.email).not.toBe("old@example.test");
+    expect(pools.accountSets.anthropic?.accounts.some(account => account.id === "old") ?? false).toBe(false);
+    await act(async () => { freshStatus.resolve(Response.json({ loggedIn: true, done: true, email: "new@example.test", accounts: [{ id: "new", active: true }] })); await login; });
+    expect(statuses.anthropic?.email).toBe("new@example.test");
+  } finally { consent.mockRestore(); oldStatus.resolve(Response.json({})); freshStatus.resolve(Response.json({})); }
+});

@@ -110,11 +110,8 @@ timestamp with the app locale. Disabled key rows offer Resume through their exis
 `gui/src/hooks/useProviderAccountPools.ts` resumes before activation, then refreshes the
 roster under its existing selection-mutation fence. No upstream error body is displayed.
 
-The same account-pool hook coordinates dashboard OAuth login, logout, and account deletion per provider.
-Deletion rechecks the login owner after confirmation, and login checks for a pending account
-mutation before starting. Logout also refuses while login owns that provider, including until
-cancellation delivery settles. The account panel exposes cancellation while login is busy, even
-before a login hint arrives. A refused overlap reports a retry notice; other providers remain independent.
+The account-pool hook coordinates logout with pending account selection and deletion per provider.
+The account panel exposes login cancellation once the provider supplies a login hint.
 When the roster and OAuth status cannot be verified, the account panel keeps logout available
 without presenting an unverified account as signed in.
 

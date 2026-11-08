@@ -508,12 +508,12 @@ export default function ProviderAuthPanel({
               </span>
             </div>
             {!busy && <OpenBrowserPrefToggle />}
-            {busy && (
+            {busy && hintForThis && (
               <div className="pwi-auth-wait">
                 <span className="pwi-spin-inline" aria-hidden="true" />
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
-                  {hintForThis && <LoginHintView
+                  <LoginHintView
                     hint={{
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,
@@ -528,7 +528,7 @@ export default function ProviderAuthPanel({
                       onChange: setManualCode,
                       onSubmit: () => { void submitManualCode(); },
                     }}
-                  />}
+                  />
                   {authHandlers.onCancelLogin && (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
                       {t("common.cancel")}

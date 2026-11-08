@@ -862,7 +862,6 @@ export const en = {
   "subagentSurface.learnMore": "Why this fails",
   "prov.logoutOk": "Logged out of {provider}.",
   "prov.logoutFail": "Could not log out of {provider}. Your account state is unchanged.",
-  "prov.accountOperationBusy": "Another account operation is in progress. Wait for it to finish, then try again.",
   "prov.logoutBusy": "An account change is in progress. Wait for it to finish, then try logging out again.",
   "prov.accountRemoveUnverified": "Could not verify whether {email} was removed. Refresh the account list before retrying.",
   "prov.removed": "Removed \"{name}\".",
