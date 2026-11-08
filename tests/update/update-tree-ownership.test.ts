@@ -255,6 +255,33 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(verifyPnpmInstallTree(pkg, "2.0.0", store, globalRoot)).toEqual({ ok: true, failures: [] });
   });
 
+  test("refuses a legacy dependency manifest that points outside the global group and store", () => {
+    const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
+    const group = join(globalRoot, "node_modules"), pkg = join(group, ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(pkg, "2.0.0");
+    writeDependency(join(group, "bun"), "bun"); writeDependency(join(group, "zod"), "zod");
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    const outside = join(root, "outside-entry.js"); writeFileSync(outside, "module.exports = 1;\n");
+    writeFileSync(join(group, "zod", "package.json"), JSON.stringify({ name: "zod", main: relative(join(group, "zod"), outside) }));
+    expect(realpathSync(createRequire(join(pkg, "entry.js")).resolve("zod"))).toBe(realpathSync(outside));
+    const result = verifyPnpmInstallTree(pkg, "2.0.0", store, globalRoot);
+    expect(result.ok).toBe(false);
+  });
+
+  test("refuses a legacy dependency reachable through an outside ancestor", () => {
+    const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
+    const group = join(globalRoot, "node_modules"), pkg = join(group, ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(pkg, "2.0.0");
+    writeDependency(join(group, "bun"), "bun"); writeDependency(join(group, "zod"), "zod");
+    writeFileSync(join(group, ".modules.yaml"), "nodeLinker: hoisted\n");
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
+    mkdirSync(join(root, "node_modules")); symlinkSync(outside, join(root, "node_modules", "foreign"), "dir");
+    expect(realpathSync(createRequire(join(pkg, "entry.js")).resolve("foreign"))).toBe(realpathSync(join(outside, "index.js")));
+    const result = verifyPnpmInstallTree(pkg, "2.0.0", store, globalRoot);
+    expect(result.ok).toBe(false);
+  });
+
   test("an isolated pnpm install below an unrelated versioned links directory remains valid", () => {
     const instance = join(root, "releases", "v2", "links", "global", "node_modules", ".pnpm", "pkg", "node_modules");
     const packageDir = join(instance, ...PKG.split("/"));
@@ -491,6 +518,49 @@ describe("#4202 install-tree dependency ownership", () => {
     const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("pnpm dependency link escapes the selected store: other");
+  });
+
+  test("refuses a dependency link that leaves the selected store and returns through an outside bridge", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11"), group = join(realpathSync(exposed), "..", "..");
+    const original = join(group, "zod"), target = realpathSync(original), bridge = join(root, "bridge");
+    rmSync(original); symlinkSync(target, bridge, "dir"); symlinkSync(bridge, original, "dir");
+    expect(realpathSync(original)).toBe(target);
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
+    expect(result.ok).toBe(false);
+  });
+
+  test("refuses a package link that leaves the selected store and returns through an outside bridge", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11"), target = realpathSync(exposed);
+    const bridge = join(root, "package-bridge"), link = join(store, "links", "package-alias");
+    symlinkSync(target, bridge, "dir"); symlinkSync(bridge, link, "dir");
+    rmSync(exposed); symlinkSync(link, exposed, "dir");
+    expect(realpathSync(exposed)).toBe(target);
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store).ok).toBe(false);
+  });
+
+  test.each(["package entry", "binary"])("refuses a %s link that returns through an outside bridge", kind => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11"), target = realpathSync(exposed);
+    const file = join(target, "bin", "inside.js"), bridge = join(root, "bridge-file");
+    writeFileSync(file, "module.exports = 1;\n"); symlinkSync(file, bridge);
+    const dir = kind === "binary" ? join(target, "node_modules", ".bin") : join(target, "bin");
+    mkdirSync(dir, { recursive: true }); symlinkSync(bridge, join(dir, "tool"));
+    expect(realpathSync(join(dir, "tool"))).toBe(realpathSync(file));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
+    expect(result.ok).toBe(false);
+  });
+
+  test("accepts a dependency link through the selected store's pinned lexical alias", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = realpathSync(join(root, "pnpm", "store", "v11")), alias = join(root, "store-alias");
+    symlinkSync(store, alias, "dir");
+    const link = join(realpathSync(exposed), "..", "..", "zod"), target = realpathSync(link);
+    rmSync(link); symlinkSync(join(alias, relative(store, target)), link, "dir");
+    const bun = join(realpathSync(exposed), "..", "..", "bun"), bunTarget = realpathSync(bun);
+    rmSync(bun); symlinkSync(bunTarget, bun, "dir");
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store, undefined, alias)).toEqual({ ok: true, failures: [] });
   });
 
   test("refuses a dangling package-local dependency link despite a valid group link", () => {
@@ -735,7 +805,7 @@ describe("#4202 install-tree dependency ownership", () => {
     mkdirSync(lookup); const original = process.env.NODE_PATH;
     try {
       process.env.NODE_PATH = lookup;
-      expect(verifyPnpmInstallTree(exposed, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+      expect(verifyPnpmInstallTree(exposed, "2.0.0", store, undefined, join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
     } finally {
       if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
     }

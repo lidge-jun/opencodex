@@ -103,7 +103,7 @@ export interface PnpmGlobalReadConstraints {
 export declare function readPnpmGlobalPackage(
   packageName: string,
   runPnpm: RunPnpm,
-  verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string) => PnpmVerificationResult,
+  verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string, lexicalStore?: string) => PnpmVerificationResult,
   constraints?: PnpmGlobalReadConstraints,
 ): PnpmGlobalPackage;
 
@@ -113,7 +113,7 @@ export declare function resolvePnpmGlobalOwner(options: {
   commandPaths: readonly string[];
   runningShimPath?: string;
   runPnpm: RunPnpmCandidate;
-  verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string) => PnpmVerificationResult;
+  verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string, lexicalStore?: string) => PnpmVerificationResult;
   platform?: NodeJS.Platform;
 }): PnpmGlobalOwnerResult;
 
@@ -148,7 +148,7 @@ export declare function runPnpmGlobalUpdate(options: {
   owner: PnpmGlobalOwner;
   runningPackagePath?: string;
   runPnpm: RunPnpm;
-  verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string) => PnpmVerificationResult;
+  verify?: (packageDir: string, expectedVersion?: string, store?: string, globalRoot?: string, lexicalStore?: string) => PnpmVerificationResult;
   verifyShims?: (
     packageDir: string,
     globalBinDir: string,
