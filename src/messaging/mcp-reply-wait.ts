@@ -36,6 +36,7 @@ export async function queueMcpWaitReply(options: QueueMcpOptions, raw: ReplyInpu
     for (let index = 0; index < 3; index++) {
       budget.throwIfEnded();
       attempts++;
+      const snapshotStartedAt = performance.now();
       let observedFailure = false;
       const result = await queueMcpReadReply(options, position, budget.signal, {
         onObservedFailure: () => { observedFailure = true; },
@@ -45,7 +46,9 @@ export async function queueMcpWaitReply(options: QueueMcpOptions, raw: ReplyInpu
       if (!result.available && observedFailure) return result;
       if (budget.signal.aborted) return exhausted();
       if (!result.available) return result;
-      last = result; observedAt = performance.now();
+      // The reply page precedes later metadata reads and helper cleanup; age conservatively
+      // from the snapshot start so that delay cannot make an older observation appear fresh.
+      last = result; observedAt = snapshotStartedAt;
       if (result.replies.length) return finish(result, "reply_observed");
       if (result.status === "ambiguous") return finish(result, "ambiguous");
       if (result.nextCursor) return finish(result, "needs_pagination");

@@ -140,7 +140,9 @@ and do not add automatic reply delivery or a reverse Claude transport.
 20,000). It makes at most three read snapshots with a two-second pause between
 them. The time budget includes all helpers and pauses; each snapshot reuses the
 existing scoped read validation and text limits. At most nine sequential helper
-invocations are possible per wait. Waits share the host's four-operation limit.
+invocations are possible per wait. Observation age is measured from the start of
+the last successful snapshot, including its metadata reads and helper cleanup.
+Waits share the host's four-operation limit.
 Each wait holds a slot for its entire lifetime: up to 20 seconds of waiting, plus
 time to terminate its helper. Four concurrent
 waits can make sends and metadata calls return busy; excess calls are rejected,

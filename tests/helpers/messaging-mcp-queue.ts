@@ -59,7 +59,11 @@ rl.on("line", line => {
       if(mode === "reply-stale") user.item.clientId="another-client";
       return emit({id:2,result:{data:[user]}});
     }
-    if(f.method === "thread/turns/list") return emit({id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : ["reply-interrupted","reply-wait-terminal"].includes(mode) ? "interrupted" : "completed",items:[]}],nextCursor:null}});
+    if(f.method === "thread/turns/list") {
+      const response = {id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : ["reply-interrupted","reply-wait-terminal"].includes(mode) ? "interrupted" : "completed",items:[]}],nextCursor:null}};
+      if(mode === "reply-slow-metadata") return setTimeout(() => emit(response), 1200);
+      return emit(response);
+    }
     if(mode === "reply-reject") return emit({id:2,error:{code:-32601,message:"PRIVATE_SERVER"}});
     const searching = !f.params.turnId;
     let data = searching ? [final,user] : [user,commentary,tool,later,final], nextCursor=null;

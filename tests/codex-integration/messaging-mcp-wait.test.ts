@@ -29,6 +29,15 @@ describe.skipIf(process.platform === "win32")("bounded stored reply waiting", ()
     } finally { await f.close(); }
   });
 
+  test("observation age includes time spent reading later metadata", async () => {
+    const f = queueMcpFixture("reply-slow-metadata");
+    try {
+      const result = payload(await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, input));
+      expect(result).toMatchObject({ available: true, waitOutcome: "reply_observed" });
+      expect(result.lastObservationAgeMs).toBeGreaterThanOrEqual(1_200);
+    } finally { await f.close(); }
+  }, 10_000);
+
   for (const mode of ["reply-refresh","reply-wait-terminal"]) test(`${mode}: stored terminal status does not hide a late final item`,async()=>{
     const f=queueMcpFixture(mode);
     try {

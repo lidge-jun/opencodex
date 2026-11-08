@@ -265,7 +265,7 @@ Existing final text returns immediately, ambiguity returns without text, and a
 required next page returns to the caller. Other snapshots refresh the matched
 turn or repeat the supplied search position. Stored turnStatus is not live
 execution authority and never causes an early terminal decision. A deadline or
-attempt limit preserves the last successful observation with its age; a deadline
+attempt limit preserves the last successful observation with its age, measured from that snapshot's start; a deadline
 before any observation is unavailable. Read failures remain unavailable and
 parent cancellation takes precedence over a stale success. Owned pause timers
 and helpers are cancelled on disconnect. Same-turn association and pagination,
