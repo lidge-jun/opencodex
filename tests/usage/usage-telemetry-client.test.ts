@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -618,7 +618,8 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     }
     expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-05");
 
-    // User removes OCX_TELEMETRY=0 on 2026-11-06: days 2026-11-03..2026-11-05 are <= ineligibleThroughDay, so nothing is sent on 2026-11-06!
+    // User removes OCX_TELEMETRY=0 on 2026-11-06. Nothing marked the end of the opt-out, so the first
+    // tick without it ends the period on its own day: 2026-11-03..2026-11-06 are never sent.
     const day6Tick = await runTelemetryTick({
       configDir: home,
       config,
@@ -627,9 +628,9 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
       fetch: mockFetch,
     });
     expect(day6Tick).toEqual({ sent: false, reason: "up-to-date" });
+    expect(readTelemetryState(home)).toMatchObject({ ineligibleThroughDay: "2026-11-06", envOptOutActiveSince: null });
     expect(sentPayloads).toHaveLength(1);
 
-    // On 2026-11-07, day 2026-11-06 (strictly after ineligibleThroughDay 2026-11-05) is sent with a fresh installId and newInstall=true:
     const day7Tick = await runTelemetryTick({
       configDir: home,
       config,
@@ -637,9 +638,19 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
       now: NOW,
       fetch: mockFetch,
     });
-    expect(day7Tick).toMatchObject({ sent: true, day: "2026-11-06" });
+    expect(day7Tick).toEqual({ sent: false, reason: "up-to-date" });
+
+    // On 2026-11-08, day 2026-11-07 (strictly after ineligibleThroughDay 2026-11-06) is sent with a fresh installId and newInstall=true:
+    const day8Tick = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: Date.parse("2026-11-08T12:00:00.000Z"),
+      fetch: mockFetch,
+    });
+    expect(day8Tick).toMatchObject({ sent: true, day: "2026-11-07" });
     expect(sentPayloads).toHaveLength(2);
-    expect(sentPayloads[1]!.day).toBe("2026-11-06");
+    expect(sentPayloads[1]!.day).toBe("2026-11-07");
     expect(sentPayloads[1]!.newInstall).toBe(true);
     const rotatedInstallId = readTelemetryInstallId(home)!.installId;
     expect(rotatedInstallId).not.toBe(originalInstallId);
@@ -654,6 +665,70 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     expect(readFileSync(victim, "utf8")).toBe("keep-safe");
     expect(lstatSync(stateFile).isSymbolicLink()).toBe(false);
     expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-07");
+  });
+
+  describe("D2: a proxy running under an env opt-out for several days", () => {
+    const config = {
+      telemetry: {
+        decision: "accepted" as const,
+        decidedAt: "2026-10-30T10:00:00.000Z",
+        noticeShownAt: "2026-10-30T10:00:00.000Z",
+      },
+    };
+    const proxyConfig = { port: 0, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    let sentDays: string[];
+    let prevTelemetry: string | undefined;
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentDays.push((JSON.parse(String(init?.body)) as TelemetryPayloadV1).day);
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+    const tickAt = (iso: string) =>
+      runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse(iso), fetch: mockFetch });
+    // The proxy reads the env once, when its background lifecycle starts; it runs no ticks while opted out.
+    const startOptedOutProxy = (iso: string) => {
+      setSystemTime(new Date(iso));
+      process.env.OCX_TELEMETRY = "0";
+      try {
+        return acquireServerBackgroundLifecycle(() => {}, proxyConfig);
+      } finally {
+        delete process.env.OCX_TELEMETRY;
+      }
+    };
+
+    beforeEach(() => {
+      sentDays = [];
+      prevTelemetry = process.env.OCX_TELEMETRY;
+    });
+
+    afterEach(() => {
+      setSystemTime();
+      if (prevTelemetry === undefined) delete process.env.OCX_TELEMETRY;
+      else process.env.OCX_TELEMETRY = prevTelemetry;
+    });
+
+    test("never sends its opt-out days when it did not stop cleanly before a normal proxy ticks", async () => {
+      const lease = startOptedOutProxy("2026-11-02T09:00:00.000Z");
+      try {
+        // Monday through Thursday ran opted out. A normal proxy takes over on Friday.
+        setSystemTime(new Date("2026-11-06T12:00:00.000Z"));
+        expect((await tickAt("2026-11-06T12:00:00.000Z")).sent).toBe(false);
+        expect((await tickAt("2026-11-07T12:00:00.000Z")).sent).toBe(false);
+        expect(await tickAt("2026-11-08T12:00:00.000Z")).toMatchObject({ sent: true, day: "2026-11-07" });
+        expect(sentDays).toEqual(["2026-11-07"]);
+      } finally {
+        await lease.release();
+      }
+    });
+
+    test("never sends its opt-out days after it stops cleanly", async () => {
+      const lease = startOptedOutProxy("2026-11-02T09:00:00.000Z");
+      setSystemTime(new Date("2026-11-05T20:00:00.000Z"));
+      await lease.release();
+      setSystemTime(new Date("2026-11-06T12:00:00.000Z"));
+      expect(await tickAt("2026-11-06T12:00:00.000Z")).toEqual({ sent: false, reason: "up-to-date" });
+      expect(await tickAt("2026-11-07T12:00:00.000Z")).toMatchObject({ sent: true, day: "2026-11-06" });
+      expect(sentDays).toEqual(["2026-11-06"]);
+    });
   });
 
   test("D7: re-reads consent and env before transmission and aborts in-flight ticks on stop or nudge", async () => {
