@@ -5,11 +5,18 @@ import { resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
 import { isPlainObject } from "../responses-snapshot-codec";
-import { deferProtocolSafeResetRecovery, type ProtocolSafeResetRecovery } from "./combo-stream-preflight";
+import { deferProtocolSafeResetRecovery, sameDeferredResponseMetadata, type ProtocolSafeResetRecovery } from "./combo-stream-preflight";
 import { guardOpenGatewayCompletion } from "./opengateway-completion-guard";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 
 const guardedResetResponses = new WeakSet<Response>();
+
+/** Match both the already-returned head and the expected upstream stream contract. */
+export function acceptsDeferredReplacement(original: Response, candidate: Response, upstreamRequestsStream: boolean): boolean {
+  const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
+  return sameDeferredResponseMetadata(original, candidate)
+    && (type.includes("text/event-stream") || (!type && upstreamRequestsStream));
+}
 
 /** The gateway clock must see upstream reads, not generated comments or held preludes. */
 export function deferPassthroughResetRecovery(

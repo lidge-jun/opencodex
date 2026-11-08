@@ -180,7 +180,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
 
-네이티브 Responses에서는 같은 선택 설정이 라이프사이클 이벤트만 받은 뒤 정상 EOF로 끝난 경우에도 적용됩니다. 자기완결 요청과 교체 횟수 제한은 그대로 적용됩니다.
+네이티브 Responses에서는 같은 선택 설정이 라이프사이클 이벤트만 받은 뒤 정상 EOF로 끝난 경우에도 적용됩니다. 자기완결 요청과 교체 횟수 제한은 그대로 적용됩니다. 교체 응답의 HTTP 상태, 상태 텍스트와 모든 헤더가 원본과 일치할 때만 교체하며, 다르면 원본 스트림을 유지합니다.
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

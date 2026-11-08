@@ -140,7 +140,9 @@ status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
-owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
+owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior. A
+replacement with a different status, status text, or header set is cancelled and the original
+stream is preserved because the response head may already be committed.
 The deferred native hold emits SSE comment heartbeats for direct streaming clients. Combo streaming
 children omit those timer-generated comments while their parent holds the headers, so those comments
 cannot consume the retained-chunk cap. For canonical buffered JSON, the hold emits a comment

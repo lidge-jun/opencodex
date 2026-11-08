@@ -168,7 +168,7 @@ import {
   reasoningEffortRejectionText,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
-import { preflightComboStreamResponse, sameDeferredResponseMetadata } from "./combo-stream-preflight";
+import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
@@ -176,7 +176,7 @@ import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-ze
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { createNativeContinuationDispatch } from "./native-continuation-send";
-import { deferPassthroughResetRecovery, guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
+import { acceptsDeferredReplacement, deferPassthroughResetRecovery, guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
 
 /** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
 export interface PassthroughAdapterHandoff { kind: "adapter-handoff" }
@@ -1933,11 +1933,7 @@ export async function preparePassthroughExchange(
             // allowance, which is what keeps a turn that already emitted output from draining
             // the replacement a later ambiguous reset would have been entitled to.
             authorize: () => authorizeResendForRecovery(stage, "connection-reset", ambiguousResend()).allowed,
-            acceptResponse: candidate => {
-              const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
-              return sameDeferredResponseMetadata(originalResponse, candidate)
-                && (type.includes("text/event-stream") || (!type && upstreamRequestsStream));
-            },
+            acceptResponse: candidate => acceptsDeferredReplacement(originalResponse, candidate, upstreamRequestsStream),
           },
         ),
         { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, keepalive: canonicalBufferedJson ? "upstream-activity" : options.comboAttempt ? "none" : "periodic" },
