@@ -17,6 +17,20 @@ test("resume grant and absolute socket must be supplied together exactly once",(
     ["--allow-resume","--resume-socket","/a","--resume-permissions", "x".repeat(129)]]) expect(parseQueueMcpArgs([...base,...extra])).toBeNull();
 });
 
+test("option values cannot grant resume access or conceal stray tokens",()=>{
+  for(const grant of ["--allow-resume","--allow-reply-read"]){
+    expect(parseQueueMcpArgs([...base,"--resume-socket","/fixture/sock","--resume-permissions",grant,":read-only"])).toBeNull();
+    expect(parseQueueMcpArgs([...base,"--allow-resume","--resume-socket","/fixture/sock","--resume-permissions",grant,":read-only"])).toBeNull();
+  }
+});
+
+test("standalone grants can follow values without reinterpreting literal profile IDs",()=>{
+  for(const profile of ["--allow-resume","--allow-reply-read"]){
+    expect(parseQueueMcpArgs(["--resume-permissions",profile,...base,"--resume-socket","/fixture/sock","--allow-resume"]))
+      .toEqual({codex:"/fixture/codex",codexHome:"/fixture/home",allowResume:true,resumeSocket:"/fixture/sock",resumePermissions:profile});
+  }
+});
+
 const result=(r:any)=>JSON.parse(r.content[0].text);
 describe.skipIf(process.platform === "win32")("resume MCP CLI",()=>{
   test("explicit grant is inert on initialization, registers a separate tool and resumes on the selected server",async()=>{
