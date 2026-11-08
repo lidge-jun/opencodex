@@ -28,11 +28,15 @@ let keychainSpy: ReturnType<typeof spyOn>;
 let readSpy: ReturnType<typeof spyOn>;
 let writeSpy: ReturnType<typeof spyOn>;
 let mkdirSpy: ReturnType<typeof spyOn>;
+let unlinkSpy: ReturnType<typeof spyOn>;
 let configLockSpy: ReturnType<typeof spyOn>;
 let configGenerationSpy: ReturnType<typeof spyOn>;
 let configSnapshotSpy: ReturnType<typeof spyOn>;
 let configBumpSpy: ReturnType<typeof spyOn>;
 let shellEnvContents = "";
+let fakeTracking: string | undefined;
+let fakeLaunchd: Map<string, string>;
+let fakeConfigGeneration = 0;
 let previousConfigDir: string | undefined;
 let previousHome: string | undefined;
 let previousApiKey: string | undefined;
@@ -52,12 +56,15 @@ const baseConfig = {
 beforeEach(() => {
   setPlatform("darwin");
   configLockSpy = spyOn(configMutation, "withConfigMutationLockSync").mockImplementation((fn => fn()) as never);
-  configGenerationSpy = spyOn(configMutation, "readConfigGenerationInCurrentMutationTransaction").mockReturnValue({ value: 0 });
-  configBumpSpy = spyOn(configMutation, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => {});
+  fakeConfigGeneration = 0;
+  configGenerationSpy = spyOn(configMutation, "readConfigGenerationInCurrentMutationTransaction").mockImplementation(() => ({ value: fakeConfigGeneration }));
+  configBumpSpy = spyOn(configMutation, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => { fakeConfigGeneration++; });
   configSnapshotSpy = spyOn(configDiagnostics, "readConfigFileSnapshot").mockReturnValue({
     diagnostics: { source: "default", error: null, config: baseConfig },
   });
   shellEnvContents = "";
+  fakeTracking = undefined;
+  fakeLaunchd = new Map();
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
   previousHome = process.env.HOME;
   // The detector also reads the AMBIENT env (source S5). A runner that exports an
@@ -73,17 +80,26 @@ beforeEach(() => {
   process.env.HOME = empty;
 
   execSpy = spyOn(childProcess, "execFileSync").mockImplementation(((file: string, args?: string[]) => {
-    // No launchctl value: a clean "absent" world.
-    if (file === "/bin/launchctl" && args?.[0] === "getenv") return "";
+    if (file === "/bin/launchctl" && args?.[0] === "getenv") return fakeLaunchd.get(args[1]!) ?? "";
+    if (file === "/bin/launchctl" && args?.[0] === "setenv") fakeLaunchd.set(args[1]!, args[2]!);
+    if (file === "/bin/launchctl" && args?.[0] === "unsetenv") fakeLaunchd.delete(args[1]!);
     return "";
   }) as never);
   keychainSpy = spyOn(claudeKeychain, "probe").mockResolvedValue({ status: "absent" });
   readSpy = spyOn(fs, "readFileSync").mockImplementation(((path: string) => {
-    if (String(path).includes("system-env-port")) throw new Error("ENOENT");
+    if (String(path).includes("system-env-port")) {
+      if (fakeTracking !== undefined) return fakeTracking;
+      throw new Error("ENOENT");
+    }
     return "";
   }) as never);
   writeSpy = spyOn(fs, "writeFileSync").mockImplementation(((path: string, data: string) => {
     if (String(path).includes("claude-env.sh")) shellEnvContents = String(data);
+    if (String(path).includes("system-env-port")) fakeTracking = String(data);
+  }) as never);
+  unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation(((path: string) => {
+    if (String(path).includes("system-env-port")) fakeTracking = undefined;
+    if (String(path).includes("claude-env.sh")) shellEnvContents = "";
   }) as never);
   mkdirSpy = spyOn(fs, "mkdirSync").mockImplementation((() => undefined) as never);
 });
@@ -97,6 +113,7 @@ afterEach(() => {
   keychainSpy.mockRestore();
   readSpy.mockRestore();
   writeSpy.mockRestore();
+  unlinkSpy.mockRestore();
   mkdirSpy.mockRestore();
   setPlatform(originalPlatform);
   if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -158,6 +175,27 @@ test("an already stale enabled configuration cannot override the saved disabled 
   expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
     && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(0);
 });
+
+for (const stale of [
+  { systemEnv: true, authMode: "proxy" as const },
+  { systemEnv: false },
+  { systemEnv: true, enabled: false },
+]) {
+  test(`an ineligible older request cannot cancel the current reconciliation (${JSON.stringify(stale)})`, async () => {
+    let started!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    configSnapshotSpy.mockReturnValue({ diagnostics: { source: "file", error: null, config: baseConfig }, raw: "synthetic" });
+    keychainSpy.mockImplementation(async () => { started(); await blocked; return { status: "absent" }; });
+    try {
+      const current = injectSystemEnv(4567, baseConfig);
+      await entered;
+      expect(await injectSystemEnv(4567, { ...baseConfig, claudeCode: stale })).toMatchObject({ injected: false });
+      release();
+      expect(await current).toEqual({ injected: true });
+    } finally { release(); }
+  });
+}
 
 test("a stale disabled settings request cannot revert a newer enabled configuration", async () => {
   configSnapshotSpy.mockReturnValue({ diagnostics: { source: "file", error: null, config: baseConfig }, raw: "synthetic" });
@@ -238,6 +276,63 @@ test("disabling system environment while model resolution is pending prevents la
       && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(writes);
     expect(shellEnvContents).toBe("");
   } finally { release(); windows.mockRestore(); }
+});
+
+test("a foreign tracking owner arriving during model resolution is not overwritten", async () => {
+  let started!: () => void, release!: () => void, tracking: string | undefined;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  readSpy.mockImplementation(((path: string) => {
+    if (String(path).includes("system-env-port")) {
+      if (tracking !== undefined) return tracking;
+      throw Object.assign(new Error("synthetic missing file"), { code: "ENOENT" });
+    }
+    return "";
+  }) as never);
+  const windows = spyOn(contextWindows, "boundedContextWindows").mockImplementation(async () => {
+    started(); await blocked; return {};
+  });
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered;
+    tracking = JSON.stringify({ pid: 123, port: 4568, injectedAt: "synthetic" });
+    release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(0);
+  } finally { release(); windows.mockRestore(); }
+});
+
+test("failed initial injection rolls back before a later owner can take over", async () => {
+  const failure = new Error("synthetic launchctl failure");
+  const foreign = "http://127.0.0.1:4568";
+  let foreignArrived = false;
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  configLockSpy.mockImplementation((fn => {
+    try { return fn(); }
+    catch (error) {
+      if (error === failure) {
+        foreignArrived = true;
+        fakeLaunchd.set("ANTHROPIC_BASE_URL", foreign);
+        fakeTracking = JSON.stringify({ pid: 42, port: 4568, injectedAt: "synthetic-foreign" });
+      }
+      throw error;
+    }
+  }) as never);
+  execSpy.mockImplementation(((file: string, args?: string[]) => {
+    if (file !== "/bin/launchctl") return "";
+    if (args?.[0] === "getenv") return fakeLaunchd.get(args[1]!) ?? "";
+    if (args?.[0] === "setenv" && args[1] === "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") throw failure;
+    if (args?.[0] === "setenv") fakeLaunchd.set(args[1]!, args[2]!);
+    if (args?.[0] === "unsetenv") fakeLaunchd.delete(args[1]!);
+    return "";
+  }) as never);
+  try {
+    await expect(injectSystemEnv(4567, baseConfig)).rejects.toBe(failure);
+    expect(foreignArrived).toBe(true);
+    expect(fakeLaunchd.get("ANTHROPIC_BASE_URL")).toBe(foreign);
+    expect(JSON.parse(fakeTracking!)).toMatchObject({ pid: 42, port: 4568 });
+  } finally { log.mockRestore(); }
 });
 
 test("disabling during gateway fetch prevents late cache and tracking writes", async () => {

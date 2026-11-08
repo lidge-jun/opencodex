@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import * as contextWindows from "../../src/claude/context-windows";
 import { claudeKeychain } from "../../src/lib/claude-keychain";
 import * as configMutation from "../../src/config/mutation-lock";
 import * as configDiagnostics from "../../src/config/diagnostics";
@@ -45,6 +46,7 @@ let configBumpSpy: ReturnType<typeof spyOn>;
 let trackingFile: string | undefined;
 let launchctlBaseUrl: string | undefined;
 let launchctlEnvValues: Record<string, string | undefined>;
+let fakeConfigGeneration = 0;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
@@ -63,8 +65,9 @@ function launchctlCommands(): string[] {
 beforeEach(() => {
   setPlatform("darwin");
   configLockSpy = spyOn(configMutation, "withConfigMutationLockSync").mockImplementation((fn => fn()) as never);
-  configGenerationSpy = spyOn(configMutation, "readConfigGenerationInCurrentMutationTransaction").mockReturnValue({ value: 0 });
-  configBumpSpy = spyOn(configMutation, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => {});
+  fakeConfigGeneration = 0;
+  configGenerationSpy = spyOn(configMutation, "readConfigGenerationInCurrentMutationTransaction").mockImplementation(() => ({ value: fakeConfigGeneration }));
+  configBumpSpy = spyOn(configMutation, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => { fakeConfigGeneration++; });
   configSnapshotSpy = spyOn(configDiagnostics, "readConfigFileSnapshot").mockReturnValue({
     diagnostics: { source: "default", error: null, config: baseConfig },
   });
@@ -81,6 +84,14 @@ beforeEach(() => {
       if (name === "ANTHROPIC_BASE_URL") return launchctlBaseUrl ?? "";
       return launchctlEnvValues[name] ?? "";
     }
+    if (file === "/bin/launchctl" && args?.[0] === "setenv") {
+      if (args[1] === "ANTHROPIC_BASE_URL") launchctlBaseUrl = args[2];
+      else launchctlEnvValues[args[1]!] = args[2];
+    }
+    if (file === "/bin/launchctl" && args?.[0] === "unsetenv") {
+      if (args[1] === "ANTHROPIC_BASE_URL") launchctlBaseUrl = undefined;
+      else delete launchctlEnvValues[args[1]!];
+    }
     return Buffer.alloc(0);
   }) as typeof childProcess.execFileSync);
   readSpy = spyOn(fs, "readFileSync").mockImplementation((() => {
@@ -88,7 +99,7 @@ beforeEach(() => {
     return trackingFile;
   }) as typeof fs.readFileSync);
   writeSpy = spyOn(fs, "writeFileSync").mockImplementation(((...args: unknown[]) => {
-    trackingFile = String(args[1]);
+    if (String(args[0]).includes("system-env-port")) trackingFile = String(args[1]);
   }) as typeof fs.writeFileSync);
   unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((() => {
     trackingFile = undefined;
@@ -625,7 +636,7 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     const writes: Array<{ path: string; data: string }> = [];
     writeSpy.mockImplementation(((...args: unknown[]) => {
       writes.push({ path: String(args[0]), data: String(args[1]) });
-      trackingFile = String(args[1]);
+      if (String(args[0]).includes("system-env-port")) trackingFile = String(args[1]);
     }) as typeof fs.writeFileSync);
     return writes;
   }
@@ -938,3 +949,98 @@ test("a cooperating config write in a synthetic child fences an in-flight inject
     }
   }
 });
+
+for (const phase of ["before-initial-commit", "after-initial-commit"] as const) {
+  test(`two synthetic processes preserve the newer environment owner (${phase})`, async () => {
+    configSnapshotSpy.mockRestore(); configBumpSpy.mockRestore(); configGenerationSpy.mockRestore(); configLockSpy.mockRestore();
+    readSpy.mockRestore(); writeSpy.mockRestore(); unlinkSpy.mockRestore(); mkdirSpy.mockRestore();
+    const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+    const home = createTempHome("ocx-sysenv-owners-");
+    process.env.HOME = home.root;
+    process.env.USERPROFILE = home.root;
+    process.env.CLAUDE_CONFIG_DIR = home.path("claude");
+    const launchd = home.path("synthetic-launchd.json");
+    fs.writeFileSync(launchd, "{}");
+    execFileSpy.mockImplementation(((file: string, args?: readonly string[]) => {
+      if (file !== "/bin/launchctl") return Buffer.alloc(0);
+      const env = JSON.parse(fs.readFileSync(launchd, "utf8")) as Record<string, string>;
+      if (args?.[0] === "getenv") return env[args[1]!] ?? "";
+      if (args?.[0] === "setenv") env[args[1]!] = args[2]!;
+      if (args?.[0] === "unsetenv") delete env[args[1]!];
+      fs.writeFileSync(launchd, JSON.stringify(env));
+      return "";
+    }) as typeof childProcess.execFileSync);
+    let started!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    let pending: ReturnType<typeof injectSystemEnv> | undefined;
+    let windows: ReturnType<typeof spyOn> | undefined;
+    try {
+      const config = { ...getDefaultConfig(), claudeCode: { systemEnv: true } };
+      configMutation.withConfigMutationLockSync(() => {
+        fs.writeFileSync(home.path("config.json"), JSON.stringify(config));
+        configMutation.bumpGenerationForCooperatingConfigWrite();
+      });
+      const loaded = loadConfig();
+      const initialGeneration = configMutation.withConfigMutationLockSync(() =>
+        configMutation.readConfigGenerationInCurrentMutationTransaction().value);
+      if (phase === "before-initial-commit") {
+        windows = spyOn(contextWindows, "boundedContextWindows").mockImplementation(async () => {
+          started(); await blocked; return {};
+        });
+      }
+      globalThis.fetch = (async input => {
+        if (phase === "after-initial-commit" && String(input).includes("/v1/models")) {
+          started(); await blocked;
+        }
+        return new Response(null, { status: String(input).includes("/healthz") ? 200 : 503 });
+      }) as typeof fetch;
+      pending = injectSystemEnv(4567, loaded);
+      await entered;
+      const observedGeneration = configMutation.withConfigMutationLockSync(() =>
+        configMutation.readConfigGenerationInCurrentMutationTransaction().value);
+      expect(observedGeneration).toBe(initialGeneration + (phase === "after-initial-commit" ? 1 : 0));
+      const childPort = phase === "before-initial-commit" ? 4568 : 4567;
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { Database } from "bun:sqlite";
+        import { readFileSync, writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        const root = process.env.OPENCODEX_HOME;
+        const db = new Database(join(root, "config-mutation.sqlite"));
+        db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+        const state = join(root, "synthetic-launchd.json");
+        const env = JSON.parse(readFileSync(state, "utf8"));
+        env.ANTHROPIC_BASE_URL = "http://127.0.0.1:${childPort}";
+        env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1";
+        env.ANTHROPIC_AUTH_TOKEN = "synthetic-competitor";
+        writeFileSync(state, JSON.stringify(env));
+        writeFileSync(join(root, "system-env-port"), JSON.stringify({ pid: process.pid, port: ${childPort},
+          injectedAt: "synthetic-competitor", injectedKeys: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "ANTHROPIC_AUTH_TOKEN"] }));
+        db.exec("COMMIT"); db.close();
+        process.stdout.write(JSON.stringify({ pid: process.pid }));
+      `], { cwd: home.root, env: {
+        HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.root, CODEX_HOME: home.codexHome,
+        CLAUDE_CONFIG_DIR: home.path("claude"), TEMP: home.root, TMP: home.root,
+        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      }, stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+      const report = JSON.parse(stdout) as { pid: number };
+      const winner = fs.readFileSync(home.path("system-env-port"), "utf8");
+      const winnerState = fs.readFileSync(launchd, "utf8");
+      expect(JSON.parse(winner)).toMatchObject({ port: childPort, pid: report.pid });
+      release();
+      expect(await pending).toMatchObject({ injected: false });
+      expect(fs.readFileSync(home.path("system-env-port"), "utf8")).toBe(winner);
+      expect(fs.readFileSync(launchd, "utf8")).toBe(winnerState);
+    } finally {
+      release(); if (pending) await pending.catch(() => {});
+      windows?.mockRestore(); home.remove();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  });
+}
