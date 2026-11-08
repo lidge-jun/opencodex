@@ -256,4 +256,14 @@ describe("/api/telemetry management routes", () => {
     const status = await call("GET", "/api/telemetry");
     expect(status.body).toMatchObject({ effective: false, decision: "declined" });
   });
+
+  test("GET /api/telemetry reports a decision written to disk while the server's config is stale", async () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      ...config,
+      telemetry: { decision: "declined", decidedAt: "2026-11-08T10:00:00.000Z", noticeShownAt: "2026-11-08T10:00:00.000Z" },
+    }, null, 2) + "\n", "utf8");
+    expect(config.telemetry).toBeUndefined();
+    const status = await call("GET", "/api/telemetry");
+    expect(status.body).toMatchObject({ effective: false, decision: "declined" });
+  });
 });
