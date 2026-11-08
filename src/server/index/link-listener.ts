@@ -11,7 +11,7 @@ import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { registerFallbackLinkResolver } from "../../routing/fallback-policy";
-import { captureHomeRouteDefaults } from "../../routing/home-route-capture";
+import { captureChildRouteDefaults } from "../../routing/home-route-intent";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 
@@ -37,7 +37,7 @@ export interface LinkListenerDeps {
   writeStore?: (path: string, store: LinkStore) => void;
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
   warn?: (message: string) => void;
-  /** Freezes the native defaults Children inherit before this listener can serve route intent. */
+  /** Freezes every default Children inherit (native switches and file ownership) before this listener can serve route intent. */
   captureRouteDefaults?: () => void;
   /** Delay before retry `attempt` (0-based) of a failed capture; tests shorten it. */
   captureRetryDelayMs?: (attempt: number) => number;
@@ -106,9 +106,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
 
   // Children read route intent through this listener, and that read is pure: it never captures.
-  // So a failed capture (a busy config lock, a damaged route-intent.json) is owed and retried with
-  // backoff until it succeeds or the listener stops, and again on every ensureStarted. Meanwhile
-  // Children project the builtin defaults, and every Home-only switch writer still captures first.
+  // So a failed capture (a busy config lock, a damaged route-intent.json, unresolved Aside
+  // ownership) is owed and retried with backoff until it succeeds or the listener stops,
+  // and again on every ensureStarted. Meanwhile every Home-only writer still captures first.
   let routeDefaultsOwed = false;
   let captureAttempt = 0;
   let captureRetry: ReturnType<typeof setTimeout> | undefined;
@@ -116,7 +116,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const captureRouteDefaults = (): void => {
     if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
     try {
-      (deps.captureRouteDefaults ?? (() => { captureHomeRouteDefaults(undefined, { whenLinked: true }); }))();
+      (deps.captureRouteDefaults ?? captureChildRouteDefaults)();
       routeDefaultsOwed = false;
       captureAttempt = 0;
     } catch (error) {
@@ -144,8 +144,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       setStatus("off", null, null);
       return;
     }
-    // Capture the Children's defaults from the Home's switches as they stand at startup, before any
-    // Home-only command can move one. A failure leaves the listener up and is retried (see above).
+    // Capture the Children's defaults from the Home's switches and integrations as they stand at
+    // startup, before any Home-only command can move one. A failure leaves the listener up and is
+    // retried (see above).
     captureRouteDefaults();
     const requestedPort = store.listenerPort ?? 0;
     const sessions = createLinkRelaySessions({ peers, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId), fingerprints: (keyId, linkId) => {

@@ -91,7 +91,7 @@ function lockContention(error: unknown): boolean {
     && (error as { cause?: { code?: unknown } }).cause?.code === "SQLITE_BUSY";
 }
 
-function captureRefusal(error: unknown): HomeRouteCaptureRefusal {
+export function captureRefusal(error: unknown): HomeRouteCaptureRefusal {
   const path = routeIntentStatePath();
   if (lockContention(error)) return { ok: false, reason: "unavailable", retryable: true,
     message: `Another process is saving the configuration, so the Children's route defaults in ${path} could not be saved first; nothing was changed. Retry in a moment.` };

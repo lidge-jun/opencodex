@@ -43,6 +43,7 @@
   "route-intent.test.ts": "clients",
   "route-to-child-defaults.test.ts": "routing",
   "route-to-home-live-flags.test.ts": "routing",
+  "route-to-home-decisions.test.ts": "routing",
   "route-to-home-native-truth.test.ts": "routing",
   "route-to-home-off-review.test.ts": "routing",
   "route-to-live-settings.test.ts": "server",

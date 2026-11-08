@@ -5,10 +5,12 @@ import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../integrations/store";
 import { listAsideProfileStores } from "../integrations/aside-profile-context";
 import { asideHomeDir } from "../clients/config-export";
-import { parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type HomeRouteIntentDocument, type RouteClientId, type RouteIntentState } from "../link/route-intent";
-import { dropHomeNativeOverrides, readRouteIntentState, updateRouteIntentState } from "./route-intent-state";
-import { durableHomeNativeRouteDefaults, fillHomeNativeRouteDefaults, homeHasLinks, type CaptureHomeRouteDefaultsOptions } from "./home-route-capture";
+import { parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type HomeRouteIntentDocument, type RouteClientId, type RouteClientIntent, type RouteIntentState } from "../link/route-intent";
+import { dropHomeNativeOverrides, homeRouteIntentInUse, readRouteIntentState, setRouteClientIntent, updateRouteIntentState } from "./route-intent-state";
+import { captureHomeRouteDefaults, durableHomeNativeRouteDefaults, fillHomeNativeRouteDefaults, homeHasLinks, type CaptureHomeRouteDefaultsOptions } from "./home-route-capture";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { readConfigDiagnostics } from "../config";
+import { packageVersion } from "../lib/package-version";
 import type { OcxConfig } from "../types";
 
 /** Existing Aside ownership must be resolved explicitly, never projected as off. */
@@ -29,16 +31,29 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
     if (intent) state.defaults[client as keyof typeof state.defaults] = intent;
   }
   if (state.defaults.aside !== undefined) return state;
+  const aside = deriveHomeAsideIntent(config, { store, home: options.home });
+  if (aside) state.defaults.aside = aside;
+  return state;
+}
+
+/**
+ * The Aside intent the Home's current Aside ownership amounts to: the stable userIds of every owned
+ * profile, all profiles under the all-profiles policy, or undefined when nothing is owned.
+ * `extraProfileIds` adds profiles about to be enabled, so a caller can refuse before writing
+ * anything when one of them has no stable userId. Throws HomeAsideIntentDerivationError.
+ */
+export function deriveHomeAsideIntent(config: OcxConfig, options: { store?: IntegrationStateStore; home?: string; extraProfileIds?: readonly number[] | "all" } = {}): RouteClientIntent | undefined {
+  const store = options.store ?? createIntegrationStateStore();
+  const records = store.readRecordsStrict();
   const scopes = listAsideProfileStores(store).filter(scope => scope.store.readRecordsStrict().aside);
-  if (!records.aside && scopes.length === 0 && config.asideProfileSync?.allProfiles !== true) return state;
-  if (config.asideProfileSync?.allProfiles === true) {
-    state.defaults.aside = { enabled: true, accounts: "all" };
-    return state;
-  }
+  const extra = options.extraProfileIds ?? [];
+  if (!records.aside && scopes.length === 0 && extra.length === 0 && config.asideProfileSync?.allProfiles !== true) return undefined;
+  if (config.asideProfileSync?.allProfiles === true) return { enabled: true, accounts: "all" };
   try {
     const raw: unknown = JSON.parse(readBoundedRegularFileSync(join(asideHomeDir(process.env, options.home ?? homedir()), "accounts.json"), 4 * 1024 * 1024).toString("utf8"));
     if (!raw || typeof raw !== "object" || !("accounts" in raw) || !Array.isArray(raw.accounts)) throw new Error("existing Aside selection needs explicit route intent");
-    const slots = new Set(scopes.map(scope => scope.profileId));
+    const every = extra === "all" ? raw.accounts.flatMap((row: unknown) => row && typeof row === "object" && "id" in row && typeof row.id === "number" ? [row.id] : []) : extra;
+    const slots = new Set([...scopes.map(scope => scope.profileId), ...every]);
     if (records.aside) {
       const root = asideHomeDir(process.env, options.home ?? homedir());
       const owned = resolve(records.aside.configPath);
@@ -56,11 +71,24 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
     }
     const intent = parseRouteClientIntent({ enabled: true, accounts: [...new Set(userIds)] }, "aside");
     if (!intent) throw new Error("existing Aside selection needs explicit stable userIds");
-    state.defaults.aside = intent;
-    return state;
+    return intent;
   } catch (cause) {
     throw new HomeAsideIntentDerivationError(cause);
   }
+}
+
+/**
+ * Records a Home Aside profile change (the dashboard, `ocx integration client enable --client aside
+ * --profile N`, an Aside restore) as the Home's `devices.home.aside` decision, naming the stable
+ * userIds of every profile it owns afterwards, so ocx sync keeps it. Only once the Home uses route
+ * intent; returns whether a decision was recorded. Throws HomeAsideIntentDerivationError.
+ */
+export function recordHomeAsideDecision(config: OcxConfig): boolean {
+  return withConfigMutationLockSync(() => {
+    if (!homeRouteIntentInUse(readRouteIntentState())) return false;
+    setRouteClientIntent("aside", deriveHomeAsideIntent(config) ?? { enabled: false }, "home");
+    return true;
+  });
 }
 
 /**
@@ -89,6 +117,25 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
       return state;
     });
   });
+}
+
+/**
+ * The link listener's capture of every default a Child inherits, from the Home's durable config:
+ * the native switches and the file clients' ownership, frozen in one write. An upgraded Home that
+ * saved only the native defaults gets the rest here, so a later dashboard toggle cannot move a
+ * Child's default. When existing Aside ownership cannot be resolved nothing else is saved; the
+ * native defaults are then captured on their own and the error is raised so the listener retries.
+ */
+export function captureChildRouteDefaults(): void {
+  const latest = readConfigDiagnostics();
+  if (latest.error) throw new Error("the configuration could not be read");
+  if (latest.config.runtimeRole === "client") return;
+  try {
+    initializeHomeRouteIntentDefaults(latest.config, packageVersion("0.0.0"), undefined, { whenLinked: true });
+  } catch (error) {
+    if (error instanceof HomeAsideIntentDerivationError) captureHomeRouteDefaults(undefined, { whenLinked: true });
+    throw error;
+  }
 }
 
 /**

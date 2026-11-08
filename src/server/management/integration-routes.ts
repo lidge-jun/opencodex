@@ -48,8 +48,8 @@ import {
   setIntegrationMutationFlightTestHook,
 } from "../../integrations/mutation-flight";
 import { jsonResponse } from "../auth-cors";
-import { isRouteClientId } from "../../link/route-intent";
-import { readRouteIntentState, recordHomeFileIntegrationDecision, routeIntentStatePath, RouteIntentStateUnreadableError } from "../../routing/route-intent-state";
+import { isRouteClientId, type RouteClientIntent } from "../../link/route-intent";
+import { prepareHomeIntegrationDecision, recordHomeIntegrationDecision } from "./home-integration-decision";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { managementInferencePort, type ManagementContext } from "./context";
 import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot } from "./model-rows";
@@ -281,6 +281,32 @@ function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
     },
     failure: result => writerFailureResponse("aside", result, ctx),
   };
+}
+
+/**
+ * Which Aside requests are a Home decision, and the profiles each may enable: a toggle of one
+ * profile or all of them, or a profile restore. Undefined for reads, previews, journal and sync.
+ */
+async function asideDecisionScope(ctx: ManagementContext, known: unknown): Promise<readonly number[] | "all" | undefined> {
+  const { pathname } = ctx.url;
+  const nested = /^\/api\/client-integrations\/aside\/profiles\/(0|[1-9][0-9]{0,8})(\/restore)?$/.exec(pathname);
+  const toggle = ctx.req.method === "PUT" && (pathname === "/api/client-integrations/aside"
+    || pathname === "/api/client-integrations/aside/profiles" || (nested !== null && nested[2] === undefined));
+  const restore = ctx.req.method === "POST" && nested?.[2] === "/restore";
+  if (!toggle && !restore) return undefined;
+  const raw = nested?.[1] ?? ctx.url.searchParams.get("profile");
+  const id = raw !== null && /^(0|[1-9][0-9]{0,8})$/.test(raw) ? Number(raw) : undefined;
+  if (restore) return id === undefined ? [] : [id];
+  const body = known !== undefined ? known : await readJsonBody({ ...ctx, req: ctx.req.clone() });
+  if (!isPlainRecord(body) || body.enabled !== true) return [];
+  return id === undefined ? "all" : [id];
+}
+
+/** A file client's Home decision as its ownership record stands after a restore. */
+function ownedIntent(store: IntegrationStateStore, clientId: IntegrationClientId): RouteClientIntent {
+  const owner = store.readRecords()[clientId];
+  return { enabled: Boolean(owner),
+    ...(owner?.modelNames && (clientId === "hermes" || clientId === "commandcode") ? { modelNames: owner.modelNames } : {}) };
 }
 
 async function buildIntegrationWriteInput(
@@ -688,10 +714,12 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
 export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   // Aside delegates before the ordinary client handler. Reject unsupported intent before that
   // delegation can enumerate profiles, load catalogs, or write a different preference.
+  let asideBody: unknown;
   if (/^\/api\/client-integrations\/aside\/profiles(?:\/|$)/.test(ctx.url.pathname)
     && (ctx.req.method === "PUT" || ctx.req.method === "POST")) {
     const body = await readJsonBody({ ...ctx, req: ctx.req.clone() });
     if (body instanceof Response) return body;
+    asideBody = body;
     if (isPlainRecord(body)) {
       const naming = readModelNames(ctx, body, "aside", "apply");
       if (naming instanceof Response) return naming;
@@ -710,8 +738,14 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   if (hermesScoped) ctx = hermesScoped;
   const { req, url } = ctx;
   const profileOptions = asideOptions(ctx);
+  // An Aside profile change is the Home's decision (home-integration-decision.ts).
+  const asideDecision = ctx.config.runtimeRole === "client" ? undefined : await asideDecisionScope(ctx, asideBody);
+  if (asideDecision !== undefined) {
+    const refused = prepareHomeIntegrationDecision(ctx, "aside", asideDecision);
+    if (refused) return refused;
+  }
   const aside = await handleAsideProfileRoutes(ctx, profileOptions);
-  if (aside) return aside;
+  if (aside) return asideDecision !== undefined && aside.status >= 200 && aside.status < 300 ? recordHomeIntegrationDecision(ctx, "aside", aside) : aside;
   if (url.searchParams.has("profile")
     && (url.pathname === INTEGRATION_COLLECTION_PATH || url.pathname.startsWith(INTEGRATION_ROUTE_PREFIX))
     && !INTEGRATION_HISTORY_PATHS.includes(url.pathname)) {
@@ -968,13 +1002,20 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     // The binding travels with the request. Dropping it here routed a bound Aside restore into
     // the unbound path, which executed the mutation while its confirmation went unexamined.
     // A Hermes-scoped restore never delegates: its operation lives in the selected Hermes store.
+    // A restore on the Home is its decision (home-integration-decision.ts); a Hermes profile's is not.
+    const restoreDecides = ctx.config.runtimeRole !== "client" && !hermesRequestScope(req)?.resolvedPaths;
+    if (restoreDecides) {
+      const refused = prepareHomeIntegrationDecision(ctx, undefined);
+      if (refused) return refused;
+    }
     const asideRestore = hermesRequestScope(req) ? null : await asideRestoreResponse(ctx, {
       opId,
       confirmDrift,
       ...(parsed.operation === undefined ? {} : { operation: parsed.operation }),
       ...(parsed.planFingerprint === undefined ? {} : { planFingerprint: parsed.planFingerprint }),
     }, profileOptions);
-    if (asideRestore) return asideRestore;
+    if (asideRestore) return restoreDecides && asideRestore.status >= 200 && asideRestore.status < 300
+      ? recordHomeIntegrationDecision(ctx, "aside", asideRestore) : asideRestore;
     let restoreClientId: IntegrationClientId | undefined;
     try {
       const store = integrationStore(ctx);
@@ -1040,7 +1081,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
          */
         return writerFailureResponse(operation.clientId, result, ctx);
       }
-      return jsonResponse(result satisfies IntegrationRestoreEnvelope, 200, req, ctx.config);
+      const restored = jsonResponse(result satisfies IntegrationRestoreEnvelope, 200, req, ctx.config);
+      // An undo is the Home's decision too: ocx sync must not reverse it.
+      return restoreDecides ? recordHomeIntegrationDecision(ctx, operation.clientId, restored, () => ownedIntent(store, operation.clientId)) : restored;
     } catch (error) {
       if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
         return jsonResponse({
@@ -1133,10 +1176,14 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   }
 
   try {
-    // On a Home that uses route intent the toggle is recorded as the Home's decision below; an
-    // unreadable route-intent.json refuses first, while nothing has changed.
+    // The toggle is the Home's decision (home-integration-decision.ts): Children's defaults are
+    // saved first, an unreadable route-intent.json refuses while nothing has changed, and the
+    // result is recorded below. A selected Hermes profile is not the Home's client.
     const recordsDecision = ctx.config.runtimeRole !== "client" && isRouteClientId(requestedClient) && !hermesRequestScope(req)?.resolvedPaths;
-    if (recordsDecision) readRouteIntentState();
+    if (recordsDecision) {
+      const refused = prepareHomeIntegrationDecision(ctx, requestedClient);
+      if (refused) return refused;
+    }
     /*
      * A bound request is built from the same passive roster the guard re-plans against, and an
      * unbound one keeps its existing refreshing path. Building the refreshing input first would
@@ -1183,16 +1230,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     const stale = guard?.response();
     if (stale) return stale;
     if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
-    if (recordsDecision) {
-      try {
-        recordHomeFileIntegrationDecision(requestedClient, { enabled: parsed.enabled,
-          ...(modelNames !== undefined && (requestedClient === "hermes" || requestedClient === "commandcode") ? { modelNames } : {}) });
-      } catch {
-        return jsonResponse({ error: `The ${requestedClient} integration was changed, but route intent in ${routeIntentStatePath()} could not record it, so ocx sync may undo it. Inspect it, fix or remove it, then toggle it again.`,
-          code: "route_intent_unavailable", clientId: requestedClient, integrationChanged: true }, 500, req, ctx.config);
-      }
-    }
-    return jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
+    const toggled = jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
+    return recordsDecision ? recordHomeIntegrationDecision(ctx, requestedClient, toggled, () => ({ enabled: parsed.enabled === true,
+      ...(modelNames !== undefined && (requestedClient === "hermes" || requestedClient === "commandcode") ? { modelNames } : {}) })) : toggled;
   } catch (error) {
     if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
       return jsonResponse({
@@ -1200,9 +1240,6 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         code: "integration_mutation_busy",
         clientId: requestedClient,
       }, 409, req, ctx.config);
-    }
-    if (error instanceof RouteIntentStateUnreadableError) {
-      return jsonResponse({ error: error.message, code: "route_intent_unavailable", clientId: requestedClient }, 500, req, ctx.config);
     }
     return internalErrorResponse(error, ctx);
   }
