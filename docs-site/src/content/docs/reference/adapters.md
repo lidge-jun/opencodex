@@ -454,11 +454,11 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
-  restarts. On Vertex and Antigravity, when upstream rejects a request with `INVALID_ARGUMENT` or a
-  signature error, whether as HTTP 400 or inside a 200 response, that conversation's in-memory
+  restarts. On Vertex and Antigravity, when upstream rejects a request with any HTTP 400, or with
+  `INVALID_ARGUMENT` or a signature error inside a 200 response, that conversation's in-memory
   signature replay entry is cleared so the next turn does not replay it. A rejection whose text
-  names a signature also evicts the rejected signatures from the durable store; a generic
-  `INVALID_ARGUMENT` leaves durable entries in place. The rejected request itself is not retried.
+  names a signature also evicts the rejected signatures from the durable store; any other
+  rejection leaves durable entries in place. The rejected request itself is not retried.
 - Antigravity's Gemini 4 Argon requests include the selected thinking tier when thought summaries
   are enabled, allowing its thought summaries to appear in supported clients.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its

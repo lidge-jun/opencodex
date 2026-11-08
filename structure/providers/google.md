@@ -159,6 +159,8 @@ An upstream rejection clears the session's replay entry whether it arrives insid
 stream or as a real HTTP 400: the Antigravity/Vertex `fetchResponse` wrapper in
 `src/adapters/google.ts` reads a clone of the final 400 body and runs the same clear-on-invalid
 check, because the dispatcher reports a non-ok response without calling the adapter parsers. The
+400 status itself counts as an invalid-argument rejection for the session clear, since the
+normalized error text keeps only Google's message and not its status enum. The
 next turn therefore signs its first call with the sentinel instead of replaying a session-cached
 rejected value until TTL expiry (#8054). Durable-store eviction keeps its narrower gate: only a
 rejection whose text names a signature evicts the injected call ids, so a generic tool-schema

@@ -947,11 +947,15 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // session replay cache), but durable-store eviction is intentionally narrower: it only runs
   // when the error text explicitly mentions a signature, so a generic tool-schema
   // INVALID_ARGUMENT does not destroy valid durable signatures.
-  function handleSignatureRejection(errorMessage?: string) {
+  //
+  // `httpStatus` is the real upstream status when the rejection arrived as an HTTP error. The
+  // normalized Vertex/Antigravity error text keeps only Google's message, not its status enum,
+  // so a 400 such as "bad model" would otherwise leave the poisoned session entry in place (#8054).
+  function handleSignatureRejection(errorMessage?: string, httpStatus?: number) {
     const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
     const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
     const text = errorMessage ?? "";
-    const isInvalidArgument = /invalid_argument|invalid argument/i.test(text);
+    const isInvalidArgument = httpStatus === 400 || /invalid_argument|invalid argument/i.test(text);
     const isSignatureError = /signature|thought_signature|thoughtSignature/i.test(text);
     // The in-memory Antigravity replay cache only exists for CCA/Vertex, so clearing it stays
     // scoped to those modes (replayModel/replaySession are undefined elsewhere anyway).
@@ -996,7 +1000,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             // dispatcher formats is untouched, and await it so the next turn cannot race ahead of
             // the eviction. No resend here: payload rejection stays resend-is-futile.
             if (res.status === 400) {
-              handleSignatureRejection(await readDisplaySafeErrorPayloadText(res.clone(), ctx?.abortSignal));
+              handleSignatureRejection(await readDisplaySafeErrorPayloadText(res.clone(), ctx?.abortSignal), res.status);
             }
             return res;
           },

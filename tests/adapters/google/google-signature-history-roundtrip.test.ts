@@ -619,8 +619,14 @@ describe("#1735 thought signature survives history replay", () => {
   // #8054: the 200-body tests above never reach the transport. A real upstream rejection is an
   // HTTP 400 that the dispatcher reports without calling parseResponse, so the clear has to run
   // in the adapter's own fetch path — exercised here through fetchResponse with a non-200 send.
-  for (const mode of ["cloud-code-assist", "vertex"] as const) {
-    test(`${mode}: a real HTTP 400 INVALID_ARGUMENT drops the cached signature so the next turn uses the sentinel`, async () => {
+  // The second case carries no "invalid argument" or "signature" wording: Google's normalized 400
+  // text keeps only the message, so the HTTP 400 status itself has to trigger the clear.
+  const rejections = [
+    { label: "INVALID_ARGUMENT text", message: "Request contains an invalid argument." },
+    { label: "status-only", message: "bad model" },
+  ] as const;
+  for (const mode of ["cloud-code-assist", "vertex"] as const) for (const rejection of rejections) {
+    test(`${mode}: a real HTTP 400 (${rejection.label}) drops the cached signature so the next turn uses the sentinel`, async () => {
       const modeProvider = mode === "cloud-code-assist"
         ? { ...provider, googleMode: mode, baseUrl: "https://daily-cloudcode-pa.googleapis.com", project: "test-proj", apiKey: "test-token" } as OcxProviderConfig
         : provider;
@@ -657,7 +663,7 @@ describe("#1735 thought signature survives history replay", () => {
       const executor = (async () => {
         sends++;
         return new Response(JSON.stringify({
-          error: { code: 400, status: "INVALID_ARGUMENT", message: "Request contains an invalid argument." },
+          error: { code: 400, status: "INVALID_ARGUMENT", message: rejection.message },
         }), { status: 400, headers: { "content-type": "application/json" } });
       }) as unknown as typeof fetch;
       const res = await second.fetchResponse!(built, { executor, timeoutMs: 5_000 });
@@ -665,7 +671,7 @@ describe("#1735 thought signature survives history replay", () => {
       // No resend: payload rejection stays resend-is-futile.
       expect(sends).toBe(1);
       // The dispatcher still owns an unread body.
-      expect(await res.text()).toContain("invalid argument");
+      expect(await res.text()).toContain(rejection.message);
 
       // Turn 3 must not replay the rejected signature; the first call falls back to the sentinel.
       const third = createGoogleAdapter(modeProvider);
