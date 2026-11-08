@@ -429,6 +429,8 @@ removes selector fields from scope refusals and never renders request/configurat
 or upstream reset times. Shared producers retain their existing bytes for Chat and other surfaces.
 HTTP workflow refusals enter the same Messages projection at
 `src/server/admitted-http-turn.ts`. A replacement refusal keeps its own construction identity.
+The workflow refusal writer carries workflow-specific headers and local provenance; the adapter's
+independent send-budget writer instead keeps its distinct request-budget code and synthetic attribution.
 
 Only buffered/folded Messages consumers receive a legacy-record sink; streaming delivery does
 not retain those records. Adapter iterator-read failures alone carry transport provenance;
