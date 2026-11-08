@@ -12,7 +12,7 @@ import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
 import { captureModelCacheGeneration, clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
 import { probeTraeCnProvider } from "../../src/server/management/trae-cn-provider-probe";
 import { handleProviderRoutes } from "../../src/server/management/provider-routes";
-import { isModelVisionSidecarConsumer, isVisionSidecarConsumer, modelAcceptsImageInput } from "../../src/vision/eligibility";
+import { customRowInputModalities, isModelVisionSidecarConsumer, isVisionSidecarConsumer, modelAcceptsImageInput } from "../../src/vision/eligibility";
 import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -362,6 +362,29 @@ describe("TRAE CN ACP regression contract", () => {
     expect(fixture.child.killed).toBe(true);
   });
 
+  for (let fragmentLength = 1; fragmentLength <= 7; fragmentLength++) {
+    test(`probe hides a ${fragmentLength}-character bearer fragment at the parser boundary`, async () => {
+      const fixture = traeFixture((request, child) => {
+        if (request.method !== "initialize") return false;
+        (child.stdout as PassThrough).write("x".repeat(64 - 7 - fragmentLength) + "Bearer abcdefghi\n");
+        return true;
+      });
+      const response = await probeTraeCnProvider("trae-cn", config(), async () => { throw new Error("must not converge"); }, undefined, fixture.deps);
+      expect(await response.json()).toMatchObject({ ok: false, error: "TRAE CN ACP returned malformed or unsupported protocol data." });
+    });
+  }
+
+  test("malformed prompt output never exposes parser snippets to the client", async () => {
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "session/prompt") return false;
+      (child.stdout as PassThrough).write("x".repeat(50) + "Bearer abcdefghi\n");
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events).toMatchObject([{ type: "error", message: "TRAE CN ACP ended with an invalid protocol response.", retryable: false }]);
+  });
+
   test("an upstream cancellation without client abort emits a terminal event and usage", async () => {
     const fixture = traeFixture(request => {
       if (request.method !== "session/prompt") return false;
@@ -469,6 +492,13 @@ describe("TRAE CN ACP regression contract", () => {
     } finally { if (previous === undefined) delete process.env.TRAE_HOME; else process.env.TRAE_HOME = previous; }
   });
 
+  test("the default CLI directory survives HOME isolation on POSIX and Windows", () => {
+    expect(traeCnChildEnv({ HOME: "/fixture/operator" }, "linux").TRAE_HOME).toBe("/fixture/operator/.trae");
+    expect(traeCnChildEnv({ USERPROFILE: "C:\\Users\\operator" }, "win32").TRAE_HOME).toBe("C:\\Users\\operator\\.trae");
+    expect(traeCnChildEnv({ HOME: "/fixture/operator", TRAE_HOME: "./selected-trae" }, "linux").TRAE_HOME)
+      .toBe(`${process.cwd()}/selected-trae`);
+  });
+
   test("static catalogs never open ACP and retain unknown text-only models", async () => {
     const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new Error("must not discover"));
     const row = { ...config(), models: ["future-model"], liveModels: false,
@@ -481,9 +511,18 @@ describe("TRAE CN ACP regression contract", () => {
     expect(result.models).toMatchObject([{ id: "future-model", inputModalities: ["text"], supportsVerbosity: false }]);
     expect(isVisionSidecarConsumer({ providers: { "trae-cn": row } }, "trae-cn", "future-model")).toBe(true);
     expect(isModelVisionSidecarConsumer(row, "future-model")).toBe(true);
-    const visionConfig = { providers: { "trae-cn": row }, customModels: [{ provider: "trae-cn", id: "future-model", inputModalities: ["text", "image"] }] };
+    const visionConfig = { providers: { "trae-cn": row }, customModels: [{ provider: "trae-cn", modelId: "future-model", inputModalities: ["text", "image"] }] };
     expect(modelAcceptsImageInput(visionConfig, { provider: "trae-cn", id: "future-model", inputModalities: ["text", "image"] })).toBe(false);
     expect(requiresVisionPreprocessing(visionConfig, row, "future-model", "trae-cn")).toBe(true);
+  });
+
+  test("a custom image row cannot override the TRAE wire without per-model capability hints", () => {
+    const row = config();
+    const visionConfig = { providers: { "trae-cn": row }, customModels: [{ provider: "trae-cn", modelId: "test-model", inputModalities: ["text", "image"] }] };
+    expect(customRowInputModalities(visionConfig, "trae-cn", "test-model")).toEqual(["text", "image"]);
+    expect(isVisionSidecarConsumer(visionConfig, "trae-cn", "test-model")).toBe(true);
+    expect(modelAcceptsImageInput(visionConfig, { provider: "trae-cn", id: "test-model" })).toBe(false);
+    expect(requiresVisionPreprocessing(visionConfig, row, "test-model", "trae-cn")).toBe(true);
   });
 
   test("discovered models do not advertise unsupported verbosity or native image input", async () => {

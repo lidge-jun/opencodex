@@ -51,7 +51,7 @@ function errorEvent(error: unknown): Extract<AdapterEvent, { type: "error" }> {
   const acp = error instanceof TraeAcpError;
   const code = acp ? error.code : "trae_acp_protocol_error";
   const auth = acp && /invalid token|unauthorized|not logged in|authentication/i.test(error.message);
-  const message = error instanceof Error ? error.message : "TRAE CN ACP ended with an invalid protocol response.";
+  const message = acp ? error.message : "TRAE CN ACP ended with an invalid protocol response.";
   const invalid = code === "trae_model_unavailable" || code === "trae_replay_too_large" || code === "trae_proxy_unsupported";
   return {
     type: "error",

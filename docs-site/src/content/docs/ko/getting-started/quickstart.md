@@ -20,6 +20,9 @@ ocx init
 
 1. **프로바이더 선택** — 내장 레지스트리 프리셋 107개 중 하나를 고르거나 `custom`을 선택해 base URL과 adapter를 직접 입력합니다.
 2. **API 키** — 키를 붙여넣거나 `${ANTHROPIC_API_KEY}` 같은 환경 변수를 참조합니다.
+
+   **TRAE CN**은 로그인된 공식 CLI를 사용하므로 API 키가 필요하지 않습니다. CLI를 설치하고 로그인한 후 마법사의 키 입력란은 비워 두세요. 자세한 내용은 [TRAE CN 설정 안내(영문)](/guides/providers/#trae-cn-official-acp)를 참고하세요.
+
 3. **기본 모델** — 키, 로컬, custom 프로바이더에서는 프리셋을 그대로 쓰거나 모델 ID를 직접 입력합니다.
 4. **프록시 포트** — 기본값은 `10100`입니다.
 5. **Codex에 주입할까요?** — 일반적인 루프백 구성에서는 opencodex가 `$CODEX_HOME/config.toml`의 루트(`~/.codex/config.toml`이 기본값)에 `openai_base_url`을 추가해 Codex의 내장 `openai` 프로바이더가 프록시를 바라보게 합니다. 원격/LAN 바인딩에서는 API 인증 헤더를 포함한 전용 프로바이더 항목을 대신 사용합니다.

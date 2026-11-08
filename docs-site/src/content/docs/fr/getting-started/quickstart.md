@@ -16,6 +16,9 @@ ocx init
 1. **Choix d’un fournisseur** — sélectionnez l’un des 107 préréglages intégrés au registre, ou `custom` pour saisir une
    URL de base et un adaptateur.
 2. **Clé API** — collez une clé ou référencez une variable d’environnement telle que `${ANTHROPIC_API_KEY}`.
+
+   **TRAE CN** utilise le CLI officiel déjà connecté et ne nécessite pas de clé API. Installez le CLI, connectez-vous et laissez le champ de clé vide dans l’assistant. Consultez la [configuration de TRAE CN (en anglais)](/guides/providers/#trae-cn-official-acp).
+
 3. **Modèle par défaut** — pour les fournisseurs clés, locaux et personnalisés, acceptez le préréglage ou saisissez un identifiant de modèle.
 4. **Port proxy** — la valeur par défaut est `10100`.
 5. **Injecter dans Codex ?** — avec une configuration de bouclage normale, opencodex ajoute une valeur racine `openai_base_url` à

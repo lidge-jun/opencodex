@@ -111,7 +111,9 @@ class TraeAcpClient {
       }
       this.fail(this.failure ?? new TraeAcpError("TRAE CN ACP closed before the turn completed", "trae_acp_closed"));
     } catch (error) {
-      this.fail(error instanceof Error ? error : new Error(String(error)));
+      // The shared JSONL parser includes stdout snippets, which can contain partial secrets.
+      this.fail(error instanceof TraeAcpError ? error
+        : new TraeAcpProtocolError("TRAE CN ACP returned malformed or unsupported protocol data."));
     }
   }
 
@@ -212,7 +214,7 @@ export async function openTraeSession(
   if (!traeCnDestinationMatches(baseUrl)) throw new TraeAcpError("TRAE CN requires its canonical provider destination", "non_canonical_destination");
   const binary = (deps.resolveBinary ?? resolveTraeCli)();
   if (!binary) throw new TraeAcpError("TRAE CN CLI not found. Install traecli and sign in through TRAE CN.", "cli_not_found");
-  const env = traeCnChildEnv();
+  const env = traeCnChildEnv(process.env, deps.platform ?? process.platform);
   const ownHome = deps.home === undefined;
   const makeTempDir = deps.makeTempDir ?? mkdtemp;
   const home = deps.home ?? await makeTempDir(join(tmpdir(), "ocx-trae-cn-"));

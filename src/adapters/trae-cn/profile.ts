@@ -10,9 +10,12 @@ export function traeCnDestinationMatches(baseUrl: string | undefined): boolean {
   return baseUrl?.replace(/\/+$/, "").toLowerCase() === TRAE_CN_BASE_URL;
 }
 
-/** Keep the child environment scoped while preserving the selected official CLI directory. */
-export function traeCnChildEnv(): Record<string, string> {
-  return { ...baseScopedEnv(), NO_COLOR: "1", ...(process.env.TRAE_HOME ? { TRAE_HOME: process.env.TRAE_HOME } : {}) };
+/** Preserve the CLI's documented config directory before replacing the child's HOME. */
+export function traeCnChildEnv(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const pathApi = platform === "win32" ? win32 : posix;
+  const home = env[platform === "win32" ? "USERPROFILE" : "HOME"];
+  const traeHome = env.TRAE_HOME ? pathApi.resolve(env.TRAE_HOME) : home ? pathApi.join(home, ".trae") : undefined;
+  return { ...baseScopedEnv(), NO_COLOR: "1", ...(traeHome ? { TRAE_HOME: traeHome } : {}) };
 }
 
 /** Find an installed CLI on PATH or at its standard user-local installation path. */

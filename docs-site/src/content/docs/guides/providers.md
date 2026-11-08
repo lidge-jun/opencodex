@@ -1475,13 +1475,14 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
 
 - **Prerequisites:** Install and sign in to [TRAE CN](https://www.trae.cn/) and its official CLI.
   The CLI owns authentication and token refresh; the provider needs no API key.
-  Set `TRAE_HOME` to your signed-in CLI directory before starting OpenCodex if authentication
-  depends on that directory, including when the CLI uses the default `~/.trae` location.
+  OpenCodex preserves the default `~/.trae` CLI directory while isolating HOME. Set `TRAE_HOME`
+  before starting OpenCodex to select a different signed-in CLI directory.
 - **Model discovery:** `session/new` returns the models available to the signed-in account.
   Successful discovery is cached by the normal provider catalog mechanism, with the last good
   catalog and a small text-only seed as degraded fallbacks.
   Read-only catalog gathers use cached evidence; they never start the CLI or refresh its sign-in.
-  Set `liveModels: false` for a static allowlist. After switching CLI accounts, **Test connection**
+  Set `liveModels: false` for a static allowlist; **Test connection** then returns not applicable.
+  After switching CLI accounts, enable live discovery and run **Test connection**. It
   replaces the roster and refreshes Codex and connected clients. It reports pending or failed
   publication separately; restart running Codex sessions after publication.
 - **Transport:** Each turn creates a fresh ACP session, selects the requested model with
