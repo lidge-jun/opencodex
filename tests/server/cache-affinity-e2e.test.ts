@@ -25,6 +25,7 @@ import {
 import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { resolveDataPlaneAdmissionSecret, type DataPlaneAdmission } from "../../src/server/auth-cors";
 
 const REAL_FETCH = globalThis.fetch;
 let testDir = "";
@@ -96,6 +97,8 @@ async function turn(
   config: OcxConfig,
   threadId: string,
   model = "affinity-e2e/test",
+  admission?: DataPlaneAdmission,
+  finalize = true,
 ): Promise<RequestLogContext> {
   saveConfig(config);
   const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -107,12 +110,12 @@ async function turn(
     }),
     config,
     logCtx,
-    {},
+    { admission },
   );
   expect(response.status).toBe(200);
   await response.text();
   // The ingress layer owns finalization in production; this harness stands in for it.
-  addFinalRequestLog(nextRequestLogId(), Date.now(), logCtx, response.status);
+  if (finalize) addFinalRequestLog(nextRequestLogId(), Date.now(), logCtx, response.status);
   return logCtx;
 }
 
@@ -204,6 +207,40 @@ describe("provider cache affinity (end-to-end)", () => {
     // A different conversation is placed by ordinary selection: the moved key.
     await turn(config, "conv-2");
     expect(seenAuth.at(-1)).toBe("Bearer key-b");
+  });
+
+  test("different authenticated principals cannot share a client-supplied lane", async () => {
+    const config = makeConfig();
+    config.apiKeys = [
+      { id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" },
+      { id: "client-b", name: "B", createdAt: "2026-01-01", key: "synthetic-client-b" },
+    ];
+    const a = resolveDataPlaneAdmissionSecret("synthetic-client-a", config)!;
+    const b = resolveDataPlaneAdmissionSecret("synthetic-client-b", config)!;
+    await turn(config, "shared-thread", undefined, a);
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    await turn(config, "shared-thread", undefined, b);
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+  });
+
+  test("a replacement credential under the same entry id cannot inherit cache evidence", async () => {
+    const config = makeConfig();
+    await turn(config, "replacement-thread");
+    config.providers["affinity-e2e"]!.apiKeyPool![0]!.key = "replacement-key";
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    await turn(config, "replacement-thread");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+  });
+
+  test("an old in-flight success cannot bind a replaced credential", async () => {
+    const config = makeConfig();
+    const oldAttempt = await turn(config, "in-flight-thread", undefined, undefined, false);
+    config.providers["affinity-e2e"]!.apiKeyPool![0]!.key = "replacement-key";
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    saveConfig(config);
+    addFinalRequestLog(nextRequestLogId(), Date.now(), oldAttempt, 200);
+    await turn(config, "in-flight-thread");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
   });
 
   test.each(["env", "keychain"])(
