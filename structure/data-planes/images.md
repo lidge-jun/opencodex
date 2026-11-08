@@ -14,7 +14,7 @@ unsent hop and clears only its matching pending reference. Standalone Images and
 retain their existing behavior.
 
 For a selected Claude CLI adapter, Responses request handling refuses instruction images and
-file-backed image references in messages or tool results before vision preprocessing or helper
+file-backed image references in messages, agent messages or tool results before vision preprocessing or helper
 dispatch. Other provider routes retain their own image handling; a usable image URL takes
 precedence over a file ID. `tests/providers/claude-cli-client-http.test.ts` covers this boundary.
 

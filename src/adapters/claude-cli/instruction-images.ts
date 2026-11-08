@@ -23,7 +23,7 @@ export function responsesHasFileImage(body: unknown): boolean {
   return body.input.some(item => {
     if (!record(item)) return false;
     const parts = item.type === "function_call_output" || item.type === "custom_tool_call_output"
-      ? item.output : (item.type === undefined || item.type === "message") ? item.content : undefined;
+      ? item.output : (item.type === undefined || item.type === "message" || item.type === "agent_message") ? item.content : undefined;
     return Array.isArray(parts) && parts.some(part => record(part) && part.type === "input_image"
       && !(typeof part.image_url === "string" && part.image_url.length > 0)
       && typeof part.file_id === "string" && part.file_id.length > 0);

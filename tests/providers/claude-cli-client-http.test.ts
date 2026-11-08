@@ -7,6 +7,7 @@ import { createClaudeCliAdapter } from "../../src/adapters/claude-cli/adapter";
 import { getAdapterDefinition } from "../../src/adapters/registry";
 import { handleResponses } from "../../src/server/responses";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { rememberResponseState } from "../../src/responses/state";
 import { buildDshClientConfig } from "../../src/clients/config-export/dsh";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { OcxConfig } from "../../src/types";
@@ -217,6 +218,14 @@ test("instruction images are refused at both HTTP routes before CLI launch", asy
         }), visionConfig, { model: "", provider: "" });
         expect(response.status).toBe(400);
         expect(await response.text()).toContain("unsupported_input_modality");
+        const fileResponse = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST", body: JSON.stringify({ model: target, input: [
+            { type: "agent_message", content: [{ type: "input_image", file_id: "file-private-fixture" }] },
+            { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,QkJC" }] },
+          ] }),
+        }), visionConfig, { model: "", provider: "" });
+        expect(fileResponse.status).toBe(400);
+        expect(await fileResponse.text()).toContain("unsupported_input_modality");
       }
       expect(descriptions).toBe(0);
       expect(launches).toBe(0);
@@ -253,6 +262,16 @@ test("instruction images are refused at both HTTP routes before CLI launch", asy
     expect(otherFileBody).toContain("OpenCodex cannot translate file input on this route");
     expect(otherFileBody).not.toContain("Claude Code CLI");
     expect(otherCalls).toBe(2);
+    const otherAgentImage = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "other/fixture-model", input: [
+        { type: "agent_message", content: [{ type: "input_image", file_id: "file-private-fixture" }] },
+      ] }),
+    }), otherConfig, { model: "", provider: "" });
+    expect(otherAgentImage.status).toBe(200);
+    const otherAgentBody = await otherAgentImage.text();
+    expect(otherAgentBody).not.toContain("Claude Code CLI");
+    expect(otherAgentBody).toContain("other provider answered");
+    expect(otherCalls).toBe(3);
     const valid = await post("chat/completions", { model, messages: [
       { role: "developer", content: "text policy" },
       { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:image/png;base64,QUFB" } }] },
@@ -285,6 +304,7 @@ test("Responses file-backed images are refused before Claude CLI launch", async 
   const image = { type: "input_image", file_id: "file-private-fixture" };
   try {
     for (const model of ["claude-cli/claude-sonnet-5-5", "pair"]) for (const input of [
+      [{ type: "agent_message", content: [{ type: "input_text", text: "before" }, image] }],
       [{ role: "user", content: [{ type: "input_text", text: "before" }, image] }],
       [{ type: "function_call", call_id: "call_1", name: "view", arguments: "{}" },
         { type: "function_call_output", call_id: "call_1", output: [{ type: "input_text", text: "before" }, image] }],
@@ -300,6 +320,35 @@ test("Responses file-backed images are refused before Claude CLI launch", async 
       expect(body).not.toContain("file-private-fixture");
     }
     expect(launches).toBe(0);
+    rememberResponseState({ input: [{ type: "agent_message", content: [image] }] },
+      { id: "resp_agent_file_fixture", status: "completed", output: [] });
+    for (const model of ["claude-cli/claude-sonnet-5-5", "pair"]) {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", body: JSON.stringify({ model, previous_response_id: "resp_agent_file_fixture", input: "continue" }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).toContain("unsupported_input_modality");
+      expect(body).not.toContain("file-private-fixture");
+    }
+    expect(launches).toBe(0);
+    let decisions = 0;
+    const decisionConfig = { ...config, providers: { ...config.providers,
+      "claude-cli": { ...config.providers["claude-cli"], selectedModels: ["claude-sonnet-5-5", "claude-opus-5-5"] }, jev: {
+      adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone", apiKey: "fixture-key",
+      fetch: async () => { decisions++; return Response.json({ error: {} }, { status: 500 }); },
+    } }, combos: { routed: { strategy: "jev", targets: [
+      { provider: "claude-cli", model: "claude-sonnet-5-5" }, { provider: "claude-cli", model: "claude-opus-5-5" },
+    ] } } } as OcxConfig;
+    const decisionResponse = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "combo/routed", input: [
+        { type: "agent_message", content: [image] }, { role: "user", content: "Inspect the message" },
+      ] }),
+    }), decisionConfig, { model: "", provider: "" });
+    expect(decisions).toBe(1);
+    expect(decisionResponse.status).toBe(400);
+    expect(await decisionResponse.text()).toContain("unsupported_input_modality");
+    expect(launches).toBe(0);
     const valid = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", body: JSON.stringify({ model: "claude-cli/claude-sonnet-5-5", input: [
         { role: "user", content: [{ ...image, image_url: "data:image/png;base64,QUFB" }] },
@@ -308,6 +357,14 @@ test("Responses file-backed images are refused before Claude CLI launch", async 
     expect(valid.status).toBe(200);
     await valid.text();
     expect(launches).toBe(1);
+    const validAgent = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "claude-cli/claude-sonnet-5-5", input: [
+        { type: "agent_message", content: [{ ...image, image_url: "data:image/png;base64,QUFB" }] },
+      ] }),
+    }), config, { model: "", provider: "" });
+    expect(validAgent.status).toBe(200);
+    await validAgent.text();
+    expect(launches).toBe(2);
   } finally {
     definition.create = originalCreate;
     releaseSpend();

@@ -81,6 +81,17 @@ test("an instruction image is refused before sidecar lease acquisition, quota ad
   expect(turns).toBe(0);
 });
 
+test("an agent message file image is refused before sidecar lease acquisition, quota admission or dispatch", async () => {
+  let checks = 0;
+  setClaudeUsagePreflightForTests(async () => { checks++; return { state: "available", checkedAt: Date.now() }; });
+  const res = await send([{ type: "agent_message", content: [{ type: "input_image", file_id: "file-fixture" }] }]);
+  expect(res.status).toBe(400);
+  expect(await res.text()).toContain("unsupported_input_modality");
+  expect(released).toBe(0);
+  expect(checks).toBe(0);
+  expect(turns).toBe(0);
+});
+
 test("a preflight that throws hands the probe lease back and starts no turn", async () => {
   setClaudeUsagePreflightForTests(async () => { throw new Error("quota cache unreadable"); });
   // The error itself keeps its existing path (it is rethrown); only the lease is settled first.
