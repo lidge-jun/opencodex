@@ -35,9 +35,10 @@ OpenCodex, yalnızca programı kuran veya çalıştıran kişi bildirimi (kontro
 açılır penceresi veya etkileşimli CLI istemi) gördükten ve reddetmedikten sonra
 `telemetry.opencodex.me` adresine günde bir anonim kullanım özeti (sürüm, platform,
 sayımlar; istemler, çıktılar, anahtarlar, hesaplar, ana bilgisayar adları veya dosya
-yolları asla dahil edilmez) gönderir; kurulum sırasında bu istemden ve istediğiniz
-zaman `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` veya Proxy
-details üzerinden kapatılabilir; proje genelindeki toplamlar herkese açıktır; bunun
+yolları asla dahil edilmez) gönderir; bu bildirimde, Windows yükleyicisinde
+(varsayılan olarak işaretli "Send anonymous usage statistics" onay kutusu) ve
+istediğiniz zaman `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1`
+veya Proxy details üzerinden kapatılabilir; proje genelindeki toplamlar herkese açıktır; bunun
 dışında veriler yalnızca kullanıcının yapılandırdığı yerlere gider. Uygulamada
 OpenCodex, istekleri yapılandırdığınız sağlayıcılara iletir. Yeni sürümler için
 GitHub ve npm kayıt deposundan yayın meta verilerini de okur; bu güncelleme
