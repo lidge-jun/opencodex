@@ -24,6 +24,7 @@ import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import { createProviderDraftStore, type ProviderDraftStore } from "../../provider-workspace/target-drafts";
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
@@ -64,6 +65,8 @@ export default function ProviderDetails({
   onCodexActiveNeedsReauthChange,
   codexController,
   onUpdateProvider,
+  targetKey,
+  draftStore,
   isDefault,
   onRemoveProvider,
   onSetDisabled,
@@ -111,6 +114,10 @@ export default function ProviderDetails({
   /** Shared Codex account state owned by Providers (WP3). */
   codexController?: CodexAccountPoolController;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  /** Dashboard server identity; provider names are only unique within one target. */
+  targetKey?: string;
+  /** Page-owned in-memory drafts, scoped by target and provider. */
+  draftStore?: ProviderDraftStore;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
@@ -119,6 +126,8 @@ export default function ProviderDetails({
   onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
+  const settingsTargetKey = targetKey ?? "";
+  const localDraftStore = useMemo(() => draftStore ?? createProviderDraftStore(), [draftStore]);
   const [tab, setTab] = useState<Tab>("overview");
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<Tab | "deselect" | null>(null);
@@ -452,9 +461,11 @@ export default function ProviderDetails({
         )}
         {tab === "settings" && (
           <ProviderSettings
-            key={item.name}
+            key={`${settingsTargetKey}\u0000${item.name}`}
             item={item}
             apiBase={apiBase}
+            targetKey={settingsTargetKey}
+            draftStore={localDraftStore}
             availableModels={availableModels}
             onUpdateProvider={handleUpdateProvider}
             onDirtyChange={setSettingsDirty}

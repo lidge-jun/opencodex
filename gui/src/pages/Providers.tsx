@@ -14,6 +14,7 @@ import { useT } from "../i18n/shared";
 import { useProviderAccountPools, type AccountSelectionTarget } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
+import { createProviderDraftStore } from "../provider-workspace/target-drafts";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
 import type { ProvidersConfig } from "./providers-shared";
@@ -216,10 +217,27 @@ function useAccountSelectionEvents(
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
+  const target = useMemo(() => ({ apiBase }), [apiBase]);
   const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
-  const [config, setConfig] = useState<ProvidersConfig | null>(
-    () => readSessionListCache<ProvidersConfig>(configCacheKey),
+  const seededConfig = useMemo(() => readSessionListCache<ProvidersConfig>(configCacheKey), [configCacheKey]);
+  // Config belongs to the target that answered it. A late response from the previous
+  // target is ignored, and the first paint after a switch never renders the old server's
+  // providers under the new server's save callbacks.
+  const [configSnapshot, setConfigSnapshot] = useState<{ target: object; config: ProvidersConfig | null }>(
+    () => ({ target, config: seededConfig }),
   );
+  const config = configSnapshot.target === target ? configSnapshot.config : seededConfig;
+  const currentTargetRef = useRef(target);
+  useLayoutEffect(() => { currentTargetRef.current = target; }, [target]);
+  const setConfig = useCallback<React.Dispatch<React.SetStateAction<ProvidersConfig | null>>>((next) => {
+    if (currentTargetRef.current !== target) return;
+    setConfigSnapshot(current => {
+      const base = current.target === target ? current.config : seededConfig;
+      return { target, config: typeof next === "function" ? next(base) : next };
+    });
+  }, [seededConfig, target]);
+  /** In-memory only; a target switch parks its drafts here for the return trip. */
+  const draftStore = useMemo(() => createProviderDraftStore(), []);
   const [adding, setAdding] = useState(false);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
@@ -420,7 +438,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const {
     draft, setDraft, jsonEditorOpen, jsonSaving, jsonLeaveOpen,
     saveConfig, openJsonEditor, discardJsonEditor, requestCloseJsonEditor, restoreJsonEditor,
-    jsonIsDirty, setJsonLeaveOpen,
+    jsonIsDirty, jsonConflict, useSavedJsonValues, keepJsonDraft, setJsonLeaveOpen,
   } = jsonEditor;
 
   /**
@@ -631,6 +649,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           onSave: () => saveConfig(),
           onClose: requestCloseJsonEditor,
           onRestore: restoreJsonEditor,
+          conflict: jsonConflict,
+          onUseSaved: useSavedJsonValues,
+          onKeepDraft: keepJsonDraft,
         }}
         jsonSaving={jsonSaving}
         modelsRefreshToken={modelsRefreshToken}
@@ -687,6 +708,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             onSetDisabled={setProviderDisabled}
             onSetDefault={name => { void setDefaultProvider(name); }}
             onUpdateProvider={updateProvider}
+            targetKey={apiBase}
+            draftStore={draftStore}
             codexController={codexPool}
           />
           );

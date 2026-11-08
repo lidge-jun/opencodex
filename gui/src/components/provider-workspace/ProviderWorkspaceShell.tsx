@@ -36,6 +36,7 @@ import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
 import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
 import ProviderJsonEditor, { type JsonEditorState } from "./ProviderJsonEditor";
+import { providerDraftTargetLabel } from "../../provider-workspace/target-drafts";
 
 import type { ModelRow } from "../../pages/models-shared";
 import { parseModelInventory, countModelInventory, parseModelSelection, parseProviderDiscoveryMap } from "../../provider-workspace/model-inventory";
@@ -592,6 +593,7 @@ export default function ProviderWorkspaceShell({
           <ProviderJsonEditor
             editor={jsonEditor}
             providerName={t("nav.providers")}
+            targetLabel={providerDraftTargetLabel(apiBase)}
             saving={jsonSaving}
             onSave={() => { void jsonEditor.onSave(); }}
           />

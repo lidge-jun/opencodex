@@ -380,7 +380,7 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     expect(host.textContent).toContain("Current accountWork");
   });
-  test("changing API targets does not unmount an unsaved Settings draft", async () => {
+  test("changing API targets parks an unsaved Settings draft on its own target", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (path.startsWith("/new/")) return new Promise<Response>(() => {});
@@ -407,6 +407,12 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     });
     expect(host.textContent).toContain("unsaved changes");
     await render(<Providers apiBase="/new" />);
+    // The new target has not answered yet; the previous server's form and draft must not
+    // be painted under its save callback.
+    expect(host.textContent).not.toContain("unsaved changes");
+    expect([...host.querySelectorAll<HTMLInputElement>("input")].some(element => element.value === "https://draft.example.test/v1")).toBe(false);
+    await render(<Providers apiBase="/old" />);
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
     expect([...host.querySelectorAll<HTMLInputElement>("input")].some(element => element.value === "https://draft.example.test/v1")).toBe(true);
     expect(host.textContent).toContain("unsaved changes");
   });
