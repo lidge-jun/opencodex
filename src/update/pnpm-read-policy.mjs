@@ -10,7 +10,7 @@ const MUTATIONS = new Set(["add", "install", "update", "remove", "uninstall"]);
 
 /** Run a synchronous pnpm mutation outside the package, in a private workspace boundary. */
 export function withPnpmCommandCwd(args, run) {
-  if (!MUTATIONS.has(args?.[0])) return run(PNPM_READ_CWD);
+  if (!MUTATIONS.has(args?.[0]) && args?.[0] !== "store") return run(PNPM_READ_CWD);
   const cwd = mkdtempSync(join(tmpdir(), "ocx-pnpm-command-"));
   const created = lstatSync(cwd);
   const files = ["pnpm-workspace.yaml", ".npmrc"];

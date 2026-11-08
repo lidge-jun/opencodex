@@ -123,7 +123,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { npmInvocation } from \"./npm-invocation.mjs\";",
     "import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from \"./pnpm-invocation.mjs\";",
     "import { detectInstallOwnershipFromPath } from \"./install-detection.mjs\";",
-    "import { pnpmOwnerInvocation, readPnpmGlobalPackage, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"./pnpm-global-install.mjs\";",
+    "import { pnpmOwnerInvocation, pnpmOwnerEnvironment, readPnpmGlobalPackage, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"./pnpm-global-install.mjs\";",
     "import { checkRegistryPackageIntegrity } from \"./registry-integrity.mjs\";",
     "import { npmCachePreflightFailureMessage, runNpmCachePreflight, } from \"./npm-cache-preflight.mjs\";",
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";",
@@ -356,7 +356,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
     "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
-    "import { basename, dirname, join } from \"node:path\";",
+    "import { basename, dirname, isAbsolute, join, relative, sep } from \"node:path\";",
     "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],

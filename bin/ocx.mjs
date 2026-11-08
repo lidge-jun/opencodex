@@ -290,18 +290,18 @@ async function runPackageManagerSelfUpdate(manager, child) {
       packagePath: resolve(here, ".."),
       commandPaths: resolvePnpmCommands(),
       runningShimPath: runningPnpmShimPath(),
-      runPnpm: (commandPath, args, capture = false) => {
-        const invocation = pnpmInvocationForPath(commandPath, args);
+      runPnpm: (commandPath, args, capture = false, owner) => {
+        const invocation = owner ? pnpmOwnerInvocation(owner, args) : pnpmInvocationForPath(commandPath, args);
         if (!invocation) return { status: 1 };
-        return probeSpawnSync(invocation.file, invocation.args, {
+        return withPnpmCommandCwd(args, cwd => probeSpawnSync(invocation.file, invocation.args, {
           stdio: capture ? "pipe" : "ignore",
           encoding: "utf8",
           timeout: 20_000,
           windowsHide: true,
-          cwd: PNPM_READ_CWD,
-          env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)),
+          cwd,
+          env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)),
           ...invocation.options,
-        });
+        }));
       },
     });
     if (!ownerResult.ok) {
@@ -1377,12 +1377,12 @@ if (orchestratedArgs?.ok && orchestratedArgs.mode === "apply" && process.env.OCX
       return JSON.parse(probe.stdout);
     },
     pnpmCommands: resolvePnpmCommands(), runningShimPath: runningPnpmShimPath(),
-    runPnpm: (commandPath, args, capture = false) => {
-      const invocation = pnpmInvocationForPath(commandPath, args);
+    runPnpm: (commandPath, args, capture = false, owner) => {
+      const invocation = owner ? pnpmOwnerInvocation(owner, args) : pnpmInvocationForPath(commandPath, args);
       if (!invocation) return { status: 1 };
-      return probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
-        timeout: 20000, windowsHide: true, cwd: PNPM_READ_CWD,
-        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)), ...invocation.options });
+      return withPnpmCommandCwd(args, cwd => probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
+        timeout: 20000, windowsHide: true, cwd,
+        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)), ...invocation.options }));
     },
     spawn: probeSpawn,
   });

@@ -16,6 +16,7 @@ import {
   verifyPnpmInstallTree,
 } from "../../src/update/transactional-install.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { resolvePnpmGlobalOwner } from "../../src/update/pnpm-global-install.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const BUN_BYTES = 10 * 1024 * 1024 + 1024;
@@ -255,12 +256,57 @@ describe("#4202 install-tree dependency ownership", () => {
 
   test("the pnpm verifier accepts a global virtual-store links group reached through the realpath", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
-    expect(verifyPnpmInstallTree(exposed, "2.0.0")).toEqual({ ok: true, failures: [] });
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
+  });
+
+  test("refuses a registered lookalike links group outside the selected pnpm store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const globalRoot = join(root, "pnpm", "global", "v11", "g1");
+    const globalDir = join(root, "pnpm", "global", "v11");
+    const bin = join(root, "pnpm", "bin");
+    const store = join(root, "actual-custom-store");
+    mkdirSync(store, { recursive: true });
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed,
+      commandPaths: [join(root, "pnpm-executable")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[2] === "global-dir") return { status: 0, stdout: globalDir };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: bin };
+        return { status: 1 };
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+  });
+
+  test("global-store dependency links cannot escape the canonical configured store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const group = join(root, "pnpm", "store", "v11", "links", ...PKG.split("/"), "2.0.0", "h1", "node_modules");
+    const outside = join(root, "outside", "zod");
+    writeDependency(outside, "zod");
+    rmSync(join(group, "zod"));
+    symlinkSync(outside, join(group, "zod"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("sentinel dependency missing: zod");
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: zod");
+  });
+
+  test("accepts links in a custom store and refuses them with no resolved store", () => {
+    const group = join(root, "custom-cache", "v11", "links", "instance", "node_modules");
+    const packageDir = join(group, ...PKG.split("/"));
+    writePackage(packageDir, "2.0.0");
+    writeDependency(join(group, "bun"), "bun");
+    writeDependency(join(group, "zod"), "zod");
+    expect(verifyPnpmInstallTree(packageDir, "2.0.0", join(root, "custom-cache", "v11")).ok).toBe(true);
+    expect(verifyPnpmInstallTree(packageDir, "2.0.0").ok).toBe(false);
   });
 
   test("another links group in the same global store cannot vouch for the package", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: false });
-    const result = verifyPnpmInstallTree(exposed, "2.0.0");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("sentinel dependency missing: bun");
     expect(result.failures).toContain("sentinel dependency missing: zod");
@@ -278,6 +324,6 @@ describe("#4202 install-tree dependency ownership", () => {
     symlinkSync(target, exposed, "dir");
     const result = verifyPnpmInstallTree(exposed, "2.0.0");
     expect(result.ok).toBe(false);
-    expect(result.failures).toContain("sentinel dependency missing: bun");
+    expect(result.failures).toContain("pnpm global links are outside the selected store");
   });
 });

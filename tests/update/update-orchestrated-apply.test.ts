@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -159,7 +159,7 @@ test("pnpm verification re-resolves the pinned owner and checks the active tree 
   const home = mkdtempSync(join(tmpdir(), "ocx-orchestrated-pnpm-"));
   const globalDir = join(home, "global"), globalRoot = join(globalDir, "v11"), globalBinDir = join(home, "bin");
   const root = join(globalRoot, "node_modules", "@bitkyc08", "opencodex"), commandPath = join(home, "pnpm");
-  const owner = { commandPath, packagePath: root, globalDir, globalRoot, globalBinDir };
+  const owner = { commandPath, packagePath: root, globalDir, globalRoot, globalBinDir, store: realpathSync(home) };
   try {
     for (const dir of [globalBinDir, join(root, "bin"), join(root, "src/cli"), join(root, "node_modules/bun/bin"), join(root, "node_modules/zod")]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.1.0", dependencies: { bun: "1", zod: "1" } }));
@@ -173,6 +173,7 @@ test("pnpm verification re-resolves the pinned owner and checks the active tree 
     for (const name of names) { const shim = join(globalBinDir, name); writeFileSync(shim, `#!/bin/sh\nexec node '${join(root, "bin/ocx.mjs")}' "$@"\n`); chmodSync(shim, 0o755); }
     let listedVersion = "2.1.0", listedGroup = globalRoot;
     const runPnpm = (_command: string, args: readonly string[]) => {
+      if (args[0] === "store") return { status: 0, stdout: home };
       if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: listedGroup, dependencies: { "@bitkyc08/opencodex": { path: root, version: listedVersion } } }]) };
       if (args[0] === "root") return { status: 0, stdout: `${listedGroup}\n` };
       if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: `${globalDir}\n` };

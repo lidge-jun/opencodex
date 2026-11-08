@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync, lstatSync } from "node:fs";
+import { existsSync, readFileSync, lstatSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runOwnedPnpm } from "../../src/update/index";
 import { runPnpmGlobalUpdate } from "../../src/update/pnpm-global-install.mjs";
@@ -27,7 +27,7 @@ test("mutation workspaces are unique, bounded to known files, and cleaned after 
   for (const cwd of seen) expect(existsSync(cwd)).toBe(false);
 });
 
-const owner = { commandPath: "/trusted/pnpm", packagePath: "/pkg", globalDir: "/global", globalRoot: "/global", globalBinDir: "/bin" };
+const owner = { commandPath: "/trusted/pnpm", packagePath: "/pkg", globalDir: "/global", globalRoot: "/global", globalBinDir: "/bin", store: realpathSync(tmpdir()) };
 for (const fail of [false,true]) {
   test(`actual pnpm spawn options isolate ${fail ? "rollback" : "install"} and registry reads`, () => {
     const mutations: string[] = [];
@@ -44,6 +44,10 @@ for (const fail of [false,true]) {
           expect(options.cwd).not.toBe(tmpdir()); expect(options.cwd).not.toBe(PNPM_READ_CWD);
           expect(existsSync(options.cwd+"/pnpm-workspace.yaml")).toBe(true);
           status=fail && addCall++===0 ? 1 : 0;
+        } else if (args[0] === "store") {
+          expect(options.cwd).not.toBe(PNPM_READ_CWD);
+          expect(existsSync(options.cwd+"/pnpm-workspace.yaml")).toBe(true);
+          stdout=tmpdir();
         } else {
           expect(options.cwd).toBe(PNPM_READ_CWD);
           if(args[0]==="list") stdout=JSON.stringify([{path:"/global",dependencies:{ocx_test:{version:versions[Math.min(listCall++,versions.length-1)],path:"/pkg"}}}]);

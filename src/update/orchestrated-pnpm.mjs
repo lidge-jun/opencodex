@@ -12,21 +12,22 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
       const result = realpathSync.native(path);
       return process.platform === "win32" ? result.toLowerCase() : result;
     };
-    const verify = (path, expected) => {
+    const verify = (path, expected, store) => {
       try {
         const manifest = JSON.parse(readFileSync(join(path, "package.json"), "utf8"));
         const source = statSync(join(path, "src", "cli", "index.ts"));
         return { ok: manifest.version === expected && Boolean(manifest.dependencies?.bun && manifest.dependencies?.zod)
-          && source.isFile() && source.size > 0 && verifyPnpmInstallTree(path, expected).ok };
+          && source.isFile() && source.size > 0 && verifyPnpmInstallTree(path, expected, store).ok };
       } catch { return { ok: false }; }
     };
     const resolved = resolvePnpmGlobalOwner({ packageName: PACKAGE_NAME, packagePath: activeRoot,
       commandPaths: [owner.commandPath], runPnpm, verify });
     if (!resolved.ok || key(resolved.owner.globalDir) !== key(owner.globalDir)
       || key(resolved.owner.globalRoot) !== key(owner.globalRoot)
-      || key(resolved.owner.globalBinDir) !== key(owner.globalBinDir)) return false;
+      || key(resolved.owner.globalBinDir) !== key(owner.globalBinDir)
+      || key(resolved.owner.store) !== key(owner.store)) return false;
     const active = readPnpmGlobalPackage(PACKAGE_NAME,
-      (args, capture) => runPnpm(owner.commandPath, args, capture), verify,
+      (args, capture) => runPnpm(owner.commandPath, args, capture, owner), verify,
       { owner, expectedPackagePath: activeRoot, expectedGlobalRoot: owner.globalRoot, globalBinDir: owner.globalBinDir });
     return active.ok && active.version === version && key(active.path) === key(activeRoot);
   } catch { return false; }

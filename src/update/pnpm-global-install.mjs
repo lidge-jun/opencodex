@@ -143,7 +143,7 @@ function ownerGlobalArgs(args, owner) {
   const input = [...args];
   if (!owner) return input;
   const command = input[0];
-  if (!["add", "install", "update", "list", "remove", "uninstall"].includes(command)) return input;
+  if (!["add", "install", "update", "list", "remove", "uninstall", "store"].includes(command)) return input;
   const rest = [];
   for (let index = 1; index < input.length; index += 1) {
     const arg = input[index];
@@ -343,12 +343,25 @@ export function readPnpmGlobalPackage(
   }
 
   let tree;
+  let store;
   try {
-    tree = verify(packagePath, version);
+    const probe = runPnpm(ownerGlobalArgs(["store", "path"], constraints.owner), true);
+    const lines = outputText(probe?.stdout).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (probe?.status !== 0 || lines.length !== 1 || !isAbsolutePath(lines[0], platform)) throw new Error();
+    store = realpathSync.native(lines[0]);
+    if (!statSync(store).isDirectory()) throw new Error();
+  } catch {
+    return { ok: false, reason: "pnpm configured store could not be resolved" };
+  }
+  if (constraints.owner?.store && lexicalPathKey(store, platform) !== lexicalPathKey(constraints.owner.store, platform)) {
+    return { ok: false, reason: "pnpm configured store changed" };
+  }
+  try {
+    tree = verify(packagePath, version, store);
   } catch {
     return { ok: false, reason: "the active pnpm package could not be verified" };
   }
-  if (!tree?.ok) return { ok: false, reason: "the active pnpm package failed verification" };
+  if (!tree?.ok) return { ok: false, reason: tree?.failures?.[0] ?? "the active pnpm package failed verification" };
 
   // A valid package tree/group is enough to bind the owner before an update. The
   // existing shim may be stale from an older pnpm run; post-update and rollback
@@ -368,6 +381,7 @@ export function readPnpmGlobalPackage(
     globalDir: expectedGlobalDir,
     globalRoot: rootPath || expectedGlobalRoot,
     globalBinDir,
+    store,
   };
 }
 
@@ -435,7 +449,7 @@ export function resolvePnpmGlobalOwner({
     const owner = { commandPath, packagePath: listedPath, globalDir, globalRoot, globalBinDir };
     const active = readPnpmGlobalPackage(
       packageName,
-      (args, capture = false) => runPnpm(commandPath, args, capture),
+      (args, capture = false) => runPnpm(commandPath, args, capture, owner),
       verify,
       {
         owner,
@@ -449,7 +463,7 @@ export function resolvePnpmGlobalOwner({
         platform,
       },
     );
-    if (active.ok) return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version } };
+    if (active.ok) return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version, store: active.store } };
     lastReason = active.reason;
   }
   return { ok: false, reason: lastReason };
@@ -479,9 +493,11 @@ export function runPnpmGlobalUpdate({
     || !owner?.globalDir
     || !owner?.globalRoot
     || !owner?.globalBinDir
+    || !owner?.store
     || !isAbsolutePath(owner.commandPath, platform)
     || !isAbsolutePath(owner.globalDir, platform)
     || !isAbsolutePath(owner.globalBinDir, platform)
+    || !isAbsolutePath(owner.store, platform)
   ) {
     return { ok: false, phase: "preflight", error: "pnpm global owner was not pinned" };
   }
@@ -525,6 +541,9 @@ export function runPnpmGlobalUpdate({
     verify,
     { ...constraints, expectedPackagePath: undefined },
   );
+  if (!after.ok && (after.reason === "pnpm configured store could not be resolved" || after.reason === "pnpm configured store changed")) {
+    return { ok: false, phase: "install", rolledBack: false, error: after.reason };
+  }
   const targetMatches = after.ok && (!targetVersion || after.version === targetVersion);
   if (install?.status === 0 && targetMatches) {
     return {
@@ -541,7 +560,7 @@ export function runPnpmGlobalUpdate({
     ? `pnpm update failed (${statusText(install?.status)})`
     : after.ok
       ? "pnpm update produced an unexpected active package version"
-      : "pnpm update completed but the active package failed verification";
+      : `pnpm update completed but the active package failed verification: ${after.reason}`;
 
   // A failed command may have left the original active group intact. Do not create a
   // second update transaction in that case; the verified previous package is already safe.

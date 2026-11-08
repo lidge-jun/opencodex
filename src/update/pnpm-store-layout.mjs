@@ -9,10 +9,10 @@
  * `mock.module` in update subprocess tests, so the verifier must not import its spelling from there.
  */
 
-/** Matches a forward-slash path that passes through a pnpm `store/v<N>/links` tree. */
-export const PNPM_GLOBAL_STORE_LINKS_PATTERN = /(?:^|\/)store\/v\d+\/links(?:\/|$)/i;
+/** Detect a versioned links layout, including a custom store directory. */
+export const PNPM_GLOBAL_STORE_LINKS_PATTERN = /(?:^|\/)v\d+\/links(?:\/|$)/i;
 
-/** True when a native path (either separator) lies inside a pnpm `store/v<N>/links` tree. */
+/** True when a native path (either separator) has the versioned links layout. */
 export function isInPnpmGlobalStoreLinks(path) {
   return PNPM_GLOBAL_STORE_LINKS_PATTERN.test(String(path).replaceAll("\\", "/"));
 }

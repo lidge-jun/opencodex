@@ -25,7 +25,7 @@ import { guardedRenameSync, ownedArtifactRm } from "./mutation-guard.mjs";
 import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
 
 /**
@@ -70,15 +70,12 @@ function isPnpmManagedRoot(nodeModulesDir) {
 }
 
 /**
- * A package group inside pnpm's global virtual store (`<store>/v<N>/links/.../node_modules`).
- * pnpm links each dependency beside the package there and writes neither `.pnpm` nor
- * `.modules.yaml`, so the bookkeeping test above cannot see it (#8183). The store is pnpm's
- * own directory, so its layout is the ownership evidence. Only the package's REALPATH group
- * may use it: a lexical path is merely how the package is exposed, and must keep proving
- * ownership with pnpm's metadata.
+ * Containment is checked on canonical paths, with a separator boundary rather than a
+ * string prefix so a sibling with a similar name cannot count as part of the store.
  */
-function isPnpmGlobalStoreGroup(nodeModulesDir) {
-  return !!nodeModulesDir && isInPnpmGlobalStoreLinks(nodeModulesDir);
+function inside(path, root) {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
 }
 
 /**
@@ -89,7 +86,7 @@ function isPnpmGlobalStoreGroup(nodeModulesDir) {
  * says pnpm manages it, or when the package's realpath group sits in pnpm's global virtual
  * store, which keeps an unrelated ancestor installation out.
  */
-function ownedDependencyRoots(packageDir) {
+function ownedDependencyRoots(packageDir, store) {
   const roots = [];
   const add = dir => { if (dir && !roots.includes(dir)) roots.push(dir); };
   const lexicalGroup = enclosingNodeModules(packageDir);
@@ -99,7 +96,7 @@ function ownedDependencyRoots(packageDir) {
   if (real && real !== packageDir) add(join(real, "node_modules"));
   if (isPnpmManagedRoot(lexicalGroup)) add(lexicalGroup);
   const realGroup = real ? enclosingNodeModules(real) : undefined;
-  if (isPnpmManagedRoot(realGroup) || isPnpmGlobalStoreGroup(realGroup)) add(realGroup);
+  if (isPnpmManagedRoot(realGroup) || (store && realGroup && inside(realGroup, join(store, "links")))) add(realGroup);
   return roots;
 }
 
@@ -110,10 +107,15 @@ function ownedDependencyRoots(packageDir) {
  * as a virtual-store path that no lexical ownership test can recognise. existsSync follows
  * the symlink, which is exactly the pnpm graph edge that proves ownership.
  */
-function pnpmOwnedDependencyDir(packageDir, name) {
-  for (const root of ownedDependencyRoots(packageDir)) {
+function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped) {
+  for (const root of ownedDependencyRoots(packageDir, store)) {
     const dir = join(root, ...name.split("/"));
-    if (existsSync(join(dir, "package.json"))) return dir;
+    if (existsSync(join(dir, "package.json"))) {
+      if (globalLinks) {
+        try { if (!inside(realpathSync(dir), store)) { escaped.add(name); continue; } } catch { escaped.add(name); continue; }
+      }
+      return dir;
+    }
   }
   return undefined;
 }
@@ -173,8 +175,20 @@ export function verifyInstallTree(packageDir, expectedVersion) {
  * hoisted linker, so the dependency may sit outside the package directory — but it must
  * still be reachable through a root this package instance owns.
  */
-export function verifyPnpmInstallTree(packageDir, expectedVersion) {
-  return verifyTreeWithDependencyLookup(packageDir, expectedVersion, pnpmOwnedDependencyDir);
+export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
+  let real;
+  try { real = realpathSync(packageDir); } catch { return { ok: false, failures: ["pnpm package path could not be resolved"] }; }
+  try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
+  const globalLinks = isInPnpmGlobalStoreLinks(real) || isInPnpmGlobalStoreLinks(packageDir)
+    || (store && (inside(real, join(store, "links")) || inside(packageDir, join(store, "links"))));
+  if (globalLinks && (!store || !inside(real, join(store, "links")))) {
+    return { ok: false, failures: ["pnpm global links are outside the selected store"] };
+  }
+  const escaped = new Set();
+  const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
+    (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped));
+  if (escaped.size) return { ok: false, failures: [...escaped].map(name => "pnpm dependency link escapes the selected store: " + name).concat(result.failures) };
+  return result;
 }
 
 function stampedName(prefix) {

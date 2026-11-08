@@ -11,6 +11,7 @@ export type RunPnpmCandidate = (
   commandPath: string,
   args: readonly string[],
   capture?: boolean,
+  owner?: PnpmGlobalOwner,
 ) => PnpmRunResult;
 
 export interface PnpmGlobalOwner {
@@ -21,6 +22,7 @@ export interface PnpmGlobalOwner {
   /** Actual versioned global group reported by pnpm root/list. */
   globalRoot: string;
   globalBinDir: string;
+  store?: string;
   version?: string;
 }
 
@@ -72,6 +74,7 @@ export type PnpmGlobalPackage =
       globalDir?: string;
       globalRoot?: string;
       globalBinDir?: string;
+      store: string;
     }
   | { ok: false; reason: string };
 

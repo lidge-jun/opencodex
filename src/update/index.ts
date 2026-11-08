@@ -29,6 +29,7 @@ import type {
 } from "./install-detection.d.mts";
 import {
   pnpmOwnerInvocation,
+  pnpmOwnerEnvironment,
   readPnpmGlobalPackage,
   resolvePnpmGlobalOwner,
   runPnpmGlobalUpdate,
@@ -117,18 +118,19 @@ function runPnpmCandidate(
   capture = false,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   probeEnv: NodeJS.ProcessEnv = process.env,
+  owner?: PnpmGlobalOwner,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
-  const invocation = pnpmInvocationForPath(commandPath, args);
+  const invocation = owner ? pnpmOwnerInvocation(owner, args, process.platform, probeEnv) : pnpmInvocationForPath(commandPath, args);
   if (!invocation) return { status: 1 };
-  return probeSpawn(invocation.file, invocation.args, {
+  return withPnpmCommandCwd(args, cwd => probeSpawn(invocation.file, invocation.args, {
     stdio: capture ? "pipe" : "ignore",
     encoding: "utf8",
     timeout: 20_000,
     windowsHide: true,
-    cwd: PNPM_READ_CWD,
-    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)),
+    cwd,
+    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(owner ? pnpmOwnerEnvironment(owner, probeEnv) : probeEnv)),
     ...invocation.options,
-  });
+  }));
 }
 
 /** Resolve the exact pnpm executable/group/bin that own this package. */
@@ -142,7 +144,7 @@ export function resolveCurrentPnpmGlobalOwner(
     packagePath: packageRoot(),
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
-    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env),
+    runPnpm: (commandPath, args, capture, owner) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env, owner),
   });
 }
 
