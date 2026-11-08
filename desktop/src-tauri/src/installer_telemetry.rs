@@ -44,8 +44,10 @@ pub const REGISTRY_VALUE: &str = "InstallerChoice";
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const STAMP_VALUE: &str = "InstallerChoiceStamp";
 /// Written by this app under HKCU: the stamp of the last machine-wide opt-out applied for this user.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const APPLIED_STAMP_VALUE: &str = "AppliedInstallerStamp";
 /// Written by this app under HKCU: the stamp of the last per-user opt-out applied.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const APPLIED_USER_STAMP_VALUE: &str = "AppliedUserInstallerStamp";
 // The installer's value for an opt-out, pinned against the WiX fragment by a test; the app treats any
 // value other than `SEND` as an opt-out.
@@ -71,12 +73,14 @@ const RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum Scope {
     /// `HKLM`: every account on the computer.
     Machine,
-    /// `HKCU`: this account only.
+    /// `HKCU`: this account only. Only the Windows registry reader records it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     User,
 }
 
 impl Scope {
     /// The HKCU value this app writes once an opt-out from this scope is applied.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn applied_value(self) -> &'static str {
         match self {
             Scope::Machine => APPLIED_STAMP_VALUE,
