@@ -553,7 +553,10 @@ function isIncompleteStructuredWrapper(text: string): boolean {
     }
     if (openBrackets !== 0) return true;
     const bracketSlice = s.slice(firstBracket, lastBracket + 1);
-    if (lastBracket > firstBracket && (bracketSlice.includes('"') || bracketSlice.includes(":"))) {
+    if (
+      lastBracket > firstBracket &&
+      (bracketSlice.includes('"') || bracketSlice.includes("'") || bracketSlice.includes(":") || bracketSlice.includes(","))
+    ) {
       try {
         JSON.parse(bracketSlice);
       } catch {
@@ -630,7 +633,11 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
   if (!parsed || typeof parsed !== "object") {
     if (isIncompleteStructuredWrapper(unescaped)) return true;
     const hasBraces = unescaped.includes("{") && unescaped.includes("}");
-    const hasBrackets = unescaped.includes('["') || (unescaped.includes("[") && unescaped.includes("]") && unescaped.includes('"'));
+    const hasBrackets =
+      unescaped.includes('["') ||
+      (unescaped.includes("[") &&
+        unescaped.includes("]") &&
+        (unescaped.includes('"') || unescaped.includes("'") || unescaped.includes(",")));
     if (hasBraces || hasBrackets) return true;
     return isConflictingDiagnosticProse(unescaped);
   }
@@ -682,6 +689,15 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
                   return true;
                 }
               } else {
+                const codeLike = trimmed.toLowerCase().replaceAll("-", "_");
+                if (
+                  !codeLike.includes(" ") &&
+                  (codeLike.includes("_") || codeLike.length < 32) &&
+                  !EFFORT_COMPATIBLE_CODES.has(codeLike) &&
+                  !EFFORT_COMPATIBLE_TYPES.has(codeLike)
+                ) {
+                  return true;
+                }
                 if (isConflictingDiagnosticProse(trimmed)) {
                   return true;
                 }
@@ -862,6 +878,7 @@ export function isReasoningEffortRejection(text: string | undefined, depth = 0):
 
   if (parsed && typeof parsed === "object") {
     if (Array.isArray(parsed)) {
+      if (hasConflictingReasoningEffortCode(unescaped)) return false;
       for (const item of parsed) {
         if (item && typeof item === "object") {
           if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>, depth + 1)) return true;
@@ -1000,7 +1017,11 @@ export function isReasoningEffortRejection(text: string | undefined, depth = 0):
   }
 
   const hasBraces = unescaped.includes("{") && unescaped.includes("}");
-  const hasBrackets = unescaped.includes('["') || (unescaped.includes("[") && unescaped.includes("]") && unescaped.includes('"'));
+  const hasBrackets =
+    unescaped.includes('["') ||
+    (unescaped.includes("[") &&
+      unescaped.includes("]") &&
+      (unescaped.includes('"') || unescaped.includes("'") || unescaped.includes(",")));
   if (hasBraces || hasBrackets || isIncompleteStructuredWrapper(unescaped)) return false;
 
   return diagnosticTextBlamesReasoningEffort(unescaped);

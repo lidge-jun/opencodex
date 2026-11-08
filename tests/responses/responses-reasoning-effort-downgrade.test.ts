@@ -82,6 +82,8 @@ const BALANCED_MALFORMED_JSON_REFUSAL =
   'Gateway error 400: {"code":"unknown_terminal_code","message":"Unsupported value for reasoning_effort", invalid_json: }';
 const BALANCED_MALFORMED_BRACKET_REFUSAL =
   'Gateway error: ["unknown_terminal_code", "unsupported reasoning effort",]';
+const VALID_BRACKET_CONFLICTING_REFUSAL =
+  'Gateway error: ["unknown_terminal_code", "unsupported reasoning effort"]';
 const INCOMPLETE_OUTER_OBJECT_REFUSAL = ' {"param":"reasoning_effort","error":{"code":"unknown_terminal_code"}';
 const ERRORS_BIO_POLICY_REFUSAL = JSON.stringify({
   param: "reasoning_effort",
@@ -810,6 +812,8 @@ describe("rejected reasoning rungs", () => {
     expect(isReasoningEffortRejection(BALANCED_MALFORMED_JSON_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(BALANCED_MALFORMED_BRACKET_REFUSAL)).toBe(true);
     expect(isReasoningEffortRejection(BALANCED_MALFORMED_BRACKET_REFUSAL)).toBe(false);
+    expect(hasConflictingReasoningEffortCode(VALID_BRACKET_CONFLICTING_REFUSAL)).toBe(true);
+    expect(isReasoningEffortRejection(VALID_BRACKET_CONFLICTING_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(CONFLICTING_PERMISSION_PREFIX_REFUSAL)).toBe(true);
     expect(isReasoningEffortRejection(CONFLICTING_PERMISSION_PREFIX_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(PREFIXED_ECHOED_PERMISSION_DENIED_REFUSAL)).toBe(false);
@@ -1835,12 +1839,16 @@ describe("rejected reasoning rungs", () => {
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
   });
 
-  test("stops before effort replay on balanced malformed JSON refusal (openai-chat)", async () => {
+  test.each([
+    ["balanced malformed JSON", BALANCED_MALFORMED_JSON_REFUSAL],
+    ["balanced malformed bracket", BALANCED_MALFORMED_BRACKET_REFUSAL],
+    ["valid bracket with conflicting code", VALID_BRACKET_CONFLICTING_REFUSAL],
+  ])("stops before effort replay on %s refusal (openai-chat)", async (_label, refusal) => {
     writeSnapshot(["low", "high", "max"]);
     const outbound: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(BALANCED_MALFORMED_JSON_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
@@ -1857,33 +1865,35 @@ describe("rejected reasoning rungs", () => {
   });
 
   test.each([
-    ["JSON", BALANCED_MALFORMED_JSON_REFUSAL],
-    ["bracket", BALANCED_MALFORMED_BRACKET_REFUSAL],
-  ])("stops before effort replay on balanced malformed %s refusal", async (_label, refusal) => {
+    ["balanced malformed JSON", BALANCED_MALFORMED_JSON_REFUSAL],
+    ["balanced malformed bracket", BALANCED_MALFORMED_BRACKET_REFUSAL],
+    ["valid bracket with conflicting code", VALID_BRACKET_CONFLICTING_REFUSAL],
+  ])("stops before effort replay on %s refusal (openai-responses)", async (_label, refusal) => {
     writeSnapshot(["low", "high", "max"]);
-    for (const [, getCfg] of [["chat", config], ["responses", passthroughConfig]] as const) {
-      const outbound: Array<Record<string, unknown>> = [];
-      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
-      }) as typeof fetch;
-      const logCtx: RequestLogContext = { model: "", provider: "" };
-      const cfg = getCfg();
-      const response = await handleResponses(request(), cfg, logCtx);
-      const text = await response.text();
-      expect(outbound).toHaveLength(1);
-      expect(effortOf(outbound[0])).toBe("max");
-      expect(response.status).toBe(400);
-      expect(text).toContain("unknown_terminal_code");
-      expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
-      expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
-    }
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("unknown_terminal_code");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
 
   test.each([
     ["JSON", BALANCED_MALFORMED_JSON_REFUSAL],
     ["bracket", BALANCED_MALFORMED_BRACKET_REFUSAL],
-  ])("combo stops immediately on balanced malformed %s refusal without walking ladder", async (_label, refusal) => {
+    ["valid bracket conflicting", VALID_BRACKET_CONFLICTING_REFUSAL],
+  ])("combo stops immediately on %s refusal without walking ladder", async (_label, refusal) => {
     writeSnapshot(["low", "high", "max"]);
     const attempts: Array<{ host: string; effort: unknown }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
