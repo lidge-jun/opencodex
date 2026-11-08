@@ -13,15 +13,84 @@ export function formatBucketHour(now: number): string {
   return new Date(now).toISOString().slice(0, 13);
 }
 
-export function extractClientIp(request: Request): string {
+/**
+ * Rate-limit key used when no trustworthy client address is available: every such request shares
+ * one bucket. Client-controlled headers such as `x-forwarded-for` are never consulted.
+ */
+export const SHARED_RATE_LIMIT_KEY = "shared-unknown-client";
+
+/**
+ * Rate-limit key for a request. Only `cf-connecting-ip` (set by Cloudflare) is trusted; without
+ * it, or when it is not a valid address, the request falls into {@link SHARED_RATE_LIMIT_KEY}.
+ */
+export function rateLimitClientKey(request: Request): string {
   const cfIp = request.headers.get("cf-connecting-ip")?.trim();
-  if (cfIp) return cfIp;
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) return first;
+  if (!cfIp) return SHARED_RATE_LIMIT_KEY;
+  return normalizeRateLimitAddress(cfIp) ?? SHARED_RATE_LIMIT_KEY;
+}
+
+/**
+ * Normalizes a client address to its rate-limit key: an IPv4 address stays per address (an
+ * IPv4-mapped IPv6 address becomes that IPv4 address), and an IPv6 address collapses to its /64
+ * prefix, because one subscriber usually holds a whole /64 (~2^64 addresses). Returns null for
+ * anything that is not an IP address.
+ */
+export function normalizeRateLimitAddress(raw: string): string | null {
+  const address = raw.trim().toLowerCase();
+  const v4 = parseIpv4Octets(address);
+  if (v4) return v4.join(".");
+  const hextets = parseIpv6Hextets(address);
+  if (!hextets) return null;
+  if (hextets.slice(0, 5).every(h => h === 0) && hextets[5] === 0xffff) {
+    const hi = hextets[6]!;
+    const lo = hextets[7]!;
+    return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join(".");
   }
-  return "0.0.0.0";
+  return `${hextets.slice(0, 4).map(h => h.toString(16)).join(":")}::/64`;
+}
+
+function parseIpv4Octets(address: string): number[] | null {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
+  if (!match) return null;
+  const octets = match.slice(1).map(Number);
+  return octets.every(n => n <= 255) ? octets : null;
+}
+
+function parseIpv6Groups(part: string, allowIpv4Tail: boolean): number[] | null {
+  if (part === "") return [];
+  const groups = part.split(":");
+  const out: number[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i]!;
+    if (allowIpv4Tail && i === groups.length - 1 && group.includes(".")) {
+      const octets = parseIpv4Octets(group);
+      if (!octets) return null;
+      out.push((octets[0]! << 8) | octets[1]!, (octets[2]! << 8) | octets[3]!);
+    } else if (/^[0-9a-f]{1,4}$/.test(group)) {
+      out.push(parseInt(group, 16));
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+function parseIpv6Hextets(address: string): number[] | null {
+  let text = address;
+  if (text.startsWith("[") && text.endsWith("]")) text = text.slice(1, -1);
+  const zoneIndex = text.indexOf("%");
+  if (zoneIndex !== -1) text = text.slice(0, zoneIndex);
+  if (!text.includes(":")) return null;
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  if (halves.length === 1) {
+    const groups = parseIpv6Groups(halves[0]!, true);
+    return groups && groups.length === 8 ? groups : null;
+  }
+  const head = parseIpv6Groups(halves[0]!, false);
+  const tail = parseIpv6Groups(halves[1]!, true);
+  if (!head || !tail || head.length + tail.length > 7) return null;
+  return [...head, ...new Array<number>(8 - head.length - tail.length).fill(0), ...tail];
 }
 
 export async function computeHourlyIpHash(
@@ -201,7 +270,7 @@ export async function handleIngest(
   const bucketHour = formatBucketHour(now);
   const ipHash = await computeHourlyIpHash(
     rateLimitSalt,
-    extractClientIp(request),
+    rateLimitClientKey(request),
     bucketHour,
   );
   const rateResult = await env.DB
@@ -293,6 +362,33 @@ export async function handleIngest(
           payload.installDayHash,
         ),
     );
+  }
+
+  // Per-day DISTINCT install counts for each provider and each model family: one increment per
+  // report however many (provider, family) rows it carries, so the small-cohort threshold in
+  // /v1/stats can never be met by one install spreading usage across several rows.
+  const usedProviderKinds = new Set<string>();
+  const usedModelFamilies = new Set<string>();
+  for (const row of payload.models) {
+    if (row.requests <= 0) continue;
+    usedProviderKinds.add(row.providerKind);
+    usedModelFamilies.add(row.modelFamily);
+  }
+  for (const [table, column, values] of [
+    ["daily_provider_installs", "provider_kind", usedProviderKinds],
+    ["daily_family_installs", "model_family", usedModelFamilies],
+  ] as const) {
+    for (const value of values) {
+      rollupStatements.push(
+        env.DB
+          .prepare(
+            `INSERT INTO ${table} (day, ${column}, installs) SELECT ?1, ?2, 1 ` +
+            "WHERE NOT EXISTS (SELECT 1 FROM daily_installs WHERE day = ?1 AND install_day_hash = ?3) " +
+            `ON CONFLICT(day, ${column}) DO UPDATE SET installs = ${clampedAddSql("installs", "1")}`,
+          )
+          .bind(payload.day, value, payload.installDayHash),
+      );
+    }
   }
 
   for (const [cause, count] of Object.entries(payload.errors)) {
