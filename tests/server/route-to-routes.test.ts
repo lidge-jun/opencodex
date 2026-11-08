@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { handleRouteToRoutes } from "../../src/server/management/route-to-routes";
+import { handleRouteToCommand } from "../../src/cli/route-to";
+import { homeLinkChildParity } from "../../src/link/child-parity";
 import { projectHomeRouteIntent, routeClientIntentDigest } from "../../src/link/route-intent";
 import { readRouteIntentState } from "../../src/routing/route-intent-state";
 import { routeToDeviceStatus } from "../../src/routing/route-to-status";
@@ -27,8 +29,8 @@ const deps = {
   applyHome: async () => { applied++; return []; },
   syncChild: async (link: { id: string }) => { remote.push(link.id); return { state: "synced" as const }; },
 };
-beforeEach(() => { home = createTempHome("route-to-api-"); applied = 0; remote = []; });
-afterEach(() => home.remove());
+beforeEach(() => { home = createTempHome("route-to-api-"); applied = 0; remote = []; homeLinkChildParity.clear(); });
+afterEach(() => { homeLinkChildParity.clear(); home.remove(); });
 
 describe("Route-to device API", () => {
   test("unsupported verbs never mutate intent or trigger apply", async () => {
@@ -98,6 +100,29 @@ describe("Route-to device API", () => {
     ], null);
     expect(row.clients.find(value => value.client === "codex")?.applied).toBe("current");
     expect(row.clients.find(value => value.client === "aside")?.applied).toBe("failed");
+  });
+  test("a Child's earlier conflict is stale once its intent changes, so the off write succeeds", async () => {
+    expect((await handleRouteToRoutes(ctx("/api/route-to", { client: "codex", action: "on", device: id }), deps))?.status).toBe(200);
+    const enabled = projectHomeRouteIntent(config, "test", id, readRouteIntentState());
+    homeLinkChildParity.record({ linkId: id, lastApplyAt: null, runtimeStartedAt: 1_761_008_405_000, appliedCodexSettingsDigest: null, sequence: 1,
+      appliedRouteIntentDigest: null, routeClientOutcomes: [
+        { client: "codex", outcome: "conflict", intentDigest: routeClientIntentDigest(enabled, "codex") },
+        { client: "claude", outcome: "failed", intentDigest: routeClientIntentDigest(enabled, "claude") },
+      ] }, new Set([id]));
+    const response = await handleRouteToRoutes(ctx("/api/route-to", { client: "codex", action: "off", device: id }), deps);
+    expect(response?.status).toBe(200);
+    const body = await response!.json();
+    const rows = body.devices.find((row: { id: string }) => row.id === id).clients;
+    expect(rows.find((row: { client: string }) => row.client === "codex")).toMatchObject({ intent: "off", applied: "stale" });
+    // A failure recorded for an unchanged intent still stands.
+    expect(rows.find((row: { client: string }) => row.client === "claude")?.applied).toBe("failed");
+    // ocx route to codex off --device <child> reads the same response and must not report a 409.
+    const out = spyOn(console, "log").mockImplementation(() => {}), err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleRouteToCommand(["codex", "off", "--device", id], { readChildContext: () => null,
+        findLiveProxy: async () => ({ hostname: "127.0.0.1", port: 10100, pid: 1, source: "runtime" }),
+        fetchImpl: (async () => Response.json(body)) as unknown as typeof fetch })).toBe(0);
+    } finally { out.mockRestore(); err.mockRestore(); }
   });
   test("Home inherit invalidates only the corresponding initial selection", async () => {
     const doc = projectHomeRouteIntent(config, "test", id);

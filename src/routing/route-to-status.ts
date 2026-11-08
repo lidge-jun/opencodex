@@ -24,7 +24,10 @@ export interface RouteToStatus {
   deferred?: { reason: "intent_or_catalog_pending"; clients: RouteClientId[] };
 }
 
-/** Compare receipts with today's intent: an old successful apply is stale, never current. */
+/**
+ * Compare receipts with today's intent: an outcome recorded for an earlier intent is stale, never
+ * current. That includes an earlier conflict or failure, which says nothing about the new intent.
+ */
 export function routeToDeviceStatus(
   id: string,
   alias: string,
@@ -46,12 +49,15 @@ export function routeToDeviceStatus(
     clients: ROUTE_CLIENT_IDS.map(client => {
       const outcome = outcomes.find(row => row.client === client);
       const disabledLocally = localOff.includes(client) || outcome?.source === "local";
+      // A receipt without per-client digests only proves its whole-document digest for current rows.
+      const outdated = outcome !== undefined && !disabledLocally && outcome.outcome !== "stale"
+        && (outcome.intentDigest ? outcome.intentDigest !== routeClientIntentDigest(effective, client)
+          : outcome.outcome === "current" && desiredDigest !== appliedDigest);
       return {
         client,
         intent: disabledLocally ? "off" : effective.clients[client].enabled ? "on" : "off",
         source: disabledLocally ? "local" : effective.sources[client],
-        applied: outcome?.outcome === "current" && !disabledLocally
-          && (outcome.intentDigest ? outcome.intentDigest !== routeClientIntentDigest(effective, client) : desiredDigest !== appliedDigest) ? "stale" : outcome?.outcome ?? null,
+        applied: outdated ? "stale" : outcome?.outcome ?? null,
         ...(outcome?.target ? { target: outcome.target } : {}),
       };
     }),
