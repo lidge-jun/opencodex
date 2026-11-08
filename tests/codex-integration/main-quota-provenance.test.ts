@@ -1,6 +1,7 @@
 import { capturePoolQuotaWriter, saveCodexAccountCredential, saveCodexAccountCredentialIfGeneration } from "../../src/codex/account-store";
 import { getAccountQuotaHistory, isValidWhamHistoryObservation, settleQuotaPersistenceForTests } from "../../src/codex/quota";
 import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +42,8 @@ import {
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { observeNativeMainClaim } from "../helpers/native-main-claim-diagnostics";
 import * as nativeMainLockFile from "../../src/codex/native-main-lock-file";
+import { withNativeMainExclusiveClaim, withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
+import type { NativeProfileContext } from "../../src/codex/native-profile-store";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -466,7 +469,7 @@ describe("main policy quota durability and lifecycle", () => {
     } finally { observer.restore(); }
   });
 
-  test("claim diagnostics read hostile metadata once and never emit its private values", async () => {
+  test("claim diagnostics never read hostile metadata accessors", async () => {
     let reads = 0;
     const error = Object.assign(new Error("private-marker-message"), { aclFailure: {
       get step() { reads++; return reads === 1 ? "/grant:r" : "private-marker-step"; },
@@ -475,10 +478,79 @@ describe("main policy quota durability and lifecycle", () => {
     const observer = observeNativeMainClaim("hardening", error);
     try {
       await expect(nativeMainLockFile.hardenStableLockFile(join(testDir, "unused"))).rejects.toBe(error);
-      expect(reads).toBe(1);
-      expect(observer.snapshot()).toEqual({ phase: "hardening", failure: { phase: "hardening", step: "/grant:r" } });
+      expect(reads).toBe(0);
+      expect(observer.snapshot()).toEqual({ phase: "hardening", failure: { phase: "hardening" } });
       expect(JSON.stringify(observer.snapshot())).not.toContain("private-marker");
     } finally { observer.restore(); }
+  });
+
+  test("claim diagnostic phases distinguish open and both fresh and cached identity checks", async () => {
+    const context = { codexHome: testDir } as NativeProfileContext;
+    const observer = observeNativeMainClaim();
+    try {
+      await withNativeMainExclusiveClaim(context, async () => {});
+      const firstEvents = observer.events();
+      expect(firstEvents.filter(phase => phase.startsWith("identity-"))).toEqual(["identity-after-hardening", "identity-after-sqlite-setup", "identity-after-transaction"]);
+      expect(observer.snapshot().phase).toBe("operation");
+      await withNativeMainExclusiveClaim(context, async () => {});
+      const secondEvents = observer.events().slice(firstEvents.length);
+      expect(secondEvents.filter(phase => phase.startsWith("identity-"))).toEqual(["identity-after-sqlite-setup", "identity-after-transaction"]);
+      expect(observer.snapshot().phase).toBe("operation");
+    } finally { observer.restore(); }
+  });
+
+  test("claim diagnostics record a statement get failure and preserve SQLITE_BUSY", async () => {
+    const context = { codexHome: testDir } as NativeProfileContext;
+    const query = Database.prototype.query;
+    const failure = Object.assign(new Error("private-marker-sqlite"), { code: "SQLITE_BUSY" });
+    Database.prototype.query = function (this: Database, sql: string) {
+      const statement = query.call(this, sql);
+      if (sql === "SELECT rootpage FROM sqlite_schema LIMIT 1") {
+        statement.get = () => { throw failure; };
+      }
+      return statement;
+    } as typeof Database.prototype.query;
+    const observer = observeNativeMainClaim();
+    try {
+      await expect(withNativeMainSharedClaim(context, async () => {})).rejects.toMatchObject({ code: "NATIVE_MAIN_CLAIM_BUSY" });
+      expect(observer.snapshot().failure).toEqual({ phase: "transaction-read", code: "SQLITE_BUSY" });
+      expect(JSON.stringify(observer.snapshot())).not.toContain("private-marker");
+    } finally { observer.restore(); Database.prototype.query = query; }
+  });
+
+  test("claim observation leaves stateful error-code mapping unchanged", async () => {
+    const context = { codexHome: testDir } as NativeProfileContext;
+    async function run(observed: boolean) {
+      let reads = 0;
+      const error = Object.defineProperty(new Error("private-marker-code"), "code", {
+        get() { reads++; return reads === 1 ? "SQLITE_BUSY" : "private-marker-code"; },
+      });
+      const baseline = observed ? undefined : spyOn(nativeMainLockFile, "openStableLockFile").mockImplementation(() => { throw error; });
+      const observer = observed ? observeNativeMainClaim("open", error) : undefined;
+      try {
+        const mapped = await withNativeMainExclusiveClaim(context, async () => {}).catch(cause => cause);
+        return { code: mapped.code, reads, diagnostics: observer?.snapshot() };
+      } finally { observer?.restore(); baseline?.mockRestore(); }
+    }
+    const baseline = await run(false);
+    const observed = await run(true);
+    expect(baseline).toMatchObject({ code: "NATIVE_MAIN_CLAIM_BUSY", reads: 1 });
+    expect(observed).toMatchObject({ code: baseline.code, reads: baseline.reads, diagnostics: { failure: { phase: "open" } } });
+  });
+
+  test("claim diagnostics never execute an ACL accessor that tampers with allowlists", async () => {
+    const originalHas = Set.prototype.has;
+    let invoked = false;
+    const error = Object.defineProperties(new Error("private-marker-message"), {
+      code: { value: "private-marker-code" },
+      aclFailure: { get() { invoked = true; Set.prototype.has = () => true; return { step: "private-marker-path", stage: "private-marker-stderr" }; } },
+    });
+    const observer = observeNativeMainClaim("hardening", error);
+    try {
+      await expect(nativeMainLockFile.hardenStableLockFile(join(testDir, "unused"))).rejects.toBe(error);
+      expect(invoked).toBe(false);
+      expect(JSON.stringify(observer.snapshot())).not.toContain("private-marker");
+    } finally { Set.prototype.has = originalHas; observer.restore(); }
   });
 
   for (const unavailable of [true, false]) {
