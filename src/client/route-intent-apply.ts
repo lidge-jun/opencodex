@@ -190,7 +190,8 @@ async function applyNative(
   }
   const desktop = await import("../claude/desktop-3p");
   guard();
-  const inspected = desktop.inspectDesktop3pConfigLibrary({ appliedFingerprint: input.config.claudeCode?.desktopProfile?.appliedFingerprint });
+  // The durable marker: a caller's snapshot can predate a Desktop apply by another process.
+  const inspected = desktop.inspectDesktop3pConfigLibrary({ appliedFingerprint: committedConfig.claudeCode?.desktopProfile?.appliedFingerprint });
   const target = inspected.selectedProfilePath ?? inspected.libraryPath;
   if (inspected.kind === "not_installed") return { client, target, outcome: intent.enabled ? "not_installed" : "current" };
   const state = readClientConnectionState();
@@ -223,9 +224,13 @@ async function applyNative(
   if (!intent.enabled && inspected.kind === "no_owned_state") return { client, target, outcome: "current" };
   const appliedFingerprint = committedConfig.claudeCode?.desktopProfile?.appliedFingerprint;
   const refreshOnly = implicitHomeIntent(input.document, client, intent, options);
+  const changedProfile = ["unsafe", "broken", "gateway_drifted"].includes(inspected.kind);
+  if (changedProfile && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };
+  // A refresh never takes over a changed profile, even with overwrite: that is a decided write.
+  if (changedProfile && refreshOnly) return { client, target, outcome: "conflict",
+    message: "Claude Desktop ownership or profile changed; replace it with ocx route to claude-desktop on --device home --overwrite-conflict" };
+  // Only an absent or untouched profile satisfies a refresh-only switch.
   if (refreshOnly && (inspected.kind !== "gateway_ours" || !appliedFingerprint)) return { client, target, outcome: "current", message: IMPLICIT_DESKTOP_MESSAGE };
-  if (["unsafe", "broken", "gateway_drifted"].includes(inspected.kind)
-    && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };
   if (!intent.enabled) {
     guard();
     const result = desktop.removeDesktop3pStandardPivot({ appliedFingerprint: committedConfig.claudeCode?.desktopProfile?.appliedFingerprint, lifecycleLockDeps: options.lifecycleLockDeps });

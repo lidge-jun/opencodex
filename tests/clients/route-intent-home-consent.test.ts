@@ -79,6 +79,19 @@ test("only a Home write deciding Desktop creates the gateway profile", () => sce
   expect(loadConfig().claudeCode?.desktopMode).toBe('gateway');
 `), SPAWN_BUDGET_MS);
 
+test("implicit Home Desktop intent reports a changed owned profile as a conflict", () => scenario(`
+  setRouteClientIntent('claude-desktop',{enabled:true});
+  expect((await reconcile('claude-desktop', modelsA, homeDocument('claude-desktop'), 'claude-desktop')).outcome).toBe('current');
+  const profile = join(library, meta().appliedId+'.json');
+  const edited = JSON.parse(readFileSync(profile,'utf8')); edited.inferenceGatewayBaseUrl = 'http://127.0.0.1:1'; writeFileSync(profile, JSON.stringify(edited));
+  const before = readFileSync(profile,'utf8');
+  for (const overwriteConflict of [false, true]) {
+    const receipt = await materializeLocalRouteIntent(loadConfig(), homeDocument(), modelsB, { onlyClients:['claude-desktop'], lifecycleLockDeps:lockDeps, overwriteConflict });
+    expect(receipt.outcomes.find(row=>row.client==='claude-desktop').outcome).toBe('conflict');
+  }
+  expect(readFileSync(profile,'utf8')).toBe(before);
+`), SPAWN_BUDGET_MS);
+
 test("implicit Home Grok intent matches the startup gate on a gated hub", () => scenario(`
   const c=loadConfig(); c.runtimeRole='hub'; saveConfig(c);
   mkdirSync(process.env.GROK_HOME,{recursive:true});
