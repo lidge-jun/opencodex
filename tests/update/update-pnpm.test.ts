@@ -55,6 +55,8 @@ describe("pnpm installation detection", () => {
     const custom = "/opt/custom-cache/v11/links/pkg/2/h/node_modules/@bitkyc08/opencodex/bin";
     expect(detectInstallFromPath(custom, { exists: path => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index"].includes(path) })).toBe("pnpm");
     expect(detectInstallFromPath(custom, { exists: path => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index.db"].includes(path) })).toBe("pnpm");
+    expect(detectInstallFromPath("/opt/custom-cache/v11/links/@bitkyc08/opencodex/2.0.0/hash/node_modules/@bitkyc08/opencodex/bin")).toBe("pnpm");
+    expect(detectInstallFromPath("/opt/releases/v2/links/work/other/2/hash/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
   });
 
   test("follows a preserved npm-looking symlink to the pnpm package target", () => {

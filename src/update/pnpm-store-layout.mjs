@@ -16,6 +16,12 @@ export const PNPM_GLOBAL_STORE_LINKS_PATTERN = /(?:^|\/)store\/v\d+\/links(?:\/|
 export function isInPnpmGlobalStoreLinks(path, exists = () => false) {
   const normalized = String(path).replaceAll("\\", "/");
   if (PNPM_GLOBAL_STORE_LINKS_PATTERN.test(normalized)) return true;
+  // Global link slots repeat package identity on both sides of node_modules.
+  // This identifies an unmarked custom store without treating a generic vN/links
+  // ancestor as pnpm evidence.
+  const instance = normalized.match(/(?:^|\/)v\d+\/links\/(@[^/]+)\/([^/]+)\/[^/]+\/(?:[^/]+\/)?node_modules\/(?:(@[^/]+)\/)?([^/]+)(?:\/|$)/i);
+  if (instance && instance[2].toLowerCase() === instance[4].toLowerCase()
+    && (instance[1] === "@" ? !instance[3] : instance[1].toLowerCase() === instance[3]?.toLowerCase())) return true;
   const customStore = normalized.match(/^(.*\/v\d+)\/links\//i)?.[1];
   return !!customStore && exists(`${customStore}/files`)
     && ["index", "index.db", "index.fallback"].some(name => exists(`${customStore}/${name}`));

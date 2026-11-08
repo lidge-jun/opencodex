@@ -18,7 +18,7 @@ import {
   verifyPnpmInstallTree,
 } from "../../src/update/transactional-install.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { resolvePnpmGlobalOwner } from "../../src/update/pnpm-global-install.mjs";
+import { readPnpmGlobalPackage, resolvePnpmGlobalOwner } from "../../src/update/pnpm-global-install.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const BUN_BYTES = 10 * 1024 * 1024 + 1024;
@@ -274,6 +274,18 @@ describe("#4202 install-tree dependency ownership", () => {
   test("the pnpm verifier accepts a global virtual-store links group reached through the realpath", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
+    const globalRoot = join(root, "pnpm", "global", "v11", "g1"), store = join(root, "pnpm", "store", "v11");
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed, commandPaths: [join(root, "pnpm-executable")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "pnpm", "global", "v11") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(result).toMatchObject({ ok: true, owner: { store: realpathSync(store), globalStore: true } });
   });
 
   test("refuses a registered lookalike links group outside the selected pnpm store", () => {
@@ -298,6 +310,46 @@ describe("#4202 install-tree dependency ownership", () => {
     if (!result.ok) expect(result.reason).toContain("outside the selected store");
   });
 
+  test("refuses a directly listed foreign custom-store package registered as the running package", () => {
+    const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
+    const foreign = join(root, "custom", "v11", "links", ...PKG.split("/"), "2.0.0", "hash", "node_modules", ...PKG.split("/"));
+    const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(foreign, "2.0.0");
+    for (const name of ["bun", "zod"]) {
+      const outside = join(root, "outside", name); writeDependency(outside, name);
+      symlinkSync(outside, join(foreign, "node_modules", name), "dir");
+    }
+    mkdirSync(join(exposed, ".."), { recursive: true }); symlinkSync(foreign, exposed, "dir");
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed, commandPaths: [join(root, "pnpm-executable")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: foreign } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+  });
+
+  test("a pinned global-store owner refuses readback of a package moved outside its store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = realpathSync(join(root, "pnpm", "store", "v11"));
+    const globalRoot = join(root, "pnpm", "global", "v11", "g1"), outside = join(root, "plain", "node_modules", ...PKG.split("/"));
+    writePackage(outside, "2.0.0");
+    const owner = { commandPath: join(root, "pnpm-executable"), packagePath: exposed, globalDir: join(root, "pnpm", "global", "v11"),
+      globalRoot, globalBinDir: join(root, "bin"), store, globalStore: true };
+    const result = readPnpmGlobalPackage(PKG, args => {
+      if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: outside } } }]) };
+      if (args[0] === "store") return { status: 0, stdout: store };
+      return { status: 1 };
+    }, () => ({ ok: true }), { owner, checkShims: false });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+  });
+
   test("refuses a registered lookalike hidden in an intermediate package symlink", () => {
     const store = join(root, "actual-store", "v11"), globalRoot = join(root, "global", "v11");
     const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
@@ -311,19 +363,21 @@ describe("#4202 install-tree dependency ownership", () => {
     mkdirSync(join(exposed, ".."), { recursive: true });
     symlinkSync(target, intermediate, "dir");
     symlinkSync(intermediate, exposed, "dir");
-    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed,
-      commandPaths: [join(root, "pnpm-executable")],
-      runPnpm: (_command, args) => {
-        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
-        if (args[0] === "root") return { status: 0, stdout: globalRoot };
-        if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
-        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
-        return { status: 1 };
-      },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+    for (const listed of [exposed, target]) {
+      const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed,
+        commandPaths: [join(root, "pnpm-executable")],
+        runPnpm: (_command, args) => {
+          if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: listed } } }]) };
+          if (args[0] === "root") return { status: 0, stdout: globalRoot };
+          if (args[0] === "store") return { status: 0, stdout: store };
+          if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+          if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+          return { status: 1 };
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("outside the selected store");
+    }
   });
 
   test("refuses a package escaping through the selected custom store without marker files", () => {

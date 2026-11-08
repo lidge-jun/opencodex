@@ -23,6 +23,7 @@ export interface PnpmGlobalOwner {
   globalRoot: string;
   globalBinDir: string;
   store?: string;
+  globalStore?: boolean;
   version?: string;
 }
 

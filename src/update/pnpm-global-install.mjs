@@ -313,6 +313,12 @@ function readPnpmStore(runPnpm, owner, platform) {
   return { ok: true, store };
 }
 
+function isPackageInGlobalStore(packagePath, store) {
+  const path = realpathSync.native(packagePath);
+  const rel = relative(join(store, "links"), path);
+  return rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel);
+}
+
 /**
  * Read and verify the package manager's active global link. `owner` constraints
  * make the listing a proof of the group selected during preflight, not merely a
@@ -364,8 +370,16 @@ export function readPnpmGlobalPackage(
   const storeResult = readPnpmStore(runPnpm, constraints.owner, platform);
   if (!storeResult.ok) return storeResult;
   const store = storeResult.store;
+  if (constraints.owner?.globalStore) {
+    try {
+      if (!isPackageInGlobalStore(packagePath, store)) return { ok: false, reason: "pnpm global-store package is outside the selected store" };
+    } catch { return { ok: false, reason: "pnpm active package path could not be resolved" }; }
+  }
   try {
     tree = verify(packagePath, version, store);
+    if (tree?.ok && constraints.expectedPackagePath && constraints.expectedPackagePath !== packagePath) {
+      tree = verify(constraints.expectedPackagePath, version, store);
+    }
   } catch {
     return { ok: false, reason: "the active pnpm package could not be verified" };
   }
@@ -471,7 +485,13 @@ export function resolvePnpmGlobalOwner({
         platform,
       },
     );
-    if (active.ok) return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version, store: active.store } };
+    if (active.ok) {
+      let globalStore;
+      try { globalStore = isPackageInGlobalStore(active.path, active.store); }
+      catch { lastReason = "pnpm active package path could not be resolved"; continue; }
+      return { ok: true, owner: { ...owner, packagePath: active.path, version: active.version, store: active.store,
+        ...(globalStore ? { globalStore: true } : {}) } };
+    }
     lastReason = active.reason;
   }
   return { ok: false, reason: lastReason };
