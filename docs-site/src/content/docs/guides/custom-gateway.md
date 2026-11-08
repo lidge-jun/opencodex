@@ -29,7 +29,8 @@ A gateway can serve completions without a model-list endpoint. If its operator s
 raw ID, configure `liveModels: false` and `models: ["vendor/model"]` on the existing provider,
 preserving its other fields and replacing the example ID with the supplied value. See
 [static model catalogs](/reference/configuration/providers/#static-model-allowlists). If you edit
-`config.json` directly while the proxy is running, save it and restart the proxy to load the change:
+`config.json` directly while the proxy is running, save your work and wait for active requests to
+finish before restarting the proxy to load the change; a restart can interrupt them. Then:
 use the OpenCodex Desktop app to stop and restart its managed proxy, `ocx service restart` for a
 service install, or `ocx stop` followed by `ocx start` for an unsupervised proxy. Then run
 `ocx sync` and inspect the live catalog again. Alternatively, test the supplied raw ID directly
@@ -81,4 +82,3 @@ only after approving that cost; non-interactive or JSON use requires `--yes`. An
 exits zero. A successful text completion does not establish tool calling, structured output,
 continuation behavior, or the model's actual identity; upstream-reported identity is metadata. For
 later compatibility issues, reproduce the affected protocol separately with a sanitized fixture.
-
