@@ -78,8 +78,12 @@ with a 10-second `signalWithTimeout`. `src/telemetry/scheduler.ts` runs an unref
 timer started lazily from `src/server/background-lifecycle.ts` with startup and periodic jitter.
 Whenever `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed (at startup in
 `src/server/background-lifecycle.ts` even though the scheduler is not started, and on every tick),
-`ineligibleThroughDay` (today's UTC day) is persisted in `<OPENCODEX_HOME>/telemetry-state.json`
-(atomic no-follow write) and `telemetry-id.json` is deleted. Each tick carries an `AbortSignal`
+`ineligibleThroughDay` (today's UTC day) and the `envOptOutActiveSince` marker are persisted in
+`<OPENCODEX_HOME>/telemetry-state.json` (atomic no-follow write) and `telemetry-id.json` is deleted.
+A proxy started under the opt-out reads the env once and runs no ticks, so the marker stands for the
+whole period it ran: while it is set no day is eligible, and `endTelemetryEnvOptOut` closes the
+period (ineligible through the closing day, marker cleared) on that proxy's clean stop or on the
+first tick that runs without the opt-out. Each tick carries an `AbortSignal`
 cancelled by shutdown or consent changes (`nudgeTelemetryScheduler`), sends at most one completed
 UTC day strictly after the consent/disclosure UTC day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`)
 and strictly after `ineligibleThroughDay` (`day > ineligibleThroughDay`), re-reads persisted consent

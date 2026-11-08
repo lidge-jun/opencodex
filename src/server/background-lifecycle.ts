@@ -33,7 +33,7 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
-import { recordTelemetryEnvOptOut } from "../telemetry/scheduler";
+import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/scheduler";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -63,6 +63,8 @@ let processLoops: ProcessLoops | null = null;
 let cleanupInProgress = false;
 let telemetryLoopGeneration = 0;
 let stopTelemetryLoop: (() => void) | null = null;
+// This process started under an env opt-out; its clean stop closes the opt-out period (D2).
+let telemetryEnvOptOutObserved = false;
 
 function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   const ocx = env.OCX_TELEMETRY?.trim().toLowerCase();
@@ -145,6 +147,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
           // Optional background loop.
         });
     } else {
+      telemetryEnvOptOutObserved = true;
       try { recordTelemetryEnvOptOut(); } catch { /* best-effort */ }
     }
     return { memoryWatchdog, stateStoreSweeper };
@@ -168,6 +171,10 @@ function stopProcessLoops(): void {
   const stopTelemetry = stopTelemetryLoop;
   stopTelemetryLoop = null;
   stopTelemetry?.();
+  if (telemetryEnvOptOutObserved) {
+    telemetryEnvOptOutObserved = false;
+    try { endTelemetryEnvOptOut(); } catch { /* best-effort; the marker stays and the next tick ends it */ }
+  }
   const loops = processLoops;
   processLoops = null;
   loops?.memoryWatchdog.stop();
