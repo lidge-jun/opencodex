@@ -73,9 +73,12 @@ function bareErrorStatus(payload: unknown): number | undefined {
         ? Number(value)
         : undefined)
     .find(value => value !== undefined && value >= 400 && value <= 599);
-  const code = typeof error.code === "string"
-    ? error.code
-    : typeof event.code === "string" ? event.code : null;
+  const rawCode = error.code ?? event.code;
+  const code = typeof rawCode === "string"
+    ? rawCode
+    : typeof rawCode === "number" && Number.isFinite(rawCode)
+      ? String(rawCode)
+      : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
   return explicitStatus ?? httpStatusFromTerminalError({
     type: typeof error.type === "string" && error.type !== "error" ? error.type : undefined,
@@ -116,9 +119,12 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const error = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
     : event;
-  const code = typeof error.code === "string"
-    ? error.code
-    : typeof event.code === "string" ? event.code : null;
+  const rawCode = error.code ?? event.code;
+  const code = typeof rawCode === "string"
+    ? rawCode
+    : typeof rawCode === "number" && Number.isFinite(rawCode)
+      ? String(rawCode)
+      : null;
   const upstreamType = typeof error.type === "string"
     ? error.type
     : typeof event.type === "string" ? event.type : null;
@@ -260,7 +266,11 @@ function failedTerminalResponse(
       type: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
         ? "invalid_request_error" : "upstream_error",
       code: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
-        ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null) : "upstream_server_error",
+        ? (typeof terminalPayload.code === "string"
+            ? terminalPayload.code
+            : typeof terminalPayload.code === "number" && Number.isFinite(terminalPayload.code)
+              ? String(terminalPayload.code)
+              : null) : "upstream_server_error",
       message: typeof terminalPayload.message === "string"
         ? terminalPayload.message
         : logCtx.upstreamError ?? "Provider stream failed before producing output",

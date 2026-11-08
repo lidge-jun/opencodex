@@ -16,6 +16,7 @@ import {
   isOpenRouterOpaque400Envelope,
 } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { normalizeUpstreamErrorText } from "../../src/server/responses/core-errors";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
 
@@ -129,6 +130,69 @@ describe("combo failure cooldown scope", () => {
     const plain = "Invalid 'input[3].content': expected a string, got null.";
     expect(comboFailureDecision(400, plain, { upstreamType: "upstream_error" })).toBe("stop");
     expect(comboFailureCooldownScope(400, plain, { upstreamType: "upstream_error" })).toBe("target");
+  });
+
+  test("preserves numeric codes in normalizeUpstreamErrorText and consumes them as structured evidence", async () => {
+    // Numeric exhaustion code 1308
+    const exhaustionBody = JSON.stringify({
+      error: { message: "Usage limit reached", code: 1308 },
+    });
+    const normalized1308 = normalizeUpstreamErrorText(exhaustionBody, "fallback");
+    expect(normalized1308.code).toBe("1308");
+
+    const failure1308 = await consumeComboFailure(new Response(exhaustionBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failure1308.upstreamCode).toBe("1308");
+    expect(comboFailureDecision(400, failure1308.classificationText, { code: failure1308.upstreamCode })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failure1308.classificationText, { code: failure1308.upstreamCode })).toBe("target");
+
+    // Non-400 numeric code (e.g. 404) in an HTTP 400 response must not take the uncoded hop or skip cooldown
+    const non400CodeBody = JSON.stringify({
+      error: { message: "Resource not found", code: 404, type: "upstream_error" },
+    });
+    const normalized404 = normalizeUpstreamErrorText(non400CodeBody, "fallback");
+    expect(normalized404.code).toBe("404");
+
+    const failure404 = await consumeComboFailure(new Response(non400CodeBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failure404.upstreamCode).toBe("404");
+    expect(comboFailureDecision(400, failure404.classificationText, {
+      code: failure404.upstreamCode,
+      upstreamType: failure404.upstreamType,
+    })).toBe("stop");
+    expect(comboFailureCooldownScope(400, failure404.classificationText, {
+      code: failure404.upstreamCode,
+      upstreamType: failure404.upstreamType,
+    })).toBe("target");
+
+    // Numeric 400 code in OpenRouter opaque envelope retains numeric 400 code and takes the hop
+    const openRouterOpaque400 = JSON.stringify({
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    });
+    const normalizedOR = normalizeUpstreamErrorText(openRouterOpaque400, "fallback");
+    expect(normalizedOR.code).toBe("400");
+    const failureOR = await consumeComboFailure(new Response(openRouterOpaque400, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failureOR.upstreamCode).toBe("400");
+    expect(failureOR.openRouterOpaque400).toBe(true);
+    expect(comboFailureDecision(400, failureOR.classificationText, {
+      code: failureOR.upstreamCode,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failureOR.classificationText, {
+      code: failureOR.upstreamCode,
+      openRouterOpaque400: failureOR.openRouterOpaque400,
+    })).toBe("none");
   });
 
   test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {

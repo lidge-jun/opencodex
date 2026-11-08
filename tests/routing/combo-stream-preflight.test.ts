@@ -406,6 +406,29 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("retries a zero-output bare SSE error carrying numeric code 1308", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      error: { code: 1308, message: "Usage limit reached" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
+  test("treats a zero-output bare SSE error with HTTP 400 and non-400 numeric code as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        code: 404,
+        type: "upstream_error",
+        message: "Resource not found",
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
   test("passes a zero-output credential error to the ordinary combo classifier", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",
