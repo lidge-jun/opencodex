@@ -9,15 +9,40 @@
  * one whose second send cannot do more than run the same inference again, and the whole
  * logical request gets a fixed number of replacements no matter how many legs ask.
  *
- * The judgment is made on the inbound body the client sent, which is already parsed. It is
- * conservative for the outbound request: the proxy expands `previous_response_id` and lowers
- * hosted tools into client execution, so every hazard that reaches the wire was visible here,
- * and a hazard visible here may already have been removed. A cheap fail-closed answer beats
- * re-parsing a multi-megabyte outbound body on every send.
+ * Callers select the body to judge. Native passthrough judges physical outbound bodies and
+ * adapter substitution metadata; translated dispatch retains its own inbound-body policy.
  */
 import type { OcxProviderConfig } from "../../types";
 import { resetReplayPolicyFor } from "../../providers/key-failover";
 import type { AmbiguousResendAllowance } from "../../lib/request-resend-gate";
+import type { AdapterRequest } from "../../adapters/base";
+import { parseOutboundRequestBody } from "./outbound-request-body";
+
+type PhysicalReplaySnapshot = { body: BodyInit | null | undefined; hosted: boolean; providerExecuted: boolean };
+export class UnsafePhysicalReplacement extends Error {}
+
+/** Captures the attempt that actually left, and fences any replacement after queued rebuilding. */
+export function createPhysicalReplayGuard(providerExecuted: () => boolean) {
+  let last: PhysicalReplaySnapshot | undefined;
+  let pending = false;
+  const snapshot = (request: AdapterRequest, body: BodyInit | null | undefined): PhysicalReplaySnapshot => ({
+    body, hosted: (request.hostedToolSubstitutions?.length ?? 0) > 0, providerExecuted: providerExecuted(),
+  });
+  const safe = (value: PhysicalReplaySnapshot | undefined): boolean => value !== undefined
+    && !value.hosted && !value.providerExecuted && typeof value.body === "string"
+    && selfContainedResponsesBody(parseOutboundRequestBody(value.body));
+  return {
+    isSelfContained: (request: AdapterRequest) => safe(last) && safe(snapshot(request, request.body)),
+    authorize: () => { pending = true; },
+    record: (request: AdapterRequest, body: BodyInit | null | undefined, next?: () => void) => {
+      const physical = snapshot(request, body);
+      if (pending && !safe(physical)) throw new UnsafePhysicalReplacement("The rebuilt request cannot be safely replayed");
+      next?.();
+      last = physical;
+      pending = false;
+    },
+  };
+}
 
 /** Input items a client owns end to end: replaying them re-runs nothing but the model. */
 const CLIENT_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
@@ -123,8 +148,7 @@ export function selfContainedChatBody(body: unknown): boolean {
  * undifferentiated no.
  *
  * `selfContained` is a predicate rather than a body, and the getter below is why: a provider
- * that never opted in must not pay to walk the input array, and the caller memoizes one answer
- * across every leg of the request.
+ * that never opted in must not pay to walk the input array.
  */
 export function ambiguousResendAllowanceFor(
   provider: Pick<OcxProviderConfig, "retryOnReset">,

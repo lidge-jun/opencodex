@@ -22,6 +22,7 @@ import {
   resetUpstreamHostHealth,
 } from "../../codex/upstream-host-health";
 import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
+import type { AdapterRequest } from "../../adapters/base";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
@@ -538,6 +539,7 @@ export interface CodexPoolAccountRetryArgs {
   httpOnly?: boolean;
   /** Pre-output refusal hold for the alternate's WebSocket send (#6969); the caller restores. */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold;
+  onPhysicalSend?: (request: AdapterRequest, body: BodyInit | null | undefined) => void;
   onResponse?: (
     response: Response,
     authCtx: CodexAuthContext,
@@ -1076,6 +1078,7 @@ export async function retryCodexPoolOnAlternateAccount(
                 httpOnly,
                 providerName: route.providerName,
                 modelId: route.modelId,
+                onPhysicalDispatch: body => args.onPhysicalSend?.(request, body),
                 preOutputRefusalHold: args.preOutputRefusalHold,
                 accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: retryAuthCtx }, headers),
                 onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { getDefaultConfig } from "../../src/config";
@@ -17,6 +17,8 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/t
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { repoPath } from "../helpers/repo-root";
+import * as pacing from "../../src/providers/request-pacing";
+import * as adapterResolve from "../../src/server/adapter-resolve";
 
 const provider: OcxProviderConfig = {
   adapter: "openai-responses",
@@ -99,6 +101,117 @@ function call(
 function sseEvent(type: string, payload: Record<string, unknown>): string {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`;
 }
+
+describe("physical hosted image replay safety", () => {
+  test("a queued replacement is refused if credential rebuilding adds a hosted tool", async () => {
+    const sent: Record<string, unknown>[] = [];
+    let releaseQueue!: () => void;
+    let queued!: () => void;
+    const queueGate = new Promise<void>(resolve => { releaseQueue = resolve; });
+    const queuedSignal = new Promise<void>(resolve => { queued = resolve; });
+    const waitForSlot = pacing.waitForProviderRequestSlot;
+    const resolveAdapter = adapterResolve.resolveAdapter;
+    const built: Record<string, unknown>[] = [];
+    const adapterSpy = spyOn(adapterResolve, "resolveAdapter").mockImplementation((...args) => {
+      const adapter = resolveAdapter(...args);
+      const build = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (...buildArgs) => {
+        const request = await build(...buildArgs);
+        built.push(JSON.parse(request.body) as Record<string, unknown>);
+        return request;
+      };
+      return adapter;
+    });
+    let waits = 0;
+    const spy = spyOn(pacing, "waitForProviderRequestSlot").mockImplementation(async (...args) => {
+      if (++waits === 2) { queued(); await queueGate; }
+      return waitForSlot(...args);
+    });
+    globalThis.fetch = (async (_input, init) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (sent.length === 1) throw Object.assign(new Error("fixture reset"), { code: "ECONNRESET" });
+      return new Response(sseEvent("response.completed", { response: { id: "replacement", status: "completed", output: [] } }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const fixture: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://provider.example.test/v1",
+      authMode: "key", apiKey: "fixture-key", retryOnReset: {}, apiKeySelectionRevision: "initial",
+      requestPacing: { enabled: true, maxConcurrentRequests: 1 } };
+    const requestConfig: OcxConfig = { ...config, defaultProvider: "fixture", providers: { fixture } };
+    try {
+      const pending = call({ ...requestBody(true, false), model: "fixture/gpt-5.6-sol", tools: [{ type: "function", name: "image_gen.imagegen", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+      await queuedSignal;
+      fixture.modelPreferHostedTools = { "gpt-5.6-sol": ["image_generation"] };
+      fixture.apiKeySelectionRevision = "changed";
+      releaseQueue();
+      const response = await pending;
+      const text = await response.text();
+      expect(built.length).toBeGreaterThanOrEqual(2);
+      expect(built.at(-1)?.tools).toContainEqual({ type: "image_generation" });
+      expect(sent).toHaveLength(1);
+      expect(text).toContain("upstream_reset_replay_refused");
+      expect(text).not.toContain("replacement");
+    } finally { releaseQueue(); spy.mockRestore(); adapterSpy.mockRestore(); pacing.resetProviderRequestPacingForTest(); }
+  });
+
+  test.each([false, true])("a purely client-executed tool can use the replacement grant (combo=%s)", async combo => {
+    const sent: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const event = sent.length === 1
+        ? sseEvent("response.created", { response: { id: "original", status: "in_progress", output: [] } })
+        : sseEvent("response.completed", { response: { id: "replacement", status: "completed", output: [] } });
+      return new Response(event, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const requestConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} },
+      ...(combo ? { fixture: { adapter: "openai-responses", baseUrl: "https://provider.example.test/v1", authMode: "key", apiKey: "fixture-key", retryOnReset: {} } } : {}) },
+      ...(combo ? { combos: { replay: { strategy: "failover", targets: [{ provider: "fixture", model: "gpt-5.6-sol" }] } } } : {}) };
+    const response = await call({ ...requestBody(true, false), ...(combo ? { model: "combo/replay" } : {}), tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+    const text = await response.text();
+    expect(sent).toHaveLength(2);
+    expect(text).toContain("replacement");
+  });
+
+  test("an exhausted replacement grant cannot send a third client-tool request", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      return new Response(sseEvent("response.created", { response: { id: `attempt_${sends}`, status: "in_progress", output: [] } }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const requestConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: { enabled: true, replacements: 1 } } } };
+    const response = await call({ ...requestBody(true, false), tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+    await response.text();
+    expect(sends).toBe(2);
+  });
+
+  for (const ending of ["eof", "reset", "pre-header"] as const) {
+    test(`does not resend a substituted image tool after ${ending}`, async () => {
+      const sent: Record<string, unknown>[] = [];
+      const prelude = sseEvent("response.created", { response: { id: "original", status: "in_progress", output: [] } });
+      globalThis.fetch = (async (_input, init) => {
+        sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (sent.length > 1) return new Response(sseEvent("response.completed", { response: { id: "replacement", status: "completed", output: [] } }), { headers: { "content-type": "text/event-stream" } });
+        if (ending === "pre-header") throw Object.assign(new Error("fixture reset"), { code: "ECONNRESET" });
+        let first = true;
+        return new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+          if (first) { first = false; controller.enqueue(new TextEncoder().encode(prelude)); }
+          else if (ending === "eof") controller.close();
+          else controller.error(Object.assign(new Error("fixture reset"), { code: "ECONNRESET" }));
+        } }), { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      const requestConfig: OcxConfig = { ...config, defaultProvider: "fixture", providers: { fixture: { ...provider, baseUrl: "https://provider.example.test/v1", authMode: "key", apiKey: "fixture-key", retryOnReset: {},
+        modelPreferHostedTools: { "gpt-5.6-sol": ["image_generation"] } } } };
+      const response = await call({ ...requestBody(true, false), model: "fixture/gpt-5.6-sol", tools: [{ type: "function", name: "image_gen.imagegen", parameters: { type: "object", properties: {} } }] }, {}, requestConfig);
+      let text = "";
+      let readError: unknown;
+      try { text = await response.text(); } catch (error) { readError = error; }
+      expect(sent[0]?.tools).toContainEqual({ type: "image_generation" });
+      expect(sent).toHaveLength(1);
+      if (ending === "eof") expect(text).toContain("original");
+      if (ending === "reset") expect(readError ? String(readError) : text).toContain("fixture reset");
+      if (ending === "pre-header") expect(text).toContain("upstream_reset_replay_refused");
+      expect(text).not.toContain("replacement");
+    });
+  }
+});
 
 describe("canonical ChatGPT transport for non-streaming Responses callers (#6162)", () => {
   test.each([false, true])("forces upstream SSE without changing explicit store:%s", store => {
