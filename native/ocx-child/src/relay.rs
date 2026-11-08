@@ -37,6 +37,9 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
 /// Deadline for every request head a control connection reads, so a sender that trickles
 /// bytes inside `CONTROL_TIMEOUT` still releases its control slot.
 const CONTROL_DEADLINE: Duration = Duration::from_secs(2);
+/// Connect bound for a request that shutdown can cancel: a socket can be registered for
+/// cancellation only once connected, so this bounds how long shutdown can wait on a connect.
+const CANCELLABLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const HEADER_AND_SSE_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_CONCURRENT_WORKERS: usize = 32;
 const MAX_CONTROL_CONNECTIONS: usize = 256;
@@ -214,7 +217,12 @@ fn open_authenticated_upstream_with(
     limits: RequestLimits<'_>,
 ) -> Result<AuthenticatedUpstream, UpstreamError> {
     let addr = SocketAddr::from(([127, 0, 0, 1], tunnel_port));
-    let stream = TcpStream::connect_timeout(&addr, limits.remaining(AUTH_TIMEOUT)?)
+    let connect_cap = if limits.cancel.is_some() {
+        CANCELLABLE_CONNECT_TIMEOUT
+    } else {
+        AUTH_TIMEOUT
+    };
+    let stream = TcpStream::connect_timeout(&addr, limits.remaining(connect_cap)?)
         .map_err(|e| UpstreamError::HomeUnreachable(format!("tunnel connect failed: {e}")))?;
     if let Some(cancel) = limits.cancel {
         cancel.register(&stream)?;
