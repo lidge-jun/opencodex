@@ -96,8 +96,6 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
-  /** Value-free fact retained before Chat instruction content is projected to text. */
-  chatInstructionImage?: boolean;
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
   /** Captured synchronously at ingress, before parsing or child replay can suspend. */
@@ -286,6 +284,8 @@ export interface HandleResponsesOptions {
   clientEncoder?: ClientEncoderOption;
   /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
   chatRawReasoningVisible?: boolean;
+  /** Value-free fact retained before Chat instruction content is projected to text. */
+  chatInstructionImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }
