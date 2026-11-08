@@ -155,6 +155,10 @@
   --radius-card: 0.625rem;
   --radius-panel: 0.75rem;
   --radius-sheet: 1rem;
+  /* Tailwind v4 defaults rounded-full to calc(infinity * 1px), which the build serializes as
+     2147483647px. WKWebView on macOS 15 and earlier can paint that overflowing radius as square
+     corners (#8281); a finite pill radius renders the same in every engine. */
+  --radius-full: 9999px;
 
   --shadow-sm: var(--ocx-shadow-sm);
   --shadow-md: var(--ocx-shadow-md);

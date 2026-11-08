@@ -6,6 +6,9 @@ import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
 
 const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
+  ["src/update/config-preflight.ts:<module>:import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from \"node:fs\";", "read-only config preflight: open with O_RDONLY | O_NONBLOCK, inspect and read the fd, then close it"],
+  ["src/update/config-preflight.ts:runConfigPreflight:openSync", "read-only config preflight default opener; called with O_RDONLY | O_NONBLOCK"],
+  ["src/update/config-preflight.ts:runConfigPreflight:closeSync", "read-only config preflight default descriptor closer"],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:probeSpawnSync(bun.path, [\"--no-env-file\", join(here, \"../src/update/orchestrated-identity-probe-entry.ts\"), \"__update-orchestrated-identity\"], { encoding: \"utf8\", timeout: 8000, maxBuffer: 8192, windowsHide: true, stdio: [\"ignore\", \"pipe\", \"ignore\"], env: { ...updateHomeProbeEnvironment(process.env, { codexHome: process.env.CODEX_HOME ?? \"\", opencodexHome: configDir() }), OCX_IDENTITY_CLI_ROOT: resolve(here, \"..\"), OCX_IDENTITY_INSTALLER: manager, OCX_IDENTITY_TARGET: child.version }, })","read-only: verify child identity before mutation"],
   ["bin/ocx.mjs:<module>:probeSpawnSync(bun.path, [\"--no-env-file\", join(here, \"../src/update/orchestrated-identity-probe-entry.ts\"), process.argv[2]], { stdio: \"inherit\", timeout: 8000, windowsHide: true, env: { ...process.env, OCX_IDENTITY_CLI_ROOT: resolve(here, \"..\"), OCX_IDENTITY_INSTALLER: \"\", OCX_IDENTITY_TARGET: \"\" }, })","read-only: identity probe before launcher mutation"],
   ["bin/ocx.mjs:<module>:probeSpawnSync(bun.path, [\"--no-env-file\", cliPath, \"update\", \"--plan\", \"--json\", ...(version ? [\"--version\", version] : tag ? [\"--tag\", tag] : [])], { encoding: \"utf8\", maxBuffer: 65536, timeout: 60000, windowsHide: true, stdio: [\"ignore\", \"pipe\", 2], env: process.env })","read-only: orchestrated plan probe"],
@@ -86,10 +89,6 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   [
     "bin/ocx.mjs:<module>:probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], { stdio: \"inherit\", // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no // console to inherit. Without this flag Windows allocates a visible console for // the long-running Bun child, and closing that window kills the proxy (#1236). windowsHide: true, env: { // A cache shared with another Bun version (the CI test runner's) is evicted on every start. ...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join), [NODE_LAUNCH_CONTEXT_ENV]: launchContext, [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source, [BUN_RUNTIME_PATH_ENV]: bunRuntime.path, }, })",
     "bounded probe or ordinary launcher; no update control"
-  ],
-  [
-    "bin/ocx.mjs:<module>:child.kill(sig)",
-    "only this function's exact returned child / ordinary signal relay"
   ],
   [
     "src/update/async-check.ts:<module>:defaultDeps: AsyncLookupDeps = { ownerFn: pnpmOwner, spawnFn: probeSpawn }",

@@ -93,7 +93,7 @@ import {
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
 import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
-import { reportRestartFailure } from "./restart-failure";
+import { deferSupervisedRestart, reportRestartFailure, type RestartSupervisor } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -955,10 +955,9 @@ async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> 
 }
 
 const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
-
 /** Reserve confirmation time within the shared restart deadline. */
 async function handleProxyRestart(
-  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
+  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
   const result = await runDesktopAwareProxyRestart({
@@ -988,6 +987,7 @@ async function handleProxyRestart(
     process.exitCode = update.ok ? 0 : 1;
     return update.ok;
   }
+  if (onSupervised && deferSupervisedRestart(result, onSupervised)) return false;
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;

@@ -4,12 +4,14 @@ import { useKeyedClientResource } from "../client-resource";
 import { replaceHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
 import { openDesktopUpdatePage } from "../lib/desktop-shell";
-import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { clearSessionListCache, readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
   STARTUP_HEALTH_STALE_RETRY_MS,
   probeNeedsFastRetry,
+  mergeStartupProbe,
   seedStartupHealthFromSettings,
+  startupDesktopContext,
   type StartupHealthStatus,
 } from "../startup-health-ui";
 import {
@@ -61,7 +63,7 @@ import { shadowCallSaveErrorKey } from "./models-shared";
 const CONTROLS_CACHE_PREFIX = "ocx.dash.controls.v1:";
 const OVERVIEW_CACHE_PREFIX = "ocx.dash.overview.v1:";
 const USAGE_CACHE_PREFIX = "ocx.dash.usage30d.v1:";
-const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v1:";
+const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v3:";
 const MA_MODE_CACHE_PREFIX = "ocx.dash.maMode.v1:";
 
 type CachedControls = {
@@ -161,15 +163,15 @@ export function useDashboardData(apiBase: string, refreshEpoch = 0) {
     [apiBase],
   );
   const cachedStartup = useMemo(() => {
-    const cached = readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`);
-    return cached === "error" ? null : cached;
+    const cached = readSessionListCache<{ status: StartupHealthStatus; desktopManaged: boolean }>(`${STARTUP_CACHE_PREFIX}${apiBase}`);
+    return cached && ["native", "protected", "unverified"].includes(cached.status) && typeof cached.desktopManaged === "boolean" ? cached : null;
   }, [apiBase]);
   const cachedMaMode = useMemo(
     () => readSessionListCache<MaMode>(`${MA_MODE_CACHE_PREFIX}${apiBase}`),
     [apiBase],
   );
   const [health, setHealth] = useState<HealthData | null>(() => cachedOverview?.health ?? null);
-  const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(() => cachedStartup);
+  const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(() => cachedStartup?.status ?? null);
   const [providers, setProviders] = useState<ProviderInfo[]>(() => cachedOverview?.providers ?? []);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settingsState, dispatchSettings] = useReducer(dashboardSettingsReducer, {
@@ -260,7 +262,10 @@ const [maBusy, setMaBusy] = useState(false);
     }
   }, []);
 
-  const startupHealthRef = useRef<StartupHealthStatus | null>(cachedStartup);
+  const startupHealthRef = useRef<StartupHealthStatus | null>(cachedStartup?.status ?? null);
+  const startupProbeAuthoritativeRef = useRef(false);
+  const startupDesktopRef = useRef(cachedStartup?.desktopManaged === true);
+  const startupTargetRef = useRef(apiBase);
   /** Bumped whenever the dedicated startup-health poll commits; core polls ignore older generations. */
   const startupHealthGenerationRef = useRef(0);
   const epochRefs = useRef<DashboardEpochRefs>({
@@ -278,6 +283,16 @@ const [maBusy, setMaBusy] = useState(false);
     (signal) => fetchStartupHealth(apiBase, signal),
     { pollMs: 30_000 },
   );
+
+  useEffect(() => {
+    if (startupTargetRef.current === apiBase) return;
+    startupTargetRef.current = apiBase;
+    startupHealthGenerationRef.current += 1;
+    startupHealthRef.current = cachedStartup?.status ?? null;
+    startupProbeAuthoritativeRef.current = false;
+    startupDesktopRef.current = cachedStartup?.desktopManaged === true;
+    setStartupHealth(startupHealthRef.current);
+  }, [apiBase, cachedStartup]);
 
   /*
    * `/api/startup-health` answers instantly from a 30s cache and resolves the real probe in the
@@ -370,14 +385,17 @@ const [maBusy, setMaBusy] = useState(false);
     if (startupHealthPoll.data !== undefined) {
       const probe = startupHealthPoll.data;
       startupHealthGenerationRef.current += 1;
-      setStartupHealth(probe.status);
-      startupHealthRef.current = probe.status;
+      const mapped = mergeStartupProbe(probe, startupDesktopRef.current);
+      setStartupHealth(mapped.status);
+      startupHealthRef.current = mapped.status;
+      startupProbeAuthoritativeRef.current = probe.status !== "error";
+      startupDesktopRef.current = mapped.desktopManaged;
       // Never persist hard errors — a cold SWR miss used to poison revisits.
       // A stale answer is a placeholder too: caching it makes the next visit start from
       // the server's guess instead of asking again.
-      if (probe.status !== "error" && !probe.stale) {
-        writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, probe.status);
-      }
+      if (probe.status !== "error" && probe.status !== "at-risk" && !probe.stale) {
+        writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, mapped);
+      } else clearSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`);
     }
   }, [startupHealthPoll.data, apiBase]);
 
@@ -448,10 +466,13 @@ const [maBusy, setMaBusy] = useState(false);
       data.startupHealthSeed !== undefined
       && data.startupHealthGeneration === startupHealthGenerationRef.current
     ) {
-      const merged = seedStartupHealthFromSettings(startupHealthRef.current, data.startupHealthSeed);
+      const previous = startupHealthRef.current;
+      const merged = seedStartupHealthFromSettings(previous, data.startupHealthSeed, startupProbeAuthoritativeRef.current);
       setStartupHealth(merged);
       startupHealthRef.current = merged;
-      if (merged) writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, merged);
+      if (data.startupHealthSeed && !startupProbeAuthoritativeRef.current && (!data.startupHealthSeed.diagnosticStale || data.startupHealthSeed.routingKind === "opencodex-local")) startupDesktopRef.current = startupDesktopContext(data.startupHealthSeed);
+      if (merged && merged !== "at-risk" && merged !== "error" && !data.startupHealthSeed?.diagnosticStale) writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, { status: merged, desktopManaged: startupDesktopRef.current });
+      else if (merged === "at-risk" || merged === "error") clearSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`);
     }
   }, [settingsPoll.data, apiBase]);
 

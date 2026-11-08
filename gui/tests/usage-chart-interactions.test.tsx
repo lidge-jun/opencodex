@@ -76,7 +76,7 @@ function usagePayload(models: Array<{ provider: string; model: string; requests:
   return {
     range: "all",
     surface: "all",
-    sourceFilter: { client: "codex", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
+    sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     since: null,
     generatedAt: Date.now(),
     summary: {

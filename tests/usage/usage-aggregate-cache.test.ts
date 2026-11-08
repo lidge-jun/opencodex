@@ -81,6 +81,24 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("app breakdowns survive filtered cache appends and match fresh scans", async () => {
+    const path = join(testDir, "usage.jsonl");
+    const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId: string) => ({ ...entry(id), client, apiKeyId });
+    writeFileSync(path, `${JSON.stringify(row("first", "codex_cli", "A"))}\n`);
+    const all = { sourceFilter: { client: "all" as const, device: { kind: "all" as const } } };
+    const keyed = { sourceFilter: { client: "all" as const, device: { kind: "key" as const, id: "A" } } };
+    await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    appendFileSync(path, [row("second", "claude_code", "A"), row("other-key", "codex_cli", "B")].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const [appendedAll, appendedKey] = await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    expect(appendedAll.update).toBe("append");
+    expect(appendedKey.update).toBe("append");
+    const summarize = (result: UsageAggregateResult) => result.accumulator.summarize("all", NOW).apps;
+    const actual = [summarize(appendedAll), summarize(appendedKey)];
+    resetUsageAggregateCacheForTests();
+    const rebuilt = await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    expect(actual).toEqual(rebuilt.map(summarize));
+    expect(actual[1]).toMatchObject([{ client: "codex", requests: 1 }, { client: "claude_code", requests: 1 }]);
+  });
   test("unconfigured reports retain invalid-row diagnostics across incremental scans", async () => {
     const path = join(testDir, "usage.jsonl");
     writeFileSync(path, line("valid"));

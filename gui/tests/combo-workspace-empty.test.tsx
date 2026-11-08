@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import ComboWorkspace from "../src/components/ComboWorkspace";
 import { LanguageProvider } from "../src/i18n/provider";
-import { providerQuotaStatesFromReports } from "../src/combo-workspace-data";
+import { emptyDraft, providerQuotaStatesFromReports } from "../src/combo-workspace-data";
 import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -58,7 +58,22 @@ test("an empty combo list renders the first-combo editor inline", () => {
   expect(html).toContain("Internal combo id. You can change it after creation.");
   expect(html).toContain("Create combo");
   expect(html).not.toContain('role="dialog"');
+  expect(html).toContain("Create your first combo");
+  expect(html).toContain("Add at least one target; use two or more for failover.");
+});
+
+test.each([
+  { loading: true, adding: false, combos: [] },
+  { loading: false, adding: true, combos: [] },
+  { loading: false, adding: false, combos: [emptyDraft("existing")] },
+])("first-combo guidance is absent outside the first-combo state: %j", state => {
+  const html = renderToStaticMarkup(<LanguageProvider><ComboWorkspace
+    {...state} providerQuotaStates={{}} providers={[]} models={[]}
+    onRefresh={() => {}} onSave={async () => ({ ok: true })} onRemove={async () => ({ ok: true })}
+    onAdd={() => {}} onCloseAdd={() => {}} onCreated={() => {}}
+  /></LanguageProvider>);
   expect(html).not.toContain("Create your first combo");
+  expect(html).not.toContain("Add at least one target; use two or more for failover.");
 });
 
 test("an empty combo list creates the first combo and shows confirmation", async () => {

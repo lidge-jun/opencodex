@@ -20,6 +20,9 @@ test("tight radii and hairline cards", async () => {
   expect(theme).toContain("--radius-control: 0.5rem;");
   expect(theme).toContain("--radius-card: 0.625rem;");
   expect(theme).toContain("--radius-panel: 0.75rem;");
+  // rounded-full must stay finite: Tailwind's calc(infinity * 1px) default builds to
+  // 2147483647px, which macOS WKWebView can paint as square corners (#8281).
+  expect(theme).toMatch(/@theme inline \{[^}]*--radius-full: 9999px;/);
   const bridge = await read("../src/design/bridge.css");
   expect(bridge).toMatch(/\.card,\s*\.panel \{\s*border: 1px solid var\(--ocx-line\);/);
 });

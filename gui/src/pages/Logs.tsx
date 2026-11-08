@@ -19,6 +19,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 import { LogsFilterBar } from "./logs-filter-bar";
+import { LogsClientChip } from "./logs-client-chip";
 import { ProtocolBadge } from "../components/protocols/ProtocolBadge";
 import { ProtocolTracePanel } from "../components/protocols/ProtocolTracePanel";
 import { logsClockAnchor, logsClockNow, type LogsClockAnchor } from "./logs-clock";
@@ -33,7 +34,6 @@ import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamC
 import "./logs-decode-rate.css";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
-import type { LogSurface } from "./logs-surface-filter";
 import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
@@ -168,7 +168,8 @@ export interface LogEntry extends LogFailureAttribution {
   timestamp: number;
   model: string;
   provider: string;
-  surface?: LogSurface;
+  /** Closed client classification from the proxy; validate API and cached values before display. */
+  client?: unknown;
   conversationId?: string;
   /**
    * The original helper model, when Shadow Call Intercept rewrote this request.
@@ -688,7 +689,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     [filteredLogs],
   );
   const { columns, toggle: toggleColumn } = useLogsColumns();
-  const columnCount = 4 + LOGS_OPTIONAL_COLUMNS.filter(column => columns[column.key]).length;
+  const columnCount = 5 + LOGS_OPTIONAL_COLUMNS.filter(column => columns[column.key]).length;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.
   // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
@@ -876,16 +877,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <div ref={scrollContainerRef} className="logs-table-wrap max-h-[calc(100dvh-300px)] overflow-auto [overflow-anchor:none]">
           <table
             className={cn(
-              "logs-table ui-v2 w-full min-w-[820px] table-fixed border-collapse text-[13px] font-normal text-fg",
+              "logs-table ui-v2 w-full min-w-[1020px] table-fixed border-collapse text-[13px] font-normal text-fg",
               "[&_th]:h-9 [&_th]:px-3 [&_th]:text-left [&_th]:text-[12px] [&_th]:font-medium [&_th]:whitespace-nowrap [&_th]:text-fg-subtle",
               "[&_td]:px-3 [&_td]:py-2.5 [&_td]:align-middle",
             )}
           >
             <colgroup>
-              {/* `w-auto` matters: the v1 sheet still sizes `col.logs-col-model` at 15%. */}
+              {/* Keep the protocol badge readable alongside the added client column. */}
+              <col className="logs-col-client w-[48px]" />
               <col className="logs-col-time w-[120px]" />
               <col className="logs-col-status w-[80px]" />
-              <col className="logs-col-model w-auto" />
+              <col className="logs-col-model" style={{ width: 280 }} />
               {columns.effort && <col className="logs-col-effort w-[104px]" />}
               {columns.tokens && <col className="logs-col-tokens w-[84px]" />}
               {columns.rate && <col className="logs-col-rate w-[84px]" />}
@@ -895,6 +897,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             </colgroup>
             <thead className="sticky top-0 z-10 bg-bg shadow-[inset_0_-1px_0_var(--ocx-line)]">
              <tr>
+               <th scope="col"><span className="sr-only">{t("logsV2.client")}</span></th>
                <th scope="col">{t("logs.col.time")}</th>
                <th scope="col">{t("logs.col.status")}</th>
                <th scope="col">{t("logs.col.provider")} · {t("logs.col.model")}</th>
@@ -932,6 +935,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                    setDetail(log);
                  }}
                >
+                 <td><LogsClientChip client={log.client} t={t} /></td>
                  <td>
                    <span className="flex flex-col leading-tight">
                      <span className="font-mono text-[12.5px] whitespace-nowrap text-fg tabular-nums">{when.time}</span>
@@ -952,10 +956,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                            {t("logs.badge.interceptedHelper", { model: log.shadowCallRewrittenFrom })}
                          </span>
                        )}
-                       {(log.surface === "claude" || log.surface === "claude-desktop") && (
-                         <span className="badge badge-accent">{t("logs.badge.claude")}</span>
-                       )}
-                       {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
                        {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                        <ProtocolBadge trace={log.protocolTrace} t={t} />
                      </span>
