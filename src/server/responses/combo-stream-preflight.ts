@@ -28,6 +28,16 @@ const PRE_OUTPUT_CONTROL_EVENTS = new Set([
   "response.heartbeat",
 ]);
 
+// The Codex WebSocket metadata channel (`codex-ws-metadata.ts`) writes these into the same SSE
+// body, typically ahead of `response.created`. They are rebuilt field by field from quota and
+// header metadata, so they are neither output nor a terminal. Committing on them made a native
+// target that declined before any output (#8107) final for the whole combo. Every other unknown
+// type still commits.
+const CODEX_METADATA_CONTROL_EVENTS = new Set([
+  "codex.rate_limits",
+  "codex.response.metadata",
+]);
+
 const TERMINAL_EVENTS = new Set([
   "response.completed",
   "response.failed",
@@ -143,7 +153,8 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
 /**
  * Decide when replaying the request on another combo target would risk duplicating
  * client-visible output or a tool-side effect. Unknown event types commit the child
- * conservatively; only the small Responses lifecycle preamble remains replayable.
+ * conservatively; only the small Responses lifecycle preamble and Codex metadata control frames
+ * remain replayable.
  */
 export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
@@ -159,7 +170,8 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
       if (Array.isArray(output) && output.length > 0) return true;
     }
   }
-  return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);
+  return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !CODEX_METADATA_CONTROL_EVENTS.has(type)
+    && !TERMINAL_EVENTS.has(type);
 }
 
 /**
