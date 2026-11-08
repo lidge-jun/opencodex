@@ -515,19 +515,34 @@ export type ProxyLivenessObservation =
 
 /** Recovery additionally covers both available loopback families and fresh PID identity. */
 export async function observeProxyLiveness(io: LivenessIo = {}): Promise<ProxyLivenessObservation> {
-  let alivePid: number | null = null, unknown = false;
+  let alivePid: number | null = null, runtimePid: number | undefined, unknown = false;
   const live = await discoverLiveProxy(io, {
     pid: pid => { alivePid = pid; },
+    runtimePid: pid => { runtimePid = pid; },
     endpoint: result => { if (result === "unknown") unknown = true; },
   });
   if (live) return { kind: "live", live };
-  if (alivePid !== null && !unknown) {
+  const candidates = new Set<number>();
+  if (alivePid !== null) candidates.add(alivePid);
+  if (runtimePid !== undefined && Number.isSafeInteger(runtimePid) && runtimePid > 0) candidates.add(runtimePid);
+  for (const pid of candidates) {
+    if (unknown) break;
+    if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) { unknown = true; break; }
+    if (pid !== alivePid) {
+      try { process.kill(pid, 0); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") continue;
+        // Permission or an indeterminate probe is not proof that the process is dead.
+        unknown = true;
+        break;
+      }
+    }
     // A failed verifier alone conflates foreign with unreadable. Only fresh positive
     // evidence of a foreign command line releases a reused PID; never signal it.
-    const commandLine = (io.readCommandLineFn ?? readProcessCommandLine)(alivePid);
+    const commandLine = (io.readCommandLineFn ?? readProcessCommandLine)(pid);
     unknown = !commandLine?.trim() || isOcxCommandLine(commandLine);
     if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) unknown = true;
   }
+  if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) unknown = true;
   return { kind: unknown ? "unknown" : "absent", live: null };
 }
 
@@ -542,6 +557,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 
 async function discoverLiveProxy(io: LivenessIo, observer?: {
   pid: (pid: number | null) => void;
+  runtimePid: (pid: number | undefined) => void;
   endpoint: (result: EndpointLiveness) => void;
 }): Promise<LiveProxy | null> {
   // Prefer the cheap alive-pid check: the Windows cmdline probe (WMIC/PowerShell) is too
@@ -641,6 +657,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   // sibling command, manual deletion). The runtime record still says where it listens —
   // identity-probe it so ensure/update/stop see the live proxy instead of shadowing it.
   const record = readRuntimeFn();
+  observer?.runtimePid(record?.pid);
   if (record?.port && record.port !== probedPort) {
     if (budgetExhausted()) return expired();
     const expectedPid = typeof record.pid === "number" ? record.pid : undefined;
