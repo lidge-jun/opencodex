@@ -203,7 +203,8 @@ test("a Remember refusal explains the address and lets the user sign in without 
   expect(remember.checked).toBe(false);
   expect(remember.disabled).toBe(true);
   expect(dialog.isConnected).toBe(true);
-  password.value = "valid-token";
+  // The refusal is about the address, so the typed token stays for a one-submit retry.
+  expect(password.value).toBe("valid-token");
   form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
   expect(await pending).toBe("valid-token");
   expect(calls).toEqual([["valid-token", true], ["valid-token", false]]);

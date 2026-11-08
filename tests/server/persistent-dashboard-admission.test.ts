@@ -95,6 +95,13 @@ test("a Remember refusal for a proxied or plaintext origin carries a stable code
   const notAdmin = await dispatch(deviceRequest(device, "/api/session/remember"));
   expect(notAdmin.status).toBe(403);
   expect((await notAdmin.json()).code).toBeUndefined();
+  // Behind a proxy without corsAllowOrigins the Origin gate answers first; it names the same reason.
+  const gated = await dispatch(request("/api/session/remember", { headers: { Origin: "https://other.test" } }));
+  expect(gated.status).toBe(403);
+  expect(await gated.json()).toMatchObject({ error: "cross-origin request blocked", code: "remember_requires_direct_origin" });
+  const otherPath = await dispatch(request("/api/config", { method: "GET", headers: { Origin: "https://other.test" } }));
+  expect(otherPath.status).toBe(403);
+  expect((await otherPath.json()).code).toBeUndefined();
 });
 
 test("forwarded headers cannot upgrade plaintext or change the origin binding", async () => {

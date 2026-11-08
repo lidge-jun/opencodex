@@ -428,7 +428,7 @@ export const ru: Record<TKey, string> = {
   "auth.adminTokenHelp": "Это административный токен управляющего API OpenCodex, а не ключ API провайдера. При первом запуске прокси записывает его в ~/.opencodex/admin-api-token (или $OPENCODEX_HOME/admin-api-token), а OPENCODEX_ADMIN_AUTH_TOKEN переопределяет это значение.",
   "auth.rememberDevice": "Запомнить это устройство",
   "auth.rememberDeviceHint": "Сохраняет отзываемую HttpOnly-сессию на 30 дней, а не токен администратора. Требуется прямой доступ к панели по HTTPS с тем же источником, что и API (или локальный loopback).",
-  "auth.rememberUnsupported": "OpenCodex принял токен администратора, но не может запомнить это устройство по этому адресу. Для запоминания нужен прямой доступ к панели по HTTPS (или локальный loopback); за обратным прокси входите без этой опции.",
+  "auth.rememberUnsupported": "OpenCodex не может запомнить это устройство по этому адресу. Для запоминания нужен прямой доступ к панели по HTTPS (или локальный loopback); за обратным прокси входите без этой опции.",
   "connection.forgetDevice": "Забыть это устройство",
   "connection.forgetDeviceFailed": "Не удалось забыть это устройство. Сессия сохранена.",
   "auth.adminTokenDocsLink": "Как его найти",

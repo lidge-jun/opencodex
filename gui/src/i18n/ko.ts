@@ -426,7 +426,7 @@ export const ko: Record<TKey, string> = {
   "auth.adminTokenHelp": "이 값은 OpenCodex 관리 API의 관리자 토큰이며 공급자 API 키가 아닙니다. 프록시가 처음 실행될 때 ~/.opencodex/admin-api-token(또는 $OPENCODEX_HOME/admin-api-token)에 기록하고, OPENCODEX_ADMIN_AUTH_TOKEN을 설정하면 그 값이 우선합니다.",
   "auth.rememberDevice": "이 기기 기억하기",
   "auth.rememberDeviceHint": "관리자 토큰이 아닌 취소 가능한 HttpOnly 세션을 30일 동안 유지합니다. API와 동일한 오리진의 HTTPS 대시보드에 직접 연결(또는 로컬 루프백)이 필요합니다.",
-  "auth.rememberUnsupported": "OpenCodex가 관리자 토큰을 확인했지만 이 주소에서는 이 기기를 기억할 수 없습니다. 기기 기억에는 HTTPS 대시보드 직접 연결(또는 로컬 루프백)이 필요합니다. 리버스 프록시 뒤에서는 이 옵션 없이 로그인하세요.",
+  "auth.rememberUnsupported": "이 주소에서는 OpenCodex가 이 기기를 기억할 수 없습니다. 기기 기억에는 HTTPS 대시보드 직접 연결(또는 로컬 루프백)이 필요합니다. 리버스 프록시 뒤에서는 이 옵션 없이 로그인하세요.",
   "connection.forgetDevice": "이 기기 잊기",
   "connection.forgetDeviceFailed": "이 기기를 해제하지 못했습니다. 세션은 유지됩니다.",
   "auth.adminTokenDocsLink": "찾는 방법",

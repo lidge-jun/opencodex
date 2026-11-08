@@ -426,7 +426,7 @@ export const de: Record<TKey, string> = {
   "auth.adminTokenHelp": "Dies ist der Admin-Token der OpenCodex-Verwaltungs-API, kein Anbieter-API-Schlüssel. Beim ersten Start schreibt der Proxy ihn nach ~/.opencodex/admin-api-token (oder $OPENCODEX_HOME/admin-api-token); OPENCODEX_ADMIN_AUTH_TOKEN hat Vorrang.",
   "auth.rememberDevice": "Dieses Gerät merken",
   "auth.rememberDeviceHint": "Eine widerrufbare HttpOnly-Dashboard-Sitzung 30 Tage behalten, nicht das Admin-Token. Erfordert ein direktes HTTPS-Dashboard mit derselben Origin wie die API (oder lokalen Loopback).",
-  "auth.rememberUnsupported": "OpenCodex hat den Admin-Token akzeptiert, kann dieses Gerät unter dieser Adresse aber nicht merken. Merken erfordert ein direktes HTTPS-Dashboard (oder lokalen Loopback); hinter einem Reverse Proxy melden Sie sich ohne diese Option an.",
+  "auth.rememberUnsupported": "OpenCodex kann dieses Gerät unter dieser Adresse nicht merken. Merken erfordert ein direktes HTTPS-Dashboard (oder lokalen Loopback); hinter einem Reverse Proxy melden Sie sich ohne diese Option an.",
   "connection.forgetDevice": "Dieses Gerät vergessen",
   "connection.forgetDeviceFailed": "Dieses Gerät konnte nicht vergessen werden. Die Sitzung wurde beibehalten.",
   "auth.adminTokenDocsLink": "So finden Sie ihn",

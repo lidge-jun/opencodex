@@ -165,21 +165,24 @@ export function promptForAdminToken(
           finish(token);
           return;
         }
-        if (result === "remember-unsupported") {
-          // The server refused Remember for this address; signing in without it still works.
+        const rememberRefused = result === "remember-unsupported";
+        if (rememberRefused) {
+          // The server refused Remember for this address; keep the typed token so signing in
+          // without it is one more submit.
           canRemember = false;
           remember.checked = false;
+        } else {
+          password.value = "";
         }
-        password.value = "";
         password.disabled = false;
         submit.disabled = false;
         remember.disabled = !canRemember;
         setValidationError(result === "rejected"
           ? messages["auth.adminTokenRejected"]
-          : result === "remember-unsupported"
+          : rememberRefused
             ? messages["auth.rememberUnsupported"]
             : messages["auth.adminTokenUnavailable"]);
-        password.focus();
+        (rememberRefused ? submit : password).focus();
       }).catch(() => {
         if (settled) return;
         password.value = "";

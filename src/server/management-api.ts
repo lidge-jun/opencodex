@@ -248,7 +248,9 @@ export async function handleManagementAPI(
   requestIngress: ManagementRequestIngress = { trustedLoopback: false },
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
-    return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+    // A proxied dashboard reaches Remember through this gate first; name the reason (#8338).
+    const remember = url.pathname === "/api/session/remember" ? { code: "remember_requires_direct_origin" } : {};
+    return jsonResponse({ error: "cross-origin request blocked", ...remember }, 403, req, config);
   }
   if (principal === "local-account-switch-capability") {
     if (req.method !== "PUT" || !isLocalAccountSwitchPath(url.pathname) || url.search !== "") {

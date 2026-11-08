@@ -426,7 +426,7 @@ export const zh: Record<TKey, string> = {
   "auth.adminTokenHelp": "这是 OpenCodex 管理 API 的管理员令牌，不是服务商 API 密钥。代理首次启动时会写入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），设置 OPENCODEX_ADMIN_AUTH_TOKEN 可覆盖该值。",
   "auth.rememberDevice": "记住此设备",
   "auth.rememberDeviceHint": "保留可撤销的 HttpOnly 会话30天，不保存管理员令牌。需要直接访问与 API 同源的 HTTPS 仪表板（或本地回环）。",
-  "auth.rememberUnsupported": "OpenCodex 已接受管理员令牌，但无法在此地址记住此设备。记住设备需要直接访问 HTTPS 仪表板（或本地回环）；在反向代理后面，请不勾选此项登录。",
+  "auth.rememberUnsupported": "OpenCodex 无法在此地址记住此设备。记住设备需要直接访问 HTTPS 仪表板（或本地回环）；在反向代理后面，请不勾选此项登录。",
   "connection.forgetDevice": "忘记此设备",
   "connection.forgetDeviceFailed": "无法忘记此设备。会话已保留。",
   "auth.adminTokenDocsLink": "如何查找",
