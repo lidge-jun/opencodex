@@ -1,167 +1,51 @@
-import { lstatSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { readConfigDiagnostics } from "../config/diagnostics";
 import { getConfigDir } from "../config/paths";
-import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import type { OcxConfig } from "../types";
 import { aggregateTelemetryForDay, type DailyTelemetryAggregate } from "./aggregate";
 import { isTelemetryEnvOptOut, resolveTelemetryStatus, type TelemetryConsentStatus } from "./consent";
-import { parseCalendarUtcDayMs } from "./contract";
 import {
   computeInstallDayHash,
-  deleteTelemetryInstallId,
   ensureTelemetryInstallId,
   markTelemetryFirstReportSent,
 } from "./install-id";
 import { buildTelemetryPayloadV1, resolveInstallChannel, type ResolveInstallChannelOptions } from "./payload";
 import { sendTelemetryPayload, type TelemetrySendOptions, type TelemetrySendResult } from "./sender";
+import {
+  endTelemetryEnvOptOut,
+  formatUtcDay,
+  readTelemetryState,
+  readTelemetryStateFile,
+  recordTelemetryEnvOptOut,
+  utcMidnightMs,
+  withPendingTelemetryDecision,
+  writeTelemetryState,
+  type TelemetryState,
+} from "./state";
 
-export const TELEMETRY_STATE_FILE = "telemetry-state.json";
+export {
+  TELEMETRY_STATE_FILE,
+  clearPendingTelemetryDecision,
+  endTelemetryEnvOptOut,
+  formatUtcDay,
+  readTelemetryState,
+  readTelemetryStateFile,
+  recordPendingTelemetryDecision,
+  recordTelemetryEnvOptOut,
+  telemetryStatePath,
+  utcMidnightMs,
+  withPendingTelemetryDecision,
+  writeTelemetryState,
+  type TelemetryEnvOptOutOwner,
+  type TelemetryState,
+} from "./state";
+
 export const TELEMETRY_TICK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const TELEMETRY_STARTUP_BASE_DELAY_MS = 30_000;
 export const TELEMETRY_STARTUP_JITTER_MS = 60_000;
 export const TELEMETRY_INTERVAL_JITTER_MS = 15 * 60 * 1000;
 const DAY_MS = 86_400_000;
 const MAX_BACKLOG_DAYS = 7;
-const STATE_RETENTION_DAYS = 30;
-
-export interface TelemetryState {
-  version: 1;
-  sentDays: Record<string, string>;
-  lastSentDay: string | null;
-  lastSentAt: string | null;
-  ineligibleThroughDay: string | null;
-  retryAfterUntil: string | null;
-  /**
-   * Set whenever an env opt-out is observed and cleared only by a clean opted-out shutdown or by the
-   * next tick that runs without the opt-out. While it is set, every day up to the current one is
-   * ineligible, because a proxy started under `OCX_TELEMETRY=0` reads the env once and runs no ticks
-   * that could keep `ineligibleThroughDay` current (D2).
-   */
-  envOptOutActiveSince?: string | null;
-}
-
-export function telemetryStatePath(configDir = getConfigDir()): string {
-  return join(configDir, TELEMETRY_STATE_FILE);
-}
-
-function emptyState(): TelemetryState {
-  return {
-    version: 1,
-    sentDays: {},
-    lastSentDay: null,
-    lastSentAt: null,
-    ineligibleThroughDay: null,
-    retryAfterUntil: null,
-    envOptOutActiveSince: null,
-  };
-}
-
-export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
-  const path = telemetryStatePath(configDir);
-  try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) return emptyState();
-    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    if (raw?.version !== 1 || !raw.sentDays || typeof raw.sentDays !== "object" || Array.isArray(raw.sentDays)) {
-      return emptyState();
-    }
-    const sentDays: Record<string, string> = {};
-    for (const [day, at] of Object.entries(raw.sentDays as Record<string, unknown>)) {
-      if (/^\d{4}-\d{2}-\d{2}$/.test(day) && typeof at === "string") {
-        sentDays[day] = at;
-      }
-    }
-    const ineligibleThroughDay =
-      typeof raw.ineligibleThroughDay === "string" && parseCalendarUtcDayMs(raw.ineligibleThroughDay) !== null
-        ? raw.ineligibleThroughDay
-        : null;
-    const retryAfterUntil =
-      typeof raw.retryAfterUntil === "string" && !Number.isNaN(Date.parse(raw.retryAfterUntil))
-        ? raw.retryAfterUntil
-        : null;
-    const envOptOutActiveSince =
-      typeof raw.envOptOutActiveSince === "string" && !Number.isNaN(Date.parse(raw.envOptOutActiveSince))
-        ? raw.envOptOutActiveSince
-        : null;
-    return {
-      version: 1,
-      sentDays,
-      lastSentDay: typeof raw.lastSentDay === "string" ? raw.lastSentDay : null,
-      lastSentAt: typeof raw.lastSentAt === "string" ? raw.lastSentAt : null,
-      ineligibleThroughDay,
-      retryAfterUntil,
-      envOptOutActiveSince,
-    };
-  } catch {
-    return emptyState();
-  }
-}
-
-export function writeTelemetryState(state: TelemetryState, configDir = getConfigDir(), now = Date.now()): void {
-  mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  const path = telemetryStatePath(configDir);
-  try { recordOwnedConfigPath(configDir, path); } catch { /* best-effort */ }
-  const minKeepDay = formatUtcDay(utcMidnightMs(now) - STATE_RETENTION_DAYS * DAY_MS);
-  const prunedSentDays: Record<string, string> = {};
-  for (const [day, at] of Object.entries(state.sentDays ?? {})) {
-    if (day >= minKeepDay) prunedSentDays[day] = at;
-  }
-  const payload: TelemetryState = {
-    version: 1,
-    sentDays: prunedSentDays,
-    lastSentDay: state.lastSentDay ?? null,
-    lastSentAt: state.lastSentAt ?? null,
-    ineligibleThroughDay: state.ineligibleThroughDay ?? null,
-    retryAfterUntil: state.retryAfterUntil ?? null,
-    envOptOutActiveSince: state.envOptOutActiveSince ?? null,
-  };
-  atomicWriteFileNoFollow(path, `${JSON.stringify(payload, null, 2)}\n`);
-}
-
-/**
- * Persist `ineligibleThroughDay = today's UTC day` and the active opt-out marker in
- * `telemetry-state.json` (atomic no-follow) and delete `telemetry-id.json` whenever an
- * `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed.
- */
-export function recordTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.now()): void {
-  const todayDay = formatUtcDay(utcMidnightMs(now));
-  const state = readTelemetryState(configDir);
-  if (!state.ineligibleThroughDay || state.ineligibleThroughDay < todayDay) {
-    state.ineligibleThroughDay = todayDay;
-  }
-  state.envOptOutActiveSince ??= new Date(now).toISOString();
-  writeTelemetryState(state, configDir, now);
-  deleteTelemetryInstallId(configDir);
-}
-
-/**
- * End an observed env opt-out: every day up to today stays ineligible and the marker is cleared, so
- * only days strictly after today can be sent. Called by a clean shutdown of an opted-out proxy and
- * by the first tick that runs without the opt-out.
- */
-export function endTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.now()): void {
-  const state = readTelemetryState(configDir);
-  if (!state.envOptOutActiveSince) return;
-  const todayDay = formatUtcDay(utcMidnightMs(now));
-  if (!state.ineligibleThroughDay || state.ineligibleThroughDay < todayDay) {
-    state.ineligibleThroughDay = todayDay;
-  }
-  state.envOptOutActiveSince = null;
-  writeTelemetryState(state, configDir, now);
-  deleteTelemetryInstallId(configDir);
-}
-
-export function utcMidnightMs(epochMs: number): number {
-  const d = new Date(epochMs);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
-export function formatUtcDay(epochMs: number): string {
-  return new Date(epochMs).toISOString().slice(0, 10);
-}
 
 export function latestCompletedUtcDay(now = Date.now()): string {
   return formatUtcDay(utcMidnightMs(now) - DAY_MS);
@@ -183,7 +67,7 @@ export function resolveNextEligibleTelemetryDay(
   if (!status.effective) {
     return { day: null, reason: status.reason };
   }
-  if (state.envOptOutActiveSince) {
+  if (state.envOptOutActiveSince || (state.envOptOutOwners?.length ?? 0) > 0) {
     return { day: null, reason: "env-opt-out-pending" };
   }
   const consentTimestamp = status.decidedAt ?? status.noticeShownAt;
@@ -254,7 +138,7 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
   const now = options.now ?? Date.now();
   const configDir = options.configDir ?? getConfigDir();
   const readCurrentEnv = (): Record<string, string | undefined> => options.env ?? process.env;
-  const readCurrentConfig = (): Pick<OcxConfig, "telemetry"> | undefined => {
+  const readRawConfig = (): Pick<OcxConfig, "telemetry"> | undefined => {
     if (options.readConfig) return options.readConfig();
     const diskConfig = readConfigDiagnostics({ passive: true }).config;
     if (options.config) {
@@ -268,6 +152,9 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     }
     return diskConfig;
   };
+  // A decision held from before config.json existed applies until the config carries its own.
+  const readCurrentConfig = (): Pick<OcxConfig, "telemetry"> | undefined =>
+    withPendingTelemetryDecision(readRawConfig(), configDir) ?? undefined;
 
   const initialEnv = readCurrentEnv();
   if (isTelemetryEnvOptOut(initialEnv) !== null) {
@@ -281,7 +168,13 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     return { sent: false, reason: status.reason };
   }
 
-  if (readTelemetryState(configDir).envOptOutActiveSince) {
+  const stateFile = readTelemetryStateFile(configDir);
+  if (stateFile.unreadable) {
+    // A state file that exists but cannot be read may have held opt-out days; never send over it.
+    return { sent: false, reason: "state-unreadable" };
+  }
+  if (stateFile.state.envOptOutActiveSince || (stateFile.state.envOptOutOwners?.length ?? 0) > 0) {
+    // Ends the period only once no opted-out proxy is still running; otherwise extends it to today.
     endTelemetryEnvOptOut(configDir, now);
   }
   const state = readTelemetryState(configDir);
@@ -340,7 +233,8 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     }
 
     const { identity } = ensureTelemetryInstallId(configDir);
-    const newInstall = identity.firstReportSent !== true;
+    // An id minted after an opt-out is a returning install, not a new one.
+    const newInstall = identity.firstReportSent !== true && preSendState.everReported !== true;
     const installDayHash = computeInstallDayHash(identity.installId, targetDay);
     const payload = buildTelemetryPayloadV1({
       aggregate,
@@ -370,6 +264,7 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     const freshState = readTelemetryState(configDir);
     const nowIso = new Date(now).toISOString();
     freshState.sentDays[targetDay] = nowIso;
+    freshState.everReported = true;
     freshState.lastSentDay = targetDay;
     freshState.lastSentAt = nowIso;
     freshState.retryAfterUntil = null;

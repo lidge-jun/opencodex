@@ -33,7 +33,9 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
-import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/scheduler";
+import { isTelemetryEnvOptOut } from "../telemetry/consent";
+// The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
+import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -65,13 +67,6 @@ let telemetryLoopGeneration = 0;
 let stopTelemetryLoop: (() => void) | null = null;
 // This process started under an env opt-out; its clean stop closes the opt-out period (D2).
 let telemetryEnvOptOutObserved = false;
-
-function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  const ocx = env.OCX_TELEMETRY?.trim().toLowerCase();
-  if (ocx === "0" || ocx === "false" || ocx === "off" || ocx === "no") return true;
-  const dnt = env.DO_NOT_TRACK?.trim().toLowerCase();
-  return dnt === "1" || dnt === "true" || dnt === "yes";
-}
 
 function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyLiveSink(applyPolicy);
@@ -137,7 +132,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
         // The next poll tick retries.
       });
     const generation = ++telemetryLoopGeneration;
-    if (!isTelemetryDisabledByEnv()) {
+    if (isTelemetryEnvOptOut(process.env) === null) {
       void import("../telemetry/scheduler")
         .then(scheduler => {
           if (generation !== telemetryLoopGeneration) return;
@@ -148,7 +143,8 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
         });
     } else {
       telemetryEnvOptOutObserved = true;
-      try { recordTelemetryEnvOptOut(); } catch { /* best-effort */ }
+      // Recorded under this pid, so a proxy sharing the home cannot end the period while this one runs.
+      try { recordTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort */ }
     }
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
@@ -173,7 +169,7 @@ function stopProcessLoops(): void {
   stopTelemetry?.();
   if (telemetryEnvOptOutObserved) {
     telemetryEnvOptOutObserved = false;
-    try { endTelemetryEnvOptOut(); } catch { /* best-effort; the marker stays and the next tick ends it */ }
+    try { endTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort; the next tick ends it once this pid has exited */ }
   }
   const loops = processLoops;
   processLoops = null;

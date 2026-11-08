@@ -227,7 +227,9 @@ describe("docs link targets", () => {
     const codeSigning = readFileSync(repoPath("docs-site/src/content/docs/reference/code-signing.md"), "utf8");
     expect(codeSigning).not.toContain("will not transfer any information to other networked systems");
     expect(codeSigning).not.toContain("carry none of your prompts,\ncredentials or usage data");
-    expect(codeSigning).toContain(expectedPrivacy);
+    // The page has its own Privacy heading, so the statement starts without the README's label.
+    expect(codeSigning).toContain(expectedPrivacy.slice("Privacy: ".length));
+    expect(codeSigning).not.toContain("\nPrivacy: opencodex");
     expect(codeSigning).toContain("(/guides/telemetry/)");
 
     const trCodeSigning = readFileSync(repoPath("docs-site/src/content/docs/tr/reference/code-signing.md"), "utf8");
@@ -262,11 +264,13 @@ describe("docs link targets", () => {
     // D14: install-days and avgDailyActiveInstalls
     expect(guide).toContain("avgDailyActiveInstalls");
     expect(guide).toContain("install-days");
-    // D15: small-cohort protection (< 10 install-days folded into "other", subtraction risk)
+    // D15: small-cohort protection per day on distinct installs, subtraction risk
     expect(guide).toContain("daily_models");
-    expect(guide).toContain("10 install-days");
+    expect(guide).toContain("10 distinct\n  installs");
+    expect(guide).not.toContain("10 install-days");
     expect(guide).toContain("subtraction");
-    // D16 & D19: 120 reports per hour per salted hourly IP hash, pruned after 2 hours
+    // D16 & D19: 120 reports per hour per salted hourly key; IPv6 keyed on the /64
+    expect(guide).toContain("/64 prefix");
     expect(guide).toContain("120 reports per hour");
     expect(guide).not.toContain("30 reports per hour");
     expect(guide).toContain("RATE_LIMIT_SALT");

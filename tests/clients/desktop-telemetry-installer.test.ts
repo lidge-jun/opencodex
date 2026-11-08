@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,10 +10,12 @@ import {
   TELEMETRY_INSTALLER_COMPONENT_GROUP,
   TELEMETRY_INSTALLER_DIALOG,
   TELEMETRY_INSTALLER_FRAGMENT_PATH,
+  TELEMETRY_INSTALLER_KEEP_NOTE,
   TELEMETRY_INSTALLER_OPT_OUT,
   TELEMETRY_INSTALLER_REGISTRY_KEY,
   TELEMETRY_INSTALLER_REGISTRY_VALUE,
-  TELEMETRY_INSTALLER_SEND,
+  TELEMETRY_INSTALLER_STAMP_PROPERTY,
+  TELEMETRY_INSTALLER_STAMP_VALUE,
 } from "../../desktop/scripts/telemetry-installer-dialog";
 import { TELEMETRY_CLI_DISCLOSURE_LINES } from "../../src/cli/telemetry";
 import { resolveTelemetryStatus } from "../../src/telemetry/consent";
@@ -22,7 +24,7 @@ import {
   TELEMETRY_DISCLOSURE_POINTS,
   TELEMETRY_POLICY_URL,
 } from "../../src/telemetry/disclosure";
-import { runTelemetryTick } from "../../src/telemetry/scheduler";
+import { readTelemetryState, runTelemetryTick, withPendingTelemetryDecision } from "../../src/telemetry/scheduler";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -68,16 +70,36 @@ describe("Windows installer telemetry choice", () => {
 
   test("the dialog links the policy and offers a disable option that is checked by default", () => {
     expect(wxs).toContain(`<a href="${TELEMETRY_POLICY_URL}">Read the full privacy policy</a>`);
-    expect(wxs).toContain(`<Property Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" Secure="yes" />`);
     expect(wxs).toMatch(new RegExp(`Type="CheckBox"[^>]*Property="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" CheckBoxValue="1" Text="${TELEMETRY_INSTALLER_CHECKBOX_TEXT}"`));
-    // Unchecking records an opt-out; silent installs default to send and opt out with the property.
-    expect(wxs).toContain(`<Property Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" Secure="yes" />`);
+    // The box starts checked unless this install already carries an opt-out (command line or upgrade).
     expect(wxs).toContain(
+      `<SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} &lt;&gt; "${TELEMETRY_INSTALLER_OPT_OUT}"</SetProperty>`,
+    );
+    // A checked box writes "send", which is never acted on, and the page says so.
+    expect(wxs).toContain(`Text="${TELEMETRY_INSTALLER_KEEP_NOTE}"`);
+    // Unchecking records an opt-out with a new stamp.
+    const next = /<Control Id="Next"[\s\S]*?<\/Control>/.exec(wxs)?.[0] ?? "";
+    expect(next).toContain(
       `<Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}">NOT (${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1")</Publish>`,
     );
-    expect(wxs).toContain(
-      `<RegistryValue Root="HKCU" Key="${TELEMETRY_INSTALLER_REGISTRY_KEY}" Name="${TELEMETRY_INSTALLER_REGISTRY_VALUE}" Type="string" Value="[${TELEMETRY_INSTALLER_CHOICE_PROPERTY}]" KeyPath="yes" />`,
-    );
+    expect(next).toContain(`<Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">1</Publish>`);
+  });
+
+  test("the choice is machine-wide, survives upgrades, and a silent opt-out gets its own stamp", () => {
+    // HKLM, so a silent install run as SYSTEM (Intune, SCCM) reaches every user.
+    for (const name of [TELEMETRY_INSTALLER_REGISTRY_VALUE, TELEMETRY_INSTALLER_STAMP_VALUE]) {
+      expect(wxs).toMatch(new RegExp(`<RegistryValue Root="HKLM" Key="${TELEMETRY_INSTALLER_REGISTRY_KEY.replaceAll("\\", "\\\\")}" Name="${name}" Type="string"`));
+      expect(wxs).toMatch(new RegExp(`<RegistrySearch Id="[^"]+" Root="HKLM" Key="${TELEMETRY_INSTALLER_REGISTRY_KEY.replaceAll("\\", "\\\\")}" Name="${name}" Type="raw"`));
+    }
+    expect(wxs).not.toContain('Root="HKCU"');
+    // No default value: a command-line choice is told apart from an upgrade that carries one.
+    expect(wxs).toContain(`<Property Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Secure="yes" />`);
+    const order = ["OcxTelemetryStampExplicit", "OcxTelemetryKeepChoice", "OcxTelemetryKeepStamp", "OcxTelemetryDefaultChoice", "OcxTelemetryCheckBox"]
+      .map(action => wxs.indexOf(`Action="${action}"`));
+    expect(order.every(index => index > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(wxs).toContain(`Action="OcxTelemetryStampExplicit" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]" Before="AppSearch"`);
+    expect(wxs).toContain(`Action="OcxTelemetryKeepChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch"`);
   });
 
   test("the dialog sits between the welcome and install-directory pages of Tauri's sequence", () => {
@@ -89,14 +111,19 @@ describe("Windows installer telemetry choice", () => {
     expect(dialog).toMatch(/<Control Id="Next"[\s\S]*?Event="NewDialog" Value="InstallDirDlg"/);
   });
 
-  test("the Tauri config links the fragment and the app reads the same registry value", () => {
+  test("the Tauri config links the fragment and the app reads the same registry values", () => {
     const config = JSON.parse(readFileSync(repoPath("desktop", "src-tauri", "tauri.conf.json"), "utf8"));
     expect(config.bundle.windows.wix.fragmentPaths).toEqual([TELEMETRY_INSTALLER_FRAGMENT_PATH]);
     expect(config.bundle.windows.wix.componentGroupRefs).toEqual([TELEMETRY_INSTALLER_COMPONENT_GROUP]);
     expect(wxs).toContain(`<ComponentGroup Id="${TELEMETRY_INSTALLER_COMPONENT_GROUP}">`);
     expect(rustConst("REGISTRY_KEY")).toBe(TELEMETRY_INSTALLER_REGISTRY_KEY);
     expect(rustConst("REGISTRY_VALUE")).toBe(TELEMETRY_INSTALLER_REGISTRY_VALUE);
+    expect(rustConst("STAMP_VALUE")).toBe(TELEMETRY_INSTALLER_STAMP_VALUE);
     expect(rustConst("OPT_OUT")).toBe(TELEMETRY_INSTALLER_OPT_OUT);
+    // The app reads HKLM and records the applied stamp per user under HKCU.
+    const module = rustCode(RUST);
+    expect(module).toContain("RegKey::predef(HKEY_LOCAL_MACHINE)");
+    expect(module).toContain("create_subkey(super::REGISTRY_KEY)");
   });
 
   test("the app saves the opt-out before it resolves or starts a proxy, and falls back to the env opt-out", () => {
@@ -110,6 +137,8 @@ describe("Windows installer telemetry choice", () => {
     expect(sidecar).toMatch(/if crate::installer_telemetry::sidecar_env_opt_out\(\) \{\s*command = command\.env\("OCX_TELEMETRY", "0"\);/);
     const module = rustCode(RUST);
     expect(module).toContain(`.args(["telemetry", "disable", "--json"])`);
+    // A failed save is retried in the background, so a proxy the app only attaches to follows it too.
+    expect(module).toMatch(/Outcome::NotPersisted => \{[\s\S]*?tauri::async_runtime::spawn\(async move \{ retry\(app, stamp\)\.await \}\)/);
   });
 
   test("the command the app runs persists the opt-out, and nothing is sent afterwards", async () => {
@@ -128,14 +157,15 @@ describe("Windows installer telemetry choice", () => {
         stderr: "pipe",
       });
       expect(result.exitCode).toBe(0);
-      const saved = JSON.parse(readFileSync(join(home, "ocx", "config.json"), "utf8")) as Pick<OcxConfig, "telemetry">;
-      expect(saved.telemetry?.decision).toBe("declined");
-      expect(resolveTelemetryStatus(saved, {}).effective).toBe(false);
+      // On a fresh install the decline is held without creating config.json, so `ocx init` still runs setup.
+      expect(existsSync(join(home, "ocx", "config.json"))).toBe(false);
+      expect(readTelemetryState(join(home, "ocx")).pendingDecision?.decision).toBe("declined");
+      expect(resolveTelemetryStatus(withPendingTelemetryDecision({}, join(home, "ocx")), {}).effective).toBe(false);
 
       let fetchCalls = 0;
       const tick = await runTelemetryTick({
         configDir: join(home, "ocx"),
-        readConfig: () => JSON.parse(readFileSync(join(home, "ocx", "config.json"), "utf8")) as Pick<OcxConfig, "telemetry">,
+        readConfig: () => ({}),
         env: {},
         now: Date.parse("2026-11-12T12:00:00.000Z"),
         fetch: (async () => {

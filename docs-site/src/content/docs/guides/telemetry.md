@@ -40,10 +40,11 @@ Sending becomes active only after a person has seen the disclosure or recorded a
    is false. Pressing Enter or `y` records `decision: "accepted"` (plus `decidedAt` and `noticeShownAt`);
    `n` records `decision: "declined"`.
 3. **Explicit enable** — turning on **Share anonymous usage statistics** in the dashboard under
-   **Proxy details**, or running `ocx telemetry enable [--json]` in an interactive human terminal
-   (where both stdin and stdout are TTYs, not `OCX_SERVICE`, and not `isAgentDriven()`), prints the
-   same disclosure block, asks the `[Y/n]` confirmation prompt (default yes), and records
-   `decision: "accepted"` when confirmed.
+   **Proxy details** records `decision: "accepted"` right away (the panel already shows what is sent).
+   Running `ocx telemetry enable [--json]` in an interactive human terminal (where both stdin and
+   stdout are TTYs, not `OCX_SERVICE`, and not `isAgentDriven()`) prints the same disclosure block,
+   asks the `[Y/n]` confirmation prompt (default yes), and records `decision: "accepted"` when
+   confirmed.
 
 `resolveTelemetryStatus` (`src/telemetry/consent.ts`) evaluates effective state in this exact
 precedence order:
@@ -93,10 +94,14 @@ You can disable telemetry at any time through any of these controls:
 1. **Windows installer** — the MSI has a page with this summary, a link to the
    [privacy statement](/reference/code-signing/#privacy), and a **Send anonymous usage statistics**
    checkbox, checked by default. Clear it, or pass `OCX_TELEMETRY_CHOICE=optout` to a silent
-   `msiexec /qn` install, and the desktop app writes `"decision": "declined"` to `config.json` the
-   first time it starts, before it resolves or starts any proxy. If that write fails, the app starts
-   its proxy with `OCX_TELEMETRY=0` and tries again on the next launch. Leaving the box checked
-   does not start sending by itself; the popup below still appears first.
+   `msiexec /qn` install, and the desktop app saves `"decision": "declined"` the first time each
+   account on the computer starts it, before it resolves or starts any proxy (on a fresh install the
+   decline is held in `telemetry-state.json` until a `config.json` exists, so `ocx init` still runs
+   setup). The choice is recorded for the whole computer, so it also covers a silent install run by
+   an administrator or a deployment tool, and in-app updates keep it. If the save fails, a proxy the
+   app starts runs with `OCX_TELEMETRY=0`, and the app retries in the background and on the next
+   launch. Leaving the box checked does not start sending by itself; the popup below still appears
+   first.
 2. **GUI consent popup** — uncheck **Share anonymous daily usage statistics** and click
    **Continue** when the first-run or post-update dialog appears.
 3. **Proxy details toggle** — open the [Web Dashboard](/guides/web-dashboard/) Overview page, go to
@@ -278,9 +283,10 @@ opencodex never includes any of the following in telemetry payloads:
   days strictly after the consent/disclosure UTC day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`)
   and strictly after `ineligibleThroughDay` (`day > ineligibleThroughDay`) are ever sent. Immediately
   before transmission, the scheduler re-reads persisted consent and environment variables and aborts
-  without sending if telemetry is no longer effective. If the collector returns HTTP `429` or `503`
-  (with a `Retry-After` header), the client persists `retryAfterUntil` in
-  `<OPENCODEX_HOME>/telemetry-state.json` and skips ticks until that time. Sent day markers in
+  without sending if telemetry is no longer effective. If the collector returns HTTP `429` or `503`,
+  the client persists `retryAfterUntil` in `<OPENCODEX_HOME>/telemetry-state.json` and skips ticks
+  until that time: it honors a `Retry-After` header when present and otherwise backs off about 15–20
+  minutes. Sent day markers in
   `telemetry-state.json` are pruned after 30 days. If the collector is not yet deployed or is
   unreachable, the 10-second send attempt fails quietly in the background without affecting proxy
   traffic or marking the day as sent.
@@ -288,26 +294,31 @@ opencodex never includes any of the following in telemetry payloads:
   single atomic conditional D1 batch across `daily_installs`, `daily_totals`, `daily_models`, and
   `daily_errors`. Re-sending the same day for the same `installDayHash` is a no-op and never
   double-counts.
-- **Salted hourly IP hash for rate limiting (no raw IP addresses stored)** — the collector never
-  stores raw client IP addresses. For abuse rate limiting (**120 reports per hour** per hash, sized
-  for shared NAT / CGNAT addresses and returning HTTP `429` with `Retry-After`), ingest hashes the
-  client IP with a mandatory secret salt and the current UTC hour
-  (`sha256(RATE_LIMIT_SALT + "\0" + bucketHour + "\0" + ip)`) in `rate_limits`, and an hourly
-  scheduled job (`15 * * * *`) prunes `rate_limits` buckets older than 2 hours.
-- **Install-days, small-cohort folding, and unauthenticated self-reported figures** — because
+- **Salted hourly hash for rate limiting (no raw IP addresses stored)** — the collector never
+  stores raw client IP addresses. For abuse rate limiting (**120 reports per hour** per key, sized
+  for shared NAT / CGNAT addresses and returning HTTP `429` with `Retry-After`), ingest hashes a
+  key derived only from Cloudflare's `cf-connecting-ip` (an IPv4 address as is, an IPv6 address
+  collapsed to its /64 prefix so one host cannot rotate past the limit; `x-forwarded-for` is
+  ignored) with a mandatory secret salt and the current UTC hour
+  (`sha256(RATE_LIMIT_SALT + "\0" + bucketHour + "\0" + key)`) in `rate_limits`, and an hourly
+  scheduled job (`15 * * * *`) deletes each bucket within about 2 hours 15 minutes of its hour.
+- **Install-days, small-cohort protection, and unauthenticated self-reported figures** — because
   `installDayHash` rotates every UTC day, `totals.activeInstalls` and the `installs` count in each
   breakdown of `GET /v1/stats` measure **install-days** (the sum of daily reporting installs across
   the selected range), while `totals.avgDailyActiveInstalls` reports `install-days / days in range`
   rounded to 1 decimal place (shown on the dashboard as **Avg daily active installs** with
-  install-days in the tooltip). `daily_models` and `daily_errors` record an `installs` column (count
-  of contributing daily reports, with `dailyByProvider` deriving its per-day install count), and in
-  every breakdown (`providers`, `models`, `versions`, `platforms`, `channels`, `errors`, and each
-  day of `dailyByProvider`) the collector folds rows with fewer than **10 install-days** in the
-  selected range into `"other"` and drops `"other"` itself if it is below 10 (`totals`, `daily`, and
-  `heatmap` are unchanged). Residual subtraction risk: when only a single small cohort is folded or
-  dropped, an observer can still approximate its requests or tokens by subtracting the published
-  breakdown rows from the unredacted `totals` or `daily` series. In addition, reports to
-  `POST /v1/events` are **unauthenticated** and can be forged within the per-IP-hash rate limit and
+  install-days in the tooltip). Small-cohort protection is applied per day, on distinct installs:
+  a breakdown row (`providers`, `models`, `versions`, `platforms`, `channels`, `errors`, and each
+  day of `dailyByProvider`) includes a day's value for a key only when at least **10 distinct
+  installs** reported that key on that day, before days are summed into the selected range. One
+  install therefore cannot reach the threshold alone by reporting on many days or through many
+  providers or model families (`daily_models`, `daily_errors`, `daily_provider_installs` and
+  `daily_family_installs` count each report once per key). Version, platform and channel rows below
+  the threshold fold into that day's `"other"`, published only if it reaches 10; provider, model
+  and error rows below it are dropped. `totals`, `daily`, and `heatmap` stay unfiltered, so a
+  suppressed value can still be approximated by subtraction from the published totals. In addition,
+  reports to
+  `POST /v1/events` are **unauthenticated** and can be forged within the per-key rate limit and
   payload bounds; the public dashboard therefore labels all figures
   **"self-reported by opencodex installs"**.
 - **Daily aggregate retention** — `daily_installs` rows (which hold only the per-day hash, version,
