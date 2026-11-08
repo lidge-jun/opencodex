@@ -522,6 +522,41 @@ function isIncompleteStructuredWrapper(text: string): boolean {
       }
     }
   }
+  const firstBracket = s.indexOf("[");
+  const lastBracket = s.lastIndexOf("]");
+  if (firstBracket !== -1) {
+    let openBrackets = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (ch === "[") openBrackets += 1;
+        else if (ch === "]") openBrackets -= 1;
+      }
+    }
+    if (openBrackets !== 0) return true;
+    const bracketSlice = s.slice(firstBracket, lastBracket + 1);
+    if (lastBracket > firstBracket && (bracketSlice.includes('"') || bracketSlice.includes(":"))) {
+      try {
+        JSON.parse(bracketSlice);
+      } catch {
+        return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -559,7 +594,8 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
   if (!parsed || typeof parsed !== "object") {
     if (isIncompleteStructuredWrapper(unescaped)) return true;
     const hasBraces = unescaped.includes("{") && unescaped.includes("}");
-    if (hasBraces) return true;
+    const hasBrackets = unescaped.includes('["') || (unescaped.includes("[") && unescaped.includes("]") && unescaped.includes('"'));
+    if (hasBraces || hasBrackets) return true;
     return /\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(unescaped);
   }
   try {
@@ -898,7 +934,8 @@ export function isReasoningEffortRejection(text: string | undefined, depth = 0):
   }
 
   const hasBraces = unescaped.includes("{") && unescaped.includes("}");
-  if (hasBraces) return false;
+  const hasBrackets = unescaped.includes('["') || (unescaped.includes("[") && unescaped.includes("]") && unescaped.includes('"'));
+  if (hasBraces || hasBrackets || isIncompleteStructuredWrapper(unescaped)) return false;
 
   return diagnosticTextBlamesReasoningEffort(unescaped);
 }
