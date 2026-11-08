@@ -12,7 +12,7 @@ export function maskEmail(value: string | null | undefined): string | null {
 
 /** A display label that never falls back to an unmasked or malformed identity. */
 export function maskedAccountLabel(value: string | null | undefined): string | undefined {
-  if (!value || value.length > 254 || !/^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@[A-Za-z0-9]+(?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9]+(?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(value)) return undefined;
+  if (!value || value.length > 254 || !/^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(value)) return undefined;
   return maskEmail(value) ?? undefined;
 }
 

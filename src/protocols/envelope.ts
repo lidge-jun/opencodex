@@ -17,8 +17,12 @@ export interface ProtocolEnvelope {
   readonly inbound: Protocol;
   /** The request features, scanned from the source body on the first call and cached. */
   features(): ReadonlySet<ProtocolFeature>;
+  /** The source body itself, uncharged, for checks that only read it; a rewrite takes `freshBody()`. */
+  readBody(): Readonly<Record<string, unknown>>;
   /** A structured clone of the source body, charged to the translator budget. */
   freshBody(): Record<string, unknown>;
+  /** Hand back the charge of a `freshBody()` copy no longer needed; later calls are no-ops. */
+  releaseBody(copy: Record<string, unknown>): void;
 }
 
 export function createProtocolEnvelope(input: {
@@ -28,16 +32,30 @@ export function createProtocolEnvelope(input: {
 }): ProtocolEnvelope {
   const { inbound, body, translatorBudget } = input;
   let features: ReadonlySet<ProtocolFeature> | undefined;
+  // The copy's own size may change once its holder rewrites it, so the charge is remembered.
+  const charged = new WeakMap<object, number>();
   return {
     inbound,
     features() {
       features ??= featuresFromBody(inbound, body);
       return features;
     },
+    readBody() {
+      return body;
+    },
     freshBody() {
       // Charged before the copy exists, so an over-budget request fails without allocating it.
-      translatorBudget.chargeRetained(jsonUtf8Bytes(body), { kind: "request_copies" });
-      return structuredClone(body);
+      const bytes = jsonUtf8Bytes(body);
+      translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
+      const copy = structuredClone(body);
+      charged.set(copy, bytes);
+      return copy;
+    },
+    releaseBody(copy) {
+      const bytes = charged.get(copy);
+      if (bytes === undefined) return;
+      charged.delete(copy);
+      translatorBudget.releaseRetained(bytes, { kind: "request_copies" });
     },
   };
 }

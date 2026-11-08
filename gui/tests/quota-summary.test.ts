@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildQuotaSummary, formatQuotaPercent, quotaSeverity } from "../src/quota-summary";
 import { accountQuotaFromReport, freshQuotaReportsFromResponse } from "../src/provider-workspace/report";
+import { parseWorkBuddyCredits } from "../../src/providers/workbuddy-credit-balance";
 
 const now = Date.UTC(2026, 8, 23, 3);
 const name = (provider: string) => provider;
@@ -50,6 +51,82 @@ describe("quota summary", () => {
     expect(rows.map(row => [row.provider, row.headline.id, row.severity])).toEqual([
       ["credits", "quotaSummary.credits", "critical"],
     ]);
+  });
+
+  test("WorkBuddy shows unavailable credits neutrally, including frozen balance, without a reset", () => {
+    const balance = (total: number, used: number, remaining: number, frozen = 0) => ({
+      total, used, remaining, frozen, groups: [],
+      expiring: { amount: 10, at: now + 3_600_000 },
+    });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 75, 25) } },
+      { provider: "frozen", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 0, 0, 100) } },
+      { provider: "fractional", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(9, 8.1, 9 - 8.1) } },
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.4, 10.6) } },
+      { provider: "close-below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 89.99999999999, 10.00000000001) } },
+      { provider: "zero-total", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0, 0, 0) } },
+      { provider: "malformed", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: { total: 100, used: 0 } } },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => [row.provider, row.headline.labelKey, row.headline.percent, row.severity])).toEqual([
+      ["workbuddy-ai", "quotaSummary.creditsUnavailable", 75, "normal"],
+      ["frozen", "quotaSummary.creditsUnavailable", 100, "normal"],
+      ["fractional", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
+      ["below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
+      ["close-below", "quotaSummary.creditsUnavailable", expect.any(Number), "normal"],
+    ]);
+    expect(formatQuotaPercent(rows[2]!.headline.percent)).toBe("90%");
+    expect(formatQuotaPercent(rows[3]!.headline.percent)).toBe("89%");
+    expect(formatQuotaPercent(rows[4]!.headline.percent)).toBe("90%");
+    expect(rows[0]!.headline.resetAt).toBeUndefined();
+  });
+
+  test("summed decimal WorkBuddy packages display their exact integer percentage", () => {
+    const workbuddyCredits = parseWorkBuddyCredits({ Packages: Array.from({ length: 54 }, () => ({
+      CycleTotalCapacity: 0.91, CycleUsedCapacity: 0.819, CycleRemainCapacity: 0.091,
+    })) });
+    expect(workbuddyCredits).toBeDefined();
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "workbuddy-ai", updatedAt: now, quota: { updatedAt: now, workbuddyCredits } },
+    ], now);
+    const [row] = buildQuotaSummary(reports, name);
+    expect(formatQuotaPercent(row!.headline.percent)).toBe("90%");
+  });
+
+  test("summed WorkBuddy packages retain decimal half-percent and below-half distinctions", () => {
+    const balance = (remaining: number) => parseWorkBuddyCredits({ Packages: Array.from({ length: 5 }, () => ({
+      CycleTotalCapacity: 1, CycleUsedCapacity: 0, CycleRemainCapacity: remaining,
+    })) });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "tie", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0.935) } },
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(0.93500000001) } },
+    ], now);
+    expect(buildQuotaSummary(reports, name).map(row => formatQuotaPercent(row.headline.percent))).toEqual(["7%", "6%"]);
+  });
+
+  test("WorkBuddy rounds an exact half percent up and a smaller share down", () => {
+    const balance = (total: number, remaining: number) => ({ total, used: 0, remaining, frozen: 0, groups: [] });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "tie", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 93.5) } },
+      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100, 93.50000000001) } },
+      { provider: "decimal-tie", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(3, 2.955) } },
+      { provider: "decimal-below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(3, 2.9550000000001) } },
+      { provider: "tiny", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(1e-300, 5e-301) } },
+    ], now);
+    expect(buildQuotaSummary(reports, name).map(row => formatQuotaPercent(row.headline.percent)))
+      .toEqual(["7%", "6%", "2%", "1%", "50%"]);
+  });
+
+  test("contradictory WorkBuddy balances are omitted without hiding valid quota windows", () => {
+    const balance = (remaining: number) => ({ total: 100, used: 2, remaining, frozen: 0, groups: [] });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "invalid", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(110) } },
+      { provider: "mixed", updatedAt: now, quota: { updatedAt: now, weeklyPercent: 25, workbuddyCredits: balance(110) } },
+      { provider: "roundoff", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(100 + 1e-12) } },
+    ], now);
+    const rows = buildQuotaSummary(reports, name);
+    expect(rows.map(row => [row.provider, row.headline.percent])).toEqual([["mixed", 25], ["roundoff", 0]]);
+    expect(rows[0]!.windows.map(window => window.labelKey)).toEqual(["quota.weeklyLimit"]);
   });
 
   test("critical credits override a noncritical headline, but not a critical one", () => {

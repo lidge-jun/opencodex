@@ -91,10 +91,6 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
     "bounded probe or ordinary launcher; no update control"
   ],
   [
-    "bin/ocx.mjs:<module>:child.kill(sig)",
-    "only this function's exact returned child / ordinary signal relay"
-  ],
-  [
     "src/update/async-check.ts:<module>:defaultDeps: AsyncLookupDeps = { ownerFn: pnpmOwner, spawnFn: probeSpawn }",
     "bounded probe or ordinary launcher; no update control"
   ],

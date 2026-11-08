@@ -1,5 +1,7 @@
 # Search Data Plane
 
+The Responses sidecar parser in `src/web-search/parse.ts` closes collection at the first terminal event or `[DONE]`. Later frames in that network chunk cannot change text, sources, error state or decoded accounting. `tests/web-search/web-search-eof.test.ts` checks this with whole and fragmented bodies.
+
 The opt-in key-auth Responses hosted-search bridge follows the
 [continuation binding contract](../providers-and-adapters.md#hosted-search-continuation-binding).
 `src/web-search/loop.ts` follows [prepaid initial sends](../transports/responses-spend.md#prepaid-initial-sends)
@@ -72,5 +74,7 @@ The Responses sidecar parser in `src/web-search/parse.ts` checks runtime field s
 The parser accepts CR, LF and CRLF line endings, including mixed endings and CRLF split across chunks. At clean response-body EOF, it consumes a final `data:` line even without its trailing newline. The same event handler owns completion, failure, citations and decoded-text accounting for that line; EOF alone is not completion. A byte-limit stop or failed read does not flush the pending line. `tests/web-search/web-search-eof.test.ts` covers line endings, immediate terminal cancellation, EOF behavior and its limit boundaries.
 
 Trailing source extraction in `src/web-search/parse.ts` pairs a pending title with a following URL only when the URL sits on an unmarked continuation line with no title of its own. A list item that cannot be paired, because another list item, a self-titled citation, or a URL that starts its own list item follows it, remains answer text, and extraction continues, so every later citation line, including one whose URL `appendSafeWebSearchSource` rejects, still leaves the answer. Non-HTTP URI-like text inside an inline code span of any backtick run, such as `mode:fast`, is not treated as a citation; an HTTP(S) URL is a citation even when code-formatted, and a closing code backtick is trimmed from it. Code spans are found by pairing backtick runs in one pass and the URI scheme length is bounded, so a long Sources line is scanned in linear time.
+
+Completed-output citations are deduplicated independently of streaming annotations, so an earlier copy of a URL cannot hide its final title. A safe final title takes precedence; when none exists, a safe streamed title for that URL is retained. Final sources are merged before streaming-only sources, with the existing count and byte limits applied to the merged records. `tests/web-search/web-search-sources.test.ts` covers metadata precedence, fallback, ordering and sanitization.
 
 Single-result query and answer truncation in `src/web-search/format-result.ts` uses the same surrogate-safe prefix as batched results. The existing UTF-16 limits and truncation markers remain unchanged.
