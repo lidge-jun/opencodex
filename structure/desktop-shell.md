@@ -441,8 +441,8 @@ The lane takes about 15 minutes, so a pull request selects it only through the `
 (`scripts/build-standalone.ts`, `scripts/standalone-targets.ts`, `src/lib/standalone.ts`,
 `src/lib/bun-runtime.ts`), native keyring staging (`scripts/standalone-keyring.ts`,
 `src/lib/keyring-native.ts`), `package.json`, `bun.lock` and `ci.yml` itself. Ordinary `src/**` and
-`gui/**` edits do not run it on a pull request; promotion pushes to `main` and `preview` and
-`workflow_dispatch` always do, so a packaging regression from such an edit surfaces at promotion.
+`gui/**` edits do not run it on a pull request; a manual `workflow_dispatch` on `dev` always does,
+so a packaging regression from such an edit surfaces in the batched full run.
 
 Extraction is intentional. A GitHub-hosted runner is disposable but its package database is still a
 shared job resource, and a normal pull request does not need passwordless package installation or GUI

@@ -560,8 +560,8 @@ input checks.
 ## Docker Compose
 
 opencodex does not publish an official container image. The repository does maintain a source-build
-[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
-[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
+[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/dev/Dockerfile),
+[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/dev/compose.yaml), and a narrow
 `.dockerignore`. The build pins the multi-platform Bun 1.4.4 image index by digest, runs the proxy as
 the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
 only the data listener on the host's `127.0.0.1:10100` by default. The foreground process uses
@@ -651,7 +651,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:

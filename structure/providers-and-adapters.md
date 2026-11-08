@@ -60,7 +60,7 @@ RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls re
 
 Both search loops keep `web_search` declared after the search budget is exhausted. Further calls receive a paired limit-reached result without another physical search; at most `maxSearches + 3` model iterations run before a terminal error. The fetch loop adds at most four iterations when the [manual Advisor sidecar](advisor.md#execution-paths) is active, preserving its separate three-consultation allowance. Ordinary caller tools and cancellation still end the loop; final client tool output follows the [explicit empty client-catalog boundary](transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire), after internal search execution. Empty-answer recovery disables tool calls; Anthropic retains its declared catalog to preserve the bound prefix.
 
-Combo preflight allows the private search tool only while a search plan is active; client tool declaration checks and replay-unsafe heartbeat protection remain enforced.
+Combo preflight allows the private search tool only while a search plan is active; client tool declaration checks and replay-unsafe heartbeat protection remain enforced. Search and vision Responses sidecar text follows the shared [snapshot reconciliation contract](data-planes/search.md).
 
 The opt-in `inlineThinkTagModels` list follows static-policy override and model-rename rules;
 shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
