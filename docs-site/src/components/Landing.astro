@@ -762,14 +762,13 @@ const docsMap = [
 
 <script>
 	// Frame-sequence scrub (motion.md): the demo capture plays through as the
-	// scrub scene scrolls. Short-circuits under reduced motion / small screens
-	// (the first frame stays); progressive checkpoint loading.
+	// scrub scene scrolls. The poster remains until a frame is ready, and when
+	// motion, viewport or scroll-timeline support makes the scrub unavailable.
 	const canvas = document.querySelector<HTMLCanvasElement>('.lp-scrub-canvas');
 	const section = document.querySelector<HTMLElement>('.lp-scene-scrub');
 	const poster = document.querySelector<HTMLImageElement>('.lp-scrub-poster');
-	const preference = matchMedia('(prefers-reduced-motion: reduce)');
-	const wide = matchMedia('(min-width: 48rem)').matches;
-	if (canvas && section && poster && !preference.matches && wide) {
+	const motionViewport = matchMedia('(prefers-reduced-motion: no-preference) and (min-width: 48rem)');
+	if (canvas && section && poster) {
 		const ctx = canvas.getContext('2d');
 		const count = Number(canvas.dataset.count || '0');
 		const base = canvas.dataset.base || '/';
@@ -778,14 +777,8 @@ const docsMap = [
 		let started = false;
 		let current = -1;
 		let raf = 0;
-		let stopped = false;
-		preference.addEventListener('change', () => {
-			if (!preference.matches) return;
-			stopped = true;
-			cancelAnimationFrame(raf);
-			canvas.style.display = 'none';
-			poster.style.display = '';
-		});
+		let generation = 0;
+		let enabled = motionViewport.matches && CSS.supports('animation-timeline: view()');
 		const load = (i: number) =>
 			new Promise<void>((resolve) => {
 				if (frames[i]) return resolve();
@@ -802,7 +795,7 @@ const docsMap = [
 			return -1;
 		};
 		const draw = (i: number) => {
-			if (stopped) return;
+			if (!enabled) return;
 			const j = nearestLoaded(Math.max(0, Math.min(count - 1, i)));
 			if (j < 0 || j === current || !ctx) return;
 			current = j;
@@ -818,7 +811,7 @@ const docsMap = [
 		};
 		const update = () => {
 			raf = 0;
-			if (stopped) return;
+			if (!enabled || !section.hasAttribute('data-scrub-active')) return;
 			const rect = section.getBoundingClientRect();
 			const travel = section.offsetHeight - innerHeight;
 			if (travel <= 0) return;
@@ -826,30 +819,49 @@ const docsMap = [
 			draw(Math.round(progress * (count - 1)));
 		};
 		const start = async () => {
-			if (started || stopped) return;
+			if (started || !enabled) return;
 			started = true;
+			const run = generation;
 			await load(0);
-			if (stopped) return;
-			draw(0);
+			if (run !== generation || !enabled || !frames[0] || !ctx) return;
 			// checkpoints first, then fill in idle time
 			const checkpoints = [count - 1, Math.floor(count / 2), Math.floor(count / 4), Math.floor((3 * count) / 4)];
 			await Promise.all(checkpoints.map(load));
-			if (stopped) return;
+			if (run !== generation || !enabled || !checkpoints.some((i) => i > 0 && frames[i])) return;
+			draw(0);
+			section.setAttribute('data-scrub-active', '');
 			update();
 			const fill = (i: number) => {
-				if (stopped || i >= count) return;
+				if (run !== generation || !enabled || i >= count) return;
 				load(i).then(() => {
 					const next = () => fill(i + 1);
 					'requestIdleCallback' in window ? requestIdleCallback(next) : setTimeout(next, 16);
 				});
 			};
 			fill(0);
-			addEventListener('scroll', () => { if (!stopped) raf ||= requestAnimationFrame(update); }, { passive: true });
-			addEventListener('resize', () => { if (!stopped) raf ||= requestAnimationFrame(update); }, { passive: true });
 		};
-		new IntersectionObserver((entries, obs) => {
+		const observer = new IntersectionObserver((entries, obs) => {
 			if (entries.some((e) => e.isIntersecting)) { obs.disconnect(); start(); }
-		}, { rootMargin: '100% 0px' }).observe(section);
+		}, { rootMargin: '100% 0px' });
+		const reconcile = () => {
+			generation++;
+			observer.disconnect();
+			cancelAnimationFrame(raf);
+			raf = 0;
+			started = false;
+			current = -1;
+			section.removeAttribute('data-scrub-active');
+			canvas.style.display = 'none';
+			poster.style.display = '';
+			if (enabled) observer.observe(section);
+		};
+		motionViewport.addEventListener('change', (event) => {
+			enabled = event.matches && CSS.supports('animation-timeline: view()');
+			reconcile();
+		});
+		addEventListener('scroll', () => { if (enabled) raf ||= requestAnimationFrame(update); }, { passive: true });
+		addEventListener('resize', () => { if (enabled) raf ||= requestAnimationFrame(update); }, { passive: true });
+		reconcile();
 	}
 </script>
 

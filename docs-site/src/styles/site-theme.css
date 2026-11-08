@@ -679,6 +679,9 @@ main:has(.lp) .sl-container { max-width: none; }
     left 0.6s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .lp-cell:hover::before { opacity: 0.55; transform: translateX(-50%) scale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .lp-cell::before, .lp-cell:hover::before { transition: none; transform: translateX(-50%); }
+}
 :root[data-theme='light'] .lp-cell:not(.lp-cell-providers):hover::before { opacity: 0.45; }
 
 /* ---- closing CTA: GitHub star on a cloud panel -------------------------- */

@@ -38,6 +38,7 @@ const move = async (page) => {
 };
 const assertStillPoster = async (page) => {
   const poster = page.locator('.lp-scrub-poster');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.lp-scrub-poster')).display !== 'none');
   await poster.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => {
     const image = document.querySelector('.lp-scrub-poster');
@@ -56,7 +57,97 @@ const assertStillPoster = async (page) => {
   assert.equal(firstFrame.ok(), true, 'first scrub frame is served');
   assert.deepEqual(bytes, await firstFrame.body(), 'poster is the first scrub frame');
 };
+const assertScrubMoves = async (page) => {
+  const canvas = page.locator('.lp-scrub-canvas');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.lp-scrub-canvas')).display !== 'none', null, { timeout: 5000 });
+  const section = page.locator('.lp-scene-scrub');
+  await section.evaluate(el => scrollTo(0, el.getBoundingClientRect().top + scrollY));
+  await page.waitForFunction(async () => {
+    const canvas = document.querySelector('.lp-scrub-canvas');
+    const image = document.querySelector('.lp-scrub-poster');
+    await image.decode();
+    const expected = document.createElement('canvas');
+    expected.width = canvas.width; expected.height = canvas.height;
+    expected.getContext('2d').drawImage(image, 0, 0, expected.width, expected.height);
+    return canvas.toDataURL() === expected.toDataURL();
+  }, null, { timeout: 5000 });
+  const first = await canvas.evaluate(el => el.toDataURL());
+  await section.evaluate(el => scrollTo(0, el.getBoundingClientRect().top + scrollY + (el.offsetHeight - innerHeight) * 0.8));
+  await page.waitForFunction(previous => document.querySelector('.lp-scrub-canvas').toDataURL() !== previous, first, { timeout: 5000 });
+};
 try {
+  const switches = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
+  await open(switches);
+  await assertStillPoster(switches);
+  await switches.emulateMedia({ reducedMotion: 'no-preference' });
+  await switches.locator('.lp-scene-scrub').scrollIntoViewIfNeeded();
+  await assertScrubMoves(switches);
+  await switches.emulateMedia({ reducedMotion: 'reduce' });
+  await pause(switches, 250);
+  await assertStillPoster(switches);
+  await switches.waitForFunction(() => !document.querySelector('.lp-scene-scrub').hasAttribute('data-scrub-active'), null, { timeout: 5000 });
+  await switches.emulateMedia({ reducedMotion: 'no-preference' });
+  await assertScrubMoves(switches);
+  await switches.setViewportSize({ width: 390, height: 844 });
+  await assertStillPoster(switches);
+  assert.equal(await switches.locator('.lp-scrub-canvas').isVisible(), false, 'mobile hides the canvas');
+  await switches.waitForFunction(() => !document.querySelector('.lp-scene-scrub').hasAttribute('data-scrub-active'), null, { timeout: 5000 });
+  await switches.setViewportSize({ width: 1280, height: 800 });
+  await switches.locator('.lp-scene-scrub').scrollIntoViewIfNeeded();
+  await assertScrubMoves(switches);
+  await switches.close();
+
+  const mobileFirst = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'no-preference' });
+  await open(mobileFirst);
+  await assertStillPoster(mobileFirst);
+  await mobileFirst.setViewportSize({ width: 1280, height: 800 });
+  await mobileFirst.locator('.lp-scene-scrub').scrollIntoViewIfNeeded();
+  await assertScrubMoves(mobileFirst);
+  await mobileFirst.close();
+
+  const noScript = await browser.newPage({ viewport: { width: 1280, height: 800 }, javaScriptEnabled: false });
+  await open(noScript);
+  await assertStillPoster(noScript);
+  assert.ok(await noScript.locator('.lp-scene-scrub').evaluate(el => el.offsetHeight < innerHeight * 2), 'static fallback has no long empty scroll');
+  await noScript.close();
+
+  const unsupported = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'no-preference' });
+  await unsupported.addInitScript(() => {
+    const supports = CSS.supports.bind(CSS);
+    CSS.supports = (...args) => args[0] === 'animation-timeline: view()' ? false : supports(...args);
+  });
+  await open(unsupported);
+  await assertStillPoster(unsupported);
+  assert.equal(await unsupported.locator('.lp-scrub-canvas').isVisible(), false, 'unsupported timeline keeps the poster');
+  assert.ok(await unsupported.locator('.lp-scene-scrub').evaluate(el => el.offsetHeight < innerHeight * 2), 'unsupported timeline has no long empty scroll');
+  await unsupported.close();
+
+  const missingFrames = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'no-preference' });
+  await missingFrames.route('**/demo-frames/*.webp', route => /\/001\.webp$/.test(route.request().url()) ? route.continue() : route.abort());
+  await open(missingFrames);
+  await assertStillPoster(missingFrames);
+  await pause(missingFrames, 500);
+  assert.equal(await missingFrames.locator('.lp-scrub-canvas').isVisible(), false, 'missing sequence keeps the poster');
+  assert.ok(await missingFrames.locator('.lp-scene-scrub').evaluate(el => el.offsetHeight < innerHeight * 2), 'missing sequence has no long empty scroll');
+  await missingFrames.close();
+
+  const cssPage = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+  await open(cssPage);
+  await cssPage.locator('.lp-menu-btn').focus();
+  await cssPage.keyboard.press('Enter');
+  const summary = cssPage.locator('.lp-menu-group > summary').first();
+  await summary.focus();
+  await cssPage.keyboard.press('Enter');
+  assert.equal(await summary.locator('..').getAttribute('open'), '', 'accordion opens by keyboard');
+  assert.equal(await summary.locator('svg').evaluate(el => getComputedStyle(el).transitionDuration), '0s', 'accordion arrow does not animate');
+  await cssPage.keyboard.press('Escape');
+  const glow = await cssPage.locator('.lp-cell').first().evaluate(el => getComputedStyle(el, '::before').transitionDuration);
+  assert.ok(glow.split(',').every(duration => parseFloat(duration) === 0), `card glow does not animate: ${glow}`);
+  const card = cssPage.locator('.lp-cell').first();
+  const beforeGlow = await card.evaluate(el => getComputedStyle(el, '::before').transform);
+  await card.hover();
+  assert.equal(await card.evaluate(el => getComputedStyle(el, '::before').transform), beforeGlow, 'card glow does not scale on hover');
+  await cssPage.close();
   const headerPage = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'no-preference' });
   await open(headerPage, 'domcontentloaded');
   await headerPage.waitForFunction(() => document.querySelector('.github-link [data-gh-stars]')?.style.filter);
