@@ -676,6 +676,9 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     let codex_home = scratch.join("codex");
     fs::create_dir_all(&ocx_home).unwrap();
     fs::create_dir_all(&codex_home).unwrap();
+    // Both homes pre-exist with a shared mode; no lifecycle command may change it.
+    set_dir_mode_755(&ocx_home);
+    set_dir_mode_755(&codex_home);
     fs::write(
         codex_home.join("config.toml"),
         b"# keep my comment\napproval_policy = \"on-request\"\n",
@@ -734,6 +737,7 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
         Some(cred_json.as_bytes()),
     );
     assert_eq!(rc_conn, 0, "connect stderr: {err_conn}");
+    assert_home_modes_kept(&ocx_home, &codex_home, "attach");
     assert!(codex_home.join("models_cache.json").exists());
 
     let rollback_path = ocx_home.join("child").join("attach-rollback.json");
@@ -981,6 +985,7 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
         None,
     );
     assert_eq!(rc_sync, 0, "sync stderr: {err_sync}");
+    assert_home_modes_kept(&ocx_home, &codex_home, "sync");
     assert_eq!(
         out_sync.trim(),
         r#"{"schema":"ocx.sync.fanout/1","home":{"state":"synced","exit":0},"fanout":{"state":"not-applicable","reason":null},"children":[]}"#
@@ -1069,6 +1074,7 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
 
     let (rc_det, _, err_det) = run_bin(&ocx_home, &codex_home, listen_port, &["disconnect"], None);
     assert_eq!(rc_det, 0, "disconnect stderr: {err_det}");
+    assert_home_modes_kept(&ocx_home, &codex_home, "detach");
     assert!(
         !process_is_alive(active_pid),
         "zero leftover daemon after disconnect"
@@ -1091,6 +1097,30 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     );
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[cfg(unix)]
+fn set_dir_mode_755(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn set_dir_mode_755(_dir: &Path) {}
+
+#[cfg(unix)]
+fn assert_home_modes_kept(ocx_home: &Path, codex_home: &Path, step: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    for (name, dir) in [("OPENCODEX_HOME", ocx_home), ("CODEX_HOME", codex_home)] {
+        let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o755,
+            "{step} changed the mode of the pre-existing {name}"
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn assert_home_modes_kept(_ocx_home: &Path, _codex_home: &Path, _step: &str) {}
 
 #[test]
 fn detach_purge_removes_only_managed_binary_refuses_symlinks_and_emits_conflict_codes() {
