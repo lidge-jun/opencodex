@@ -104,32 +104,6 @@ describe("quota summary", () => {
     expect(buildQuotaSummary(reports, name).map(row => formatQuotaPercent(row.headline.percent))).toEqual(["7%", "6%"]);
   });
 
-  test("mixed package decimals keep the exact below-half balance through the report", () => {
-    const balance = (second: string) => parseWorkBuddyCredits({ Packages: ["0.4975", second].map(remaining => ({
-      CycleTotalCapacity: "0.5", CycleUsedCapacity: "0", CycleRemainCapacity: remaining,
-    })) });
-    const wire = JSON.parse(JSON.stringify([
-      { provider: "below", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("0.49750000000000005") } },
-      { provider: "tie", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("0.4975") } },
-    ]));
-    expect(buildQuotaSummary(freshQuotaReportsFromResponse(wire, now), name)
-      .map(row => formatQuotaPercent(row.headline.percent))).toEqual(["0%", "1%"]);
-  });
-
-  test("exact balances retain subnormal precision and reject exact overdraw", () => {
-    const small = (digit: string) => `0.${"0".repeat(323)}${digit}`;
-    const balance = (total: string, remaining: string) => parseWorkBuddyCredits({ Packages: [{
-      CycleTotalCapacity: total, CycleUsedCapacity: "0", CycleRemainCapacity: remaining,
-    }] });
-    const reports = freshQuotaReportsFromResponse([
-      { provider: "tiny", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(small("2"), small("1")) } },
-      { provider: "tiny-over", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(small("4"), small("7")) } },
-      { provider: "over", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("1", "1.00000000000000005") } },
-    ], now);
-    expect(buildQuotaSummary(reports, name).map(row => [row.provider, formatQuotaPercent(row.headline.percent)]))
-      .toEqual([["tiny", "50%"]]);
-  });
-
   test("WorkBuddy rounds an exact half percent up and a smaller share down", () => {
     const balance = (total: number, remaining: number) => ({ total, used: 0, remaining, frozen: 0, groups: [] });
     const reports = freshQuotaReportsFromResponse([
@@ -153,16 +127,6 @@ describe("quota summary", () => {
     const rows = buildQuotaSummary(reports, name);
     expect(rows.map(row => [row.provider, row.headline.percent])).toEqual([["mixed", 25], ["roundoff", 0]]);
     expect(rows[0]!.windows.map(window => window.labelKey)).toEqual(["quota.weeklyLimit"]);
-  });
-
-  test("invalid exact WorkBuddy metadata omits its percentage while preserving regular windows", () => {
-    const reports = freshQuotaReportsFromResponse([{ provider: "mixed", updatedAt: now,
-      quota: { updatedAt: now, weeklyPercent: 25, workbuddyCredits: {
-        total: 1, used: 0, remaining: 0.995, frozen: 0, groups: [], exact: { total: "1", remaining: "2" },
-      } } }], now);
-    const [row] = buildQuotaSummary(reports, name);
-    expect(row!.headline.percent).toBe(25);
-    expect(row!.windows.map(window => window.labelKey)).toEqual(["quota.weeklyLimit"]);
   });
 
   test("critical credits override a noncritical headline, but not a critical one", () => {
