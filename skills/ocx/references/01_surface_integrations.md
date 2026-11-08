@@ -183,13 +183,16 @@ State-changing: yes. JSON mode: `payload`.
 | Method | Route |
 |---|---|
 | GET | `/api/native-integrations` |
-| PUT | `/api/route-to` |
+| PUT | `/api/native-integrations/claude` |
+| PUT | `/api/native-integrations/claude-desktop` |
+| PUT | `/api/native-integrations/codex` |
+| PUT | `/api/native-integrations/grok` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the client rows or toggle result as JSON. |
 
-- Native on/off aliases route to: Home defaults persist and synchronize to devices. Child writes are refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
+- Each on/off saves a Home-only route override and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting the Home default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
 
 ### `ocx integration client`
 

@@ -109,8 +109,22 @@ async function nativeIntegration(argv: string[], deps: RuntimeApiDeps): Promise<
     throw new CliUsageError(`expected on or off after ${action}`, USAGE);
   }
 
-  const { routeToAction } = await import("./route-to");
-  await routeToAction([action, state, ...(wantsJson ? ["--json"] : [])], deps);
+  // A native switch is a Home-only decision. The native route records the Home override and runs
+  // the client's own transition (Claude Desktop first-party included); Children keep inheriting
+  // the Home default. A Child refuses here with the Home command for its own device.
+  const { readLinkChildContext } = await import("./link-child");
+  const routeDeps = deps as import("./route-to").RouteToDeps;
+  if ((routeDeps.readChildContext ?? readLinkChildContext)()) {
+    const { routeToAction } = await import("./route-to");
+    await routeToAction([action, state, ...(wantsJson ? ["--json"] : [])], routeDeps);
+    return;
+  }
+  const result = await runtimeRequest(`/api/native-integrations/${action}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: state === "on" }),
+  }, deps);
+  printData(result, wantsJson, summaryLines(result));
 }
 
 /**

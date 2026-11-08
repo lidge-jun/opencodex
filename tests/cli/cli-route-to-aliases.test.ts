@@ -23,10 +23,19 @@ function fixture(response?: unknown) {
   } };
 }
 
-test.each(["on", "off"])("native %s aliases Home route intent", async action => {
+test.each(["on", "off"])("native %s stays a Home-only decision through the native route", async action => {
+  const f = fixture({ ok: true, clientId: "claude-desktop", changed: true, state: action === "on" ? "current" : "absent", desiredEnabled: action === "on", message: "ok" });
+  expect(await handleIntegrationCommand(["native", "claude-desktop", action, "--json"], f.deps)).toBe(0);
+  // The native route records a Home override and runs Desktop's own first-party transition.
+  expect(f.calls).toEqual([{ path: "/api/native-integrations/claude-desktop", body: { enabled: action === "on" } }]);
+});
+
+test("native on a Child is refused with the Home device command", async () => {
   const f = fixture();
-  expect(await handleIntegrationCommand(["native", "codex", action, "--json"], f.deps)).toBe(0);
-  expect(f.calls).toEqual([{ path: "/api/route-to", body: { client: "codex", action } }]);
+  const deps = { ...f.deps, readChildContext: () => ({ connection: {} as never, linkId: "lnk_0123456789abcdef", homePhrase: "the Home" }) };
+  expect(await handleIntegrationCommand(["native", "codex", "off"], deps)).toBe(5);
+  expect(f.calls).toEqual([]);
+  expect(err.mock.calls.flat().join("\n")).toContain("ocx route to codex off --device lnk_0123456789abcdef");
 });
 
 test.each(["enable", "disable"])("plain client %s aliases Home route intent", async action => {
