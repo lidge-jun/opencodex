@@ -201,15 +201,14 @@ test("disables switch and renders a warning notice naming the variable when OCX_
   expect(host.querySelector(".notice-warn")?.textContent).toContain("DO_NOT_TRACK=1");
 });
 
-test("disables switch in readOnly mode for Remote Link children", async () => {
+test("a Remote Link child shows only the Home hint and fetches nothing", async () => {
   await mountPanel(true);
-  expect(toggleSwitch().getAttribute("aria-checked")).toBe("true");
-  expect(toggleSwitch().disabled).toBe(true);
-  await act(async () => {
-    click(toggleSwitch());
-    await new Promise(r => setTimeout(r, 20));
-  });
-  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
+  // /api/telemetry is not a link-readable path, so a fetch would only produce a permanent error.
+  expect(calls).toEqual([]);
+  expect(toggleSwitch()).toBeNull();
+  expect(host.querySelector(".telemetry-preview-trigger")).toBeNull();
+  expect(host.querySelector(".notice-err")).toBeNull();
+  expect(host.querySelector(".telemetry-settings-row")?.textContent).toContain("Managed on the Home proxy for this Remote Link.");
 });
 
 test("Preview the JSON button opens the preview dialog with autoFocus on Close and restores focus after unmount", async () => {

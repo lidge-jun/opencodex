@@ -63,7 +63,8 @@ a human seeing the disclosure. Following `AGENTS_INSTALL.md` and `src/cli/star-p
   most once per version (`.telemetry-deferred` marker in the config dir) and writes **neither**
   `noticeShownAt` nor `decision`. The install stays `awaiting-notice` until a human sees the GUI popup
   or an interactive prompt.
-- `PUT /api/telemetry` and `POST /api/telemetry/notice` both require `hasHumanDashboardSession(ctx)`.
+- `PUT /api/telemetry` requires `hasHumanDashboardSession(ctx)`. There is no separate notice route:
+  only a decision records the notice (060 D13).
 - `ocx telemetry enable` refuses with `agent_consent_required` (non-zero exit) when `isAgentDriven()`;
   `ocx telemetry disable` is always allowed (opting out is never a consent risk).
 - `src/cli/config-command.ts` `set`/`unset` refuse the `telemetry` key, and `import` drops a
@@ -136,7 +137,6 @@ declared in `route-registry.ts`:
   `preview` (the exact payload for the latest completed day; hash shown as a placeholder when no id
   exists).
 - `PUT /api/telemetry` `{ decision }` — human session only; `exempt: { reason: "session-only" }`.
-- `POST /api/telemetry/notice` — human session only, idempotent; `exempt: { reason: "session-only" }`.
 
 ## CLI
 
