@@ -22,7 +22,7 @@ import {
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
-import { captureMuseQuotaOwner } from "../../src/providers/quota/muse-owner";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner } from "../../src/providers/quota/muse-owner";
 
 const originalHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
@@ -78,7 +78,7 @@ async function seedObservation(ageMs: number): Promise<void> {
     fiveHourPercent: 1,
     weeklyPercent: 1,
     updatedAt: Date.now() - ageMs,
-  }, captureConfigGeneration(), captureMuseQuotaOwner("meta-muse", accountId));
+  }, captureConfigGeneration(), bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", accountId), config(), "meta-muse"));
 }
 
 test("a passive report is marked observed and keeps its observation timestamp", async () => {
