@@ -977,7 +977,7 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
             }
             Err(e) => {
                 eprintln!(
-                    "attach completed but the client relay did not start: {e}; run                      `ocx-child restart`"
+                    "attach completed but the client relay did not start: {e}; run `ocx-child restart`"
                 );
                 return Err(AttachFailure {
                     code: 1,
