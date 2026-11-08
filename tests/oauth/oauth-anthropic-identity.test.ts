@@ -4,7 +4,7 @@ import { claudeKeychain, createClaudeKeychainService, type KeychainChild } from 
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
-import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../../src/oauth";
+import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, runLogin } from "../../src/oauth";
 import { AnthropicOAuthFlow, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
 import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
 import { captureOAuthAccountSelection, loadAuthStore, mutateStore, removeAccount, saveAccountCredential, setAccountPaused } from "../../src/oauth/store";
@@ -167,6 +167,54 @@ test("cancelling local login during a Keychain read never dispatches an expired 
     expect(await outcome).toBe(cancelled);
     expect(posts).toBe(0);
   } finally { release.resolve(); read.mockRestore(); }
+});
+
+for (const expiresIn of [-1, 59_000]) {
+  test(`local login never refreshes an expired or nearly expired credential (${expiresIn}ms)`, async () => {
+    writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: "synthetic-old", refreshToken: "synthetic-old-refresh", expiresAt: Date.now() + expiresIn,
+    } }));
+    const browserCredential = { access: "synthetic-browser", refresh: "synthetic-browser-refresh", expires: Date.now() + 3_600_000 };
+    const browser = spyOn(AnthropicOAuthFlow.prototype, "login").mockResolvedValue(browserCredential);
+    let posts = 0;
+    globalThis.fetch = (async (_url, init) => { if (init?.method === "POST") posts++; return new Response(null, { status: 503 }); }) as typeof fetch;
+    try {
+      await expect(loginAnthropic({}, { importLocal: "only" })).rejects.toThrow("expired");
+      expect(browser).not.toHaveBeenCalled();
+      expect(posts).toBe(0);
+      expect(await loginAnthropic({}, { importLocal: "fallback" })).toEqual(browserCredential);
+      expect(browser).toHaveBeenCalledTimes(1);
+      expect(posts).toBe(0);
+    } finally { browser.mockRestore(); }
+  });
+}
+
+test("cancelling browser fallback preserves an expired local credential without refreshing it", async () => {
+  const { id, credential } = await seed();
+  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    accessToken: credential.access, refreshToken: credential.refresh, expiresAt: 1,
+  } }));
+  const started = deferred(), response = deferred();
+  const controller = new AbortController();
+  const cancelled = new Error("synthetic login superseded");
+  let posts = 0;
+  globalThis.fetch = (async (_url, init) => { if (init?.method === "POST") posts++; return new Response(null, { status: 503 }); }) as typeof fetch;
+  const browser = spyOn(AnthropicOAuthFlow.prototype, "login").mockImplementation(async () => {
+    started.resolve(); await response.promise;
+    return { access: "synthetic-browser", refresh: "synthetic-browser-refresh", expires: Date.now() + 3_600_000 };
+  });
+  const outcome = runLogin("anthropic", { signal: controller.signal }, undefined, {
+    assertCurrentOwner: () => { if (controller.signal.aborted) throw cancelled; },
+  }).catch(error => error);
+  try {
+    await started.promise;
+    controller.abort(cancelled);
+    response.resolve();
+    expect(await outcome).toBe(cancelled);
+    expect(posts).toBe(0);
+    expect(getAccountCredential("anthropic", id)).toEqual(credential);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+  } finally { response.resolve(); browser.mockRestore(); }
 });
 
 test("an already cancelled refresh does not read Keychain or create an intent", async () => {

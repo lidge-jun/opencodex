@@ -901,6 +901,9 @@ and does not replay a potentially consumed refresh token. Use explicit login to 
 Claude Code credential. Import preserves unrelated identityless slots and may create a separate
 account; select the intended account and remove obsolete slots only after checking them. A profile
 lookup failure can leave a new import identityless, with the same automatic-recovery limitation.
+An import uses a Claude Code token only when it has at least 60 seconds remaining. If it is
+expired or nearly expired, sign in to Claude Code again before an import-only attempt; ordinary
+login uses browser OAuth instead. Login does not refresh the local Claude Code token.
 
 If no permitted fallback remains, quota and live model discovery wait for a usable active account.
 You can explicitly select an existing unpaused legacy account with

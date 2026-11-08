@@ -238,20 +238,16 @@ export async function loginAnthropic(
     }
     const local = observation.kind === "present" ? observation.credential : null;
     if (local) {
-      ctrl.onProgress?.("Found Claude Code token, importing automatically");
       ctrl.signal?.throwIfAborted();
       if (local.expires >= Date.now() + 60_000) {
+        ctrl.onProgress?.("Found Claude Code token, importing automatically");
         const identity = await resolveAnthropicAccountIdentity(local.access, ctrl.signal);
         ctrl.signal?.throwIfAborted();
         return { ...local, ...(identity ? { accountId: identity.accountUuid,
           anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null } : {}) };
       }
-      try {
-        return { ...(await refreshAnthropicToken(local.refresh)), source: "local-cli" };
-      } catch (error) {
-        if (importLocal === "only") {
-          throw new Error(`Claude Code token expired and could not be refreshed: ${error instanceof Error ? error.message : String(error)}`);
-        }
+      if (importLocal === "only") {
+        throw new Error("Claude Code token is expired or nearly expired. Sign in to Claude Code again or run 'ocx login anthropic' for browser OAuth.");
       }
     } else if (importLocal === "only") {
       throw new Error(
