@@ -853,6 +853,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
 
   startPackageRefresh();
   desktopCompatibilityStartup = scheduleDesktopCompatibilityStartup(config, { boundHostname: bindHost, boundPort: actualPort, loopbackPort: loopbackServer?.port ?? undefined, readiness: deps.readinessGate });
+  if (deps.liveConfigRef) deps.liveConfigRef.current = config;
   return server;
 }
 

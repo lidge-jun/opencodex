@@ -1,4 +1,5 @@
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../../service";
+import type { OcxConfig } from "../../types";
 import {
   createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
@@ -142,6 +143,8 @@ export function withRequestLogId(response: Response, requestId: string): Respons
 }
 
 export interface StartServerDeps {
+  /** Receives the running server's live config only after startup succeeds. */
+  liveConfigRef?: { current?: OcxConfig };
   /** Test-only CONNECT binder; permits kernel-assigned ports without probe-and-release races. */
   startClaudeInterceptProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   /** Test-only seam; production always initializes its own management credential state. */

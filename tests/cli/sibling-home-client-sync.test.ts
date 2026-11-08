@@ -416,6 +416,7 @@ test("a lone custom-home start still syncs Grok and prunes its own Claude roster
   });
   trackChild(child);
   const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
+  await waitForClientStartup(child);
   expect(runtime.siblingOfPort).toBeUndefined();
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline && readFileSync(grokPath, "utf8").includes("127.0.0.1:12345")) await Bun.sleep(20);

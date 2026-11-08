@@ -2,6 +2,13 @@ export interface StartOwnershipLease {
   release(): void;
 }
 
+export class StartCommandExit extends Error {
+  constructor(readonly exitCode: number) {
+    super(`start command exited with code ${exitCode}`);
+    this.name = "StartCommandExit";
+  }
+}
+
 export class StartOwnershipRollbackUncertainError extends AggregateError {
   constructor(errors: Iterable<unknown>) {
     super(errors, "start listener rollback could not be proven complete");

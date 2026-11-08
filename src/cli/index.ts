@@ -140,7 +140,7 @@ import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import {
   bindAndPublishStartOwnership,
-  StartOwnershipRollbackUncertainError,
+  StartCommandExit, StartOwnershipRollbackUncertainError,
 } from "./start-ownership-publication";
 import { syncModelsToCodex } from "../codex/sync";
 import { localClientSkipReason, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
@@ -255,13 +255,6 @@ async function waitForProxy(timeoutMs = 8_000, keepWaiting?: () => boolean): Pro
   // Runtime-state-first with identity: finds the proxy even when it started on a
   // fallback port, and never mistakes a foreign 200 for our proxy.
   return waitForLiveProxy({ find: findLiveProxy, timeoutMs, keepWaiting });
-}
-
-class StartCommandExit extends Error {
-  constructor(readonly exitCode: number) {
-    super(`start command exited with code ${exitCode}`);
-    this.name = "StartCommandExit";
-  }
 }
 
 async function chooseListenPort(
@@ -559,14 +552,21 @@ async function handleStart(options: { block?: boolean } = {}) {
         const serverModule = await import("../server");
         const readinessGate = createReadinessGate();
         const localAttestationSecret = createLocalAttestationSecret();
-        const config = loadConfig();
+        let config = loadConfig();
+        const liveConfigRef: { current?: import("../types").OcxConfig } = {};
         await (await import("../plugins/loader")).loadAndReportOcxPlugins();
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {
             if (updateRestartChild && siblingStart) throw new Error("update_restart_sibling_refused");
             updateRestartChild?.check(port, loadConfig().hostname ?? "");
-            server = serverModule.startServer(port, { localAttestationSecret, readinessGate });
+            server = serverModule.startServer(port, { localAttestationSecret, readinessGate, liveConfigRef });
+            if (!liveConfigRef.current) {
+              try { await server.stop(true); }
+              catch (rollback) { throw new StartOwnershipRollbackUncertainError([new Error("Server live config unavailable"), rollback]); }
+              throw new Error("Server live config unavailable");
+            }
+            config = liveConfigRef.current;
             if (updateRestartChild) {
               try { updateRestartChild.check(port, server.hostname); }
               catch (error) {

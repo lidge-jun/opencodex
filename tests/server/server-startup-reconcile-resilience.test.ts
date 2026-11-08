@@ -61,6 +61,29 @@ const CAN_BIND = canBindLoopback();
  */
 const SKIP_LISTENER = !CAN_BIND && !IS_CI;
 
+test("successful startup returns the actual migrated server config to its owner", async () => {
+  saveConfig({
+    port: 0, hostname: "127.0.0.1", defaultProvider: "fixture",
+    providers: { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example.test" } },
+    claudeCode: { injectAgents: false, systemEnv: false },
+  } as OcxConfig);
+  const previous = loadConfig();
+  const liveConfigRef: { current?: OcxConfig } = {};
+  const installed = spyOn(stateStores, "setLiveStateStoreConfig");
+  const fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(new Error("network disabled"));
+  let server: ReturnType<typeof startServer> | undefined;
+  try {
+    server = startServer(0, { liveConfigRef });
+    expect(liveConfigRef.current).toBe(installed.mock.calls.at(-1)![0]);
+    expect(liveConfigRef.current?.claudeCode?.authMode).toBe("subscription");
+    expect(previous.claudeCode?.authMode).toBeUndefined();
+    expect(loadConfig().claudeCode?.authMode).toBe("subscription");
+  } finally {
+    if (server) await server.stop(true);
+    fetchSpy.mockRestore(); installed.mockRestore();
+  }
+});
+
 test.skipIf(!IS_CI)("hosted CI can bind a loopback listener for the startup cases", () => {
   expect(CAN_BIND).toBe(true);
 });
