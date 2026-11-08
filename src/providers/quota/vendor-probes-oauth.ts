@@ -19,7 +19,7 @@ import {
   type KiroUsageSnapshot,
   kiroUsageContextForAccount,
 } from "../kiro-usage";
-import { captureConfigGeneration } from "../../lib/state-store-sweeper";
+import { captureConfigGeneration, readStateStoreLiveConfig } from "../../lib/state-store-sweeper";
 import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityQuota } from "../codex-capacity";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
@@ -430,18 +430,22 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   const captured = captureMuseQuotaOwner(provider);
   const owner = config ? bindMuseQuotaConfig(captured, config, provider) : captured;
   if (!owner) return null;
+  const liveOwnerCurrent = () => {
+    const live = readStateStoreLiveConfig(getConfigDir());
+    return !live || owner.isConfigCurrent?.(live) === true;
+  };
   const probedAccountId = owner.accountId;
   // A paused account is excluded from every automatic upstream use; a key mint is one.
   if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;
   const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
   // An imported or pasted credential has no account token and never will: it is
   // capability, not provider id, that decides whether a probe is possible.
-  if (!oauthAccessToken || !owner.isCurrent()) return null;
+  if (!oauthAccessToken || !owner.isCurrent() || !liveOwnerCurrent()) return null;
   const probedAccountKey = accountCacheKey(provider, probedAccountId);
   const writerGeneration = captureConfigGeneration();
   const epoch = captureProviderAccountQuotaEpoch(provider);
   const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken, {}, undefined, owner.identity);
-  if (!quota || !owner.isCurrent() || epoch !== captureProviderAccountQuotaEpoch(provider)
+  if (!quota || !owner.isCurrent() || !liveOwnerCurrent() || epoch !== captureProviderAccountQuotaEpoch(provider)
     || !mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) return null;
   // Hydrate before writing: persistence serializes the whole in-memory map.
   hydrateAccountQuotaCache();
@@ -452,7 +456,7 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   persistAccountQuotaCache();
   return bindMuseReport(report(provider, `${provider}:key-endpoint`, quota), {
     ...owner, isCurrent: () => accountQuotaCache.get(probedAccountKey) === entry
-      && epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent(),
+      && epoch === captureProviderAccountQuotaEpoch(provider) && owner.isCurrent() && liveOwnerCurrent(),
   });
 }
 /**

@@ -569,6 +569,40 @@ describe("provider-level quota row for a passive provider", () => {
     } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
   });
 
+  test.each(["equivalent", "changed"] as const)("a successful detached Muse probe cannot replace the live quota (%s)", async mode => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: calls === 1 ? 40 : 80, window_duration_mins: 300 } } }); }) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      resetMuseKeyQuotaBackoff(); // Exercise an otherwise eligible successful probe after mint spacing.
+      const detached = structuredClone(config);
+      if (mode === "changed") detached.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      expect(await fetchMuseKeyQuota("meta-muse", detached)).toBeNull();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("a Muse probe cannot publish when a different live configuration is adopted while it waits", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setStateStoreLiveConfigReader(() => null);
+    let release!: (response: Response) => void, started!: () => void;
+    const called = new Promise<void>(resolve => { started = resolve; });
+    globalThis.fetch = (() => { started(); return new Promise<Response>(resolve => { release = resolve; }); }) as typeof fetch;
+    try {
+      const pending = fetchMuseKeyQuota("meta-muse", config);
+      await called;
+      setLiveStateStoreConfig(structuredClone(config));
+      release(Response.json({ is_subs_active: true, subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } }));
+      expect(await pending).toBeNull();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
   test("a held passive Muse report rechecks the caller's configuration without retiring its live owner", async () => {
     writeTwoAccounts(true);
     const config = museConfig(), originalFetch = globalThis.fetch;
