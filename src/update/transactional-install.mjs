@@ -286,12 +286,23 @@ function nestedPnpmRoots(packageDir, store, escaped, budget) {
     let real;
     try { real = realpathSync(current); } catch { escaped.add("pnpm package path could not be resolved"); continue; }
     if (!inside(real, store)) { escaped.add("pnpm package link escapes the selected store"); continue; }
+    const manifestPath = join(current, "package.json");
+    try {
+      lstatSync(manifestPath);
+      try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        inspectPackageEntries(current, manifest, store, escaped);
+        if (current !== real) inspectPackageEntries(real, manifest, store, escaped);
+      } catch { escaped.add("pnpm nested package manifest could not be read"); }
+    } catch (error) {
+      if (error?.code !== "ENOENT") escaped.add("pnpm nested package manifest could not be read");
+    }
     if (seen.has(real)) continue;
     if (budget.remaining-- <= 0) { escaped.add("pnpm package traversal exceeds verification limit"); return roots; }
     seen.add(real);
     try {
       for (const entry of readdirSync(real, { withFileTypes: true })) {
-        const child = join(real, entry.name);
+        const child = join(current, entry.name);
         if (entry.name === "node_modules") { roots.push(child); continue; }
         if (entry.isDirectory()) pending.push(child);
         else if (entry.isSymbolicLink()) {
@@ -325,7 +336,7 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
     seen.add(path);
     inspectAncestorRoots(path, store, escaped);
     const names = new Set();
-    const nestedRoots = nestedPnpmRoots(path, store, escaped, budget);
+    const nestedRoots = nestedPnpmRoots(spelling, store, escaped, budget);
     const ownRoot = join(path, "node_modules"), groupRoot = enclosingNodeModules(path);
     for (const root of [...new Set([ownRoot, groupRoot, ...nestedRoots])]) {
       if (!root) continue;

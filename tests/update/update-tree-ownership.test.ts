@@ -594,6 +594,32 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm package entry point is outside the selected store");
   });
 
+  test("refuses a nested package main entry outside the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11");
+    const zod = join(store, "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const nested = join(zod, "lib"), outside = join(root, "outside-entry.js");
+    mkdirSync(nested); writeFileSync(outside, "module.exports = 1;\n");
+    const nestedLink = join(realpathSync(exposed), "..", "..", "zod", "lib");
+    writeFileSync(join(nested, "package.json"), JSON.stringify({ main: relative(nestedLink, outside) }));
+    const node = Bun.which("node"); if (!node) throw new Error("Node is required for this resolution fixture");
+    const probe = spawnSync(node, ["-e", "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('zod/lib'))", join(realpathSync(exposed), "entry.js")], { encoding: "utf8" });
+    expect({ status: probe.status, stderr: probe.stderr }).toMatchObject({ status: 0 });
+    expect(realpathSync(probe.stdout)).toBe(realpathSync(outside));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm package entry point is outside the selected store");
+  });
+
+  test("accepts an in-store nested package main entry", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11");
+    const nested = join(store, "links", "zod", "1.0.0", "h2", "node_modules", "zod", "lib");
+    mkdirSync(nested); writeFileSync(join(nested, "index.js"), "module.exports = 1;\n");
+    writeFileSync(join(nested, "package.json"), JSON.stringify({ main: "./index.js" }));
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+  });
+
   test("accepts in-store package main, exports and binary paths", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const store = join(root, "pnpm", "store", "v11");
