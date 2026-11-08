@@ -705,6 +705,21 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(verifyPnpmInstallTree(pkg, "2.0.0", store).ok).toBe(false);
   }, 20_000);
 
+  test("checks an unshadowed shared-group dependency even if the first importer shadows it", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11"), pkg = realpathSync(exposed), group = join(pkg, "..", "..");
+    const shadow = join(pkg, "node_modules", "evil"), dep = join(group, "dep"), evil = join(group, "evil");
+    const outside = join(root, "outside.js");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: PKG, version: "2.0.0", dependencies: { bun: "1", zod: "1", dep: "1" } }));
+    writeDependency(shadow, "evil"); writeDependency(dep, "dep"); writeDependency(evil, "evil");
+    writeFileSync(outside, "module.exports = 1;\n");
+    writeFileSync(join(evil, "package.json"), JSON.stringify({ name: "evil", main: relative(evil, outside) }));
+    expect(realpathSync(createRequire(join(dep, "entry.js")).resolve("evil"))).toBe(realpathSync(outside));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm package entry point is outside the selected store");
+  });
+
   test("refuses a required transitive dependency resolved through an outside ancestor", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");

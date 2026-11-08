@@ -460,6 +460,10 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) 
     const names = new Set();
     const nestedRoots = nestedPnpmRoots(spelling, store, escaped, budget, storeAlias);
     const ownRoot = join(path, "node_modules"), groupRoot = enclosingNodeModules(path);
+    const enqueueRootEntry = (root, name) => {
+      const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped, [root], storeAlias);
+      if (dependency) pending.push(dependency);
+    };
     for (const root of [...new Set([ownRoot, groupRoot, ...nestedRoots])]) {
       if (!root) continue;
       try { lstatSync(root); } catch (error) {
@@ -470,8 +474,11 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) 
         const realRoot = realpathSync(root);
         if (!inside(realRoot, store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
         if (inside(root, store) || (storeAlias && inside(root, storeAlias))) resolveStoreLinkChain(root, store, storeAlias);
-        if (enumeratedRoots.has(realRoot)) continue;
-        enumeratedRoots.add(realRoot);
+        // Different spellings of the same physical root can resolve package entry points
+        // differently under preserved symlinks, so cache only the spelling we inspected.
+        const rootSpelling = resolve(root);
+        if (enumeratedRoots.has(rootSpelling)) continue;
+        enumeratedRoots.add(rootSpelling);
         for (const name of readdirSync(root)) {
           if ([".bin", ".pnpm", ".modules.yaml"].includes(name)) {
             const kind = name === ".bin" ? "binary" : "metadata";
@@ -479,11 +486,11 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) 
             inspectPnpmMetadata(join(root, name), store, escaped, kind, storeAlias, metadataSeen.get(kind));
             continue;
           }
-          if (!name.startsWith("@")) { names.add(name); continue; }
+          if (!name.startsWith("@")) { enqueueRootEntry(root, name); continue; }
           const scope = join(root, name);
           try {
             if (!inside(realpathSync(scope), store)) { escaped.add("pnpm dependency scope is outside the selected store: " + name); continue; }
-            if (statSync(scope).isDirectory()) for (const child of readdirSync(scope)) names.add(name + "/" + child);
+            if (statSync(scope).isDirectory()) for (const child of readdirSync(scope)) enqueueRootEntry(root, name + "/" + child);
           } catch { escaped.add("pnpm dependency scope could not be resolved: " + name); }
         }
       } catch { escaped.add("pnpm dependency root could not be resolved"); }
