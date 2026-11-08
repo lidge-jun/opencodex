@@ -750,3 +750,133 @@ test.each(["delete", "logout"] as const)("%s with failed reads retains explicit 
   expect(logouts).toHaveLength(logoutCount + 1);
   expect(logouts.every(request => request.provider === "anthropic2")).toBe(true);
 });
+
+test.each(["post", "status"] as const)("accounts panel exposes cancellation during stalled login %s", async pending => {
+  const posts: Array<PromiseWithResolvers<Response>> = [];
+  const status = Promise.withResolvers<Response>();
+  const cancel = Promise.withResolvers<Response>();
+  const notices: string[] = [];
+  const settled: string[] = [];
+  let oauth!: ReturnType<typeof useProvidersOAuth>;
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  respond = async request => {
+    if (request.path === "/api/oauth/login") {
+      const post = Promise.withResolvers<Response>(); posts.push(post); return post.promise;
+    }
+    if (request.path === "/api/oauth/status") return status.promise;
+    if (request.path === "/api/oauth/login/cancel") return cancel.promise;
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings(request.provider!, false, 55));
+    if (request.path === "/api/anthropic/reset-grants") return Response.json(grantSnapshot(request.provider!, 1));
+    return Response.json({ activeAccountId: "shared", accounts: accounts(request.provider ?? "anthropic2") });
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [statuses, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true } });
+    const [busy, setBusy] = useState<string | null>(null);
+    const [hint, setLoginInfo] = useState<Parameters<typeof useProvidersOAuth>[0]["setLoginInfo"] extends React.Dispatch<React.SetStateAction<infer S>> ? S : never>(null);
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: statuses,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy, setStatus: () => {}, setLoginInfo, setOauthStatus,
+      beginAccountLogin: pools.beginAccountLogin, beginAccountLogout: pools.beginAccountLogout,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {},
+      onLoginSettled: provider => settled.push(provider) });
+    return <ProviderAuthPanel item={POOL_B} apiBase="" oauth={statuses.anthropic2}
+      accounts={accounts("anthropic2")} busy={busy === "anthropic2"} loginHint={hint}
+      authHandlers={{ ...recordingHandlers([]), onCancelLogin: oauth.cancelLoginOAuth, onLogout: oauth.logoutOAuth }} />;
+  }
+  try {
+    await render(<Harness />);
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "shared"); });
+    expect(requests.find(request => request.path === "/api/oauth/login")?.body).toMatchObject({ provider: "anthropic2", accountId: "shared", reauth: true });
+    if (pending === "status") {
+      await act(async () => { posts[0]!.resolve(Response.json({ url: "https://example.test/login" })); });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); });
+      expect(requests.filter(request => request.path === "/api/oauth/status")).toHaveLength(1);
+    }
+    expect(buttonsByText(en["common.cancel"])).toHaveLength(1);
+    await click(buttonsByText(en["common.cancel"])[0]);
+    expect(requests.filter(request => request.path === "/api/oauth/login/cancel").map(request => request.provider)).toEqual(["anthropic2"]);
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "other"); void oauth.loginOAuth("anthropic"); });
+    expect(requests.filter(request => request.path === "/api/oauth/login").map(request => request.provider)).toEqual(["anthropic2", "anthropic"]);
+    await act(async () => { cancel.resolve(Response.json({})); });
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "other"); });
+    expect(requests.filter(request => request.path === "/api/oauth/login").map(request => request.body?.accountId)).toEqual(["shared", undefined, "other"]);
+    await act(async () => {
+      if (pending === "post") posts[0]!.resolve(Response.json({ url: "https://stale.example.test" }));
+      else status.resolve(Response.json({ loggedIn: true, done: true, accounts: accounts("anthropic2") }));
+    });
+    await act(async () => { void oauth.loginOAuth("anthropic2"); });
+    expect(requests.filter(request => request.path === "/api/oauth/login")).toHaveLength(3);
+    expect(settled).toEqual([]);
+    expect(notices).toContain("prov.accountOperationBusy");
+  } finally {
+    await act(async () => {
+      cancel.resolve(Response.json({})); status.resolve(Response.json({}));
+      for (const post of posts) post.resolve(Response.json({}, { status: 400 }));
+    });
+  }
+});
+
+test.each(["post", "status"] as const)("logout refuses the provider's stalled login %s until cancellation settles", async pending => {
+  const post = Promise.withResolvers<Response>();
+  const status = Promise.withResolvers<Response>();
+  const cancel = Promise.withResolvers<Response>();
+  const notices: string[] = [];
+  let oauth!: ReturnType<typeof useProvidersOAuth>;
+  respond = async request => {
+    if (request.path === "/api/oauth/login") return post.promise;
+    if (request.path === "/api/oauth/status") return status.promise;
+    if (request.path === "/api/oauth/login/cancel") return cancel.promise;
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings(request.provider!, false, 55));
+    if (request.path === "/api/anthropic/reset-grants") return Response.json(grantSnapshot(request.provider!, 1));
+    return Response.json({ activeAccountId: "shared", accounts: accounts(request.provider ?? "anthropic2") });
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [statuses, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true } });
+    const [busy, setBusy] = useState<string | null>(null);
+    const [hint, setLoginInfo] = useState<Parameters<typeof useProvidersOAuth>[0]["setLoginInfo"] extends React.Dispatch<React.SetStateAction<infer S>> ? S : never>(null);
+    const pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: statuses,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy, setStatus: () => {}, setLoginInfo, setOauthStatus,
+      beginAccountLogin: pools.beginAccountLogin, beginAccountLogout: pools.beginAccountLogout,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return <ProviderAuthPanel item={POOL_B} apiBase="" oauth={statuses.anthropic2} accounts={accounts("anthropic2")}
+      busy={busy === "anthropic2"} loginHint={hint}
+      authHandlers={{ ...recordingHandlers([]), onCancelLogin: oauth.cancelLoginOAuth, onLogout: oauth.logoutOAuth }} />;
+  }
+  try {
+    await render(<Harness />);
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "shared"); });
+    if (pending === "status") {
+      await act(async () => { post.resolve(Response.json({ url: "https://example.test/login" })); });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); });
+      expect(requests.filter(request => request.path === "/api/oauth/status")).toHaveLength(1);
+    }
+    await click(buttonsByText(en["prov.logout"])[0]);
+    expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(0);
+    expect(notices).toContain("prov.logoutBusy");
+    expect(buttonsByText(en["common.cancel"])).toHaveLength(1);
+    await click(buttonsByText(en["common.cancel"])[0]);
+    await act(async () => { void oauth.logoutOAuth("anthropic2"); await oauth.logoutOAuth("anthropic"); });
+    expect(requests.filter(request => request.path === "/api/oauth/logout").map(request => request.provider)).toEqual(["anthropic"]);
+    await act(async () => { cancel.resolve(Response.json({})); });
+    await act(async () => { await oauth.logoutOAuth("anthropic2"); });
+    expect(requests.filter(request => request.path === "/api/oauth/logout").map(request => request.provider)).toEqual(["anthropic", "anthropic2"]);
+    await act(async () => {
+      if (pending === "post") post.resolve(Response.json({ url: "https://stale.example.test" }));
+      else status.resolve(Response.json({ loggedIn: true, done: true, accounts: accounts("anthropic2") }));
+    });
+    expect(buttonsByText(en["common.cancel"])).toHaveLength(0);
+  } finally {
+    await act(async () => {
+      cancel.resolve(Response.json({})); post.resolve(Response.json({}, { status: 400 })); status.resolve(Response.json({}));
+    });
+  }
+});

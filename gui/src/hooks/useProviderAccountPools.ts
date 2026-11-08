@@ -415,7 +415,8 @@ export function useProviderAccountPools(deps: {
 
   const beginAccountLogout = (provider: string): (() => void) | null => {
     const key = `oauth:${provider}`;
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase || selectionMutationsRef.current.has(key)) return null;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase
+      || selectionMutationsRef.current.has(key) || loginOwnersRef.current.has(provider)) return null;
     invalidateSelectionReads(provider, "oauth");
     const owner = Symbol();
     selectionMutationsRef.current.set(key, owner);

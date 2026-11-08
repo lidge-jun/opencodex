@@ -13,6 +13,10 @@ These links preserve the preset's referral parameters. Sponsor information is sh
 the configured provider name, adapter and endpoint match the preset; it never changes routing,
 account selection or defaults.
 
+While a provider login is in progress, its Accounts panel offers **Cancel**, including before
+the sign-in instructions appear. Logout is refused while that login is active or cancellation
+is settling; retry logout after the operation ends. Other providers remain independent.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
