@@ -179,7 +179,7 @@ test.each(["key", "destination", "adapter"] as const)("publication drops an OAut
   await saveKimiFixture();
   const cfg = config("oauth");
   cfg.providers.deepseek = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "fixture-deepseek" };
-  globalThis.fetch = (async input => Response.json(String(input).includes("deepseek.com")
+  globalThis.fetch = (async input => Response.json(new URL(String(input)).hostname === "api.deepseek.com"
     ? { is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] }
     : { usages: { limit_month_total: monthlyRow } })) as typeof fetch;
   setProviderQuotaBeforePublishForTests(() => {

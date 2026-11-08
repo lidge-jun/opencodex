@@ -213,7 +213,7 @@ test("a transient refresh does not return a cached budget after its credential c
 test("a removed provider's denial does not suppress a different provider's retained quota", async () => {
   const other = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "test-deepseek-key" } as const;
   const cfg = { ...config, providers: { mistral: { ...provider }, deepseek: other } } as OcxConfig;
-  globalThis.fetch = (async input => Response.json(String(input).includes("deepseek.com")
+  globalThis.fetch = (async input => Response.json(new URL(String(input)).hostname === "api.deepseek.com"
     ? { is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] }
     : String(input).endsWith("/subscription") ? subscription : budget)) as typeof fetch;
   expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(2);
@@ -250,7 +250,7 @@ test.each([[100, 0], [0, 100], [undefined, 100]] as const)("passive quota pool e
   const resetAt = "2099-12-01T00:00:00Z";
   globalThis.fetch = (async input => {
     const url = String(input);
-    if (url.includes("deepseek.com")) return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
+    if (new URL(url).hostname === "api.deepseek.com") return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
     if (url.includes("openrouter.ai")) return Response.json({ data: { limit: 20, limit_remaining: 15 } });
     if (url.endsWith("/subscription")) return Response.json(subscription);
     return Response.json({

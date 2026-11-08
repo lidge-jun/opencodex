@@ -343,7 +343,7 @@ test("a credential changed and restored during collection cannot publish a misma
   clearProviderQuotaCache();
   setQuotaResetSink(event => events.push(event));
   globalThis.fetch = (async (input, init) => {
-    if (String(input).includes("deepseek.com")) {
+    if (new URL(String(input)).hostname === "api.deepseek.com") {
       key = b;
       installKeychain();
       return Response.json({ balance_infos: [{ currency: "USD", total_balance: 10 }] });
