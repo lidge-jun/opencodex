@@ -364,7 +364,12 @@ export function updateCommand(installer: Installer, tag: Channel, resolvedVersio
     return { bin: "pnpm", args: ["add", "-g", "--allow-build=bun", `${PKG}@${target}`] };
   }
   const bin = "npm";
-  const args = ["install", "-g", `${PKG}@${target}`];
+  // npm 11 blocks dependency lifecycle scripts by default, and bun's postinstall is what
+  // copies the selected @oven/bun-* executable into bun/bin. Without this narrow approval
+  // the install succeeds but leaves bun's un-downloaded placeholder, so the next `ocx`
+  // cannot start (#8361). npm 8 through 11 accept the flag on global installs, so it is
+  // unconditional rather than version-gated.
+  const args = ["install", "-g", "--allow-scripts=bun", `${PKG}@${target}`];
   return { bin, args };
 }
 
