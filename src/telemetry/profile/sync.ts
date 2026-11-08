@@ -118,7 +118,9 @@ async function retryPendingDelete(
   const result = await deleteProfile(state.secret, options);
   if (result.deleted) {
     // Only the file of the profile just deleted: a reconnect in the meantime has its own secret.
-    if (readTelemetryProfileFile(configDir).state?.secret === state.secret) deleteTelemetryProfileFile(configDir);
+    const current = readTelemetryProfileFile(configDir).state;
+    if (current && current.secret !== state.secret) return { sent: false, deleted: true, reason: "deleted" };
+    if (!deleteTelemetryProfileFile(configDir)) return { sent: false, deleted: false, reason: "local-file-remains" };
     return { sent: false, deleted: true, reason: "deleted" };
   }
   if (result.retryAfterMs) {

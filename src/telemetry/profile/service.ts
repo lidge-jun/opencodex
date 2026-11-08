@@ -201,8 +201,10 @@ export async function disconnectTelemetryProfile(options: ProfileServiceOptions 
   rankCache = null;
   const result = await deleteProfile(state.secret, options);
   if (result.deleted) {
-    deleteTelemetryProfileFile(configDir);
-    return { status: "deleted" };
+    if (deleteTelemetryProfileFile(configDir)) return { status: "deleted" };
+    // The server profile is gone, but the local file (with its now useless secret) is still
+    // there: say so instead of reporting a clean disconnect. The loop keeps retrying the removal.
+    return { status: "deletion_pending", error: "the local profile file could not be removed" };
   }
   return { status: "deletion_pending", error: result.error ?? "collector unavailable" };
 }

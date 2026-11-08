@@ -16,7 +16,8 @@ import type { CollectorEnv, D1Database } from "./types";
 const DAY_MS = 86_400_000;
 export const LEADERBOARD_MAX_LIMIT = 100;
 export const LEADERBOARD_DEFAULT_LIMIT = 50;
-export const PROFILE_READS_PER_HOUR = 600;
+/** Public reads per client key and hour; generous because a shared NAT may serve many dashboard viewers. */
+export const PROFILE_READS_PER_HOUR = 3000;
 export const LEADERBOARD_CACHE_TTL_MS = 300_000;
 
 export interface LeaderboardEntryV1 {

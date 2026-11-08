@@ -89,6 +89,9 @@ function statusLines(snapshot: ProfileStatusSnapshot, rank: ProfileRankV1 | null
   return [
     `Public profile: @${profile.handle} (${profile.displayName}) — ${state}`,
     `Connected: ${profile.connectedAt}; last sent day: ${profile.lastSentDay ?? "none yet"}`,
+    snapshot.preview
+      ? `Next submission (${snapshot.preview.day}): ${snapshot.preview.requests} requests, ${snapshot.preview.families.map(row => `${row.family} ${row.tokens} tokens`).join(", ")}; --json shows the exact payload`
+      : `Next submission: none due (${snapshot.nextDayReason})`,
     ...rankLines(rank),
   ];
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DailyTelemetryAggregate } from "../../src/telemetry/aggregate";
@@ -245,6 +245,21 @@ describe("opt-in public profile: client sync", () => {
     expect(existsSync(telemetryProfilePath(home))).toBe(false);
     expect(calls).toHaveLength(0);
     await connect();
+  });
+
+  test("disconnect never reports success while the secret file is still on disk", async () => {
+    await connect();
+    // The server deletes the profile, but the local file has been swapped for a directory.
+    respond = call => {
+      if (call.method === "DELETE") {
+        unlinkSync(telemetryProfilePath(home));
+        mkdirSync(telemetryProfilePath(home));
+        return Response.json({ ok: true, deleted: true });
+      }
+      return Response.json({ ok: true });
+    };
+    const outcome = await disconnectTelemetryProfile({ configDir: home, now: CONNECT_AT });
+    expect(outcome.status).toBe("deletion_pending");
   });
 
   test("profile modules never reach the anonymous install identity", () => {

@@ -150,7 +150,7 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
               <label className="flex flex-col gap-1 text-[13px]">
                 <span className="font-medium">{t("telemetryProfile.nameLabel")}</span>
                 <input name="displayName" value={displayName} onChange={event => setDisplayName(event.target.value)} autoComplete="off"
-                  maxLength={64} className="rounded-control border border-line bg-raised px-2.5 py-1.5 text-[14px]" />
+                  maxLength={32} className="rounded-control border border-line bg-raised px-2.5 py-1.5 text-[14px]" />
               </label>
               <fieldset className="m-0 flex flex-col gap-1 border-0 p-0 text-[13px]">
                 <legend className="mb-1 font-medium">{t("telemetryProfile.colourLabel")}</legend>
