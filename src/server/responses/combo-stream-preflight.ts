@@ -389,7 +389,13 @@ export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
   retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
-  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal },
+  options?: {
+    allowMissingContentType?: boolean;
+    inspectJsonResponse?: boolean;
+    replayReadErrors?: boolean;
+    requiredToolPrelude?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<ComboStreamPreflightResult> {
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
@@ -398,11 +404,10 @@ export async function preflightComboStreamResponse(
     return { kind: "accepted", response };
   }
   if (!isEventStream) {
-    const isJson = hasResponseMediaType(response.headers, "application/json");
-    if (!isJson && contentType) {
-      return { kind: "accepted", response };
+    if (options?.inspectJsonResponse && (hasResponseMediaType(response.headers, "application/json") || !contentType)) {
+      return await preflightComboJsonResponse(response, logCtx, retryableTerminal, options);
     }
-    return await preflightComboJsonResponse(response, logCtx, retryableTerminal, options);
+    return { kind: "accepted", response };
   }
 
   const reader = response.body.getReader();

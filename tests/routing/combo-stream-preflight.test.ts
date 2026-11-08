@@ -841,4 +841,53 @@ describe("combo stream preflight", () => {
       },
     });
   });
+
+  test("inspectJsonResponse converts zero-output incomplete JSON with max_output_tokens into a retryable failure", async () => {
+    const jsonPayload = {
+      id: "r1",
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [],
+      usage: { input_tokens: 42, output_tokens: 0, total_tokens: 42 },
+    };
+    const source = new Response(JSON.stringify(jsonPayload), {
+      headers: { "content-type": "application/json" },
+    });
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, {
+      inspectJsonResponse: true,
+    });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "zero_output_token_limit",
+      },
+      response: {
+        usage: { input_tokens: 42, output_tokens: 0 },
+      },
+    });
+  });
+
+  test("inspectJsonResponse accepts complete JSON without failing", async () => {
+    const jsonPayload = {
+      id: "r1",
+      status: "completed",
+      output: [{ type: "message", content: "complete response" }],
+      usage: { input_tokens: 42, output_tokens: 10, total_tokens: 52 },
+    };
+    const source = new Response(JSON.stringify(jsonPayload), {
+      headers: { "content-type": "application/json" },
+    });
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, {
+      inspectJsonResponse: true,
+    });
+    expect(result.kind).toBe("accepted");
+    expect(result.response.status).toBe(200);
+    const body = await result.response.json();
+    expect(body.status).toBe("completed");
+  });
 });
+
