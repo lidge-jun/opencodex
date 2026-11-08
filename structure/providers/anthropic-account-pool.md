@@ -348,8 +348,9 @@ Explicit local import observes the bearer when usable and enriches only a shared
 verified-UUID slot, retaining that slot's ID and selection. It preserves unrelated identityless
 slots. If profile evidence is unavailable, import remains identityless with the same automatic
 recovery limitation. These rules do not authenticate the local host owner who can edit the store.
-An import requests a fresh Keychain observation and refuses an unavailable one; cancellation is
-checked after observation and before dispatching an expired credential's refresh token.
+An import requests a fresh Keychain observation. If it is unavailable, import-only fails
+transiently and fallback login proceeds through browser OAuth without using a local credential;
+cancellation is checked after observation and before dispatching an expired credential's refresh token.
 
 Regression coverage: `tests/oauth/oauth-anthropic-identity.test.ts`, `tests/oauth/oauth-refresh.test.ts`.
 

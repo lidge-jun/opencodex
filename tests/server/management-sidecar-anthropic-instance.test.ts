@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as store from "../../src/oauth/store";
 import * as modelRows from "../../src/server/management/model-rows";
 import * as managementShared from "../../src/server/management/shared";
@@ -29,9 +29,15 @@ let rowsSpy: ReturnType<typeof spyOn<typeof modelRows, "listManagementModelRows"
 let catalogSpy: ReturnType<typeof spyOn<typeof managementShared, "fetchInitializedModels">>;
 let allModelsSpy: ReturnType<typeof spyOn<typeof managementShared, "fetchAllModels">>;
 let keychainProbe: ReturnType<typeof spyOn>;
+let previousPaths: Record<string, string | undefined>;
 beforeEach(() => {
   keychainProbe = spyOn(claudeKeychain, "probe").mockResolvedValue({ status: "absent" });
   home = createTempHome("ocx-helper-instance-settings-");
+  previousPaths = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  process.env.HOME = home.root;
+  process.env.USERPROFILE = home.root;
+  process.env.CLAUDE_CONFIG_DIR = home.path("claude-profile");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   accounts = {};
   accountSpy = spyOn(store, "getAccountSet").mockImplementation(provider => accounts[provider] ?? null);
   rowsSpy = spyOn(modelRows, "listManagementModelRows").mockResolvedValue([]);
@@ -45,6 +51,9 @@ afterEach(() => {
   catalogSpy.mockRestore();
   allModelsSpy.mockRestore();
   home.remove();
+  for (const [key, value] of Object.entries(previousPaths)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
 });
 
 function login(instance: "anthropic" | "anthropic2") {
@@ -64,6 +73,12 @@ async function request(config: OcxConfig, path: string, body?: unknown) {
 function persisted(): OcxConfig {
   return JSON.parse(readFileSync(home.path("config.json"), "utf8")) as OcxConfig;
 }
+
+test("management fixture pins Claude and home paths to its own temporary root", () => {
+  expect(process.env.CLAUDE_CONFIG_DIR).toBe(home.path("claude-profile"));
+  expect(process.env.HOME).toBe(home.root);
+  expect(process.env.USERPROFILE).toBe(home.root);
+});
 
 test.each([false, true])("normal Claude management saves retain retired disable intent; explicit reset and model edits work (backend: %s)", async withBackend => {
   let outbound = 0;

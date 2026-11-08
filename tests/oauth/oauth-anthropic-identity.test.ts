@@ -84,6 +84,21 @@ function deferred() {
 }
 const noRefresh = { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new Error("refresh must not run"); } };
 
+test("unavailable local credentials fall back to browser login without a token refresh", async () => {
+  const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
+  const browserCredential = { access: "synthetic-browser", refresh: "synthetic-browser-refresh", expires: Date.now() + 3_600_000 };
+  const browser = spyOn(AnthropicOAuthFlow.prototype, "login").mockResolvedValue(browserCredential);
+  let posts = 0;
+  globalThis.fetch = (async (_url, init) => { if (init?.method === "POST") posts++; return new Response(null, { status: 503 }); }) as typeof fetch;
+  try {
+    expect(await loginAnthropic({}, { importLocal: "fallback" })).toEqual(browserCredential);
+    expect(browser).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+    await expect(loginAnthropic({}, { importLocal: "only" })).rejects.toThrow("temporarily unavailable");
+    expect(browser).toHaveBeenCalledTimes(1);
+  } finally { read.mockRestore(); browser.mockRestore(); }
+});
+
 for (const mode of ["only", "fallback"] as const) {
   test(`local ${mode} login refuses an older in-flight Keychain read`, async () => {
     process.env.CLAUDE_CONFIG_DIR = join(tmp, "login-profile-without-file");
@@ -116,9 +131,14 @@ for (const mode of ["only", "fallback"] as const) {
       await earlier;
       const result = await outcome;
       expect(posts).toBe(0);
-      expect(result).toBeInstanceOf(Error);
+      if (mode === "only") {
+        expect(result).toBeInstanceOf(Error);
+        expect(browser).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ access: "synthetic-browser" });
+        expect(browser).toHaveBeenCalledTimes(1);
+      }
       expect(read).toHaveBeenCalledWith({ fresh: true });
-      expect(browser).not.toHaveBeenCalled();
     } finally { read.mockRestore(); browser.mockRestore(); }
   });
 }

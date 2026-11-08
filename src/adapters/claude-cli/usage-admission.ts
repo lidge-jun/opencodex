@@ -27,6 +27,7 @@ export type AdmissionDeps = {
 const CACHE_MS = 60_000;
 const MAX_IDENTITY_WAITERS = 256;
 const identityWaiters = createAdmissionGate("claude_cli_identity_waiters", MAX_IDENTITY_WAITERS);
+const probeWaiters = createAdmissionGate("claude_cli_probe_waiters", 256);
 const inflight = new Map<string, Promise<Snapshot | null>>();
 const memory = new Map<string, Snapshot>();
 let identityCache: { scope: string; at: number; value: Promise<Identity | null> } | undefined;
@@ -174,31 +175,35 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
     if (!expiredReset && now >= cached.checkedAt && now - cached.checkedAt < CACHE_MS) return status;
   }
   const requestKey = `${path}:${identity.key}`;
-  let probe = inflight.get(requestKey);
-  if (!probe) {
-    probe = (async () => {
-      let quota: ProviderQuota | null = null;
-      try { quota = await (deps.probe ?? readAnthropicUsageQuota)(identity.access); } catch { /* Unavailable is unknown. */ }
-      // A login change during the probe makes this answer belong to no current account: neither
-      // persist it nor admit or refuse with it.
-      if ((await resolveIdentity(deps, true))?.key !== identity.key) return null;
-      // Merge the newest refusal at commit time. Nothing awaits between this read and the write,
-      // so a refusal the CLI reported while the probe was in flight is never overwritten.
-      const at = (deps.now ?? Date.now)();
-      const refusals = [load(path), memory.get(path)]
-        .filter((s): s is Snapshot => s?.identity === identity.key)
-        .map(s => s.refusalUntil)
-        .filter((until): until is number => finite(until) && until > at);
-      const refusalUntil = refusals.length ? Math.max(...refusals) : undefined;
-      const snapshot: Snapshot = { identity: identity.key, checkedAt: at, ...(quota ? { quota } : {}), ...(refusalUntil ? { refusalUntil } : {}) };
-      save(path, snapshot);
-      return snapshot;
-    })().finally(() => inflight.delete(requestKey));
-    inflight.set(requestKey, probe);
-  }
-  const snapshot = await probe;
-  if (!snapshot) return { state: "unknown", checkedAt: (deps.now ?? Date.now)() };
-  return admission(snapshot, model, (deps.now ?? Date.now)());
+  const lease = probeWaiters.tryAcquire();
+  if (!lease) return { state: "unknown", checkedAt: now };
+  try {
+    let probe = inflight.get(requestKey);
+    if (!probe) {
+      probe = (async () => {
+        let quota: ProviderQuota | null = null;
+        try { quota = await (deps.probe ?? readAnthropicUsageQuota)(identity.access); } catch { /* Unavailable is unknown. */ }
+        // A login change during the probe makes this answer belong to no current account: neither
+        // persist it nor admit or refuse with it.
+        if ((await resolveIdentity(deps, true))?.key !== identity.key) return null;
+        // Merge the newest refusal at commit time. Nothing awaits between this read and the write,
+        // so a refusal the CLI reported while the probe was in flight is never overwritten.
+        const at = (deps.now ?? Date.now)();
+        const refusals = [load(path), memory.get(path)]
+          .filter((s): s is Snapshot => s?.identity === identity.key)
+          .map(s => s.refusalUntil)
+          .filter((until): until is number => finite(until) && until > at);
+        const refusalUntil = refusals.length ? Math.max(...refusals) : undefined;
+        const snapshot: Snapshot = { identity: identity.key, checkedAt: at, ...(quota ? { quota } : {}), ...(refusalUntil ? { refusalUntil } : {}) };
+        save(path, snapshot);
+        return snapshot;
+      })().finally(() => inflight.delete(requestKey));
+      inflight.set(requestKey, probe);
+    }
+    const snapshot = await probe;
+    if (!snapshot) return { state: "unknown", checkedAt: (deps.now ?? Date.now)() };
+    return admission(snapshot, model, (deps.now ?? Date.now)());
+  } finally { lease.release(); }
 }
 
 let preflightOverride: ((model: string) => Promise<ClaudeAdmission>) | undefined;

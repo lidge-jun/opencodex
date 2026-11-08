@@ -42,6 +42,31 @@ const seed = (quota: unknown, now: number) => {
 };
 
 describe("Claude usage admission cache", () => {
+  test("a shared quota probe bounds callers through the fresh identity recheck", async () => {
+    const statePath = tempState();
+    let quotaStarted!: () => void, releaseQuota!: () => void, freshStarted!: () => void, releaseFresh!: () => void;
+    const quotaEntered = new Promise<void>(resolve => { quotaStarted = resolve; });
+    const quotaBlocked = new Promise<void>(resolve => { releaseQuota = resolve; });
+    const freshEntered = new Promise<void>(resolve => { freshStarted = resolve; });
+    const freshBlocked = new Promise<void>(resolve => { releaseFresh = resolve; });
+    const deps = { statePath, identity: async (fresh?: boolean) => {
+      if (fresh) { freshStarted(); await freshBlocked; }
+      return identity();
+    }, probe: async () => { quotaStarted(); await quotaBlocked; return freshQuota; } };
+    const requests = Array.from({ length: 256 }, () => checkClaudeUsageAdmission("", deps));
+    let overflow: string | undefined;
+    try {
+      await quotaEntered;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const extra = checkClaudeUsageAdmission("", deps).then(result => { overflow = result.state; });
+      releaseQuota(); await freshEntered;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(overflow).toBe("unknown");
+      releaseFresh(); await Promise.all([...requests, extra]);
+      expect((await checkClaudeUsageAdmission("", deps)).state).toBe("available");
+    } finally { releaseQuota(); releaseFresh(); await Promise.allSettled(requests); }
+  });
+
   test("a saturated fresh recheck invalidates pending old identity and cached refusal", async () => {
     const ownerState = tempState(), waitingState = tempState();
     const profile = ownerState + "-profile";

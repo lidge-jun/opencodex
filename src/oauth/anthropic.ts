@@ -233,6 +233,7 @@ export async function loginAnthropic(
     const observation = await observeClaudeCodeToken({ fresh: true });
     ctrl.signal?.throwIfAborted();
     if (observation.kind === "unavailable") {
+      if (importLocal === "fallback") return new AnthropicOAuthFlow(ctrl).login();
       throw new Error("Claude Code credentials are temporarily unavailable. Try again after Keychain access is available.");
     }
     const local = observation.kind === "present" ? observation.credential : null;
