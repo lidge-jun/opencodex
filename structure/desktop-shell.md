@@ -380,7 +380,8 @@ silent install run as SYSTEM (Intune, SCCM) or approved by another administrator
 who use the app; Tauri's MSI is per-machine and needs elevation, so there is no per-user install.
 `OCX_TELEMETRY_CHOICE` has no default. A command-line value other than `send` (`off`, `0`, a typo)
 becomes `optout` first (`OcxTelemetryNormalizeChoice`, compared with `""` because a bare property
-whose value is the integer 0 evaluates false). A value passed on the command line gets a new stamp
+whose value is the integer 0 evaluates false; every condition in the fragment compares
+explicitly for the same reason, which a test enforces). A value passed on the command line gets a new stamp
 (`OcxTelemetryStampExplicit`, before `AppSearch`), but only while no stamp is set, so the stamp the
 UI phase hands to the install phase is never replaced. Otherwise `AppSearch` reads the previous
 choice and stamp and carries them (`OcxTelemetryKeepChoice`, `OcxTelemetryKeepStamp`). That keeps

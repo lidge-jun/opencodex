@@ -115,17 +115,17 @@ export function renderTelemetryInstallerFragment(): string {
       <RegistrySearch Id="OcxTelemetryPreviousStamp" Root="HKLM" Key="${TELEMETRY_INSTALLER_REGISTRY_KEY}" Name="${TELEMETRY_INSTALLER_STAMP_VALUE}" Type="raw" Win64="$(var.OcxTelemetryWin64)" />
     </Property>
     <!-- Fail closed: any command-line value other than send (off, 0, a typo, padding) is an opt-out.
-         Compared with "" because a bare property whose value is the integer 0 evaluates false. -->
+         Every condition here compares with "" because a bare property holding the integer 0 is false. -->
     <SetProperty Action="OcxTelemetryNormalizeChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}" Before="OcxTelemetryStampExplicit" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} &lt;&gt; "" AND ${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; "${TELEMETRY_INSTALLER_SEND}"</SetProperty>
     <!-- A choice given on the command line is a new decision: give it a new stamp. The UI phase passes
          its stamp to the install phase, so a carried choice is never re-stamped without the page. -->
-    <SetProperty Action="OcxTelemetryStampExplicit" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]" Before="AppSearch" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} AND NOT ${TELEMETRY_INSTALLER_STAMP_PROPERTY}</SetProperty>
-    <SetProperty Action="OcxTelemetryKeepChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY} AND OCX_TELEMETRY_PREVIOUS_CHOICE</SetProperty>
-    <SetProperty Action="OcxTelemetryKeepStamp" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_STAMP]" After="OcxTelemetryKeepChoice" Sequence="both">NOT ${TELEMETRY_INSTALLER_STAMP_PROPERTY} AND OCX_TELEMETRY_PREVIOUS_STAMP</SetProperty>
+    <SetProperty Action="OcxTelemetryStampExplicit" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]" Before="AppSearch" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} &lt;&gt; "" AND ${TELEMETRY_INSTALLER_STAMP_PROPERTY} = ""</SetProperty>
+    <SetProperty Action="OcxTelemetryKeepChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} = "" AND OCX_TELEMETRY_PREVIOUS_CHOICE &lt;&gt; ""</SetProperty>
+    <SetProperty Action="OcxTelemetryKeepStamp" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_STAMP]" After="OcxTelemetryKeepChoice" Sequence="both">${TELEMETRY_INSTALLER_STAMP_PROPERTY} = "" AND OCX_TELEMETRY_PREVIOUS_STAMP &lt;&gt; ""</SetProperty>
     <!-- The stamp the page started from, restored when Next leaves the carried choice unchanged. -->
-    <SetProperty Action="OcxTelemetryCarriedStamp" Id="OCX_TELEMETRY_CARRIED_STAMP" Value="[${TELEMETRY_INSTALLER_STAMP_PROPERTY}]" After="OcxTelemetryKeepStamp" Sequence="ui">${TELEMETRY_INSTALLER_STAMP_PROPERTY}</SetProperty>
+    <SetProperty Action="OcxTelemetryCarriedStamp" Id="OCX_TELEMETRY_CARRIED_STAMP" Value="[${TELEMETRY_INSTALLER_STAMP_PROPERTY}]" After="OcxTelemetryKeepStamp" Sequence="ui">${TELEMETRY_INSTALLER_STAMP_PROPERTY} &lt;&gt; ""</SetProperty>
     <!-- After KeepStamp, which runs in both sequences: WiX's linker rejects a parent missing from a sequence. -->
-    <SetProperty Action="OcxTelemetryDefaultChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" After="OcxTelemetryKeepStamp" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY}</SetProperty>
+    <SetProperty Action="OcxTelemetryDefaultChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" After="OcxTelemetryKeepStamp" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} = ""</SetProperty>
     <!-- The box starts checked only when the choice is send, so a carried opt-out (or any other carried value) starts unchecked. -->
     <SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~= "${TELEMETRY_INSTALLER_SEND}"</SetProperty>
     <ComponentGroup Id="${TELEMETRY_INSTALLER_COMPONENT_GROUP}">
@@ -155,7 +155,7 @@ ${controls.join("\n")}
           <Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}">${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1"</Publish>
           <Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}">NOT (${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1")</Publish>
           <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; OCX_TELEMETRY_PREVIOUS_CHOICE</Publish>
-          <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_CARRIED_STAMP]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~= OCX_TELEMETRY_PREVIOUS_CHOICE AND OCX_TELEMETRY_CARRIED_STAMP</Publish>
+          <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_CARRIED_STAMP]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~= OCX_TELEMETRY_PREVIOUS_CHOICE AND OCX_TELEMETRY_CARRIED_STAMP &lt;&gt; ""</Publish>
           <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
