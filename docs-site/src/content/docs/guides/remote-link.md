@@ -146,6 +146,8 @@ ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 
+`ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
+
 ## Related guides
 
 - [Remote Hub Deployment](/guides/remote-hub/)

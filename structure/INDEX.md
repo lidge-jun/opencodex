@@ -254,6 +254,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-local-control.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
@@ -354,6 +355,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/error-destination.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/local-control-socket.ts` | [`remote-link.md`](remote-link.md) |
 | `src/lib/local-upstream.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/lib/messages-error-body.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/messages-sse-error-presentation.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -435,6 +437,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/index/local-control-listener.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/index/serve-options.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/startup-warnings.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
