@@ -12,6 +12,7 @@ import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
+import { previewRecoveryFor, type PreviewRecovery } from "./preview-recovery";
 import { loadCursorIntegrationStatus } from "./cursor-api";
 import {
   buildOverviewRows,
@@ -34,7 +35,6 @@ import {
   bindingFor,
   deleteJournalEntry,
   IntegrationApiError,
-  isIntegrationPreviewUnavailable,
   isMissingJournalEntry,
   type IntegrationJournalRow,
   type IntegrationStatus,
@@ -144,6 +144,7 @@ function OverviewCard({
   onOpen,
   onToggle,
   onOverwrite,
+  onChooseProfile,
 }: {
   row: OverviewRow;
   pending: boolean;
@@ -152,6 +153,8 @@ function OverviewCard({
   onToggle: (() => void) | null;
   /** Present only for a conflicted file client; null everywhere else. */
   onOverwrite: (() => void) | null;
+  /** Aside only: one plan names one profile, so the aggregate card cannot replace. */
+  onChooseProfile: (() => void) | null;
 }) {
   const t = useT();
   const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
@@ -235,6 +238,17 @@ function OverviewCard({
             {t("integrations.action.overwrite")}
           </button>
         )}
+        {/*
+          Aside has no aggregate writer: a fingerprint describes one profile's
+          file, and the server refuses an unprofiled plan for exactly that
+          reason. The card therefore sends the user to the per-profile surface
+          instead of opening a dialog that could never load a plan.
+        */}
+        {onChooseProfile && (
+          <button type="button" className="btn btn-ghost" onClick={onChooseProfile} disabled={pending}>
+            {t("integrations.action.chooseProfile")}
+          </button>
+        )}
       </div>
     </li>
   );
@@ -273,6 +287,7 @@ export default function IntegrationsOverview({
     plan: IntegrationMutationPlan | null;
     loading: boolean;
     failure: string | null;
+    recovery: PreviewRecovery | null;
   } | null>(null);
   const [bulkPlans, setBulkPlans] = useState<BulkDisableState | null>(null);
   const cardPreviewAbortRef = useRef<AbortController | null>(null);
@@ -648,29 +663,59 @@ export default function IntegrationsOverview({
     }
   };
 
-  const requestFilePlan = async (row: OverviewRow, operation: Exclude<IntegrationPlanOperation, "restore">) => {
-    if (!row.status || plannedCard) return;
+  const requestFilePlan = async (
+    row: OverviewRow,
+    operation: Exclude<IntegrationPlanOperation, "restore">,
+    /** Recovery replaces the failed plan it is retrying; the first request never does. */
+    replacing = false,
+  ) => {
+    if (!row.status || (plannedCard && !replacing)) return;
     const controller = new AbortController();
     const generation = cardPreviewGenerationRef.current + 1;
     cardPreviewGenerationRef.current = generation;
     cardPreviewAbortRef.current?.abort();
     cardPreviewAbortRef.current = controller;
-    setPlannedCard({ row, operation, plan: null, loading: true, failure: null });
+    setPlannedCard({ row, operation, plan: null, loading: true, failure: null, recovery: null });
     try {
       const plan = await previewIntegrationMutation(apiBase, row.status.clientId, operation, controller.signal);
       if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
       cardPreviewAbortRef.current = null;
-      setPlannedCard({ row, operation, plan, loading: false, failure: null });
+      setPlannedCard({ row, operation, plan, loading: false, failure: null, recovery: null });
     } catch (error) {
       if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
       cardPreviewAbortRef.current = null;
-      if (isIntegrationPreviewUnavailable(error)) {
-        setPlannedCard(null);
-        refresh();
-        return;
-      }
-      setPlannedCard({ row, operation, plan: null, loading: false, failure: t("integrations.preview.failed") });
+      /*
+       * No retained roster is NOT a dead end. Closing the dialog, as this used
+       * to, looked like the button did nothing; keep the dialog and offer the
+       * one read that makes the next preview answerable.
+       */
+      const recovery = previewRecoveryFor(error);
+      setPlannedCard({
+        row, operation, plan: null, loading: false, recovery,
+        failure: recovery === null ? t("integrations.preview.failed") : null,
+      });
     }
+  };
+
+  /*
+   * Read the collection again, then re-ask for the plan.
+   *
+   * The collection read is an ordinary authoritative load and is what retains
+   * the export roster the preview reads. Waiting for it — rather than the
+   * fire-and-forget refresh() — is the whole recovery; nothing here writes a
+   * client file, and the preview stays side-effect free.
+   */
+  const recoverPlannedCard = async () => {
+    const planned = plannedCard;
+    if (!planned) return;
+    try {
+      await loadIntegrationStates(apiBase);
+    } catch {
+      // The preview will answer (or refuse) again; a second error banner here
+      // would only obscure the one the user can act on.
+    }
+    refresh();
+    await requestFilePlan(planned.row, planned.operation, true);
   };
 
   const closePlannedCard = () => {
@@ -720,8 +765,11 @@ export default function IntegrationsOverview({
       result={cardResults[row.id] ?? null}
       onOpen={() => navigateHash(row.hash)}
       onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
-      onOverwrite={row.status !== null && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
+      onOverwrite={row.status !== null && row.status.clientId !== "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
         ? () => void requestFilePlan(row, "overwrite")
+        : null}
+      onChooseProfile={row.status?.clientId === "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
+        ? () => navigateHash(row.hash)
         : null}
     />
   );
@@ -938,6 +986,8 @@ export default function IntegrationsOverview({
           plan={plannedCard.plan}
           planLoading={plannedCard.loading}
           planFailure={plannedCard.failure}
+          previewRecovery={plannedCard.recovery}
+          onPreviewRecovery={recoverPlannedCard}
           onClose={closePlannedCard}
           onConfirm={async plan => {
             if (!plan) return;
