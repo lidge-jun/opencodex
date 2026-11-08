@@ -300,28 +300,6 @@ export async function injectSystemEnv(
     bindHost: probeHostname(config.hostname),
     clientBaseUrl: destination.origin,
   };
-  const keychainPresence = deps.authDetect?.keychainProbe
-    ? (() => { try { return deps.authDetect!.keychainProbe!(); } catch { return "unknown" as const; } })()
-    : await resolveClaudeKeychainPresence();
-  if (!commitIfCurrent(() => {})) return superseded();
-  const resolvedDeps = { ...deps, authDetect: { ...deps.authDetect, keychainProbe: () => keychainPresence } };
-  const markerMode = systemEnvMarkerMode(config, resolvedDeps);
-  // The data-plane credential this host can present to its own public listener: env token,
-  // hardened service token file, then a configured key. Never the admin token.
-  const hostAdmissionToken = destination.requiresAdmissionToken ? localAdmissionToken(config) : undefined;
-  // The launchd domain is machine-wide, so injecting a destination that will 401 every plain
-  // `claude` is worse than not injecting at all. Degrade out loud instead: a subscription
-  // launch cannot carry a host token (asserting one logs a claude.ai subscriber out, #253),
-  // and with no resolvable credential there is nothing to carry either way.
-  if (destination.requiresAdmissionToken && (markerMode !== "proxy" || !hostAdmissionToken)) {
-    console.error(
-      `⚠ Skipping system-environment injection: ${destination.origin} requires an opencodex data-plane `
-      + "credential that this launch cannot supply. Enable `unauthenticatedLoopbackListener` or bind the "
-      + "proxy to loopback.",
-    );
-    return { injected: false, reason: "local inference requires a data-plane credential" };
-  }
-
   const currentBaseUrl = launchctlGetenv("ANTHROPIC_BASE_URL");
   // Ours is loopback in every topology but one: with the listener off and a non-loopback bind
   // the value WE wrote names the bind address, and rejecting it as "user has custom" would make
@@ -347,7 +325,26 @@ export async function injectSystemEnv(
     : launchctlGetenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
   const auto = resolveAutoContext(config.claudeCode, userAutoCompact);
   const { modelEnv, windows } = await computeEffectiveModelEnv(config, auto);
-  if (!isCurrent()) return superseded();
+  if (!commitIfCurrent(() => {})) return superseded();
+  // Resolve auth after catalog work so a login during that wait is not hidden by an old snapshot.
+  const keychainPresence = deps.authDetect?.keychainProbe
+    ? (() => { try { return deps.authDetect!.keychainProbe!(); } catch { return "unknown" as const; } })()
+    : await resolveClaudeKeychainPresence();
+  if (!commitIfCurrent(() => {})) return superseded();
+  const resolvedDeps = { ...deps, authDetect: { ...deps.authDetect, keychainProbe: () => keychainPresence } };
+  const markerMode = systemEnvMarkerMode(config, resolvedDeps);
+  // The data-plane credential this host can present to its own public listener: env token,
+  // hardened service token file, then a configured key. Never the admin token.
+  const hostAdmissionToken = destination.requiresAdmissionToken ? localAdmissionToken(config) : undefined;
+  // Subscription launches cannot carry a proxy token; refuse destinations that require one.
+  if (destination.requiresAdmissionToken && (markerMode !== "proxy" || !hostAdmissionToken)) {
+    console.error(
+      `⚠ Skipping system-environment injection: ${destination.origin} requires an opencodex data-plane `
+      + "credential that this launch cannot supply. Enable `unauthenticatedLoopbackListener` or bind the "
+      + "proxy to loopback.",
+    );
+    return { injected: false, reason: "local inference requires a data-plane credential" };
+  }
   const inject = (name: string, value: string) => {
     setLaunchctlEnv(name, value);
     if (!injectedKeys.includes(name)) injectedKeys.push(name);

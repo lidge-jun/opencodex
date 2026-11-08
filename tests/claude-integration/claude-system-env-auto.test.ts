@@ -278,6 +278,26 @@ test("disabling system environment while model resolution is pending prevents la
   } finally { release(); windows.mockRestore(); }
 });
 
+test("auth mode observes Keychain after pending model resolution", async () => {
+  let started!: () => void, release!: () => void, keychainPresent = false;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const windows = spyOn(contextWindows, "boundedContextWindows").mockImplementation(async () => {
+    started(); await blocked; return {};
+  });
+  keychainSpy.mockImplementation(async () => ({ status: keychainPresent ? "present" : "absent" }));
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered;
+    keychainPresent = true;
+    release();
+    expect(await pending).toEqual({ injected: true });
+    expect(keychainSpy).toHaveBeenCalledTimes(1);
+    expect(fakeLaunchd.get("ANTHROPIC_AUTH_TOKEN")).toBeUndefined();
+    expect(shellEnvContents).not.toContain(PROXY_MARKER);
+  } finally { release(); windows.mockRestore(); }
+});
+
 test("a foreign tracking owner arriving during model resolution is not overwritten", async () => {
   let started!: () => void, release!: () => void, tracking: string | undefined;
   const entered = new Promise<void>(resolve => { started = resolve; });
