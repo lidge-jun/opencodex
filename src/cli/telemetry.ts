@@ -37,7 +37,7 @@ const DEFERRAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const TELEMETRY_CLI_DISCLOSURE_LINES = Object.freeze([
   "  Anonymous daily usage telemetry:",
-  "  • Sent once per day to telemetry.opencodex.me: version, OS/arch, install channel, provider kind, coarse model family, active minutes, and request/token/error counts.",
+  "  • Sent daily to telemetry.opencodex.me: a daily-changing install hash, version, release channel, OS/arch, install channel, first-report flag, provider kind, model family, active minutes, request/token/error counts.",
   "  • Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text.",
   "  • Public aggregates: project-wide totals are published at opencodex.me/dashboard.",
   "  • See the exact payload: ocx telemetry status --json",
@@ -165,7 +165,9 @@ function formatStatusLines(snapshot: TelemetryStatusSnapshot): string[] {
     ...(snapshot.envOverride ? [`Environment override: ${snapshot.envOverride}`] : []),
     `Install channel: ${snapshot.installChannel}`,
     `Last sent day: ${snapshot.lastSentDay ?? "never"}`,
-    ...(snapshot.stateUnreadable ? ["Sending paused: telemetry-state.json cannot be read, so nothing is sent."] : []),
+    ...(snapshot.stateUnreadable
+      ? ["Sending paused: telemetry-state.json cannot be read. Choosing again (ocx telemetry enable or disable) rebuilds it."]
+      : []),
     `Preview eligible: ${snapshot.previewEligible ? "yes" : "no"}`,
     snapshot.previewEligible
       ? `Preview (${snapshot.preview.day}, next eligible send):`
