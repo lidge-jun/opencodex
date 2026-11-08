@@ -391,6 +391,41 @@ describe("combo stream preflight", () => {
     }), { model: "m1", provider: "a" });
 
     expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+  });
+
+  test("retries a zero-output opaque OpenRouter numeric 400 when status is omitted from SSE error", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const body = await result.response.json();
+    expect(body.error).toMatchObject({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR" },
+    });
+  });
+
+  test("treats a zero-output opaque OpenRouter numeric 400 carrying root detail for malformed response_format as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      detail: "Invalid schema for response_format: 'type' must be 'object'",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
   });
 
   test("treats a wrapped invalid_request_error with upstream_error as terminal", async () => {

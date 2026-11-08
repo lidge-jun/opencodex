@@ -257,6 +257,33 @@ describe("combo failure cooldown scope", () => {
       openRouterOpaque400: malformedFailure.openRouterOpaque400,
       malformedResponseFormat: malformedFailure.malformedResponseFormat,
     })).toBe("stop");
+
+    const rootDetailOpaqueBody = JSON.stringify({
+      detail: "Invalid schema for response_format: 'type' must be 'object'",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    });
+    expect(isMalformedResponseFormatRequest(400, rootDetailOpaqueBody)).toBe(true);
+    const rootDetailFailure = await consumeComboFailure(new Response(rootDetailOpaqueBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(rootDetailFailure.malformedResponseFormat).toBe(true);
+    expect(rootDetailFailure.openRouterOpaque400).toBe(true);
+    expect(comboFailureDecision(400, rootDetailFailure.classificationText, {
+      code: rootDetailFailure.upstreamCode,
+      upstreamType: rootDetailFailure.upstreamType,
+      openRouterOpaque400: rootDetailFailure.openRouterOpaque400,
+      malformedResponseFormat: rootDetailFailure.malformedResponseFormat,
+    })).toBe("stop");
+    expect(comboFailureCooldownScope(400, rootDetailFailure.classificationText, {
+      code: rootDetailFailure.upstreamCode,
+      openRouterOpaque400: rootDetailFailure.openRouterOpaque400,
+      malformedResponseFormat: rootDetailFailure.malformedResponseFormat,
+    })).toBe("target");
   });
 
   test.each([400, 422])("HTTP %s per-request free-tier cap still hops without cooldown scope", status => {

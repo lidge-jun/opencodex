@@ -397,9 +397,14 @@ export function http400ErrorRecord(message: string): Record<string, unknown> | u
       ? (root.response as Record<string, unknown>).error
       : undefined;
     const error = root.error ?? nested;
-    return error !== null && typeof error === "object" && !Array.isArray(error)
-      ? error as Record<string, unknown>
-      : undefined;
+    if (error !== null && typeof error === "object" && !Array.isArray(error)) {
+      const record = { ...(error as Record<string, unknown>) };
+      if (typeof record.detail !== "string" && typeof root.detail === "string") {
+        record.detail = root.detail;
+      }
+      return record;
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -410,7 +415,7 @@ export function isMalformedResponseFormatRecord(record?: Record<string, unknown>
   const fields = record
     ? [record.message, record.detail].filter((value): value is string => typeof value === "string")
     : [];
-  if (fields.length === 0 && rawText) fields.push(rawText);
+  if (rawText) fields.push(rawText);
   return fields.some(detail =>
     /\binvalid schema(?: for)? response_format\b/i.test(detail)
     || /\bresponse_format(?:\.[a-z_]+)*\s+must be (?:one of|valid|a valid)\b/i.test(detail));

@@ -90,6 +90,9 @@ function bareErrorStatus(payload: unknown): number | undefined {
       ? String(rawCode)
       : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
+  if (explicitStatus === undefined && (isOpenRouterOpaque400Record(error) || isOpenRouterOpaque400Record(event))) {
+    return 400;
+  }
   return explicitStatus ?? httpStatusFromTerminalError({
     type: typeof error.type === "string" && error.type !== "error" ? error.type : undefined,
     code,
@@ -141,7 +144,10 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
-  const rawRecord = (nested && typeof nested === "object" && !Array.isArray(nested) ? nested : event) as Record<string, unknown>;
+  const rawRecord = {
+    ...((nested && typeof nested === "object" && !Array.isArray(nested) ? nested : event) as Record<string, unknown>),
+    ...(typeof event.detail === "string" ? { detail: event.detail } : {}),
+  };
   const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
   const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400Record(rawRecord) : undefined;
   return comboFailureDecision(status, message, {
@@ -271,6 +277,12 @@ function failedTerminalResponse(
     ? nestedError as Record<string, unknown>
     : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
       ? topLevelError as Record<string, unknown>
+    : isOpenRouterOpaque400Record(terminalPayload)
+      ? {
+        message: terminalPayload.message,
+        code: terminalPayload.code,
+        metadata: terminalPayload.metadata,
+      }
     : {
       // A caller-validated flat error can carry its identity beside type:error.
       // Retain it when that caller established a 400, rather than discarding the
@@ -294,6 +306,7 @@ function failedTerminalResponse(
   const usage = terminalResponse.usage;
   return new Response(JSON.stringify({
     error,
+    ...(typeof terminalPayload.detail === "string" ? { detail: terminalPayload.detail } : {}),
     // The combo classifier needs only the error and optional usage. Do not carry
     // response ids, provider metadata, or future terminal fields into the client
     // error envelope merely because they shared the terminal snapshot.
