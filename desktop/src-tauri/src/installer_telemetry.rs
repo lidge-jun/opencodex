@@ -44,7 +44,11 @@ pub const STAMP_VALUE: &str = "InstallerChoiceStamp";
 pub const APPLIED_STAMP_VALUE: &str = "AppliedInstallerStamp";
 /// Written by this app under HKCU: the stamp of the last per-user opt-out applied.
 pub const APPLIED_USER_STAMP_VALUE: &str = "AppliedUserInstallerStamp";
+// The installer's value for an opt-out, pinned against the WiX fragment by a test; the app treats any
+// value other than `SEND` as an opt-out.
+#[allow(dead_code)]
 pub const OPT_OUT: &str = "optout";
+pub const SEND: &str = "send";
 
 static SIDECAR_ENV_OPT_OUT: AtomicBool = AtomicBool::new(false);
 
@@ -108,8 +112,10 @@ pub enum Outcome {
     NotPersisted,
 }
 
+/// Fail closed like the installer: any recorded value other than `send` (or nothing) is an opt-out.
 fn is_opt_out(choice: &str) -> bool {
-    choice.trim().eq_ignore_ascii_case(OPT_OUT)
+    let choice = choice.trim();
+    !choice.is_empty() && !choice.eq_ignore_ascii_case(SEND)
 }
 
 /// The opt-outs this account has not applied yet, machine-wide first. `send` is never pending.
@@ -411,7 +417,7 @@ mod tests {
             vec![(Scope::Machine, "send", "s1")],
             vec![(Scope::User, "send", "s1")],
             vec![(Scope::Machine, "send", "s1"), (Scope::User, "SEND", "s2")],
-            vec![(Scope::Machine, "", "s1"), (Scope::User, "off", "s2")],
+            vec![(Scope::Machine, "", "s1"), (Scope::User, " Send ", "s2")],
         ] {
             let registry = FakeRegistry::with(&choices);
             // Nothing runs: the bridge only ever runs `ocx telemetry disable`, and here not even that.
@@ -422,6 +428,18 @@ mod tests {
             );
             assert_eq!(registry.applied(Scope::Machine), None);
             assert_eq!(registry.applied(Scope::User), None);
+        }
+    }
+
+    #[test]
+    fn an_unrecognized_value_counts_as_an_opt_out() {
+        for value in ["off", "0", "opt-out", "OptOut", " optout "] {
+            let registry = FakeRegistry::with(&[(Scope::User, value, "u1")]);
+            assert_eq!(
+                launch(&registry, true),
+                (Outcome::Applied, true),
+                "{value:?}"
+            );
         }
     }
 
