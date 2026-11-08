@@ -1356,6 +1356,9 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/index/local-control-listener.ts",
+        "src/lib/local-control-socket.ts",
+        "src/cli/link-local-control.ts",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"
