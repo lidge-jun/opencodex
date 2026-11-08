@@ -135,7 +135,10 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     const homeNative = selected === "home" && isHomeNativeRouteClient(write.client) ? write.client : undefined;
     const commit = () => withConfigMutationLockSync(() => {
       reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
-      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined);
+      // A Home-only decision captures the Children's native defaults only once the Home has a link,
+      // as every Home-only switch writer does. Until then a Home inherit takes the builtin.
+      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined,
+        { whenLinked: selected === "home" });
       if (homeNative) recordHomeNativeDecision(homeNative);
       else if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
       else setRouteClientIntent(write.client, write.intent, selected);

@@ -307,9 +307,10 @@ async function commitNativeDecision(
   let published = false;
   try {
     return await settleConfigRoot(configRoot(), () => withConfigMutationLockSync(() => {
-      // Capture the Children's defaults from the durable switches before this one changes;
-      // another process may have changed them since this server loaded its snapshot.
-      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version);
+      // Capture the Children's defaults from the durable switches before this one changes, under
+      // the rule every Home-only switch writer follows: only once the Home has a link. Another
+      // process may have changed the switches since this server loaded its snapshot.
+      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, undefined, { whenLinked: true });
       const result = persist();
       if (result instanceof Response) return result;
       published = result;

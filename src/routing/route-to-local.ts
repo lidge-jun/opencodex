@@ -28,7 +28,9 @@ export async function syncHomeRouteTo(config: OcxConfig, version: string, overwr
   return withLinkApply(async () => {
     commit?.();
     const local = withDurableRouteNativeSettings(config);
-    initializeHomeRouteIntentDefaults(local, version);
+    // The Home's own apply is Home-only: it captures the Children's native defaults only once the
+    // Home has a link. A default write's commit above has already captured them.
+    initializeHomeRouteIntentDefaults(local, version, undefined, { whenLinked: true });
     const decidedIntent = deps.onlyIntent?.();
     const document = projectHomeRouteIntent(local, version, "home", readHomeRouteIntentState(local),
       { decidedClient: deps.onlyClient, ...(decidedIntent ? { decidedIntent } : {}) });

@@ -213,3 +213,30 @@ test("an unreadable route-intent.json refuses every Home-only switch writer with
   expect(loadConfig().claudeCode?.enabled).not.toBe(false);
   expect(live.claudeCode?.enabled).not.toBe(false);
 `), SPAWN_BUDGET_MS);
+
+test("unlinked Homes in the same end state give a later-enrolled Child the same defaults", () => scenario(`
+  const { rmSync } = await import('node:fs');
+  const { handleNativeIntegrationRoutes } = await import('./src/server/management/native-integration-routes');
+  const { seedRouteDeviceClients } = await import('./src/routing/home-route-intent');
+  const link = { id: 'lnk_0123456789abcdef', alias: 'child', direction: 'client-initiated', hostKeyFingerprint: null, tunnelPort: 19200, apiKeyId: 'key-test', createdAt: '2026-11-07T00:00:00.000Z' };
+  const inherited = [];
+  // Each Home-only way to turn Codex off on a Home with no link yet.
+  for (const turnOff of [
+    async () => expect((await management(handleNativeIntegrationRoutes, 'PUT', '/api/native-integrations/codex', { enabled: false })).status).toBe(200),
+    async () => expect(setHomeIntegrationEnabled('codex', false).ok).toBe(true),
+    async () => expect((await call('/api/route-to', { client: 'codex', action: 'off', device: 'home' })).status).toBe(200),
+  ]) {
+    writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [] });
+    rmSync(routeIntentStatePath(), { force: true });
+    const c = loadConfig(); c.clientIntegrations = {}; saveConfig(c); Object.assign(live, loadConfig());
+    await turnOff();
+    expect(loadConfig().clientIntegrations?.codex).toBe(false);
+    expect(readRouteIntentState().defaults.codex).toBeUndefined();
+    // Enrollment adds the link, then provisioning seeds the new Child's route intent.
+    writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [link] });
+    seedRouteDeviceClients(loadConfig(), 'test', link.id, undefined, [link.id]);
+    inherited.push((await childIntent()).codex);
+  }
+  // The switches as they stood at enrollment, whichever writer moved them.
+  expect(inherited).toEqual([{ enabled: false }, { enabled: false }, { enabled: false }]);
+`), SPAWN_BUDGET_MS);

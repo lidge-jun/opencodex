@@ -21,12 +21,15 @@ function captured(state: RouteIntentState): boolean {
 }
 
 /** Unreadable trust metadata counts as linked: a Child may still depend on these defaults. */
-function homeHasLinks(): boolean {
+export function homeHasLinks(): boolean {
   try { return readLinkStore(linkStorePath()).links.length > 0; } catch { return true; }
 }
 
 export interface CaptureHomeRouteDefaultsOptions {
-  /** Switch writers pass this: a Home without any link has no Child to protect yet. */
+  /**
+   * Every Home-only switch writer passes this: a Home without any link has no Child to protect
+   * yet, and a Child enrolled later inherits the switches as they stand at its enrollment.
+   */
   whenLinked?: boolean;
 }
 

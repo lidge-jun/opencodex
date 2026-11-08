@@ -199,9 +199,10 @@ test("a Home-only native write applies through the switch and keeps no Home entr
   expect(loadConfig().clientIntegrations?.codex).toBe(false);
   expect(homeRow(off.body, 'codex')).toMatchObject({ intent: 'off', source: 'native', applied: 'current' });
   expect(readRouteIntentState().devices.home).toBeUndefined();
-  // Children keep the default captured before the switch changed.
-  expect(readHomeRouteIntentState(loadConfig()).defaults.codex).toEqual({ enabled: true });
-  // Home inherit sets the switch to the default Children inherit.
+  // This Home has no link, so the Home-only write captured nothing: a Child enrolled later
+  // inherits the switch as it stands at enrollment.
+  expect(readHomeRouteIntentState(loadConfig()).defaults.codex).toBeUndefined();
+  // Home inherit sets the switch to the default Children inherit, the builtin until one is saved.
   const inherited = await call('/api/route-to', { client: 'codex', action: 'inherit', device: 'home' });
   expect(inherited.status).toBe(200);
   expect(loadConfig().clientIntegrations?.codex).not.toBe(false);
