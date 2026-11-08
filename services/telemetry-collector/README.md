@@ -21,6 +21,8 @@ Range-wide `totals`, `daily`, `heatmap`, and `outcomes` remain unfiltered.
 
 Residual subtraction risk: the threshold keeps a single install's numbers out of the breakdown rows, but `totals` and `daily` stay unfiltered, so when few rows are suppressed their combined counts can still be approximated by subtracting the published breakdown rows from the published totals.
 
+Residual forged-cohort risk: reports are unauthenticated, so the threshold counts reports, not people. Someone who sends 9 forged reports for a rare provider, model family, version or error cause on the same day as one real install lifts that key to 10 distinct installs, and can then subtract their own known share to recover the real install's figures for that key. The real install stays anonymous (only its per-day hash is stored), and the per-client-key rate limit raises the cost, but no count threshold on unauthenticated input can prevent this.
+
 ## Rate-limit key
 
 The hourly rate limit is keyed on a salted hash of the client key, never the raw address. The key comes only from `cf-connecting-ip`, which Cloudflare sets: an IPv4 address is used per address (an IPv4-mapped IPv6 address such as `::ffff:203.0.113.5` counts as that IPv4 address), and an IPv6 address is reduced to its /64 prefix, because one subscriber usually holds a whole /64. `x-forwarded-for` and other client-supplied headers are ignored; a request without a valid `cf-connecting-ip` shares one fixed bucket with every other such request. A subscriber holding a larger IPv6 prefix (for example a /48) still has one bucket per /64.
