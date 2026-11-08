@@ -52,6 +52,11 @@ Only a human can transition an undecided install to active sending:
   `telemetry-state.json` instead of creating the config, so `ocx init` still runs setup.
   `withPendingTelemetryDecision` applies it wherever consent is resolved (scheduler, status route,
   CLI prompt) until a decision is written into the config, which clears it.
+- The dashboard popup (`gui/src/components/telemetry-consent-card.tsx`) opens only for an undecided
+  install with no env override, after the star onboarding has closed, and never on a Remote Link
+  Child. Only Continue writes (`PUT /api/telemetry`); Escape, the backdrop and the close button
+  record nothing. Focus starts on the heading, so a stray Enter cannot accept. A saved decision
+  whose reply cannot be parsed is re-read with `GET` (`gui/src/telemetry-api.ts`).
 
 ## Identity, aggregation, and scheduling
 
