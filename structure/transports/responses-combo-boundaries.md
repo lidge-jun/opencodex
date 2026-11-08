@@ -135,13 +135,17 @@ Native post-header reset recovery shares that boundary, because it is asking the
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A lifecycle snapshot with output items, malformed output, or a non-null error
+resend gate decides. A lifecycle snapshot with output items, malformed output, a non-null top-level
+`error`, or a non-null `response.error` or `response.last_error`
 commits the original stream. An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
 owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
-The deferred native hold emits bounded SSE comment heartbeats without counting them as output.
-Direct streams can receive them during the hold; combo preflight buffers them until selection.
+The deferred native hold emits SSE comment heartbeats for direct streaming clients. Combo streaming
+children omit those timer-generated comments while their parent holds the headers, so those comments
+cannot consume the retained-chunk cap. For canonical buffered JSON, the hold emits a comment
+only when it reads non-empty upstream bytes: this reports real prelude activity to the collector's
+inactivity clock without making a silent provider appear active. The byte and chunk caps remain in force.
 Downstream cancellation aborts the hold or an in-flight replacement.
 
 - a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the

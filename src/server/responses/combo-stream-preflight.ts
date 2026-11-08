@@ -182,11 +182,13 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (PRE_OUTPUT_CONTROL_EVENTS.has(type)) {
     // Lifecycle snapshots may already carry output or an error. Neither can be discarded
     // for a replacement, even if the event name otherwise describes only a prelude.
-    const response = (payload as { response?: unknown }).response;
+    const event = payload as { response?: unknown; error?: unknown };
+    if (event.error != null) return true;
+    const response = event.response;
     if (response && typeof response === "object" && !Array.isArray(response)) {
-      const snapshot = response as { output?: unknown; error?: unknown };
+      const snapshot = response as { output?: unknown; error?: unknown; last_error?: unknown };
       if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
-      if (snapshot.error != null) return true;
+      if (snapshot.error != null || snapshot.last_error != null) return true;
     }
   }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);
@@ -326,7 +328,7 @@ export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
   retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
-  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; replayCleanEof?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal },
+  options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; replayCleanEof?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal; onUpstreamActivity?: () => void },
 ): Promise<ComboStreamPreflightResult> {
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
@@ -427,6 +429,7 @@ export async function preflightComboStreamResponse(
           };
         }
       } else {
+        if (next.value.byteLength > 0) options?.onUpstreamActivity?.();
         if (bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES) {
           // Keep the cap about memory the preflight allocates. The upstream chunk already exists;
           // copying it before committing would transiently exceed the boundary for no
@@ -485,7 +488,7 @@ export function deferProtocolSafeResetRecovery(
   response: Response,
   logCtx: RequestLogContext,
   recover: ProtocolSafeResetRecovery,
-  options?: { allowMissingContentType?: boolean; heartbeatIntervalMs?: number },
+  options?: { allowMissingContentType?: boolean; heartbeatIntervalMs?: number; keepalive?: "periodic" | "upstream-activity" | "none" },
 ): Response {
   if (!response.body) return response;
 
@@ -493,6 +496,7 @@ export function deferProtocolSafeResetRecovery(
   let initialization: Promise<void> | undefined;
   let initializationResult: { kind: "ready" } | { kind: "failed"; error: unknown } | undefined;
   let notifyInitialization: (() => void) | undefined;
+  let activityPending = false;
   let closed = false;
   const preflightAbort = new AbortController();
   const requestedHeartbeatMs = options?.heartbeatIntervalMs;
@@ -508,7 +512,11 @@ export function deferProtocolSafeResetRecovery(
       logCtx,
       () => false,
       { allowMissingContentType: options?.allowMissingContentType === true, replayReadErrors: true,
-        replayCleanEof: true, signal: preflightAbort.signal },
+        replayCleanEof: true, signal: preflightAbort.signal,
+        onUpstreamActivity: options?.keepalive === "upstream-activity" ? () => {
+          activityPending = true;
+          notifyInitialization?.();
+        } : undefined },
     );
     let selected = preflight.response;
     if (!closed && (preflight.kind === "read-error" || preflight.kind === "pre-output-eof")) {
@@ -534,12 +542,18 @@ export function deferProtocolSafeResetRecovery(
         );
         // Keep only one waiter on the initialization; racing it afresh for every heartbeat
         // would retain one promise callback per interval until a quiet upstream settles.
-        const initialized = initializationResult !== undefined || await new Promise<boolean>(resolve => {
-          const timer = setTimeout(() => { notifyInitialization = undefined; resolve(false); }, heartbeatMs);
-          notifyInitialization = () => { clearTimeout(timer); notifyInitialization = undefined; resolve(true); };
-        });
+        const keepalive = options?.keepalive ?? "periodic";
+        if (initializationResult === undefined && !(keepalive === "upstream-activity" && activityPending)) {
+          await new Promise<void>(resolve => {
+            const timer = keepalive === "periodic"
+              ? setTimeout(() => { notifyInitialization = undefined; resolve(); }, heartbeatMs)
+              : undefined;
+            notifyInitialization = () => { if (timer !== undefined) clearTimeout(timer); notifyInitialization = undefined; resolve(); };
+          });
+        }
         if (closed) return;
-        if (!initialized) {
+        if (initializationResult === undefined) {
+          activityPending = false;
           controller.enqueue(new TextEncoder().encode(": keepalive\n\n"));
           return;
         }
@@ -571,6 +585,7 @@ export function deferProtocolSafeResetRecovery(
       if (closed) return;
       closed = true;
       preflightAbort.abort(reason);
+      notifyInitialization?.();
       if (reader) {
         try { void reader.cancel(reason).catch(() => {}); } catch { /* already closed */ }
         try { reader.releaseLock(); } catch { /* already released */ }

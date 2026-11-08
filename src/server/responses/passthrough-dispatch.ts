@@ -1938,7 +1938,7 @@ export async function preparePassthroughExchange(
             },
           },
         ),
-        { allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream },
+        { allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, keepalive: canonicalBufferedJson ? "upstream-activity" : options.comboAttempt ? "none" : "periodic" },
       );
     }
     break;
