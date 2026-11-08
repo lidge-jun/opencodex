@@ -573,6 +573,18 @@ describe("pnpm global update", () => {
     expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: false, error: "pnpm configured store changed" });
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
+  test("rechecks the store before rollback even when post-install listing fails", () => {
+    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const run = fakePnpm(state, owner); let lists = 0, stores = 0;
+    const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
+      runPnpm: (args, capture) => {
+        if (args[0] === "list" && ++lists > 1) return { status: 1 };
+        if (args[0] === "store" && ++stores > 1) return { status: 0, stdout: dirname(tmpdir()) };
+        return run(args, capture);
+      }, verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
+    expect(result).toMatchObject({ ok: false, rolledBack: false, error: "pnpm configured store changed" });
+    expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
+  });
   test("unconfirmed installer exit stops before inspection or rollback", () => {
     const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
     const run = fakePnpm(state, owner);

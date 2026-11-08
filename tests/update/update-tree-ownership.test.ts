@@ -320,6 +320,22 @@ describe("#4202 install-tree dependency ownership", () => {
     if (!result.ok) expect(result.reason).toContain("outside the selected store");
   });
 
+  test("refuses a package escaping through the selected custom store without marker files", () => {
+    const store = join(root, "custom", "v11"), intermediate = join(store, "links", "pkg", "node_modules", ...PKG.split("/"));
+    const exposed = join(root, "global", "node_modules", ...PKG.split("/"));
+    const target = join(root, "plain", "node_modules", ...PKG.split("/"));
+    writePackage(target, "2.0.0");
+    writeDependency(join(target, "node_modules", "bun"), "bun");
+    writeDependency(join(target, "node_modules", "zod"), "zod");
+    mkdirSync(join(intermediate, ".."), { recursive: true });
+    mkdirSync(join(exposed, ".."), { recursive: true });
+    symlinkSync(target, intermediate, "dir");
+    symlinkSync(intermediate, exposed, "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm global links are outside the selected store");
+  });
+
   test("global-store dependency links cannot escape the canonical configured store", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const group = join(root, "pnpm", "store", "v11", "links", ...PKG.split("/"), "2.0.0", "h1", "node_modules");

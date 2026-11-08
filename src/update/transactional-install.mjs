@@ -79,11 +79,11 @@ function inside(path, root) {
 }
 
 /** Retain intermediate spellings: realpath alone hides a links directory behind another symlink. */
-function packagePathUsesGlobalLinks(packageDir) {
+function packagePathUsesGlobalLinks(packageDir, store) {
   let path = resolve(packageDir);
   let found = false;
   for (let hop = 0; hop < 64; hop += 1) {
-    found ||= isInPnpmGlobalStoreLinks(path, existsSync);
+    found ||= isInPnpmGlobalStoreLinks(path, existsSync) || (store && inside(path, join(store, "links")));
     const root = parse(path).root;
     const parts = path.slice(root.length).split(sep).filter(Boolean);
     let prefix = root, changed = false;
@@ -206,7 +206,7 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
   try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
   let globalLinks;
   try {
-    globalLinks = packagePathUsesGlobalLinks(packageDir)
+    globalLinks = packagePathUsesGlobalLinks(packageDir, store)
       || (store && (inside(real, join(store, "links")) || inside(packageDir, join(store, "links"))));
   } catch { return { ok: false, failures: ["pnpm package symlink chain could not be resolved"] }; }
   if (globalLinks && (!store || !inside(real, join(store, "links")))) {

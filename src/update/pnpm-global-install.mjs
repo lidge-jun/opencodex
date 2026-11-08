@@ -295,6 +295,24 @@ export function verifyPnpmGlobalShims(
     : { ok: false, reason: `pnpm generated shim verification failed (${missing.join(", ")})` };
 }
 
+/** Resolve the selected pnpm's configured store under the install workspace policy. */
+function readPnpmStore(runPnpm, owner, platform) {
+  let store;
+  try {
+    const probe = runPnpm(ownerGlobalArgs(["store", "path"], owner), true);
+    const lines = outputText(probe?.stdout).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (probe?.status !== 0 || lines.length !== 1 || !isAbsolutePath(lines[0], platform)) throw new Error();
+    store = realpathSync.native(lines[0]);
+    if (!statSync(store).isDirectory()) throw new Error();
+  } catch {
+    return { ok: false, reason: "pnpm configured store could not be resolved" };
+  }
+  if (owner?.store && lexicalPathKey(store, platform) !== lexicalPathKey(owner.store, platform)) {
+    return { ok: false, reason: "pnpm configured store changed" };
+  }
+  return { ok: true, store };
+}
+
 /**
  * Read and verify the package manager's active global link. `owner` constraints
  * make the listing a proof of the group selected during preflight, not merely a
@@ -343,19 +361,9 @@ export function readPnpmGlobalPackage(
   }
 
   let tree;
-  let store;
-  try {
-    const probe = runPnpm(ownerGlobalArgs(["store", "path"], constraints.owner), true);
-    const lines = outputText(probe?.stdout).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    if (probe?.status !== 0 || lines.length !== 1 || !isAbsolutePath(lines[0], platform)) throw new Error();
-    store = realpathSync.native(lines[0]);
-    if (!statSync(store).isDirectory()) throw new Error();
-  } catch {
-    return { ok: false, reason: "pnpm configured store could not be resolved" };
-  }
-  if (constraints.owner?.store && lexicalPathKey(store, platform) !== lexicalPathKey(constraints.owner.store, platform)) {
-    return { ok: false, reason: "pnpm configured store changed" };
-  }
+  const storeResult = readPnpmStore(runPnpm, constraints.owner, platform);
+  if (!storeResult.ok) return storeResult;
+  const store = storeResult.store;
   try {
     tree = verify(packagePath, version, store);
   } catch {
@@ -577,6 +585,10 @@ export function runPnpmGlobalUpdate({
     };
   }
 
+  // A failed listing says nothing about the effective store: bind it again before
+  // issuing a rollback mutation, independently of whether readback succeeded.
+  const rollbackStore = readPnpmStore(runPnpm, owner, platform);
+  if (!rollbackStore.ok) return { ok: false, phase: "rollback", rolledBack: false, error: rollbackStore.reason };
   log(`Restoring ${packageName}@${before.version} with pnpm…`);
   let rollback;
   try {
