@@ -38,10 +38,12 @@ type CompletedOutput = WebSearchResult & { incomplete: boolean; parts: Map<strin
 /** Streamed text for one `output_text` content part. */
 interface StreamedPart {
   key: string;
+  order: number;
   delta: string;
   done: string | null;
   itemId?: string;
   contentIndex?: number;
+  promotedFromContent?: boolean;
 }
 
 /** The streamed part for events that carry no valid `output_index`/`content_index`. */
@@ -96,6 +98,9 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
   if (indexedPart && compatible(indexedPart)) return indexedKey!;
 
   let match = itemId ? identifiedPart(lookup, itemId, contentIndex, !!indexedKey) : undefined;
+  // A content-only part can acquire its item or output identity after other parts arrived.
+  const contentOnly = contentIndex === undefined ? undefined : parts.get(`content:${contentIndex}`);
+  if (!match && contentOnly && compatible(contentOnly)) match = contentOnly;
   if (!match && parts.size === 1) {
     const only = parts.values().next().value;
     if (only && compatible(only) && (!indexedKey || !isIndexedPartKey(only.key))
@@ -105,6 +110,7 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
     if (indexedKey && !indexedPart && match.key !== indexedKey) {
       indexPart(lookup, match, false);
       parts.delete(match.key);
+      if (match.key.startsWith("content:")) match.promotedFromContent = true;
       match.key = indexedKey;
       parts.set(indexedKey, match);
       indexPart(lookup, match, true);
@@ -133,11 +139,30 @@ function streamedPartText(part: StreamedPart): string {
   return part.done?.trim() ? part.done : part.delta;
 }
 
-/** Join indexed parts in index order, followed by any unindexed text. */
+/** Keep earlier content-only siblings before a part promoted to an indexed identity. */
+function orderedPartKeys(completed: Iterable<string>, streamed: Map<string, StreamedPart>): string[] {
+  const indexed = [...new Set([...completed, ...streamed.keys()].filter(isIndexedPartKey))].sort(comparePartKeys);
+  const contentOnly = [...streamed.values()].filter(part => part.key.startsWith("content:"))
+    .sort((a, b) => a.order - b.order);
+  const keys: string[] = [];
+  let next = 0;
+  for (const key of indexed) {
+    const part = streamed.get(key);
+    if (part?.promotedFromContent) {
+      while (next < contentOnly.length && contentOnly[next]!.order < part.order) keys.push(contentOnly[next++]!.key);
+    }
+    keys.push(key);
+  }
+  const emitted = new Set(contentOnly.slice(0, next));
+  const remaining = [...streamed.values()].filter(part => !isIndexedPartKey(part.key) && !emitted.has(part));
+  remaining.sort((a, b) => a.order - b.order);
+  keys.push(...remaining.map(part => part.key));
+  return keys;
+}
+
+/** Join indexed parts in index order, preserving arrival order for unindexed parts. */
 function assembleStreamedText(parts: Map<string, StreamedPart>): string {
-  const keys = [...parts.keys()].filter(isIndexedPartKey).sort(comparePartKeys);
-  keys.push(...[...parts.keys()].filter(key => !isIndexedPartKey(key)));
-  return keys.map(key => streamedPartText(parts.get(key)!)).join("");
+  return orderedPartKeys([], parts).map(key => streamedPartText(parts.get(key)!)).join("");
 }
 
 /**
@@ -145,7 +170,7 @@ function assembleStreamedText(parts: Map<string, StreamedPart>): string {
  * completed output has it, and otherwise takes that part's streamed text.
  */
 function mergeIncompleteOutput(completed: Map<string, string>, streamed: Map<string, StreamedPart>): string {
-  const keys = [...new Set([...completed.keys(), ...streamed.keys()])].sort(comparePartKeys);
+  const keys = orderedPartKeys(completed.keys(), streamed);
   return keys.map(key => {
     const text = completed.get(key);
     if (text?.trim()) return text;
@@ -416,6 +441,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   let responseBytes = 0;
   const seen = new Set<string>();
   const partLookup: PartLookup = new Map();
+  let nextPartOrder = 0;
   // Holder object — fields are mutated inside the closure, so they can't live as narrowed locals.
   const acc: {
     parts: Map<string, StreamedPart>;
@@ -439,7 +465,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   const streamedPart = (data: Record<string, unknown>): StreamedPart => {
     const key = streamedPartKey(data, acc.parts, partLookup);
     let part = acc.parts.get(key);
-    if (!part) { part = { key, delta: "", done: null }; acc.parts.set(key, part); }
+    if (!part) { part = { key, order: nextPartOrder++, delta: "", done: null }; acc.parts.set(key, part); }
     indexPart(partLookup, part, false);
     if (typeof data.item_id === "string" && data.item_id) part.itemId = data.item_id;
     if (Number.isInteger(data.content_index)) part.contentIndex = data.content_index as number;
@@ -560,12 +586,12 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   // Prefer the authoritative completed output[], then the done text, then accumulated deltas.
   // Each streamed content part contributes its done text, or its deltas when the done event never
   // arrived. A completed output that skipped malformed entries may be partial: indexed streams fill
-  // only the parts it lacks, while an unindexed stream replaces it as a whole.
+  // only the parts it lacks, while a wholly unindexed stream replaces it as a whole.
   const streamedText = assembleStreamedText(acc.parts);
   const completedText = acc.final?.text.trim() ? acc.final.text : "";
   let text = completedText || streamedText;
   if (acc.final?.incomplete) {
-    const repaired = [...acc.parts.keys()].some(key => !isIndexedPartKey(key)) ? streamedText : mergeIncompleteOutput(acc.final.parts, acc.parts);
+    const repaired = [...acc.parts.keys()].some(isIndexedPartKey) ? mergeIncompleteOutput(acc.final.parts, acc.parts) : streamedText;
     if (repaired.trim()) text = repaired;
   }
   // Merge sources from the final output[] and the streaming annotation events.

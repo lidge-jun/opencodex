@@ -145,6 +145,36 @@ describe("sidecar text-done snapshots", () => {
 });
 
 describe("search SSE field shapes", () => {
+  for (const identity of [{ item_id: "a" }, { output_index: 1 }]) {
+    test(`retains a content part when it gains identity ${JSON.stringify(identity)}`, async () => {
+      const result = await parseSidecarSSE(response([
+        { type: "response.output_text.done", content_index: 0, text: "First. " },
+        { type: "response.output_text.done", content_index: 1, text: "Second." },
+        { type: "response.output_text.done", content_index: 1, ...identity, text: "Second." },
+        { type: "response.completed" },
+      ]));
+      expect(result).toEqual({ text: "First. Second.", sources: [] });
+    });
+  }
+  test("does not merge content-only parts after their item identities conflict", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", content_index: 0, text: "First. " },
+      { type: "response.output_text.done", item_id: "a", content_index: 0, text: "First. " },
+      { type: "response.output_text.done", item_id: "b", content_index: 0, text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+  test("preserves completed indexed text alongside a separate unindexed part", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", output_index: 0, content_index: 0, delta: "draft " },
+      { type: "response.output_text.done", item_id: "b", text: "second" },
+      { type: "response.completed", response: { output: [
+        { type: "message", content: [{ type: "output_text", text: "authoritative " }] }, null,
+      ] } },
+    ]));
+    expect(result).toEqual({ text: "authoritative second", sources: [] });
+  });
   test.each([7, {}, [], true])("ignores a non-string event type: %j", async type => {
     const result = await parseSidecarSSE(response([{ type }, { type: "response.output_text.delta", delta: "kept" }, { type: "response.completed" }]));
     expect(result).toEqual({ text: "kept", sources: [] });
