@@ -193,7 +193,7 @@ function notifyProviderQuotaSnapshot(
     .then(async () => {
       const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
-      const { providerWindowObservations } = await import("../quota/window-mapping");
+      const { providerWindowObservations, mistralUnknownBudgetWindows } = await import("../quota/window-mapping");
       await providerQuotaBeforeObservationForTests?.();
       for (const observation of observations) {
         if (accountReportObservationKeys.has(observation.report)) {
@@ -206,6 +206,7 @@ function notifyProviderQuotaSnapshot(
           scope: observation.scope,
           accountKey: observation.accountKey,
           windows: providerWindowObservations(observation.quota),
+          ...(observation.report.source === "mistral:budget" ? { retainUnknownWindows: mistralUnknownBudgetWindows(observation.quota) } : {}),
         });
       }
     })

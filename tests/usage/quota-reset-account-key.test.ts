@@ -8,8 +8,105 @@ import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key
 import { setQuotaResetSink } from "../../src/quota/reset-observer";
 import { flushQuotaResetStoreForTests, resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import type { QuotaResetEvent } from "../../src/quota/reset-detector";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+test.each(["currency", "usage_percentage", "initial_budget"] as const)("Mistral retains a reset baseline while %s is temporarily unknown", async missing => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-mistral-unknown-reset-"));
+  process.env.OPENCODEX_HOME = home;
+  const cfg = { defaultProvider: "mistral", providers: { mistral: {
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-mistral-key",
+  } } } as OcxConfig;
+  const events: QuotaResetEvent[] = [];
+  const oldReset = Date.now() - 60_000;
+  let api: Record<string, unknown> = { initial_budget: 100, currency: "EUR", usage_percentage: 95, reset_at: oldReset };
+  let plan = "TEAM";
+  globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? { plan_name: plan } : {
+    api_budget: api, vibe_budget: { initial_budget: 10, currency: "EUR", usage_percentage: 20, reset_at: Date.now() + 3_600_000 },
+  })) as typeof fetch;
+  clearProviderQuotaCache(); resetQuotaResetStoreForTests(); setQuotaResetSink(event => events.push(event));
+  const probe = async () => { await fetchProviderQuotaReports(cfg, true); await flushProviderQuotaObservationsForTests(); };
+  try {
+    await probe();
+    api = { ...api, [missing]: null }; plan = "EDU";
+    await probe();
+    expect(events).toEqual([]);
+    api = { initial_budget: 100, currency: "EUR", usage_percentage: 2, reset_at: Date.now() + 7_200_000 };
+    await probe();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "scheduled", scope: "mistral", window: "custom:API budget", percentBefore: 95, percentAfter: 2 });
+    await probe();
+    expect(events).toHaveLength(1);
+  } finally {
+    setQuotaResetSink(null); clearProviderQuotaCache(); resetQuotaResetStoreForTests(); globalThis.fetch = originalFetch;
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = originalHome;
+    removeTreeWithRetry(home);
+  }
+});
+
+test("Mistral retains a Vibe baseline through an unknown-only snapshot and restart", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-mistral-vibe-reset-"));
+  process.env.OPENCODEX_HOME = home;
+  const cfg = { defaultProvider: "mistral", providers: { mistral: {
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-mistral-key",
+  } } } as OcxConfig;
+  const events: QuotaResetEvent[] = [];
+  const oldReset = Date.now() - 60_000;
+  let vibe: Record<string, unknown> = { initial_budget: 100, currency: "EUR", usage_percentage: 95, reset_at: oldReset };
+  globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? { plan_name: "TEAM" } : { vibe_budget: vibe })) as typeof fetch;
+  clearProviderQuotaCache(); resetQuotaResetStoreForTests(); setQuotaResetSink(event => events.push(event));
+  const probe = async () => { await fetchProviderQuotaReports(cfg, true); await flushProviderQuotaObservationsForTests(); };
+  try {
+    await probe();
+    vibe = { ...vibe, currency: null };
+    await probe();
+    expect(events).toEqual([]);
+    flushQuotaResetStoreForTests(); resetQuotaResetStoreForTests();
+    vibe = { initial_budget: 100, currency: "EUR", usage_percentage: 2, reset_at: Date.now() + 7_200_000 };
+    await probe();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "scheduled", window: "custom:Vibe budget", percentBefore: 95, percentAfter: 2 });
+  } finally {
+    setQuotaResetSink(null); clearProviderQuotaCache(); resetQuotaResetStoreForTests(); globalThis.fetch = originalFetch;
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = originalHome;
+    removeTreeWithRetry(home);
+  }
+});
+
+test.each(["changed-clock", "missing-clock", "new-key"] as const)("Mistral unknown-only snapshots do not reuse a baseline after %s", async change => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-mistral-unknown-fence-"));
+  process.env.OPENCODEX_HOME = home;
+  const cfg = { defaultProvider: "mistral", providers: { mistral: {
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-mistral-key",
+  } } } as OcxConfig;
+  const events: QuotaResetEvent[] = [];
+  const oldReset = Date.now() - 60_000;
+  let api: Record<string, unknown> = { initial_budget: 100, currency: "EUR", usage_percentage: 95, reset_at: oldReset };
+  globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? { plan_name: "TEAM" } : { api_budget: api })) as typeof fetch;
+  clearProviderQuotaCache(); resetQuotaResetStoreForTests(); setQuotaResetSink(event => events.push(event));
+  const probe = async () => { await fetchProviderQuotaReports(cfg, true); await flushProviderQuotaObservationsForTests(); };
+  try {
+    await probe();
+    api = { ...api, currency: null, reset_at: change === "changed-clock" ? oldReset + 1000 : change === "missing-clock" ? null : oldReset };
+    if (change === "new-key") cfg.providers.mistral!.apiKey = "fixture-replacement-key";
+    await probe();
+    api = { initial_budget: 100, currency: "EUR", usage_percentage: 2, reset_at: Date.now() + 7_200_000 };
+    await probe();
+    expect(events).toEqual([]);
+  } finally {
+    setQuotaResetSink(null); clearProviderQuotaCache(); resetQuotaResetStoreForTests(); globalThis.fetch = originalFetch;
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = originalHome;
+    removeTreeWithRetry(home);
+  }
+});
 
 test.each(["disabled", "removed", "key", "provider-clear", "global-clear", "other-clear", "detached-disable"] as const)("a deferred key quota reset respects %s", async change => {
   const originalFetch = globalThis.fetch;
