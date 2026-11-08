@@ -27,8 +27,11 @@ exec 4<&0
 guard=$!
 "$@" <&4 3<&- 4<&- &
 cli=$!
-exec 3<&- 4<&-
+exec 4<&-
 wait "$cli"
+status=$?
+case "$status" in 126|127) printf 'OCX_TRAE_LAUNCH:%s\n' "$status" >&3 ;; esac
+exec 3<&-
 exec 0<&- 1>&- 2>&-
 wait "$guard"
 stop_group

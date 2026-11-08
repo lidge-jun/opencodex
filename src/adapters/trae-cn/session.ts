@@ -1,4 +1,4 @@
-import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import type { AdapterEvent, OcxProviderConfig } from "../../types";
 import { CodingAgentStreamLimitError, readJsonLines } from "../coding-agent/protocol";
 import { resolveTraeCli, traeCnChildEnv, traeCnDestinationMatches } from "./profile";
 import { traePosixInvocation, traeStopPipe } from "./process";
+import { prepareTraeWindowsJob, TraeWindowsJobFrames } from "./windows-job";
 import { parseTraeAcpMessage, parseTraeModels, traePromptEvents, traeSessionId, traeStopReason, traeUsage, TraeAcpProtocolError, type TraeAcpFrame } from "./protocol";
 
 export type SpawnTraeCli = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -20,7 +21,6 @@ export interface TraeAcpDeps {
   timeoutMs?: number;
   killGraceMs?: number;
   reapTimeoutMs?: number;
-  killWindowsProcessTree?: (pid: number) => void;
   makeTempDir?: typeof mkdtemp;
 }
 
@@ -61,7 +61,12 @@ class TraeAcpClient {
   private readonly pending = new Map<number, Pending>();
   private readonly updates: TraeAcpFrame[] = [];
   private readonly waiters: Array<(frame: TraeAcpFrame | null) => void> = [];
-  private readonly stderr: string[] = [];
+  private stderr = "";
+  private stderrTruncated = false;
+  private readonly windowsFrames?: TraeWindowsJobFrames;
+  private initialized = false;
+  private launchStatus?: number;
+  private spawnFailed = false;
   private readonly reader: Promise<void>;
   private readonly lifecycle: Promise<void>;
   private failure?: Error;
@@ -70,19 +75,52 @@ class TraeAcpClient {
   private closing?: Promise<void>;
 
   constructor(private readonly child: ChildProcess, private readonly timeoutMs: number, private readonly deps: TraeAcpDeps) {
+    if ((deps.platform ?? process.platform) === "win32") {
+      this.windowsFrames = new TraeWindowsJobFrames(text => this.appendStderr(text), (stage, code) => {
+        this.fail(new TraeAcpError("TRAE CN Windows supervisor failed during " + stage + " (Win32 " + code + ").",
+          stage === "transport" ? "trae_acp_transport" : "trae_startup_windows_" + stage));
+      });
+    }
     this.lifecycle = new Promise(resolve => {
-      child.once("error", error => this.fail(startupFailure("spawn", error)));
-      child.once("close", resolve);
-      if (child.exitCode !== null) resolve();
+      child.once("error", error => {
+        this.spawnFailed = child.pid === undefined && !this.initialized;
+        this.fail(startupFailure("spawn", error));
+      });
+      child.once("close", () => { this.windowsFrames?.finish(); resolve(); });
     });
     child.stdin?.on("error", error => this.fail(error));
     traeStopPipe(child)?.on("error", () => undefined);
-    child.stderr?.on("data", (chunk: Uint8Array) => {
-      this.stderr.push(new TextDecoder().decode(chunk));
-      while (this.stderr.join("").length > 8192) this.stderr.shift();
+    let control = "";
+    traeStopPipe(child)?.on("data", (chunk: Uint8Array) => {
+      control = (control + Buffer.from(chunk).toString("ascii")).slice(-64);
+      const launch = /OCX_TRAE_LAUNCH:(126|127)\n/.exec(control);
+      if (launch) this.launchStatus = Number(launch[1]);
     });
+    const stderrDecoder = new TextDecoder();
+    child.stderr?.on("data", (chunk: Uint8Array) => {
+      if (this.windowsFrames) this.windowsFrames.push(chunk);
+      else this.appendStderr(stderrDecoder.decode(chunk, { stream: true }));
+    });
+    child.stderr?.once("end", () => { if (!this.windowsFrames) this.appendStderr(stderrDecoder.decode()); });
     this.reader = this.read();
     this.reader.catch(() => undefined);
+  }
+
+  private appendStderr(text: string): void {
+    if (this.stderrTruncated) return;
+    if (this.stderr.length + text.length > 8192) {
+      this.stderr = "";
+      this.stderrTruncated = true;
+    } else this.stderr += text;
+  }
+
+  markInitialized(): void { this.initialized = true; }
+
+  closedError(error: TraeAcpError): TraeAcpError {
+    if (!this.initialized && this.launchStatus) {
+      return startupFailure("spawn", { code: this.launchStatus === 127 ? "ENOENT" : "EACCES" });
+    }
+    return new TraeAcpError(this.diagnostic() || error.message, error.code);
   }
 
   /** Wake every waiter immediately; process reaping is separate from request settlement. */
@@ -169,7 +207,8 @@ class TraeAcpClient {
 
   /** Expose only a bounded, redacted diagnostic when the CLI closes unexpectedly. */
   diagnostic(): string {
-    return redactSecretString(this.stderr.join("").trim() || this.failure?.message || "").trim().slice(0, 512);
+    if (this.stderrTruncated) return "TRAE CN stderr exceeded the diagnostic limit; its contents were suppressed.";
+    return redactSecretString(this.stderr.trim() || this.failure?.message || "").trim().slice(0, 512);
   }
 
   /** Stop RPCs first, then terminate the owned process tree and bound all remaining waits. */
@@ -177,29 +216,19 @@ class TraeAcpClient {
     if (this.closing) return this.closing;
     this.fail(new TraeAcpError("TRAE CN ACP session closed", "trae_acp_closed"));
     this.closing = (async () => {
-      const terminateWindows = (signal: NodeJS.Signals): void => {
-        const pid = this.child.pid;
-        if (this.child.exitCode !== null || this.child.signalCode) return;
-        if (pid) {
-          try {
-            if (this.deps.killWindowsProcessTree) this.deps.killWindowsProcessTree(pid);
-            else execFileSync(`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"],
-              { stdio: "ignore", windowsHide: true, timeout: 1000 });
-            return;
-          } catch { /* Fall back to the direct child if tree termination is unavailable. */ }
-        }
-        try { this.child.kill(signal); } catch { /* Already exited. */ }
-      };
       const reapTimeoutMs = this.deps.reapTimeoutMs ?? 2250;
       const graceMs = this.deps.killGraceMs ?? 2000;
       let stopped: boolean;
       if ((this.deps.platform ?? process.platform) === "win32") {
-        terminateWindows("SIGTERM");
-        stopped = await waitBounded(this.lifecycle, graceMs);
-        if (!stopped) {
-          terminateWindows("SIGKILL");
-          stopped = await waitBounded(this.lifecycle, reapTimeoutMs);
+        try { this.child.stdin?.end("__OCX_STOP_TRAE__\n"); } catch { /* Supervisor may have exited. */ }
+        let exited = await waitBounded(this.lifecycle, graceMs + reapTimeoutMs);
+        if (!exited) {
+          // Closing the supervisor's non-inherited Job handle kills remaining members.
+          // Without its accounting proof we still report an unconfirmed shutdown.
+          try { this.child.kill("SIGKILL"); } catch { /* Already exited. */ }
+          exited = await waitBounded(this.lifecycle, reapTimeoutMs);
         }
+        stopped = exited && (this.spawnFailed || this.windowsFrames?.processTreeExited === true);
       } else {
         try { traeStopPipe(this.child)?.end("stop\n"); } catch { /* An exited supervisor already closed the descriptor. */ }
         stopped = await waitBounded(this.lifecycle, graceMs + reapTimeoutMs);
@@ -245,7 +274,9 @@ export async function openTraeSession(
     if (ownHome) await rm(home, { recursive: true, force: true }).catch(() => undefined);
     throw startupFailure("workspace", error);
   }
+  let cleanupSupervisor: (() => Promise<void>) | undefined;
   const cleanup = async (): Promise<void> => {
+    await cleanupSupervisor?.().catch(() => undefined);
     await Promise.all([
       ...(ownHome ? [rm(home, { recursive: true, force: true }).catch(() => undefined)] : []),
       ...(!deps.cwd ? [rm(work, { recursive: true, force: true }).catch(() => undefined)] : []),
@@ -260,9 +291,13 @@ export async function openTraeSession(
     signal?.throwIfAborted();
     const invocation = commandInvocation(binary, args, deps.platform ?? process.platform, { env });
     const windows = (deps.platform ?? process.platform) === "win32";
-    const owned = windows ? invocation : traePosixInvocation(invocation.file, invocation.args, deps.killGraceMs ?? 2000);
+    const owned = windows
+      ? await prepareTraeWindowsJob(invocation, home, work, deps.reapTimeoutMs ?? 2250, env)
+      : { ...traePosixInvocation(invocation.file, invocation.args, deps.killGraceMs ?? 2000), options: {} };
+    if ("cleanup" in owned) cleanupSupervisor = owned.cleanup;
+    signal?.throwIfAborted();
     child = (deps.spawn ?? nodeSpawn)(owned.file, owned.args, {
-      ...invocation.options, env, stdio: windows ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"], windowsHide: true,
+      ...owned.options, env, stdio: windows ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"], windowsHide: true,
       detached: !windows,
       cwd: deps.cwd ?? work,
     });
@@ -282,6 +317,7 @@ export async function openTraeSession(
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       clientInfo: { name: "opencodex", title: "OpenCodex", version: "1" },
     });
+    client.markInitialized();
     const result = await client.request("session/new", {
       cwd: deps.cwd ?? work, mcpServers: [], _meta: { trae: { options: { skills: [] } } },
     });
@@ -341,7 +377,7 @@ export async function openTraeSession(
         } catch (error) {
           if (error instanceof TraeAcpError && error.code === "trae_acp_closed") {
             await client.close();
-            throw new TraeAcpError(client.diagnostic() || error.message, error.code);
+            throw client.closedError(error);
           }
           throw error;
         } finally {
@@ -351,21 +387,21 @@ export async function openTraeSession(
       },
       close: async () => {
         signal?.removeEventListener("abort", abort);
-        try { await client.close(); } finally { await cleanup(); }
+        await client.close();
+        await cleanup();
       },
     };
   } catch (error) {
     if (error instanceof TraeAcpError && error.code === "trae_acp_closed") {
       await client.close();
-      const detail = client.diagnostic();
-      if (detail && detail !== error.message) throw new TraeAcpError(detail, error.code);
+      throw client.closedError(error);
     }
     throw error;
   } finally {
     if (!opened) {
       signal?.removeEventListener("abort", abort);
-      await client.close().catch(() => undefined);
-      await cleanup();
+      // Keep owned files when process exit could not be confirmed.
+      await client.close().then(cleanup).catch(() => undefined);
     }
   }
 }

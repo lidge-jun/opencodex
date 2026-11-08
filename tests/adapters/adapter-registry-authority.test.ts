@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, once } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { posix } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { PassThrough, Writable } from "node:stream";
@@ -8,6 +8,9 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:c
 import { createTraeCnAdapter } from "../../src/adapters/trae-cn/adapter";
 import * as traeClient from "../../src/adapters/trae-cn/client";
 import { traePosixInvocation, traeStopPipe } from "../../src/adapters/trae-cn/process";
+import { prepareTraeWindowsJob, TraeWindowsJobFrames, traeWindowsCommandLine } from "../../src/adapters/trae-cn/windows-job";
+import { commandInvocation } from "../../src/lib/win-exec";
+import { buildCatalogEntries } from "../../src/codex/catalog";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
 import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
@@ -157,6 +160,7 @@ function traeFixture(intercept?: (request: AcpRequest, child: ChildProcess) => b
   const send = (frame: unknown) => stdout.write(JSON.stringify(frame) + "\n");
   Object.assign(child, { stdout, stderr: new PassThrough(), killed: false, exitCode: null });
   child.stdin = new Writable({ write(chunk, _encoding, callback) {
+    if (String(chunk) === "__OCX_STOP_TRAE__\n") { callback(); child.emit("trae-stop-request"); return; }
     const request = JSON.parse(String(chunk)) as AcpRequest;
     requests.push(request);
     callback();
@@ -183,6 +187,7 @@ function traeFixture(intercept?: (request: AcpRequest, child: ChildProcess) => b
   const stopPipe = new Writable({ write(_chunk, _encoding, callback) { callback(); child.kill("SIGTERM"); } });
   Object.assign(child, { stdio: [child.stdin, stdout, child.stderr, stopPipe] });
   const deps: traeClient.TraeAcpDeps = {
+    platform: "linux",
     resolveBinary: () => "/fixture/traecli", timeoutMs: 300, killGraceMs: 2, reapTimeoutMs: 5,
     spawn: (_command, _args, opts) => { options = opts; return child; },
   };
@@ -461,13 +466,57 @@ describe("TRAE CN ACP regression contract", () => {
   test("shutdown remains bounded when the process and its pipe never close", async () => {
     const fixture = traeFixture(request => request.method === "session/prompt");
     fixture.child.kill = () => true;
-    const session = await traeClient.openTraeSession(config().baseUrl, fixture.deps);
+    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, home: testHome.root, cwd: testHome.root });
     const turn = session.prompt("test-model", "hello", () => undefined).catch(error => error);
     await expect(session.close()).rejects.toThrow("shutdown was not confirmed");
     expect(await turn).toBeInstanceOf(Error);
     expect(fixture.child.stdout!.destroyed).toBe(true);
-    expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
+    expect(existsSync(String(fixture.options()!.cwd))).toBe(true);
   });
+
+  test("a cleanup failure preserves already-received terminal usage", async () => {
+    const fixture = traeFixture();
+    fixture.child.kill = () => true;
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), { ...fixture.deps, home: testHome.root, cwd: testHome.root })
+      .runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_shutdown_timeout", usage: { inputTokens: 10, outputTokens: 2 } });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  for (const consumer of ["adapter", "probe"]) {
+    test("stderr overflow suppresses a split authorization value in " + consumer, async () => {
+      const fixture = traeFixture((request, child) => {
+        if (request.method !== "initialize") return false;
+        const prefix = "Authorization: Bearer ";
+        (child.stderr as PassThrough).write("x".repeat(8192 - prefix.length) + prefix);
+        (child.stderr as PassThrough).write("opaque-fixture-credential\n");
+        (child.stdout as PassThrough).end();
+        return true;
+      });
+      let serialized: string;
+      if (consumer === "adapter") {
+        const events: AdapterEvent[] = [];
+        await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+        serialized = JSON.stringify(events);
+      } else serialized = JSON.stringify(await (await probeTraeCnProvider("trae-cn", config(), async () => { throw new Error("must not converge"); }, undefined, fixture.deps)).json());
+      expect(serialized).toContain("contents were suppressed");
+      expect(serialized).not.toContain("opaque-fixture-credential");
+    });
+  }
+
+  for (const removed of [true, false]) {
+    test.skipIf(process.platform === "win32")("POSIX lookup-to-launch failure hides paths: removed=" + removed, async () => {
+      const binary = testHome.path("private cli");
+      writeFileSync(binary, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+      const deps: traeClient.TraeAcpDeps = { home: testHome.root, cwd: testHome.root, killGraceMs: 20,
+        resolveBinary: () => { if (removed) unlinkSync(binary); else chmodSync(binary, 0o600); return binary; } };
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events).toMatchObject([{ type: "error", status: 500, code: "trae_startup_spawn_" + (removed ? "enoent" : "eacces") }]);
+      expect(JSON.stringify(events)).not.toContain(binary);
+    });
+  }
 
   test("POSIX shutdown uses the owned pipe without signalling a possibly reused PID", async () => {
     const fixture = traeFixture();
@@ -544,16 +593,88 @@ describe("TRAE CN ACP regression contract", () => {
     expect(growth).toBeLessThan(16 * 1024 * 1024);
   }, 15000);
 
-  test("Windows dispatchers use process-tree termination", async () => {
-    const fixture = traeFixture();
-    Object.assign(fixture.child, { pid: 4242 });
-    const killed: number[] = [];
-    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, platform: "win32",
-      killWindowsProcessTree: pid => { killed.push(pid); fixture.child.kill(); },
+  for (const proof of [true, false]) {
+    test("Windows cleanup requires Job accounting proof: " + proof, async () => {
+      const fixture = traeFixture();
+      fixture.child.once("trae-stop-request", () => {
+        if (proof) (fixture.child.stderr as PassThrough).write("OCX_TRAE_JOB_STOPPED\n");
+        fixture.child.kill();
+      });
+      const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, platform: "win32", home: testHome.root, cwd: testHome.root });
+      if (proof) await session.close();
+      else await expect(session.close()).rejects.toThrow("shutdown was not confirmed");
+      expect(fixture.options()?.windowsVerbatimArguments).toBeUndefined();
     });
-    await session.close();
-    expect(killed).toEqual([4242]);
+  }
+
+  test("Windows CLI diagnostics cannot forge supervisor proof, even with split frames", () => {
+    let text = "";
+    const frames = new TraeWindowsJobFrames(chunk => { text += chunk; }, () => { throw new Error("unexpected status"); });
+    const encoded = "OCX_TRAE_STDERR:" + Buffer.from("OCX_TRAE_JOB_STOPPED\n中文").toString("base64") + "\n";
+    for (const byte of Buffer.from(encoded)) frames.push(Uint8Array.of(byte));
+    expect(text).toBe("OCX_TRAE_JOB_STOPPED\n中文");
+    expect(frames.processTreeExited).toBe(false);
+    frames.push(Buffer.from("OCX_TRAE_JOB_STOPPED\n"));
+    frames.finish();
+    expect(frames.processTreeExited).toBe(true);
+    const invalid = new TraeWindowsJobFrames(() => {}, () => {});
+    invalid.push(Buffer.from("x".repeat(5000) + "\nOCX_TRAE_JOB_STOPPED\n"));
+    expect(invalid.processTreeExited).toBe(false);
   });
+
+  test("Windows launcher preserves cmd escaping and owns only its staging directory", async () => {
+    const invocation = commandInvocation("C:\\Users\\test\\trae cli.cmd", ["a&b", "with space"], "win32");
+    expect(traeWindowsCommandLine(invocation)).toEndWith(invocation.args.join(" "));
+    const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, {});
+    try {
+      expect(job.options.windowsVerbatimArguments).toBeUndefined();
+      const loader = Buffer.from(job.args.at(-1)!, "base64").toString("utf16le");
+      expect(loader).not.toContain("ExecutionPolicy");
+      expect(loader).toContain("Add-Type");
+      expect(loader.length).toBeLessThan(10000);
+    } finally { await job.cleanup(); }
+    expect(existsSync(testHome.root)).toBe(true);
+  });
+
+  for (const inheritedPipes of [true, false]) {
+    test.skipIf(process.platform !== "win32")("Windows Job reaps a helper after its dispatcher exits: inherited pipes=" + inheritedPipes, async () => {
+      const heartbeat = testHome.path("heartbeat");
+      const dispatcher = testHome.path("dispatcher exited");
+      const script = testHome.path("cli fixture.mjs");
+      const shim = testHome.path("cli fixture.cmd");
+      const helper = "const fs=require('node:fs');setInterval(()=>fs.writeFileSync(" + JSON.stringify(heartbeat) + ",String(Date.now())),10);";
+      writeFileSync(script, [
+        "import {spawn} from 'node:child_process';import fs from 'node:fs';",
+        "spawn(process.execPath,['-e'," + JSON.stringify(helper) + "],{stdio:" + JSON.stringify(inheritedPipes ? ["ignore", "inherit", "inherit"] : "ignore") + "}).unref();",
+        "while(!fs.existsSync(" + JSON.stringify(heartbeat) + ")) await new Promise(r=>setTimeout(r,10));",
+        "fs.writeFileSync(" + JSON.stringify(dispatcher) + ",'exited');process.exit(0);",
+      ].join("\n"));
+      writeFileSync(shim, '@"' + process.execPath + '" "' + script + '" %*\r\n');
+      const invocation = commandInvocation(shim, ["acp", "serve"], "win32");
+      const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, process.env as Record<string, string>);
+      const child = nodeSpawn(job.file, job.args, { ...job.options, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      const closed = once(child, "close");
+      let diagnostic = "";
+      const failures: string[] = [];
+      const frames = new TraeWindowsJobFrames(text => { diagnostic += text; }, (stage, code) => { failures.push(stage + ":" + code); });
+      child.stdout!.resume();
+      child.stderr!.on("data", chunk => frames.push(chunk));
+      child.stdin!.on("error", () => {});
+      child.stdin!.write("{}\n");
+      const watchdog = setTimeout(() => { child.kill("SIGKILL"); }, 15_000);
+      try {
+        await closed;
+        frames.finish();
+        expect(failures).toEqual([]);
+        expect(diagnostic).toBe("");
+        expect(frames.processTreeExited).toBe(true);
+        expect(existsSync(dispatcher)).toBe(true);
+        const after = readFileSync(heartbeat, "utf8");
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(readFileSync(heartbeat, "utf8")).toBe(after);
+      } finally { clearTimeout(watchdog); await job.cleanup(); }
+    }, 20_000);
+  }
 
   test("workspace allocation failure removes only an owned temporary HOME", async () => {
     let owned = "";
@@ -617,9 +738,12 @@ describe("TRAE CN ACP regression contract", () => {
       const models = await gatherRoutedModels({ port: 10100, defaultProvider: "trae-cn",
         providers: { "trae-cn": { ...config(), liveModels: false } }, visionSidecar: { enabled },
         customModels: [{ provider: "trae-cn", modelId: "test-model", inputModalities: ["text", "image"] }],
+        combos: { selected: { targets: [{ provider: "trae-cn", model: "test-model" }] } },
       });
       expect(models.find(model => model.provider === "trae-cn" && model.id === "test-model"))
         .toMatchObject({ inputModalities: enabled ? ["text", "image"] : ["text"], supportsVerbosity: false });
+      expect(buildCatalogEntries(null, [], models).find(model => model.slug === "combo/selected")?.input_modalities)
+        .toEqual(enabled ? ["text", "image"] : ["text"]);
     });
   }
 

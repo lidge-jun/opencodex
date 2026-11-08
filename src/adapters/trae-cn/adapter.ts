@@ -82,13 +82,13 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
       if (incoming.abortSignal?.aborted) return;
       const producer = incoming.sendBudget?.beginSpendProducer?.();
       let permit: SingleUseDispatchPermit | undefined;
+      let terminal: Extract<AdapterEvent, { type: "done" | "incomplete" | "error" }> | undefined;
       try {
         const replay = replayText(parsed);
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: `trae-cn|${parsed.modelId}` });
         if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
         permit = decision?.allowed ? decision.permit : undefined;
         const session = await openTraeSession(provider.baseUrl, deps, incoming.abortSignal, provider);
-        let terminal: AdapterEvent | undefined;
         try {
           await session.prompt(parsed.modelId, replay, event => {
             if (event.type === "done" || event.type === "incomplete" || event.type === "error") terminal = event;
@@ -107,7 +107,7 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
       } catch (error) {
         if (incoming.abortSignal?.aborted) return;
         if (error instanceof SendBudgetExhaustedError) throw error;
-        emit(errorEvent(error));
+        emit({ ...errorEvent(error), ...(terminal?.usage ? { usage: terminal.usage } : {}) });
       } finally {
         try { permit?.release(); } finally { producer?.close(); }
       }

@@ -1485,7 +1485,8 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   After switching CLI accounts, enable live discovery and run **Test connection**. It
   replaces the roster and refreshes Codex and connected clients. It reports pending or failed
   publication separately; restart running Codex sessions after publication.
-  If the provider changes during the probe, its roster is not replaced; run **Test connection** again.
+  A probe overtaken before updating the model cache asks you to retry. Disk-only edits require
+  reloading provider configuration and testing again.
 - **Transport:** Each turn opens a fresh ACP session for the selected model and streams text and reasoning.
   Conversation history is replayed as labelled text. The limit is 1,000,000 UTF-16 code units
   (JavaScript string length); an emoji may use two units. Oversized replay is rejected.
@@ -1499,7 +1500,7 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   Requests with an output-token limit fail with `unsupported_max_output_tokens` because this
   adapter has no verified ACP field for that limit.
 - **CLI process:** The CLI uses an empty temporary workspace, no session MCP/skills and a finite tool denylist.
-  Shutdown targets the owned POSIX process group or the Windows process tree. POSIX descendants
+  Shutdown targets the owned POSIX process group or Windows Job Object (Windows 10+, PowerShell 5.1). POSIX descendants
   that detach into another group can survive; this mechanism does not contain untrusted hooks or tools.
   Use a trusted CLI and configuration: its hooks and unlisted tools are outside OpenCodex's
   client-capability controls. Temporary directories and tool denial do not provide an OS sandbox.

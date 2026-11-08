@@ -21,21 +21,29 @@ Observed-auth gathers use only cached evidence; only refreshing gathers and expl
 probes may launch the CLI. Management convergence refreshes CLI-owned evidence before catalog
 admission, so a cold automatic tick can populate it. Lost-generation discovery rereads the current
 cache before attaching its revision. Relative PATH entries resolve before the child changes its cwd.
-Custom catalog rows receive the wire modality/verbosity ceiling before optional sidecar publication.
+Custom catalog rows and combo members receive the wire modality/verbosity ceiling before optional sidecar publication.
 
 Cancellation is bound before the first initialization RPC. Pending RPCs fail as shutdown starts;
 stdin errors enter the same failure path. Shutdown terminates the POSIX process group or Windows
-process tree and bounds both process and stream waits. The POSIX supervisor in
+Job Object and bounds both process and stream waits. The POSIX supervisor in
 `src/adapters/trae-cn/process.ts` keeps its group leader alive after the CLI exits. The parent requests
 shutdown through a private pipe; live group members signal group 0, so numeric group-ID reuse cannot
 target an unrelated group. Descendants that detach into another group are outside this cleanup scope.
-Unconfirmed shutdown is an error; the adapter publishes its terminal event after cleanup. A failed workspace allocation removes an
+On Windows 10+, `src/adapters/trae-cn/windows-job.ts` launches a PowerShell 5.1 supervisor with
+atomic Job List and handle-list process attributes. It owns descendants even after a dispatcher
+exits, denies breakaway, and kills members when its private Job handle closes. CLI stderr travels
+as bounded base64 frames; only supervisor frames can attest that the Job has no active members.
+Unsupported supervision fails before launching an unowned CLI. No numeric PID is reopened.
+Unconfirmed shutdown is an error and retains owned temporary files; the adapter publishes its terminal
+event after cleanup, preserving received usage even when cleanup fails. A failed workspace allocation removes an
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send; startup
 failure or unavailable models return unused reservations. Replay over 1,000,000 UTF-16 code units is
 rejected before startup. Unexpected EOF diagnostics retain bounded, redacted stderr after process
-cleanup, including stderr that arrives after stdout closes.
+cleanup, including stderr that arrives after stdout closes. Once stderr exceeds 8192 characters,
+all diagnostic text is suppressed so truncation cannot separate a secret from its redaction label.
 Malformed stdout produces fixed protocol diagnostics, never the shared JSONL parser's snippets.
 Byte-limit failures retain `trae_stdout_limit`; startup failures retain a stage and allowlisted errno.
+POSIX launch exits 126/127 before initialization report safe startup codes via the private control pipe.
 Prompt completion closes the bounded update stream once, without a new promise reaction per chunk.
 Client cancellation emits no provider error; an upstream cancellation without client abort emits
 an incomplete event with usage. Explicit output-token limits are refused before startup.
@@ -46,8 +54,9 @@ disabled ACP client capabilities do not sandbox CLI-side hooks or unlisted vendo
 connection test and replaces the unchanged generation's cached roster after success. It requests
 catalog convergence and refreshes previously connected clients through the owned integration writer.
 The response separates connectivity from catalog/client publication and notes the running Codex
-session restart requirement. An overtaken probe reports `rosterReplaced: false` and asks for another
-connection test; it cannot replace the new roster.
+session restart requirement. Invalidation before the cache write reports `rosterReplaced: false`
+and asks for another test. Invalidation after that write does not undo the historical `true` result.
+Disk-only edits do not invalidate the running process's cache generation.
 It never probes the vendor
 website or accepts a cached roster as login evidence. The cache remains provider-scoped, so account
 switches require this explicit refresh. Each prompt still checks its model against a new session roster.
