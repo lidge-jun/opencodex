@@ -993,6 +993,38 @@ describe("combo stream preflight", () => {
   });
 
   for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
+    for (const value of [true, null, "false", 0]) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves replayUnsafe=${JSON.stringify(value)} on ${ending}`, async () => {
+          const frame = `data: ${JSON.stringify({ type, replayUnsafe: value })}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let calls = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            calls++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "eof") expect((await reader.read()).done).toBe(true);
+          else await expect(reader.read()).rejects.toBe(error);
+          expect(calls).toBe(0);
+        });
+      }
+    }
+    test(`${type} with replayUnsafe=false remains replayable`, async () => {
+      let calls = 0;
+      const wrapped = deferProtocolSafeResetRecovery(sse({ type, replayUnsafe: false, sequence_number: 1 }),
+        { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
     for (const field of ["error", "response.error", "response.last_error", "last_error"] as const) {
       for (const ending of ["eof", "read-error"] as const) {
         test(`${type} preserves ${field} evidence on ${ending}`, async () => {
@@ -1048,6 +1080,10 @@ describe("combo stream preflight", () => {
       { type, delta: "original output" },
       { type, response: { output: [], incomplete_details: { reason: "upstream_stall_timeout" } } },
       { type, response: ["malformed snapshot"] },
+      { type, stream_id: "another-stream" },
+      { type, sequence_number: "invalid" },
+      { type, response: { output: [], replayUnsafe: true } },
+      { type, future_signal: { effect: "unknown" } },
     ]) {
       test(`${type} preserves contradictory or malformed evidence at EOF (%j)`, async () => {
         const original = sse(payload);

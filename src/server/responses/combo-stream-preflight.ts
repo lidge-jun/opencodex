@@ -31,6 +31,11 @@ const PRE_OUTPUT_CONTROL_EVENTS = new Set([
   "response.heartbeat",
 ]);
 
+const PRE_OUTPUT_EVENT_FIELDS = new Set([
+  "type", "response", "sequence_number", "replayUnsafe", "error", "last_error",
+  "incomplete_details", "status", "output", "item", "delta", "content", "message", "code",
+]);
+
 const TERMINAL_EVENTS = new Set([
   "response.completed",
   "response.failed",
@@ -184,6 +189,10 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
     // for a replacement, even if the event name otherwise describes only a prelude.
     const event = payload as Record<string, unknown>;
     const conflictingStatus = (status: unknown) => status != null && status !== "queued" && status !== "in_progress";
+    if (Object.keys(event).some(key => !PRE_OUTPUT_EVENT_FIELDS.has(key))) return true;
+    if (Object.hasOwn(event, "replayUnsafe") && event.replayUnsafe !== false) return true;
+    if (event.sequence_number !== undefined && !(typeof event.sequence_number === "number"
+      && Number.isSafeInteger(event.sequence_number) && event.sequence_number >= 0)) return true;
     if (event.error != null || event.last_error != null || event.incomplete_details != null
       || event.item != null || event.delta != null || event.content != null
       || event.message != null || event.code != null || conflictingStatus(event.status)) return true;
@@ -191,8 +200,9 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
     const response = event.response;
     if (response != null && (typeof response !== "object" || Array.isArray(response))) return true;
     if (response && typeof response === "object" && !Array.isArray(response)) {
-      const snapshot = response as { output?: unknown; error?: unknown; last_error?: unknown; incomplete_details?: unknown; status?: unknown };
+      const snapshot = response as { output?: unknown; error?: unknown; last_error?: unknown; incomplete_details?: unknown; status?: unknown; replayUnsafe?: unknown };
       if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
+      if (Object.hasOwn(snapshot, "replayUnsafe") && snapshot.replayUnsafe !== false) return true;
       if (snapshot.error != null || snapshot.last_error != null || snapshot.incomplete_details != null
         || conflictingStatus(snapshot.status)) return true;
     }

@@ -381,6 +381,33 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     }
   });
 
+  for (const ending of ["eof", "read-error"] as const) {
+    test(`native streaming never resends replay-unsafe heartbeat after ${ending}`, async () => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        const frame = new TextEncoder().encode(sseEvent("response.heartbeat", { replayUnsafe: true }));
+        if (sends > 1) return new Response(sseEvent("response.completed", { response: { id: "replacement" } }), {
+          headers: { "content-type": "text/event-stream" },
+        });
+        let sent = false;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (!sent) { sent = true; controller.enqueue(frame); }
+            else if (ending === "eof") controller.close();
+            else controller.error(new Error("upstream reset"));
+          },
+        }), { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      const resetConfig: OcxConfig = { ...config, providers: { openai: { ...provider, retryOnReset: {} } } };
+      const response = await call(requestBody(true, false), {}, resetConfig);
+      const body = await response.text();
+      expect(sends).toBe(1);
+      expect(body).toContain('"replayUnsafe":true');
+      expect(body).not.toContain("replacement");
+    });
+  }
+
   test.each([
     ["clean EOF", sseEvent("response.created", { response: { id: "resp_eof", status: "in_progress", output: [] } })],
     ["malformed payload", [
