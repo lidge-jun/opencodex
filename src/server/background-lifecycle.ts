@@ -34,7 +34,8 @@ import {
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
-import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/scheduler";
+// The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
+import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -142,7 +143,8 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
         });
     } else {
       telemetryEnvOptOutObserved = true;
-      try { recordTelemetryEnvOptOut(); } catch { /* best-effort */ }
+      // Recorded under this pid, so a proxy sharing the home cannot end the period while this one runs.
+      try { recordTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort */ }
     }
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
@@ -167,7 +169,7 @@ function stopProcessLoops(): void {
   stopTelemetry?.();
   if (telemetryEnvOptOutObserved) {
     telemetryEnvOptOutObserved = false;
-    try { endTelemetryEnvOptOut(); } catch { /* best-effort; the marker stays and the next tick ends it */ }
+    try { endTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort; the next tick ends it once this pid has exited */ }
   }
   const loops = processLoops;
   processLoops = null;

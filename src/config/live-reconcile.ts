@@ -636,6 +636,15 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     );
     if (provenanceProjection.configRebaseProvenance === undefined) delete projectedConfig.configRebaseProvenance;
     else projectedConfig.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
+    // Telemetry consent is owned by the file: the CLI and the consent route write it there while a
+    // proxy may hold an older snapshot. A settings save must carry the decision on disk, never drop
+    // or roll it back.
+    if (onDisk !== undefined) {
+      const diskTelemetry = (onDisk as Partial<OcxConfig>).telemetry;
+      if (diskTelemetry === undefined) delete projectedConfig.telemetry;
+      else projectedConfig.telemetry = structuredClone(diskTelemetry);
+      adoptPersistedTelemetry(config, diskTelemetry);
+    }
     const persistedBinding = (bindingBaseline || diskDeletedKeys.has("hostname")) && onDisk
       ? readPersistedServerBinding(onDisk, bindingBaseline ?? { port: config.port, hostname: config.hostname })
       : bindingBaseline;
