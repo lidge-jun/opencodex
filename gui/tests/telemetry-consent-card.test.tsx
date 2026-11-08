@@ -514,6 +514,8 @@ test("links the full privacy policy, the same URL the CLI and installer show", a
   expect(disclosure).toContain(`export const TELEMETRY_POLICY_URL = "${telemetryApi.TELEMETRY_POLICY_URL}";`);
   const items = host.querySelector(".telemetry-consent-card")?.textContent ?? "";
   expect(items).toContain("A per-day install hash that changes every day");
+  expect(items).toContain("release channel");
+  expect(items).toContain("first-report flag");
   expect(items).toContain("account IDs or emails");
 });
 
