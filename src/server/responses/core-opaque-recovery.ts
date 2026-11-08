@@ -1,7 +1,12 @@
 import { ENCRYPTED_FUNCTION_OUTPUT_REJECTION, upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isPlainObject } from "../../lib/plain-data";
-import { isHardPolicyOrOriginRefusal, isReasoningEffortRejection, planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
+import {
+  hasConflictingReasoningEffortCode,
+  isHardPolicyOrOriginRefusal,
+  isReasoningEffortRejection,
+  planReasoningEffortDowngrade,
+} from "../../providers/reasoning-metadata";
 import { isAnthropicFastRefusal } from "../../providers/anthropic-fast";
 import type { AdapterRequest } from "../../adapters/base";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
@@ -80,7 +85,7 @@ export async function refusedReasoningEffortDowngrade(
 ): Promise<ReturnType<typeof planReasoningEffortDowngrade>> {
   if (guard.attempted && !comboAttempt) return undefined;
   const rejectionText = await reasoningEffortRejectionText(response, false, signal);
-  return rejectionText === undefined || isHardPolicyOrOriginRefusal(rejectionText)
+  return rejectionText === undefined || isHardPolicyOrOriginRefusal(rejectionText) || hasConflictingReasoningEffortCode(rejectionText)
     ? undefined
     : planReasoningEffortDowngrade({ ...plan, rejectionText });
 }
@@ -397,7 +402,7 @@ export async function reasoningEffortRejectionText(
   if (response.status !== 400 && response.status !== 403) return undefined;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal });
-    if (!body.displaySafe || body.truncated || isHardPolicyOrOriginRefusal(body.text)) return undefined;
+    if (!body.displaySafe || body.truncated || isHardPolicyOrOriginRefusal(body.text) || hasConflictingReasoningEffortCode(body.text)) return undefined;
     return isReasoningEffortRejection(body.text) ? body.text : undefined;
   } catch {
     return undefined;

@@ -447,6 +447,75 @@ const REJECTION_WINDOW = 48;
  */
 const GENERIC_ERROR_TYPE = /invalid_request_error/gi;
 
+const EFFORT_COMPATIBLE_CODES = new Set([
+  "",
+  "invalid_request_error",
+  "invalid_argument",
+  "unsupported_parameter",
+  "unsupported_value",
+  "invalid_parameter_error",
+]);
+const EFFORT_COMPATIBLE_TYPES = new Set([
+  "",
+  "invalid_request_error",
+  "upstream_error",
+]);
+
+/**
+ * Rejects error envelopes that carry a conflicting code (e.g. permission_denied, insufficient_quota,
+ * rate_limit_exceeded, model_not_found, malformed non-string code) so they stay terminal or proceed
+ * to combo failover without false reasoning-effort learning or same-target ladder retries (#8173).
+ */
+export function hasConflictingReasoningEffortCode(text: string | undefined): boolean {
+  if (!text) return false;
+  let unescaped = text.trim();
+  for (let d = 0; d < 3; d += 1) {
+    if (unescaped.startsWith("Provider error 400: ")) {
+      unescaped = unescaped.slice("Provider error 400: ".length).trim();
+    }
+    if (unescaped.startsWith("data:") && !unescaped.includes("\n")) {
+      unescaped = unescaped.slice("data:".length).trim();
+    }
+  }
+  if (!unescaped.startsWith("{")) {
+    return /\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(unescaped);
+  }
+  try {
+    const parsed = JSON.parse(unescaped);
+    const queue = [parsed];
+    let examined = 0;
+    while (queue.length > 0 && examined < 32) {
+      const candidate = queue.shift();
+      examined += 1;
+      if (!candidate || typeof candidate !== "object") continue;
+      if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+          if (item && typeof item === "object") queue.push(item);
+        }
+        continue;
+      }
+      const rec = candidate as Record<string, unknown>;
+      if (rec.code !== undefined && rec.code !== null) {
+        if (typeof rec.code !== "string") return true;
+        const code = rec.code.trim().toLowerCase().replaceAll("-", "_");
+        if (!EFFORT_COMPATIBLE_CODES.has(code)) return true;
+      }
+      if (rec.type !== undefined && rec.type !== null) {
+        if (typeof rec.type !== "string") return true;
+        const type = rec.type.trim().toLowerCase().replaceAll("-", "_");
+        if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
+      }
+      for (const field of ["error", "details", "response", "last_error"] as const) {
+        const val = rec[field];
+        if (val && typeof val === "object") queue.push(val);
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 /**
  * Evidence test for a rejection body: does it blame reasoning effort?
  *
@@ -458,6 +527,7 @@ const GENERIC_ERROR_TYPE = /invalid_request_error/gi;
 export function isReasoningEffortRejection(text: string | undefined): boolean {
   if (!text) return false;
   if (isHardPolicyOrOriginRefusal(text)) return false;
+  if (hasConflictingReasoningEffortCode(text)) return false;
   if (/unsupported.{0,24}effort/i.test(text)) return true;
   // An upstream that names the offending parameter has already said which one it means.
   if (/["']?param["']?\s*[:=]\s*["']?(?:reasoning[._ ]effort|reasoning)/i.test(text)) return true;
@@ -481,7 +551,7 @@ export function planReasoningEffortDowngrade(args: {
   requested?: string;
   rejectionText?: string;
 }): { effort: string; recorded: boolean } | undefined {
-  if (args.rejectionText && isHardPolicyOrOriginRefusal(args.rejectionText)) return undefined;
+  if (args.rejectionText && (isHardPolicyOrOriginRefusal(args.rejectionText) || hasConflictingReasoningEffortCode(args.rejectionText))) return undefined;
   const requested = args.requested === "ultra" ? "max" : args.requested;
   if (!requested || !RANKED.includes(requested)) return undefined;
   const recorded = recordUnsupportedReasoningEffort(args.provider, args.modelId, requested, args.rejectionText);

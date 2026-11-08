@@ -35,16 +35,24 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
 
   try {
     const parsed = JSON.parse(unescaped) as Record<string, unknown>;
-    const candidates = [
+    const queue: unknown[] = [
+      parsed,
       parsed.error,
       (parsed.response as Record<string, unknown> | undefined)?.error,
       (parsed.response as Record<string, unknown> | undefined)?.last_error,
       parsed.last_error,
-      parsed,
     ];
-
-    for (const candidate of candidates) {
-      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    let examined = 0;
+    while (queue.length > 0 && examined < 32) {
+      const candidate = queue.shift();
+      examined += 1;
+      if (!candidate || typeof candidate !== "object") continue;
+      if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+          if (item && typeof item === "object") queue.push(item);
+        }
+        continue;
+      }
       const rec = candidate as Record<string, unknown>;
 
       const code = typeof rec.code === "string" ? rec.code.trim().toLowerCase().replaceAll("-", "_") : undefined;
@@ -70,7 +78,7 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
         }
       }
 
-      for (const field of ["message", "error", "details", "body", "reason"] as const) {
+      for (const field of ["message", "error", "details", "body", "reason", "last_error", "response"] as const) {
         const val = rec[field];
         if (typeof val === "string") {
           if (
@@ -81,6 +89,8 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
           ) {
             return true;
           }
+        } else if (val && typeof val === "object") {
+          queue.push(val);
         }
       }
     }
