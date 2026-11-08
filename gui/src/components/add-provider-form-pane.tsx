@@ -183,6 +183,16 @@ export function AddProviderFormPane({
           )}
         </>
       )}
+      {preset.id === "google-vertex" && form.adapter === "google" && <>
+        <p className="muted text-hint" style={{ margin: 0 }}>{t("modal.vertexAdcHint")}</p>
+        <p className="muted text-hint" style={{ margin: 0 }}>{t("modal.vertexStaticHint")}</p>
+        <AddProviderField label={t("modal.vertexProject")}>
+          <input className="input" value={form.project ?? ""} onChange={e => onFormChange({ ...form, project: e.target.value })} />
+        </AddProviderField>
+        <AddProviderField label={t("modal.vertexLocation")}>
+          <input className="input" aria-label={t("modal.vertexLocation")} value={form.location ?? ""} onChange={e => onFormChange({ ...form, location: e.target.value })} placeholder="us-central1" />
+        </AddProviderField>
+      </>}
       {!isReservedForward && <AddProviderField label={t("modal.defaultModel")}>
         <input className="input" value={form.defaultModel} onChange={e => onFormChange({ ...form, defaultModel: e.target.value })} placeholder={t("modal.defaultModelPlaceholder")} />
       </AddProviderField>}

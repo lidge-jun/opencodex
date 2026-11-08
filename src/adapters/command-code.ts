@@ -437,17 +437,20 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      const next = buffer + decoder.decode(value, { stream: !done });
-      const nextBytes = encoder.encode(next).byteLength;
+      const decoded = decoder.decode(value, { stream: !done });
+      // TextDecoder emits complete code points, so fragment UTF-8 sizes are additive.
+      const nextBytes = bufferBytes + encoder.encode(decoded).byteLength;
       resizeBuffer(nextBytes);
-      buffer = next;
-      let newline = buffer.indexOf("\n");
+      buffer += decoded;
+      // The retained suffix has no newline; only new text can complete a record.
+      const hasNewline = decoded.includes("\n");
+      let newline = hasNewline ? buffer.indexOf("\n") : -1;
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
         if (line) yield* decodeEventLine(line);
         newline = buffer.indexOf("\n");
       }
-      resizeBuffer(encoder.encode(buffer).byteLength);
+      if (hasNewline) resizeBuffer(encoder.encode(buffer).byteLength);
       if (done) break;
     }
     const final = buffer.trim();

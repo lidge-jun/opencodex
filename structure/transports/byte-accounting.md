@@ -155,7 +155,10 @@ removed bytes. Recounting an unchanged residual does not reserve it twice. Faile
 the previous charge owned until `finally` releases it, without releasing other owners' bytes.
 The turn limit and transport-read accounting remain in force. `tests/providers/command-code-buffer-budget.test.ts`
 covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
-one-byte overflow, another retained owner, consumer return and upstream cancellation.
+one-byte overflow, another retained owner, consumer return and upstream cancellation. Byte sizing
+measures only new decoded text, including EOF replacement bytes; newline searches run only when
+new text contains a newline, and only a drained residual is remeasured. The same tests bound total
+measurement and search input by wire size for both newline and EOF termination.
 
 Devin Connect-RPC in `src/adapters/devin/cloud-direct/chat.ts` compacts surviving chunks in place
 and truncates the queue, or clears it when no bytes remain. No deleted-chunk
@@ -249,6 +252,7 @@ original wire bytes. `src/server/relay.ts` re-exports the canonical extractor an
 Empty byte results across the relay and `src/server/sse-frame-buffer.ts` reuse one immutable
 zero-length view; non-empty frame ownership,
 frame limits, cancellation and wire ownership remain bounded. The byte framer and inspection share
+an unfinished-byte count for the native combo replay observer, without exposing or copying its buffer. They share
 one CR/LF/CRLF delimiter scanner; WebSocket projection uses the canonical data extractor. A terminal
 CR dispatches without awaiting EOF. A later LF extends that delimiter: byte delivery returns a
 framing-only continuation, excluded from event-count limits and the next event's byte cap;
