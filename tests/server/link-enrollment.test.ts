@@ -330,6 +330,18 @@ describe("Home enrollment of a standalone Child", () => {
     expect(config.options?.maxOutputBytes).toBe(SSH_MAX_OUTPUT_BYTES);
   });
 
+  test("a Child preflight failure carries the Child's own reason (#8357)", async () => {
+    const h = harness(); h.confirmed();
+    h.overrides.config = () => ({ code: 1, stdout: "", stderr: "opencodex: invalid config\nError: defaultProvider must exist in providers\n" });
+    const payload = await denied(await h.call("apply", { alias: "child" }), "child_preflight_failed") as { error: { hint: string } };
+    expect(payload.error.hint).toBe("Error: defaultProvider must exist in providers");
+    noEnrollmentEffects(h);
+    const unreadable = harness(); unreadable.confirmed();
+    unreadable.overrides.config = () => result("not json\n");
+    const second = await denied(await unreadable.call("apply", { alias: "child" }), "child_preflight_failed") as { error: { hint: string } };
+    expect(second.error.hint).toContain("config show --json");
+  });
+
   test("an output limit in Child preflight names the cap instead of failing generically", async () => {
     const h = harness(); h.confirmed();
     h.overrides.config = () => { throw new SshRunnerError("output_limit", `ssh output exceeded ${SSH_MAX_OUTPUT_BYTES} bytes`); };

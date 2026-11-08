@@ -11,6 +11,7 @@ import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { assertSshAlias } from "../link/ssh-argv";
+import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
@@ -253,10 +254,15 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
-  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code }, ...(body.residual === true ? { residual: true as const } : {}) } : null;
+  if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
+  // The hint is the only other field kept (#8357): the server builds it from a Child's last stderr
+  // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
+  // the body is still never echoed.
+  const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
+  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {

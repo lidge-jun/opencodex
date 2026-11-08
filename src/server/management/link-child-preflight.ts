@@ -1,4 +1,4 @@
-import { SSH_MAX_OUTPUT_BYTES } from "../../link/ssh-runner";
+import { SSH_MAX_OUTPUT_BYTES, sshFailureHint } from "../../link/ssh-runner";
 
 /**
  * Home enrollment reads one Child command before it may restart that Child: `ocx config show
@@ -19,3 +19,13 @@ export const CHILD_CONFIG_TOO_LARGE_MESSAGE = "The Child configuration is too la
 /** The operator-facing hint for a Child whose config output exceeded even the raised cap. */
 export const CHILD_CONFIG_TOO_LARGE_HINT =
   `ocx config show --json on the Child exceeded ${CHILD_PREFLIGHT_MAX_OUTPUT_BYTES} bytes; trim the Child's saved configuration and retry`;
+
+/**
+ * Why the Child's effective configuration could not be read (#8357): a failed `config show`
+ * names its own last stderr line (bounded and redacted by `sshFailureHint`, e.g. an invalid
+ * saved configuration), and a successful one that printed no usable JSON says so.
+ */
+export function childConfigFailureHint(result: { code: number; stderr: string }): string {
+  if (result.code !== 0) return sshFailureHint(result.stderr) ?? `ocx config show --json exited ${result.code} on the Child`;
+  return "ocx config show --json on the Child did not print a configuration with a valid port";
+}
