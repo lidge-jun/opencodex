@@ -51,6 +51,11 @@ if you opted out before. Continuing without changing the box keeps that earlier 
 so it is not applied again over a choice you made in the dashboard since; changing the box records a
 new decision.
 
+If you installed the background service with `ocx service install`, it can start a proxy at logon
+without the app. An opt-out recorded by a later installer reaches that service's config the next
+time the app starts; until then the service may still send its daily summary. To stop it at once,
+run `ocx telemetry disable`.
+
 ### Linux
 
 Download `OpenCodex-<version>-linux-x86_64.AppImage` or

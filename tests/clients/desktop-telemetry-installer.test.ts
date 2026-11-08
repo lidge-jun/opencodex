@@ -179,9 +179,9 @@ describe("Windows installer telemetry choice", () => {
   test("the dialog links the policy and offers a disable option that is checked by default", () => {
     expect(wxs).toContain(`<a href="${TELEMETRY_POLICY_URL}">Read the full privacy policy</a>`);
     expect(wxs).toMatch(new RegExp(`Type="CheckBox"[^>]*Property="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" CheckBoxValue="1" Text="${TELEMETRY_INSTALLER_CHECKBOX_TEXT}"`));
-    // The box starts checked unless this install already carries an opt-out (command line or upgrade).
+    // The box starts checked only when the choice is send, so any carried opt-out (command line or upgrade) starts unchecked.
     expect(wxs).toContain(
-      `<SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; "${TELEMETRY_INSTALLER_OPT_OUT}"</SetProperty>`,
+      `<SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~= "send"</SetProperty>`,
     );
     // A checked box writes "send", which is never acted on, and the page says so.
     expect(wxs).toContain(`Text="${TELEMETRY_INSTALLER_KEEP_NOTE}"`);
@@ -212,6 +212,20 @@ describe("Windows installer telemetry choice", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(wxs).toContain(`Action="OcxTelemetryStampExplicit" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]" Before="AppSearch"`);
     expect(wxs).toContain(`Action="OcxTelemetryKeepChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch"`);
+  });
+
+  test("every scheduling parent exists in each sequence its action runs in, as WiX's linker requires", () => {
+    // Standard actions present in both InstallUISequence and InstallExecuteSequence.
+    const standard = new Set(["AppSearch"]);
+    const actions = [...wxs.matchAll(/<SetProperty Action="(\w+)" Id="\w+" Value="[^"]*" (Before|After)="(\w+)" Sequence="(\w+)">/g)]
+      .map(([, action, , parent, sequence]) => ({ action: action!, parent: parent!, sequences: sequence === "both" ? ["ui", "execute"] : [sequence!] }));
+    expect(actions.length).toBeGreaterThan(0);
+    for (const { action, parent, sequences } of actions) {
+      for (const sequence of sequences) {
+        const parentScheduled = standard.has(parent) || actions.some(other => other.action === parent && other.sequences.includes(sequence));
+        expect(parentScheduled, `${action} (${sequence}) is scheduled after ${parent}, which is not in that sequence`).toBe(true);
+      }
+    }
   });
 
   describe("what each kind of install records in HKLM", () => {
@@ -282,6 +296,13 @@ describe("Windows installer telemetry choice", () => {
         expect(simulateInstall(wxs, { ui: "full", commandLine: { OCX_TELEMETRY_CHOICE: value } }).boxPreselected, value).toBe(false);
       }
       expect(simulateInstall(wxs, { ui: "none", commandLine: { OCX_TELEMETRY_CHOICE: "Send" } }).choice).toBe("Send");
+    });
+
+    test("a carried value other than send also preselects an unchecked box", () => {
+      // Written by something other than this MSI (a policy pre-seed): the app already reads it as an opt-out.
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: "off", stamp: "s1" } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: false });
+      expect(simulateInstall(wxs, { ui: "none", previous: { choice: "off", stamp: "s1" } })).toEqual({ choice: "off", stamp: "s1", boxPreselected: undefined });
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: "SEND", stamp: "s1" } }).boxPreselected).toBe(true);
     });
   });
 
