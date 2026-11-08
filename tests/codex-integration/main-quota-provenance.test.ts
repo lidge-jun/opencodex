@@ -346,6 +346,32 @@ test("window replacement persists without carrying its proof into later partial 
   expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
 });
 
+interface ColdKeyringSelection { selected?: boolean; failure?: string; failureDetail?: unknown; claimDiagnostics?: unknown }
+
+/**
+ * Compare selection together with the child's failure and claim diagnostics, so a failed positive
+ * case prints why the native claim failed instead of a bare boolean diff (#8342). Absent fields are
+ * projected to null because the child's JSON line drops undefined values.
+ */
+function expectColdKeyringSelection(result: ColdKeyringSelection, selected: boolean): void {
+  expect({ selected: result.selected, failure: result.failure ?? null, failureDetail: result.failureDetail ?? null,
+    claimDiagnostics: result.claimDiagnostics ?? null })
+    .toMatchObject(selected ? { selected: true, failure: null, failureDetail: null } : { selected: false });
+}
+
+describe("cold keyring selection assertion", () => {
+  test("a failed positive selection reports the child's claim diagnostics (#8342)", () => {
+    const result = { selected: false, failure: "CodexAuthContextError",
+      failureDetail: { cause: "NativeProfileError", code: "NATIVE_MAIN_CLAIM_UNAVAILABLE" },
+      claimDiagnostics: { failure: { phase: "open", code: "EICACLS", step: "/inheritance:r" } } };
+    let message = "";
+    try { expectColdKeyringSelection(result, true); } catch (error) { message = String((error as Error).message); }
+    expect(message).toContain("EICACLS");
+    expect(message).toContain("NATIVE_MAIN_CLAIM_UNAVAILABLE");
+    expect(() => expectColdKeyringSelection({ selected: true, claimDiagnostics: { phase: "operation" } }, true)).not.toThrow();
+  });
+});
+
 describe("main policy quota durability and lifecycle", () => {
   // The first loop iteration is this graph's cold child; warm quota provenance imports before its
   // spawn timeout starts measuring the restart behavior.
@@ -427,7 +453,7 @@ describe("main policy quota durability and lifecycle", () => {
       expect(line).toBeDefined();
       const result = JSON.parse(line!);
       expect(result.before.weeklyPercent).toBe(100);
-      expect(result.selected).toBe(scenario.selected);
+      expectColdKeyringSelection(result, scenario.selected);
       expect(result.stored.weeklyPercent).toBe(33);
       expect(result.paused).toEqual(scenario.paused ? [MAIN] : []);
       if (scenario.source === "file") expect(result.initialized).toBe(true);
