@@ -98,8 +98,9 @@ You can disable telemetry at any time through any of these controls:
    account on the computer starts it, before it resolves or starts any proxy (on a fresh install the
    decline is held in `telemetry-state.json` until a `config.json` exists, so `ocx init` still runs
    setup). The choice is recorded for the whole computer, so it also covers a silent install run by
-   an administrator or a deployment tool, and in-app updates keep it (`optout` is matched in any
-   letter case). Each opt-out applies once per account: running a newer installer and continuing
+   an administrator or a deployment tool, and in-app updates keep it (only `send` keeps telemetry on;
+   `optout` in any letter case, or any other value, turns it off). Each opt-out applies once per
+   account: running a newer installer and continuing
    without changing the box keeps the earlier decision as it was, so it is not applied again over a
    choice you made in the dashboard since. If the save fails, a proxy the app starts runs with
    `OCX_TELEMETRY=0`, and the app retries in the background and on the next launch. Leaving the box
