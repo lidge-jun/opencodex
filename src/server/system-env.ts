@@ -19,6 +19,7 @@ import { resolveClaudeKeychainPresence } from "../claude/auth-detect";
 import type { SystemEnvDeps } from "./system-env-shell";
 import * as configMutation from "../config/mutation-lock";
 import * as configDiagnostics from "../config/diagnostics";
+import { matchesReconciledLiveTopology } from "../config/live-reconcile";
 
 const SYSTEM_ENV_NAMES = [
   "ANTHROPIC_BASE_URL",
@@ -79,8 +80,9 @@ type CleanupResult = { cleaned: boolean; reason?: string };
 type SystemEnvFollowup = (action: () => void) => boolean;
 const completedSystemEnv = new WeakMap<SystemEnvResult, SystemEnvFollowup>();
 let systemEnvGeneration = 0;
-function savedConfigMatches(config: string, snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]): boolean {
-  return snapshot.source === "default" || (snapshot.source === "file" && !snapshot.error && JSON.stringify(snapshot.config) === config);
+function savedConfigMatches(config: OcxConfig, desired: string, snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]): boolean {
+  return snapshot.source === "default" || (snapshot.source === "file" && !snapshot.error
+    && (JSON.stringify(snapshot.config) === desired || matchesReconciledLiveTopology(config, snapshot.config)));
 }
 
 /** Carry the result's ownership through asynchronous startup follow-ups without serializing it. */
@@ -105,8 +107,9 @@ export function captureSystemEnvFollowup(config: OcxConfig, result: SystemEnvRes
   const epoch = systemEnvGeneration;
   const receipt = configMutation.withConfigMutationLockSync(() => {
     const snapshot = configDiagnostics.readConfigFileSnapshot().diagnostics;
-    if (!savedConfigMatches(desired, snapshot)) return undefined;
+    if (!savedConfigMatches(config, desired, snapshot)) return undefined;
     const tracking = readTracking();
+    if (tracking && (tracking.pid !== process.pid || tracking.port !== config.port)) return undefined;
     return { generation: configMutation.readConfigGenerationInCurrentMutationTransaction().value, source: snapshot.source,
       tracking: JSON.stringify(tracking), baseUrl: launchctlGetenv("ANTHROPIC_BASE_URL") };
   });
@@ -114,7 +117,7 @@ export function captureSystemEnvFollowup(config: OcxConfig, result: SystemEnvRes
   return bounded(action => configMutation.withConfigMutationLockSync(() => {
     const snapshot = configDiagnostics.readConfigFileSnapshot().diagnostics;
     if (epoch !== systemEnvGeneration || getConfigDir() !== sourcePath || JSON.stringify(config) !== desired || snapshot.source !== receipt.source
-      || !savedConfigMatches(desired, snapshot)
+      || !savedConfigMatches(config, desired, snapshot)
       || JSON.stringify(readTracking()) !== receipt.tracking || launchctlGetenv("ANTHROPIC_BASE_URL") !== receipt.baseUrl
       || configMutation.readConfigGenerationInCurrentMutationTransaction().value !== receipt.generation) return false;
     action();
@@ -263,7 +266,7 @@ export async function injectSystemEnv(
   const desiredStillCurrent = (snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]) => {
     if (JSON.stringify(config) !== desired) return false;
     if (snapshot.source === "fallback" || (initialSource !== undefined && snapshot.source !== initialSource)) return false;
-    return savedConfigMatches(desired, snapshot);
+    return savedConfigMatches(config, desired, snapshot);
   };
   let configGeneration = configMutation.withConfigMutationLockSync(() => {
     const snapshot = configDiagnostics.readConfigFileSnapshot().diagnostics;
@@ -533,7 +536,7 @@ export async function applySystemEnvToggle(config: OcxConfig, port: number): Pro
   if (config.claudeCode?.systemEnv === true) return injectSystemEnv(port, config);
   if (process.platform !== "darwin") return revertSystemEnv();
   return configMutation.withConfigMutationLockSync(() => {
-    if (!savedConfigMatches(JSON.stringify(config), configDiagnostics.readConfigFileSnapshot().diagnostics)) {
+    if (!savedConfigMatches(config, JSON.stringify(config), configDiagnostics.readConfigFileSnapshot().diagnostics)) {
       return { reverted: false, reason: "superseded" };
     }
     return revertSystemEnv();

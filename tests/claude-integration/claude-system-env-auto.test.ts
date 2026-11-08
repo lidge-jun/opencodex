@@ -419,6 +419,18 @@ test("a disabled-state follow-up cannot write after another environment owner ap
   expect(writes).toBe(0);
 });
 
+test("a follow-up refuses an already live foreign environment owner", async () => {
+  const { captureSystemEnvFollowup } = await import("../../src/server/system-env");
+  fakeTracking = JSON.stringify({ pid: 42, port: 4568, injectedAt: "synthetic-foreign" });
+  fakeLaunchd.set("ANTHROPIC_BASE_URL", "http://127.0.0.1:4568");
+  const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+  try {
+    const result = await injectSystemEnv(4567, baseConfig);
+    expect(result).toEqual({ injected: false, reason: "another instance owns env (port 4568)" });
+    expect(captureSystemEnvFollowup(baseConfig, result)).toBeUndefined();
+  } finally { fetchSpy.mockRestore(); }
+});
+
 test("a follow-up refuses and reports a busy coordinator", async () => {
   const { captureSystemEnvFollowup } = await import("../../src/server/system-env");
   const result = await injectSystemEnv(4567, baseConfig);

@@ -21,6 +21,7 @@ import { configDiagnosticsFromRaw, readConfigDiagnostics, validateConfigCandidat
 import { normalizePersistedClaudeCode } from "./load-degrade";
 import { reconcileApiKeys } from "./api-key-reconcile";
 import { captureLiveTopologyBaseline, LIVE_TOPOLOGY_KEYS, projectLiveTopology } from "./live-topology";
+import { getConfigDir } from "./paths";
 
 // ---------------------------------------------------------------------------
 // Hand-edit protection for the `claudeCode` subtree (devlog 260726_claude_auth_auto/040 H1).
@@ -137,6 +138,14 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
  * long-lived server config.
  */
 const detachedConfigSnapshots = new WeakSet<OcxConfig>();
+const reconciledTopologyReceipts = new WeakMap<OcxConfig, { directory: string; live: string; saved: OcxConfig }>();
+
+/** A receipt is issued only by a live save, and only for its exact live/disk pair. */
+export function matchesReconciledLiveTopology(config: OcxConfig, saved: OcxConfig): boolean {
+  const receipt = reconciledTopologyReceipts.get(config);
+  return receipt !== undefined && receipt.directory === getConfigDir()
+    && receipt.live === JSON.stringify(config) && deepEqual(receipt.saved, saved);
+}
 
 /**
  * Arm the baseline for a long-lived config. MANDATORY at `startServer`, not lazy on
@@ -144,6 +153,7 @@ const detachedConfigSnapshots = new WeakSet<OcxConfig>();
  * save, which is the case the guard exists for.
  */
 export function armClaudeCodeBaseline(config: OcxConfig): void {
+  reconciledTopologyReceipts.delete(config);
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
   captureLiveTopologyBaseline(config);
@@ -647,6 +657,21 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     }
     clearPendingConfigObjectChildDeletions(config);
     clearPendingConfigTopLevelDeletions(config);
+    reconciledTopologyReceipts.delete(config);
+    if (liveConfigBaseline.has(config) && !detachedConfigSnapshots.has(config)) {
+      const saved = readConfigDiagnostics({ passive: true });
+      if (saved.source === "file" && !saved.error) {
+        const liveWithoutTopology = { ...config } as Record<string, unknown>;
+        const savedWithoutTopology = { ...saved.config } as Record<string, unknown>;
+        for (const key of LIVE_TOPOLOGY_KEYS) {
+          delete liveWithoutTopology[key];
+          delete savedWithoutTopology[key];
+        }
+        if (deepEqual(liveWithoutTopology, savedWithoutTopology)) {
+          reconciledTopologyReceipts.set(config, { directory: getConfigDir(), live: JSON.stringify(config), saved: structuredClone(saved.config) });
+        }
+      }
+    }
   });
   try {
     save();

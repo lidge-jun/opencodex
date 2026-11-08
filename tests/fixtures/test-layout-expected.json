@@ -527,7 +527,7 @@
   "claude-long-context-eligibility.test.ts": "claude-integration",
   "claude-prompt-too-long.test.ts": "claude-integration", "claude-uncoded-context-overflow.test.ts": "claude-integration",
   "claude-shell-hook.test.ts": "claude-integration", "claude-sidecar-override.test.ts": "claude-integration",
-  "claude-source-envelope.test.ts": "claude-integration", "claude-system-env-auto.test.ts": "claude-integration",
+  "claude-source-envelope.test.ts": "claude-integration", "claude-system-env-auto.test.ts": "claude-integration", "claude-system-env-topology.test.ts": "claude-integration",
   "cleanup-orphaned-workflows.test.ts": "ci-workflows", "clearable-deadline.test.ts": "lib",
   "cli-account-alias-target.test.ts": "cli", "cli-account-cancel-flow.test.ts": "cli",
   "cli-account-kiro-device.test.ts": "cli", "cli-account-orca-import.test.ts": "cli", "cli-provider-cc-switch-import.test.ts": "cli",
