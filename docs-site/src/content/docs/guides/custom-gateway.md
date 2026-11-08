@@ -81,6 +81,8 @@ ocx provider test my-gateway --model '<raw-upstream-id>'
 This sends one bounded request, consumes quota, and may incur charges. Confirm the default-No prompt
 only after approving that cost; non-interactive or JSON use requires `--yes`. An
 `applicable: false` completion result sends no completion and is not a pass, even if the command
-exits zero. A successful text completion does not establish tool calling, structured output,
+exits zero. Before counting a successful test as a pass, check that the reported wire model
+matches the intended upstream ID; an alias can resolve to a different model. In JSON output this
+is `wireModel`. A successful text completion does not establish tool calling, structured output,
 continuation behavior, or the model's actual identity; upstream-reported identity is metadata. For
 later compatibility issues, reproduce the affected protocol separately with a sanitized fixture.
