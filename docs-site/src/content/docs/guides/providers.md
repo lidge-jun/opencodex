@@ -779,9 +779,11 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
-ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+opencodex ships 107 built-in presets: 86 in the key-based registry category, 17 OAuth, three local, and one default
+ChatGPT-forward preset. The key-based category also includes keyless presets such as TRAE CN,
+whose official CLI owns authentication. For providers that require an API key, the dashboard’s
+**Add provider** picker opens the provider’s dashboard, validates the key, and stores it; validation
+is provider-specific. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
@@ -1473,12 +1475,16 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
 
 - **Prerequisites:** Install and sign in to [TRAE CN](https://www.trae.cn/) and its official CLI.
   The CLI owns authentication and token refresh; the provider needs no API key.
+  Set `TRAE_HOME` before starting OpenCodex if you use a custom CLI directory.
 - **Model discovery:** `session/new` returns the models available to the signed-in account.
   Successful discovery is cached by the normal provider catalog mechanism, with the last good
   catalog and a small text-only seed as degraded fallbacks.
+  Set `liveModels: false` to keep a static allowlist and skip CLI discovery. After switching CLI
+  accounts, run **Test connection** to check the active account and invalidate the previous model cache.
 - **Transport:** Each turn creates a fresh ACP session, selects the requested model with
   `session/set_model`, and maps `agent_message_chunk` and `agent_thought_chunk` to OpenCodex text
   and reasoning events. Conversation history is replayed as labelled text.
+  Replays longer than 1,000,000 characters are rejected so system instructions cannot be silently lost.
 - **Capability boundary:** This initial provider supports text conversations only. It rejects
   client tools, tool replay, and image/audio input. Permission requests from the CLI receive an
   error. Internal tool notifications are not converted into client tool calls, and a turn that

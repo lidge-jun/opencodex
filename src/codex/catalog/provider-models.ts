@@ -214,7 +214,7 @@ export async function fetchProviderModelsWithAuth(
     ...(prov.retainModels ?? []),
   ])];
   const configured: CatalogModel[] = configuredIds.map(id => applyProviderConfigHints(
-    name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold,
+    name, prov, { id, provider: name, ...(prov.adapter === "trae-cn" ? { inputModalities: ["text"], supportsVerbosity: false } : {}) }, contextCap, metadataModelIdCaseFold,
     captured.effectiveAlias, metadataConfigDir, false,
   ));
   const withConfiguredRetention = (
@@ -244,7 +244,7 @@ export async function fetchProviderModelsWithAuth(
     }
     return merged;
   };
-  if (prov.adapter === "trae-cn") {
+  if (prov.adapter === "trae-cn" && prov.liveModels !== false) {
     return fetchTraeCnProviderModels(captured, ttlMs, contextCap, configured, withConfiguredRetention);
   }
   // Static catalogs never need an OAuth refresh or an upstream model request. Clear any

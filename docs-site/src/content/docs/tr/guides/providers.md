@@ -342,6 +342,8 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
+**TRAE CN**, oturum açılmış resmi CLI uygulamasını kullanır; API anahtarı gerekmez. CLI uygulamasını yükleyip oturum açın ve sihirbazdaki anahtar alanını boş bırakın. Ayrıntılar için [TRAE CN kurulumu (İngilizce)](/guides/providers/#trae-cn-official-acp) bölümüne bakın.
+
 opencodex 107 yerleşik önayar ile birlikte gelir: 86 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,

@@ -1816,6 +1816,7 @@ export const pt: Record<TKey, string> = {
   "modal.freeTierTitle": "Plano gratuito",
   "modal.subscriptionCliTitle": "CLI por assinatura, não chave de API",
   "modal.subscriptionCliWarning": "Este provedor não usa chave de API. Ele aciona a CLI oficial do Claude Code autenticada nesta máquina ({cmd}) e cobra da conta de assinatura do Claude. O OpenCodex não armazena nenhuma chave para ele, e uma chave informada aqui nunca é usada. Para cobrança por chave de API, adicione {apiProvider}.",
+  "modal.traeCnCliWarning": "Usa a CLI oficial do TRAE CN com sessão iniciada ({cmd}). Instale a CLI e inicie sessão primeiro; não é necessária uma chave de API. Suporta fluxos de texto e raciocínio, mas não ferramentas do cliente, imagens ou áudio.",
   "modal.freeTierDefault": "Não requer chave de API. Funciona de imediato.",
   "modal.tab.accounts": "Contas",
   "modal.tab.free": "Grátis",

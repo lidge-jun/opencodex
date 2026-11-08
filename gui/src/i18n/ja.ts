@@ -1715,6 +1715,7 @@ export const ja: Record<TKey, string> = {
   "modal.freeTierTitle": "無料枠",
   "modal.subscriptionCliTitle": "サブスクリプション CLI（API キーではありません）",
   "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Claude Code CLI（{cmd}）を実行し、その Claude サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
+  "modal.traeCnCliWarning": "ログイン済みの公式 TRAE CN CLI（{cmd}）を使用します。先に CLI をインストールしてログインしてください。API キーは不要です。テキストと推論のストリーミングに対応し、クライアントツール、画像、音声には対応していません。",
   "modal.freeTierDefault": "API キー不要です。そのまま利用できます。",
   "modal.tab.accounts": "アカウント",
   "modal.tab.free": "無料",

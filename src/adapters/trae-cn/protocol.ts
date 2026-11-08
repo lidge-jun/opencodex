@@ -14,10 +14,12 @@ export type TraeAcpFrame =
   | { kind: "update"; sessionId: string; update: Record<string, unknown> }
   | { kind: "request"; id: number; method: string };
 
+/** Exclude primitives and arrays before validating fields in an ACP object. */
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
+/** Validate the JSON-RPC envelope before dispatching a reply, update, or client request. */
 export function parseTraeAcpMessage(value: unknown): TraeAcpFrame {
   const message = record(value);
   if (!message || message.jsonrpc !== "2.0") throw new TraeAcpProtocolError("Invalid ACP JSON-RPC envelope");
@@ -44,6 +46,7 @@ export function parseTraeAcpMessage(value: unknown): TraeAcpFrame {
   return { kind: "response", id: message.id as number, result: message.result };
 }
 
+/** Keep only bounded, publishable model identifiers from the signed-in session roster. */
 export function parseTraeModels(result: unknown): string[] {
   const models = record(record(result)?.models)?.availableModels;
   if (!Array.isArray(models)) throw new TraeAcpProtocolError("ACP session did not provide a model catalog");
@@ -57,12 +60,14 @@ export function parseTraeModels(result: unknown): string[] {
   return [...ids];
 }
 
+/** Require a session identifier before issuing model-selection or prompt requests. */
 export function traeSessionId(result: unknown): string {
   const id = record(result)?.sessionId;
   if (typeof id !== "string" || !id) throw new TraeAcpProtocolError("ACP session id is missing");
   return id;
 }
 
+/** Map text and reasoning deltas; tools and unrecognized updates fail closed. */
 export function traePromptEvents(sessionId: string, update: Record<string, unknown>): AdapterEvent[] {
   const kind = update.sessionUpdate;
   if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") {
@@ -89,6 +94,7 @@ export function traePromptEvents(sessionId: string, update: Record<string, unkno
   return [];
 }
 
+/** Translate documented ACP terminal reasons without treating unknown values as success. */
 export function traeStopReason(result: unknown): string {
   const stop = record(result)?.stopReason;
   if (stop === "end_turn") return "stop";
@@ -98,6 +104,7 @@ export function traeStopReason(result: unknown): string {
   throw new TraeAcpProtocolError(`Unsupported ACP stop reason: ${String(stop)}`);
 }
 
+/** Accept upstream usage only when both token counts are nonnegative safe integers. */
 export function traeUsage(result: unknown): OcxUsage | undefined {
   const usage = record(record(result)?.usage);
   if (!usage) return undefined;

@@ -69,21 +69,24 @@ describe("documented provider preset counts match the registry", () => {
   for (const guide of GUIDES) {
     test(`${guide.locale} provider guide states ${TOTAL} presets and ${KEY_PRESETS} key-based`, async () => {
       const line = await anchoredLine(guide.path, guide.anchor);
-      expect(line, `${guide.path} total`).toContain(String(TOTAL));
-      expect(line, `${guide.path} key-based split`).toContain(String(KEY_PRESETS));
+      const counts = [...line.matchAll(/\d+/g)].map(match => Number(match[0]));
+      expect(counts[0], `${guide.path} total`).toBe(TOTAL);
+      expect(counts[1], `${guide.path} key-based split`).toBe(KEY_PRESETS);
     });
   }
 
   for (const quickstart of QUICKSTARTS) {
     test(`${quickstart.locale} quickstart states ${TOTAL} presets`, async () => {
       const line = await anchoredLine(quickstart.path, quickstart.anchor);
-      expect(line, `${quickstart.path} total`).toContain(String(TOTAL));
+      const prose = line.replace(/^\s*\d+[.)]\s+/, "");
+      expect(Number(prose.match(/\d+/)?.[0]), `${quickstart.path} total`).toBe(TOTAL);
     });
   }
 
   test("the structure ops record carries the same split", async () => {
     const line = await anchoredLine(STRUCTURE.path, STRUCTURE.anchor);
-    expect(line).toContain(String(TOTAL));
-    expect(line).toContain(String(KEY_PRESETS));
+    const counts = [...line.matchAll(/\d+/g)].map(match => Number(match[0]));
+    expect(counts[0]).toBe(TOTAL);
+    expect(counts[1]).toBe(KEY_PRESETS);
   });
 });

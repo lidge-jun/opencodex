@@ -647,7 +647,7 @@
       "tier": 4,
       "title": "TRAE CN ACP",
       "scope": "Official CLI authentication, ACP text streaming, model discovery, capability limits and process lifecycle.",
-      "documents": ["src/adapters/trae-cn/", "src/codex/catalog/trae-cn-models.ts"]
+      "documents": ["src/adapters/trae-cn/", "src/codex/catalog/trae-cn-models.ts", "src/server/management/trae-cn-provider-probe.ts"]
     },
     {
       "path": "providers-and-adapters.md",

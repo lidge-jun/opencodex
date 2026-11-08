@@ -1,5 +1,5 @@
 import { openTraeSession } from "../../adapters/trae-cn/client";
-import { TRAE_CN_BASE_URL } from "../../adapters/trae-cn/profile";
+import { traeCnDestinationMatches } from "../../adapters/trae-cn/profile";
 import {
   captureModelCacheGeneration,
   getFreshCached,
@@ -17,6 +17,7 @@ import type { CapturedProviderGather } from "./gather-capture";
 import type { ProviderModelsResult } from "./provider-models";
 import type { CatalogModel } from "./parsing";
 
+/** Discover an account roster with bounded failure retries and current hints on every cached return. */
 export async function fetchTraeCnProviderModels(
   captured: CapturedProviderGather,
   ttlMs: number,
@@ -26,17 +27,20 @@ export async function fetchTraeCnProviderModels(
 ): Promise<ProviderModelsResult> {
   const { name, provider, metadataModelIdCaseFold, metadataConfigDir } = captured;
   const observed = (models: CatalogModel[], state: ProviderModelsResult["outcome"]["state"]): ProviderModelsResult => ({
-    models, outcome: { provider: name, state }, contentRevision: observeModelCacheRevision(name),
+    models: withConfiguredRetention(models.map(model => applyProviderConfigHints(name, provider, model,
+      contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false)))
+      .map(model => ({ ...model, inputModalities: ["text"], supportsVerbosity: false })),
+    outcome: { provider: name, state }, contentRevision: observeModelCacheRevision(name),
   });
-  const fresh = getFreshCached(name, ttlMs, Date.now());
-  if (fresh) return observed(withConfiguredRetention(fresh), "authoritative");
-  const stale = getStaleCached(name);
-  if (isModelsFetchCoolingDown(name) && stale) return observed(withConfiguredRetention(stale), "degraded");
-  const generation = captureModelCacheGeneration(name);
-  if (provider.baseUrl?.replace(/\/+$/, "").toLowerCase() !== TRAE_CN_BASE_URL) {
+  if (!traeCnDestinationMatches(provider.baseUrl)) {
     markProviderDiscoveryFailed(name, { reason: "blocked" });
-    return observed(stale ?? configured, "degraded");
+    return observed(configured, "degraded");
   }
+  const fresh = getFreshCached(name, ttlMs, Date.now());
+  if (fresh) return observed(fresh, "authoritative");
+  const stale = getStaleCached(name);
+  if (isModelsFetchCoolingDown(name)) return observed(stale ?? configured, "degraded");
+  const generation = captureModelCacheGeneration(name);
   try {
     const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 });
     await session.close();
@@ -46,7 +50,7 @@ export async function fetchTraeCnProviderModels(
       captured.effectiveAlias, metadataConfigDir, false));
     if (!setCached(name, models, Date.now(), generation)) return observed(stale ?? configured, "degraded");
     markProviderDiscoveryOk(name, models.length);
-    return observed(withConfiguredRetention(models), "authoritative");
+    return observed(models, "authoritative");
   } catch {
     if (isModelCacheGenerationCurrent(name, generation)) {
       markModelsFetchFailure(name);

@@ -145,6 +145,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     models: [...TRAE_CN_MODELS],
     liveModels: true,
     noVisionModels: [...TRAE_CN_MODELS],
+    inputModalities: ["text"],
+    supportsVerbosity: false,
     reasoningEfforts: [],
     note: "Uses the signed-in official traecli through `traecli acp serve`; OpenCodex stores no TRAE token. Requires TRAE CN CLI and a signed-in account. The initial adapter supports text and reasoning streams; client tools and images are rejected explicitly.",
   },
