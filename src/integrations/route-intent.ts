@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { routeClientIntentDigest, routeIntentDigest, ROUTE_CLIENT_IDS, type RouteClientId, type RouteClientIntent } from "../link/route-intent";
-import { isIntegrationClientId } from "./registry";
+import { isIntegrationClientId, type IntegrationClientId } from "./registry";
 import { readIntegrationState } from "./state";
 import { createIntegrationStateStore } from "./store";
 import { applyIntegrationCoordinated, disableIntegrationCoordinated, overwriteIntegrationCoordinated, refreshIntegrationCoordinated,
@@ -173,12 +173,37 @@ export async function materializeRouteIntent(input: RouteIntentApplyInput): Prom
   } finally { flights.delete(path); }
 }
 
-/** Disconnect calls this while it holds its lifecycle fence, before clearing intent receipts. */
-export async function cleanupRouteIntent(input: RouteIntentApplyInput): Promise<RouteClientOutcome[]> {
+/**
+ * Put a standalone integration back: one still owned, or one the person changed (their own block),
+ * is kept as is; one the link disabled is applied again. An uninstalled client has nothing to do.
+ */
+async function restoreStandaloneClient(input: RouteIntentApplyInput, client: IntegrationClientId, modelNames?: "alias" | "routed"): Promise<RouteClientOutcome> {
+  const bound: IntegrationWriteInput = { clientId: client, config: input.config, port: input.config.port, models: input.models,
+    env: input.env, home: input.home, store: input.store, modelNames };
+  const state = readIntegrationState(bound);
+  if (input.store?.readRecords()[client] || state.state !== "absent") return { client, outcome: "current", target: state.configPath };
+  const result = await applyIntegrationCoordinated(bound, { guard: () => { input.beforeWrite?.(); return null; } });
+  return result.ok || result.reason === "not_installed" ? { client, outcome: "current", target: state.configPath } : project(client, result, state.configPath);
+}
+
+/**
+ * Disconnect calls this while it holds its lifecycle fence, before clearing intent receipts.
+ * `standalone` names file clients the Child owned before linking; they are restored, not removed.
+ */
+export async function cleanupRouteIntent(input: RouteIntentApplyInput,
+  standalone: Partial<Record<RouteClientId, { modelNames?: "alias" | "routed" }>> = {}): Promise<RouteClientOutcome[]> {
   const receipt = readRouteIntentReceipt(input.statePath);
   if (!receipt) return [];
   const document = structuredClone(receipt.document);
   for (const id of ROUTE_CLIENT_IDS) document.clients[id].enabled = false;
-  return (await materializeRouteIntent({ ...input, document, overwriteConflict: false,
-    onlyClients: ROUTE_CLIENT_IDS.filter(isIntegrationClientId) })).outcomes.filter(row => isIntegrationClientId(row.client));
+  const kept = ROUTE_CLIENT_IDS.filter((id): id is IntegrationClientId => isIntegrationClientId(id) && id !== "aside" && Object.hasOwn(standalone, id));
+  const outcomes = (await materializeRouteIntent({ ...input, document, overwriteConflict: false,
+    onlyClients: ROUTE_CLIENT_IDS.filter(id => isIntegrationClientId(id) && !(kept as readonly string[]).includes(id)) }))
+    .outcomes.filter(row => isIntegrationClientId(row.client) && !(kept as readonly string[]).includes(row.client));
+  const store = input.store ?? createIntegrationStateStore();
+  for (const client of kept) {
+    const restore = () => restoreStandaloneClient({ ...input, store }, client, standalone[client]?.modelNames);
+    outcomes.push(input.withFileWrites ? await input.withFileWrites(restore) : await restore());
+  }
+  return outcomes;
 }

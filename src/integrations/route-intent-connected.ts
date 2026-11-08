@@ -124,8 +124,16 @@ export async function applyConnectedRouteIntent(
   const local = loadConfig();
   const config = { ...local, hostname: "127.0.0.1", unauthenticatedLoopbackListener: undefined };
   const previousHomeRecord = readHomeRouteIntentRecord(linkId);
-  // A failed materialization must not leave the separately reportable Home proof current.
-  withClientLifecycleSync(() => { guard(); clearHomeRouteIntentRecord(); }, options.lifecycleLockDeps);
+  const { createIntegrationStateStore } = await import("./store");
+  const { captureFileIntentOriginals } = await import("../client/route-intent-file-originals");
+  const store = options.store ?? createIntegrationStateStore();
+  withClientLifecycleSync(() => {
+    guard();
+    // Write-ahead, before any client changes: which file integrations were standalone.
+    captureFileIntentOriginals(linkId, readRouteIntentReceipt(options.statePath)?.linkId === undefined, store.readRecordsStrict());
+    // A failed materialization must not leave the separately reportable Home proof current.
+    clearHomeRouteIntentRecord();
+  }, options.lifecycleLockDeps);
   const persist = (receipt: RouteIntentReceipt) => {
     receipt.outcomes = receipt.outcomes.map(initialRouteOutcomeMetadata(linkId, intent.document));
     withClientLifecycleSync(() => {

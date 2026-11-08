@@ -22,6 +22,7 @@
   "route-intent-connected-review.test.ts": "clients",
   "route-intent-connected.test.ts": "clients",
   "route-intent-desktop.test.ts": "clients",
+  "route-intent-file-originals.test.ts": "clients",
   "route-intent-home-consent.test.ts": "clients",
   "route-intent-local-receipt.test.ts": "clients",
   "route-intent-materializer.test.ts": "clients",

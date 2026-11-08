@@ -5,7 +5,7 @@ import { readClientConnectionState, sameClientConnectionOwner } from "../client/
 import { withClientLifecycle, withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { readDesktopDisconnectReceipt, type DesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { readServiceApiTokenState } from "../lib/service-secrets";
-import { readRouteIntentReceiptStrict } from "./route-intent-state";
+import { readLocalRouteIntentOff, readRouteIntentReceiptStrict } from "./route-intent-state";
 import { homeRouteIntentPath } from "../client/link-home";
 import type { OcxClientConnectionConfig } from "../types";
 
@@ -79,9 +79,16 @@ export async function cleanupConnectedRouteIntent(
   const { stripGrokConfig } = await import("../grok/inject");
   const { injectClaudeAgentDefs } = await import("../claude/agents-inject");
   const config = { ...local, hostname: "127.0.0.1", unauthenticatedLoopbackListener: undefined };
+  // Integrations the Child owned before this link come back instead of being removed; a local
+  // opt-out is the person's own later choice and wins.
+  const { readFileIntentOriginals } = await import("../client/route-intent-file-originals");
+  const originals = readFileIntentOriginals();
+  const optedOut = new Set<string>(readLocalRouteIntentOff());
+  const standalone = originals?.linkId === connection.link.linkId
+    ? Object.fromEntries(Object.entries(originals.clients).filter(([client]) => !optedOut.has(client))) : {};
   const outcomes = await cleanupRouteIntent({ config, linkId: connection.link.linkId, document: receipt.document, models: receipt.models ?? [], beforeWrite: guard, recoverConflicts,
     withReceiptWrite: write => withClientLifecycleSync(() => { guard(); write(); }, lifecycleLockDeps),
-    withFileWrites: work => withClientLifecycle(work, lifecycleLockDeps) });
+    withFileWrites: work => withClientLifecycle(work, lifecycleLockDeps) }, standalone);
   if (outcomes.some(row => row.outcome !== "current")) throw new Error("Route intent cleanup was partial; ownership and disconnect receipts retained. Repair the conflicting client and rerun ocx disconnect.");
   withClientLifecycleSync(() => {
     guard();

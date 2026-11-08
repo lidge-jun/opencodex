@@ -108,6 +108,7 @@ import { clearHomeRouteIntentRecord } from "./link-home";
 import { clearInitialRouteIntent, recordInitialRouteIntent } from "../integrations/route-intent-initial";
 import { cleanupConnectedRouteIntent } from "../integrations/route-intent-disconnect";
 import { restoreNativeIntentOriginals } from "./route-intent-native-originals";
+import { clearFileIntentOriginals } from "./route-intent-file-originals";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -1315,6 +1316,8 @@ export async function disconnectClient(
     if (connection?.transport === "link" && !disconnectAtLeast(receipt, "removing_token")) {
       if (connection.link) clearInitialRouteIntent(connection.link.linkId);
       clearHomeRouteIntentRecord();
+      // Its clients were restored by the route cleanup above, which phase gating never reruns.
+      clearFileIntentOriginals();
       if (readRouteIntentReceiptStrict()?.linkId === connection.link?.linkId) clearRouteIntentReceipt();
     }
     // Standalone native switches come back before the token that displaced them is removed.

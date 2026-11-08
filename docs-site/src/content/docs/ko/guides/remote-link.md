@@ -98,6 +98,8 @@ Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `al
 
 연결된 Child는 Home의 실효 의도를 자신의 Codex, Claude Code, Claude Desktop, Grok 켜기/끄기 스위치에 기록합니다. Claude Code를 끄면 Messages API 설정도 고정될 수 있습니다. Child는 처음 바꾸기 전에 각 스위치의 독립형 값을, 설정되지 않았던 상태까지 포함해 기록합니다. `ocx disconnect`와 실패한 등록은 그 값을 되돌립니다. 연결 중 사용자가 직접 바꾼 스위치는 그 값을 유지합니다. 다만 Home이 마지막으로 적용한 값과 정확히 같은 값으로 직접 설정한 스위치는 Home의 기록과 구별할 수 없어 복원됩니다. 로컬 제외(`--local`)는 해당 Child 사용자의 선택이므로 disconnect 후에도 유지됩니다.
 
+파일 연동도 같은 방식으로 되돌립니다. 링크 후 첫 적용 때 Child는 스스로 설정해 둔 파일 연동을 기록합니다(Aside 프로필은 제외). `ocx disconnect`는 아직 설정된 연동은 유지하고, Home이 끈 연동은 다시 설정하며, 링크가 추가한 연동만 제거합니다. 로컬 제외나 연결 중 직접 작성한 블록은 유지합니다. 복원된 연동은 처음에는 Child가 Home에서 마지막으로 받은 모델 목록을 쓰며, 다음 독립형 시작 때 로컬 카탈로그로 갱신됩니다.
+
 disconnect는 소유한 키만 복구하므로 이후 편집한 모델·훅·신뢰 프로젝트·Computer Use 설정이 남습니다. 중단된 작업은 `ocx disconnect`로 재개하며 최초 사용한 `--keep-catalog`를 유지하세요. 소유 키 충돌이나 소유권 근거가 남은 이전 저널은 `ocx disconnect --recover-config --yes`로 현재 상태를 비공개 백업한 뒤 키 단위로 복구합니다. 소유권을 확인할 수 없거나 프로필이 편집되어 검증할 수 없으면 계속 거부합니다. 백업 경로를 보존하고, disconnect 후 `ocx service restart`로 독립형 런타임을 시작한 다음 다시 연결하세요.
 
 ## 보안
