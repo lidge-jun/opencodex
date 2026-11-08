@@ -157,3 +157,14 @@ test("an Aside profile toggle refuses before anything changes when its decision 
   expect(damaged.body.error).toContain(routeIntentStatePath());
   expect(asideRouted()).toBe(false);
 `), SPAWN_BUDGET_MS);
+
+test("on a Home with no link an unreadable route-intent.json neither blocks a dashboard toggle nor gets written", () => scenario(`
+  writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [] });
+  writeFileSync(routeIntentStatePath(), '{not json');
+  expect((await toggle('pi', true)).status).toBe(200);
+  expect(piRouted()).toBe(true);
+  expect(readFileSync(routeIntentStatePath(), 'utf8')).toBe('{not json');
+  expect((await toggle('pi', false)).status).toBe(200);
+  expect(piRouted()).toBe(false);
+  expect(readFileSync(routeIntentStatePath(), 'utf8')).toBe('{not json');
+`), SPAWN_BUDGET_MS);

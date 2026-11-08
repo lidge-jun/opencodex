@@ -1,13 +1,16 @@
 /**
  * Home-only file integration writes under route intent: the dashboard toggle, an integration
- * restore and every Aside profile change. Each is the Home's own decision. Before it writes, an
- * unreadable route-intent.json refuses, and a linked Home saves every default its Children inherit
+ * restore and every Aside profile change. Each is the Home's own decision. Before it writes, a
+ * linked Home refuses an unreadable route-intent.json and saves every default its Children inherit
  * (src/routing/home-route-intent.ts), so the write cannot move one. Afterwards, once the Home uses
- * route intent, the result is recorded as a `devices.home` entry so `ocx sync` keeps it.
+ * route intent, the result is recorded as a `devices.home` entry so `ocx sync` keeps it; that entry
+ * is the Home's own row and never a default a Child inherits. A Home with no link saves no default,
+ * and when its route-intent.json cannot be read it records nothing either: `ocx sync` cannot read
+ * that file, so it cannot undo the write.
  */
 import { readConfigDiagnostics } from "../../config";
 import { isRouteClientId, type RouteClientIntent } from "../../link/route-intent";
-import { captureRefusal } from "../../routing/home-route-capture";
+import { captureRefusal, homeHasLinks } from "../../routing/home-route-capture";
 import { deriveHomeAsideIntent, HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults, recordHomeAsideDecision } from "../../routing/home-route-intent";
 import { homeRouteIntentInUse, readRouteIntentState, recordHomeFileIntegrationDecision, routeIntentStatePath, RouteIntentStateUnreadableError } from "../../routing/route-intent-state";
 import type { OcxConfig } from "../../types";
@@ -19,6 +22,16 @@ const ASIDE_UNRESOLVED = "Existing Aside ownership could not be resolved to stab
 function durableConfig(config: OcxConfig): OcxConfig {
   const latest = readConfigDiagnostics();
   return latest.source === "file" && !latest.error ? latest.config : config;
+}
+
+/** On a Home with no link an unreadable route-intent.json means there is nothing this write may record. */
+function unlinkedUnreadableState(): boolean {
+  if (homeHasLinks()) return false;
+  try { readRouteIntentState(); return false; }
+  catch (error) {
+    if (error instanceof RouteIntentStateUnreadableError) return true;
+    throw error;
+  }
 }
 
 function refusal(ctx: ManagementContext, clientId: string | undefined, error: unknown): Response {
@@ -41,6 +54,7 @@ function refusal(ctx: ManagementContext, clientId: string | undefined, error: un
 export function prepareHomeIntegrationDecision(ctx: ManagementContext, clientId: string | undefined,
   asideEnabling?: readonly number[] | "all"): Response | null {
   try {
+    if (unlinkedUnreadableState()) return null;
     readRouteIntentState();
     // The durable config already carries the switches another process may have changed; the live
     // one is never cloned here (it can hold runtime-only values).
@@ -61,6 +75,7 @@ export function prepareHomeIntegrationDecision(ctx: ManagementContext, clientId:
 export function recordHomeIntegrationDecision(ctx: ManagementContext, clientId: string, success: Response,
   intent?: () => RouteClientIntent): Response {
   try {
+    if (unlinkedUnreadableState()) return success;
     if (clientId === "aside") recordHomeAsideDecision(durableConfig(ctx.config));
     else if (isRouteClientId(clientId) && intent) recordHomeFileIntegrationDecision(clientId, intent());
     return success;
