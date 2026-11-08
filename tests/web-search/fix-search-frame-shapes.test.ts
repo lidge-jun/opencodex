@@ -4,6 +4,68 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test("matches a unique identified content part when an output index arrives without its item ID", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", output_index: 0, content_index: 0, delta: "draftA" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "draftB" },
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("AB");
+  });
+
+  test("retains ambiguous identified content parts when an output index arrives without an item ID", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "B" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("CAB");
+  });
+
+  test("does not prefer a content-only key over another compatible identified part", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", item_id: "a", content_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", content_index: 0, text: "B" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("CAB");
+  });
+
+  test("looks up ambiguous unpositioned content without scanning its bucket", async () => {
+    const frames: unknown[] = Array.from({ length: 500 }, (_, i) =>
+      ({ type: "response.output_text.delta", item_id: `item_${i}`, content_index: 0, delta: "" }));
+    frames.push(...Array.from({ length: 500 }, (_, output_index) =>
+      ({ type: "response.output_text.done", output_index, content_index: 0, text: "" })));
+    frames.push({ type: "response.completed" });
+    let scanned = 0;
+    const original = Set.prototype.values;
+    const spy = spyOn(Set.prototype, "values").mockImplementation(function (this: Set<unknown>) {
+      scanned += this.size;
+      return Reflect.apply(original, this, []);
+    });
+    try {
+      expect((await parseSidecarSSE(response(frames))).text).toBe("");
+      expect(scanned).toBeLessThanOrEqual(1000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("matches the compatible content index without merging other identified parts", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 1, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("BA");
+  });
+
   test("preserves a part across overlapping identity subsets and partial completion", async () => {
     const fields = [{ item_id: "a" }, { output_index: 0 }, { content_index: 0 }];
     const identity = (mask: number) => Object.assign({}, ...fields.filter((_, bit) => mask & (1 << bit)));

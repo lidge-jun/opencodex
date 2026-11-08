@@ -63,8 +63,10 @@ function partBucket(itemId: string, contentIndex: number | undefined, exact: boo
 }
 
 function indexPart(lookup: PartLookup, part: StreamedPart, add: boolean): void {
-  if (part.outputIndex !== undefined) {
-    const key = JSON.stringify(["output", part.outputIndex]);
+  const positionBucket = part.outputIndex !== undefined ? ["output", part.outputIndex]
+    : part.contentIndex !== undefined ? ["unpositioned-content", part.contentIndex] : undefined;
+  if (positionBucket) {
+    const key = JSON.stringify(positionBucket);
     let bucket = lookup.get(key);
     if (add) {
       if (!bucket) { bucket = new Set(); lookup.set(key, bucket); }
@@ -128,9 +130,13 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
     const only = bucket?.size === 1 ? bucket.values().next().value : undefined;
     if (only && compatible(only)) match = only;
   }
+  if (!match && !itemId && indexedKey && !indexedPart) {
+    const bucket = lookup.get(JSON.stringify(["unpositioned-content", contentIndex]));
+    if (bucket?.size === 1) match = bucket.values().next().value;
+  }
   // A content-only part can acquire its item or output identity after other parts arrived.
   const contentOnly = contentIndex === undefined ? undefined : parts.get(`content:${contentIndex}`);
-  if (!match && contentOnly && compatible(contentOnly)) match = contentOnly;
+  if (!match && (itemId || !indexedKey) && contentOnly && compatible(contentOnly)) match = contentOnly;
   if (!match && parts.size === 1) {
     const only = parts.values().next().value;
     if (only && compatible(only) && (!indexedKey || !isIndexedPartKey(only.key))
