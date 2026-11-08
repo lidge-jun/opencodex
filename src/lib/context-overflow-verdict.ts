@@ -76,6 +76,7 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
 
 const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/i;
 const MODAL_PROHIBITION = /\b(?:must|should|shall|may)\s+(?:not|never)\b|\b(?:mustn|shouldn)['\u2019]t\b|\bcan\s*not\b|\bcan['\u2019]t\b|\bcannot\b/i;
+const OVERFLOW_COUNT_EVIDENCE = /\b\d+\s*(?:tokens?)?\s*(?:>|exceeds?|past)\s*\d+\b|\b(?:exceeded|exceeds|past|over)\s+(?:the\s+)?(?:limit|maximum|context\s+(?:window|length|limit))\s+by\s+\d+\b|\(\s*\d+\s*\)/i;
 
 /** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
@@ -88,6 +89,9 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     matchSlice.lastIndexOf("\n"),
   );
   const verdictClause = lastBoundary !== -1 ? matchSlice.slice(lastBoundary + 1) : matchSlice;
+  if (MODAL_PROHIBITION.test(verdictClause)) {
+    if (!OVERFLOW_COUNT_EVIDENCE.test(text)) return true;
+  }
   const nonModalVerdict = verdictClause
     .replace(new RegExp(MODAL_PROHIBITION.source, "gi"), "");
   if (NEGATED_CONTEXT_VERDICT.test(nonModalVerdict)) return true;
@@ -101,8 +105,9 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
   const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary) : before;
   // Modal prohibitions ("must not exceed", "should not exceed", "can't exceed", "can not exceed", etc.)
   // describe the limit that was violated rather than asserting the absence of an overflow.
+  // Without count evidence that this request actually crossed the limit, a modal rule stays non-overflow.
   if (MODAL_PROHIBITION.test(clauseBefore)) {
-    return false;
+    return !OVERFLOW_COUNT_EVIDENCE.test(text);
   }
   return /\b(?:not|never|neither|nor)\b|n['\u2019]t\b/i.test(clauseBefore)
     || /\b(?:in\s+no\s+way|by\s+no\s+means)\b/i.test(clauseBefore);
