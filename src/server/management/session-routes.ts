@@ -1,6 +1,9 @@
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
+/** The Remember enrollment route; the management Origin gate names its refusal reason (#8338). */
+export const SESSION_REMEMBER_PATH = "/api/session/remember";
+
 export function handleSessionRoutes(ctx: ManagementContext): Response | null {
   if (ctx.url.pathname === "/api/session/remember" && ctx.req.method === "POST") {
     if (ctx.principal !== "admin-token") return jsonResponse({ error: "Admin token required" }, 403, ctx.req, ctx.config);
