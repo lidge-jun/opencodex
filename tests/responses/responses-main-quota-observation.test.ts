@@ -31,6 +31,7 @@ import { NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, isCodexWsPreludeProjection } from "../../src/server/responses/ws-upstream";
 import { UPGRADE_DEADLINE_MS, markCodexWsResponse, isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "../../src/server/responses/codex-ws-wire";
+import { DIRECT_RESET_INSPECTION_WINDOW_MS } from "../../src/server/responses/passthrough-completion";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -53,6 +54,8 @@ let pendingPersist: { run: () => void; timer: ReturnType<typeof setTimeout> } | 
 let clock: ReturnType<typeof installPersistenceClock>;
 let pendingPreludeTimeout: (() => void) | undefined;
 let pendingUpgradeTimeout: (() => void) | undefined;
+// Armed by a case that commits the reset-selection head itself instead of waiting on a wall clock.
+let inspectionWindow: PromiseWithResolvers<() => void> | undefined;
 
 // Exercise the real serializer without a wall-clock race, as main-quota-provenance does.
 function installPersistenceClock() {
@@ -66,6 +69,10 @@ function installPersistenceClock() {
     }
     if (delay === CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS) {
       pendingPreludeTimeout = () => callback(...args);
+      return nativeTimeout(() => {}, delay);
+    }
+    if (delay === DIRECT_RESET_INSPECTION_WINDOW_MS && inspectionWindow) {
+      inspectionWindow.resolve(() => callback(...args));
       return nativeTimeout(() => {}, delay);
     }
     if (delay !== 250) return nativeTimeout(callback, delay, ...args);
@@ -147,6 +154,7 @@ beforeEach(() => {
   pendingPersist = undefined;
   pendingPreludeTimeout = undefined;
   pendingUpgradeTimeout = undefined;
+  inspectionWindow = undefined;
   clock = installPersistenceClock();
   globalThis.fetch = (async () => { throw new Error("unexpected network call"); }) as typeof fetch;
 });
@@ -158,6 +166,7 @@ afterEach(() => {
   pendingPersist = undefined;
   pendingPreludeTimeout = undefined;
   pendingUpgradeTimeout = undefined;
+  inspectionWindow = undefined;
   clock.mockRestore();
   clearCodexUpstreamHealth(); clearThreadAccountMap(); clearPoolRotationState();
   clearAccountNeedsReauth(MAIN); clearAccountNeedsReauth(POOL);
@@ -587,8 +596,7 @@ describe("credential-bound plain-main Responses quota", () => {
     }
   });
 
-  const resetQuotaConfig = (stallTimeoutSec?: number): OcxConfig => ({ ...config, defaultProvider: "openai",
-    ...(stallTimeoutSec === undefined ? {} : { stallTimeoutSec }),
+  const resetQuotaConfig = (): OcxConfig => ({ ...config, defaultProvider: "openai",
     providers: { openai: { ...provider, codexAccountMode: "direct", upstreamWebsocket: false, retryOnReset: {} } } });
   const resetQuotaRequest = () => new Request("http://localhost/v1/responses", {
     method: "POST", headers: new Headers({ ...Object.fromEntries(caller()), "content-type": "application/json" }),
@@ -603,7 +611,7 @@ describe("credential-bound plain-main Responses quota", () => {
     type: "response.completed", response: { id, status: "completed", output: [] },
   })}\n\n`);
 
-  test("heartbeat-committed reset keeps the arrival head and never publishes replacement quota", async () => {
+  test("a head committed before the reset keeps the arrival head and never publishes replacement quota", async () => {
     observe();
     const renewalSpy = spyOn(mainCache, "renewMainQuotaDispatchForAttempt");
     const claimSpy = spyOn(mainCache, "isMainQuotaDispatchWsClaimed");
@@ -634,9 +642,15 @@ describe("credential-bound plain-main Responses quota", () => {
       }, { highWaterMark: 0 }), { status: 200, headers: sseQuotaHeaders("99") });
     }) as typeof fetch;
     try {
-      // A one-second stall budget bounds the pre-head wait, so the head commits before the reset.
-      const response = await handleResponses(resetQuotaRequest(), resetQuotaConfig(1),
+      // The case commits the head itself by firing the quiet original's inspection window, and only
+      // then releases the reset. The inactivity guard keeps the default 300-second budget on its own
+      // clock: a guard timeout is never replayed, so sharing one short deadline with the commit
+      // decided the send count by timer order.
+      inspectionWindow = Promise.withResolvers();
+      const pending = handleResponses(resetQuotaRequest(), resetQuotaConfig(),
         { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+      (await inspectionWindow.promise)();
+      const response = await pending;
       expect(httpCalls).toBe(1);
       expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(17);
       gate.resolve();

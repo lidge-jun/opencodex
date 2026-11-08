@@ -28,7 +28,7 @@ const guardedResetResponses = new WeakMap<Response, number>();
  * heartbeat interval. A failure observed inside this window may still publish the replacement's
  * own head, as a pre-header reset does.
  */
-export const DIRECT_RESET_INSPECTION_WINDOW_MS = 250;
+export const DIRECT_RESET_INSPECTION_WINDOW_MS = 200;
 
 /** Who consumes the selected head: the client directly, the canonical JSON collector, or a combo parent. */
 export type ResetSelectionDelivery = "direct-stream" | "buffered-json" | "combo-child";

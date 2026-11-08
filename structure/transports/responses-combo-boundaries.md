@@ -150,7 +150,7 @@ preflight, so nothing holds its head or prelude. Dispatch
 waits for whichever comes first: the selection, an abort, or a deadline of one 15-second heartbeat
 interval capped by the stall timeout. Returning the response is the last point at which dispatch can
 choose a head, so a direct stream also commits the original head once the original's own inspection
-has run for `DIRECT_RESET_INSPECTION_WINDOW_MS` (250 ms, `src/server/responses/passthrough-completion.ts`):
+has run for `DIRECT_RESET_INSPECTION_WINDOW_MS` (200 ms, `src/server/responses/passthrough-completion.ts`):
 a quiet source may be a healthy slow turn. A failure observed inside that window ends the window, and
 only the replacement's head is then awaited, still bounded by the deadline, as after a pre-header reset.
 Canonical buffered JSON and combo children keep the deadline alone, because their consumer publishes

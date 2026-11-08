@@ -552,7 +552,7 @@ describe("OpenGateway native empty completion", () => {
     try {
       await firstRead.promise;
       for (let i = 0; i < 50; i++) await Promise.resolve();
-      jest.advanceTimersByTime(249);
+      jest.advanceTimersByTime(199);
       for (let i = 0; i < 50; i++) await Promise.resolve();
       expect(returned).toBe(false);
       // The quiet original's inspection window ends; its head is returned with a comment to carry it.
@@ -560,7 +560,7 @@ describe("OpenGateway native empty completion", () => {
       const response = await pending;
       const reader = response.body!.getReader();
       expect(new TextDecoder().decode((await reader.read()).value)).toContain(": keepalive");
-      jest.advanceTimersByTime(19_749);
+      jest.advanceTimersByTime(19_799);
       for (let i = 0; i < 100; i++) await Promise.resolve();
       expect(cancelled).toBe(0);
       jest.advanceTimersByTime(1);
