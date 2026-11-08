@@ -109,6 +109,8 @@ interface InstallRun {
   ui: "full" | "reduced" | "none";
   /** In a full-UI run: the box state the person leaves before clicking Next (default: as preselected). */
   box?: boolean;
+  /** In a full-UI run: the box state at each Next click, with Back in between (overrides `box`). */
+  clicks?: boolean[];
 }
 
 /**
@@ -119,7 +121,7 @@ interface InstallRun {
 function simulateInstall(wxs: string, run: InstallRun): { choice: string; stamp: string; boxPreselected?: boolean } {
   const actions = [...wxs.matchAll(/<SetProperty Action="(\w+)" Id="(\w+)" Value="([^"]*)" (?:Before|After)="\w+" Sequence="(\w+)">([^<]*)<\/SetProperty>/g)]
     .map(([, action, id, template, sequence, condition]) => ({ action: action!, id: id!, template: template!, sequence: sequence!, condition: condition! }));
-  if (actions.length !== 5) throw new Error(`expected 5 SetProperty actions, found ${actions.length}`);
+  if (actions.length !== 7) throw new Error(`expected 7 SetProperty actions, found ${actions.length}`);
   const secure = [...wxs.matchAll(/<Property Id="(\w+)" Secure="yes" \/>/g)].map(match => match[1]!);
   const phase = (props: Props, sequence: "ui" | "execute", clock: string): Props => {
     for (const step of actions) {
@@ -140,12 +142,16 @@ function simulateInstall(wxs: string, run: InstallRun): { choice: string; stamp:
     const ui = phase({ ...commandLine }, "ui", "11/8/2026 01:00:00");
     if (run.ui === "full") {
       boxPreselected = ui.OCX_TELEMETRY_SEND === "1";
-      const box = run.box ?? boxPreselected;
-      if (box) ui.OCX_TELEMETRY_SEND = "1";
-      else delete ui.OCX_TELEMETRY_SEND;
       const next = /<Control Id="Next"[\s\S]*?<\/Control>/.exec(wxs)?.[0] ?? "";
-      for (const [, property, template, condition] of next.matchAll(/<Publish Property="(\w+)" Value="([^"]*)">([^<]*)<\/Publish>/g)) {
-        if (msiCondition(condition!, ui)) ui[property!] = msiFormat(template!, ui, "11/8/2026 01:00:00");
+      // Each Next click (Back from the next page returns here) has its own time.
+      const clicks = run.clicks ?? [run.box ?? boxPreselected];
+      for (const [index, box] of clicks.entries()) {
+        if (box) ui.OCX_TELEMETRY_SEND = "1";
+        else delete ui.OCX_TELEMETRY_SEND;
+        const clock = index === 0 ? "11/8/2026 01:00:00" : `11/8/2026 01:0${index}:00`;
+        for (const [, property, template, condition] of next.matchAll(/<Publish Property="(\w+)" Value="([^"]*)">([^<]*)<\/Publish>/g)) {
+          if (msiCondition(condition!, ui)) ui[property!] = msiFormat(template!, ui, clock);
+        }
       }
     }
     // Only Secure public properties reach the elevated install phase.
@@ -259,6 +265,24 @@ describe("Windows installer telemetry choice", () => {
     test("a silent install without a choice defaults to send and records no stamp", () => {
       expect(simulateInstall(wxs, { ui: "none" })).toEqual({ choice: send, stamp: "", boxPreselected: undefined });
     });
+
+    test("going Back and putting the box back keeps the carried stamp", () => {
+      // Checked, Next, Back, unchecked again, Next: the final choice equals the carried one.
+      expect(simulateInstall(wxs, { ui: "full", clicks: [true, false], previous: { choice: optOut, stamp: "s1" } })).toEqual({ choice: optOut, stamp: "s1", boxPreselected: false });
+      expect(simulateInstall(wxs, { ui: "full", clicks: [false, true], previous: { choice: send, stamp: "s1" } })).toEqual({ choice: send, stamp: "s1", boxPreselected: true });
+      // A real change is still a new decision, stamped at the Next that made it.
+      expect(simulateInstall(wxs, { ui: "full", clicks: [true, false, true], previous: { choice: optOut, stamp: "s1" } })).toEqual({ choice: send, stamp: "11/8/2026 01:02:00", boxPreselected: false });
+      // A command-line opt-out keeps its own new stamp when the person leaves it as it is.
+      expect(simulateInstall(wxs, { ui: "full", clicks: [true, false], commandLine: { OCX_TELEMETRY_CHOICE: optOut }, previous: { choice: optOut, stamp: "s1" } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: false });
+    });
+
+    test("any command-line value other than send counts as an opt-out", () => {
+      for (const value of ["off", "0", "opt-out", "disabled", " optout", "OPTOUT", " send"]) {
+        expect(simulateInstall(wxs, { ui: "none", commandLine: { OCX_TELEMETRY_CHOICE: value } }), value).toEqual({ choice: optOut, stamp: INSTALL_STAMP, boxPreselected: undefined });
+        expect(simulateInstall(wxs, { ui: "full", commandLine: { OCX_TELEMETRY_CHOICE: value } }).boxPreselected, value).toBe(false);
+      }
+      expect(simulateInstall(wxs, { ui: "none", commandLine: { OCX_TELEMETRY_CHOICE: "Send" } }).choice).toBe("Send");
+    });
   });
 
   test("the dialog sits between the welcome and install-directory pages of Tauri's sequence", () => {
@@ -271,6 +295,11 @@ describe("Windows installer telemetry choice", () => {
     const dialog = /<Dialog Id="OcxTelemetryDlg"[\s\S]*?<\/Dialog>/.exec(wxs)?.[0] ?? "";
     expect(dialog).toMatch(/<Control Id="Back"[\s\S]*?Value="WelcomeDlg"/);
     expect(dialog).toMatch(/<Control Id="Next"[\s\S]*?Event="NewDialog" Value="InstallDirDlg"/);
+    // Tauri routes through LicenseAgreementDlg only when a license file is set; the page's Next goes
+    // straight to InstallDirDlg, so a license file would need the page rerouted first.
+    const tauri = JSON.parse(readFileSync(repoPath("desktop", "src-tauri", "tauri.conf.json"), "utf8"));
+    expect(tauri.bundle.licenseFile).toBeUndefined();
+    expect(tauri.bundle.windows?.wix?.license).toBeUndefined();
   });
 
   test("the Tauri config links the fragment and the app reads the same registry values", () => {

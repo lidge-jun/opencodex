@@ -21,6 +21,8 @@ let originalFetch: typeof globalThis.fetch;
 let statusResponse: TelemetryStatusSnapshot;
 let calls: Array<{ method: string; path: string; body?: unknown }>;
 let failMethods: Set<string>;
+/** When set, PUT /api/telemetry answers with this instead of saving. */
+let putReply: (() => Response) | null;
 let statusEvents: TelemetryStatusSnapshot[];
 
 function makeStatus(overrides: Partial<TelemetryStatusSnapshot> = {}): TelemetryStatusSnapshot {
@@ -74,6 +76,7 @@ beforeEach(() => {
   calls = [];
   failMethods = new Set();
   statusEvents = [];
+  putReply = null;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -85,6 +88,7 @@ beforeEach(() => {
         return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
       }
       if (path === "/api/telemetry" && method === "PUT") {
+        if (putReply) return putReply();
         const decision = (body as { decision: "accepted" | "declined" }).decision;
         statusResponse = {
           ...statusResponse,
@@ -368,4 +372,31 @@ test("PROXY_SECTION_IDS registers proxy-telemetry and AdvancedHub matches teleme
     });
     expect(host.textContent).toContain("1 shown");
   }
+});
+
+test("a save whose reply and re-read both fail says so and holds the switch until a read succeeds", async () => {
+  await mountPanel();
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("true");
+  putReply = () => new Response("not json", { status: 200 });
+  failMethods.add("GET /api/telemetry");
+  await act(async () => {
+    click(toggleSwitch());
+    await new Promise(r => setTimeout(r, 30));
+  });
+  // The decline may be saved, so the switch is not left looking like sending is on without a word.
+  expect(host.querySelector(".notice-warn")?.textContent).toContain("Saved. The status could not be read back yet");
+  expect(toggleSwitch().disabled).toBe(true);
+  expect(host.querySelector(".notice-err")).toBeNull();
+
+  // The next successful read clears it.
+  failMethods.clear();
+  putReply = null;
+  statusResponse = { ...statusResponse, effective: false, reason: "declined", decision: "declined" };
+  await act(async () => {
+    win.dispatchEvent(new win.CustomEvent(TELEMETRY_STATUS_CHANGED_EVENT, { detail: statusResponse }) as unknown as Event);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector(".notice-warn")).toBeNull();
+  expect(toggleSwitch().disabled).toBe(false);
+  expect(toggleSwitch().getAttribute("aria-checked")).toBe("false");
 });

@@ -33,6 +33,8 @@ export interface TelemetryStatusSnapshot extends TelemetryConsentStatus {
   lastSentAt: string | null;
   previewEligible: boolean;
   preview: TelemetryPayloadV1;
+  /** Present when telemetry-state.json exists but cannot be read: every send is refused until it can. */
+  stateUnreadable?: true;
 }
 
 /** How long the dashboard's preview may reuse a completed day's aggregate (the panel polls). */
@@ -91,6 +93,7 @@ export async function buildTelemetryStatusSnapshot(
     lastSentAt: state.lastSentAt,
     previewEligible,
     preview,
+    ...(stateFile.unreadable ? { stateUnreadable: true as const } : {}),
   };
 }
 

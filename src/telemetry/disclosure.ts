@@ -11,7 +11,7 @@ export const TELEMETRY_POLICY_URL = "https://opencodex.me/reference/code-signing
 export const TELEMETRY_DISCLOSURE_HEADING = "Anonymous daily usage telemetry:";
 
 export const TELEMETRY_DISCLOSURE_POINTS: readonly string[] = Object.freeze([
-  "Sent once per day to telemetry.opencodex.me: version, OS/arch, install channel, provider kind, coarse model family, active minutes, and request/token/error counts.",
+  "Sent daily to telemetry.opencodex.me: a daily-changing install hash, version, release channel, OS/arch, install channel, first-report flag, provider kind, model family, active minutes, request/token/error counts.",
   "Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text.",
   "Public aggregates: project-wide totals are published at opencodex.me/dashboard.",
   "See the exact payload: ocx telemetry status --json",

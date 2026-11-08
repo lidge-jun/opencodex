@@ -378,7 +378,9 @@ The choice is machine-wide: `HKLM\Software\OpenCodex\Telemetry` holds `Installer
 or `optout`) and `InstallerChoiceStamp` (`[Date] [Time]` of the decision). HKLM is what lets a
 silent install run as SYSTEM (Intune, SCCM) or approved by another administrator reach the people
 who use the app; Tauri's MSI is per-machine and needs elevation, so there is no per-user install.
-`OCX_TELEMETRY_CHOICE` has no default. A value passed on the command line gets a new stamp
+`OCX_TELEMETRY_CHOICE` has no default. A command-line value other than `send` (`off`, `0`, a typo)
+becomes `optout` first (`OcxTelemetryNormalizeChoice`, compared with `""` because a bare property
+whose value is the integer 0 evaluates false). A value passed on the command line gets a new stamp
 (`OcxTelemetryStampExplicit`, before `AppSearch`), but only while no stamp is set, so the stamp the
 UI phase hands to the install phase is never replaced. Otherwise `AppSearch` reads the previous
 choice and stamp and carries them (`OcxTelemetryKeepChoice`, `OcxTelemetryKeepStamp`). That keeps
@@ -387,16 +389,20 @@ an opt-out, with its old stamp, through in-app updates (`/passive`, no UI sequen
 install defaults to `send`. The box starts checked unless the install already carries an opt-out
 (compared case-insensitively with `~<>`). Pressing Next records the box, and issues a new stamp only
 when the box differs from the carried choice (`OCX_TELEMETRY_CHOICE ~<> OCX_TELEMETRY_PREVIOUS_CHOICE`),
-so continuing past a carried opt-out does not apply it again over a later dashboard enable. A
-page note says leaving the box checked keeps the current choice, because `send` is never acted on.
-The installer test evaluates the fragment's conditions through both MSI phases for fresh, silent,
-reduced-UI and upgrade installs.
+so continuing past a carried opt-out does not apply it again over a later dashboard enable; when
+the box ends equal to the carried choice after Back and another Next, the stamp the page started
+from (`OCX_TELEMETRY_CARRIED_STAMP`, saved in the UI sequence) is restored. A page note says
+leaving the box checked keeps the current choice, because `send` is never acted on. The installer
+test evaluates the fragment's conditions through both MSI phases for fresh, silent, reduced-UI and
+upgrade installs and repeated Next clicks. The page's Next goes straight to `InstallDirDlg`, so the
+test also asserts no license file is configured (Tauri routes through `LicenseAgreementDlg` only then).
 
 `desktop/src-tauri/src/installer_telemetry.rs` runs in the startup sequence before `resolve::run`,
 so before the app resolves, attaches to or starts any proxy, with its own 10-second cap. It reads
 the HKLM choice (64-bit view, then 32-bit) and the same two values under the user's own
-`HKCU\Software\OpenCodex\Telemetry`, which an administrator can set for one account. An `optout`
-in any letter case is pending when its stamp differs from the one this user last applied for that
+`HKCU\Software\OpenCodex\Telemetry`, which an administrator can set for one account. Any value
+other than `send` counts as an opt-out, as in the installer; it is pending when its stamp differs
+from the one this user last applied for that
 scope: `AppliedInstallerStamp` for HKLM and `AppliedUserInstallerStamp` for HKCU, both written under
 the user's HKCU key. Pending opt-outs run the bundled `ocx telemetry disable --json` once (on a
 fresh install it holds the decline as `pendingDecision` in `telemetry-state.json` without creating

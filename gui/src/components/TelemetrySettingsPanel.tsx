@@ -36,6 +36,8 @@ export function TelemetrySettingsPanel({
   const [status, setStatus] = useState<TelemetryStatusSnapshot | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveFailed, setSaveFailed] = useState<"failed" | "session" | null>(null);
+  // A save the server accepted whose status could not be read back: hold the switch until a read works.
+  const [saveUnconfirmed, setSaveUnconfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [, setModalRevision] = useState(0);
@@ -56,6 +58,7 @@ export function TelemetrySettingsPanel({
       if (!savingRef.current && seq === seqRef.current) {
         setStatus(next);
         setLoadFailed(false);
+        setSaveUnconfirmed(false);
       }
     } catch {
       if (!savingRef.current && seq === seqRef.current) {
@@ -78,6 +81,7 @@ export function TelemetrySettingsPanel({
         seqRef.current += 1;
         setStatus(detail);
         setLoadFailed(false);
+        setSaveUnconfirmed(false);
       }
     };
     window.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, onExternalChange);
@@ -138,10 +142,10 @@ export function TelemetrySettingsPanel({
 
   const effective = status?.effective ?? false;
   const envOverride = status?.envOverride ?? null;
-  const switchDisabled = !status || saving || readOnly || envOverride !== null;
+  const switchDisabled = !status || saving || readOnly || saveUnconfirmed || envOverride !== null;
 
   const handleToggle = useCallback(async () => {
-    if (savingRef.current || !status || readOnly || status.envOverride !== null) return;
+    if (savingRef.current || !status || readOnly || saveUnconfirmed || status.envOverride !== null) return;
     const nextDecision: TelemetryDecision = status.effective ? "declined" : "accepted";
     savingRef.current = true;
     seqRef.current += 1;
@@ -156,6 +160,7 @@ export function TelemetrySettingsPanel({
         setLoadFailed(false);
       } else {
         // Saved, but the status could not be re-read: refresh instead of showing a stale switch.
+        setSaveUnconfirmed(true);
         refresh = true;
       }
     } catch (error) {
@@ -165,7 +170,7 @@ export function TelemetrySettingsPanel({
       setSaving(false);
     }
     if (refresh) void load();
-  }, [apiBase, load, readOnly, status]);
+  }, [apiBase, load, readOnly, saveUnconfirmed, status]);
 
   const envVarDisplay =
     envOverride === "DO_NOT_TRACK"
@@ -227,6 +232,7 @@ export function TelemetrySettingsPanel({
           <Notice tone="warn">{t("proxyV2.telemetryEnvOverride", { envVar: envVarDisplay })}</Notice>
         )}
         {loadFailed && !status && <Notice tone="err">{t("proxyV2.telemetryLoadFailed")}</Notice>}
+        {saveUnconfirmed && <Notice tone="warn">{t("proxyV2.telemetrySaveUnconfirmed")}</Notice>}
         {saveFailed && (
           <Notice tone="err">
             {t(saveFailed === "session" ? "proxyV2.telemetrySaveNeedsHumanSession" : "proxyV2.telemetrySaveFailed")}
