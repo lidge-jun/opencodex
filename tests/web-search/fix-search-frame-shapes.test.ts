@@ -3,6 +3,106 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
+describe("identity transition matrix", () => {
+  test("preserves a part across overlapping identity subsets and partial completion", async () => {
+    const fields = [{ item_id: "a" }, { output_index: 0 }, { content_index: 0 }];
+    const identity = (mask: number) => Object.assign({}, ...fields.filter((_, bit) => mask & (1 << bit)));
+    for (let first = 1; first < 8; first++) {
+      for (let second = 1; second < 8; second++) {
+        if (!(first & second) || !((first | second) & 2)) continue;
+        for (const partial of [false, true]) {
+          const result = await parseSidecarSSE(response([
+            { type: "response.output_text.done", ...identity(first), text: "draft" },
+            { type: "response.output_text.done", ...identity(second), text: "A" },
+            { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+            partial
+              ? { type: "response.completed", response: { output: [{ id: "a", type: "message", content: [{ type: "output_text", text: "Final" }] }, null] } }
+              : { type: "response.completed" },
+          ]));
+          expect(result.text).toBe(partial ? "FinalB" : "AB");
+        }
+      }
+    }
+  });
+
+  for (const first of [{ item_id: "a" }, { content_index: 0 }]) {
+    for (const completion of [false, true]) {
+      test(`accumulates output identity ${JSON.stringify(first)}, partial final ${completion}`, async () => {
+        const frames: unknown[] = [
+          { type: "response.output_text.done", ...first, text: "draft A" },
+          { type: "response.output_text.done", ...first, output_index: 0, text: "A" },
+          { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+          completion
+            ? { type: "response.completed", response: { output: [{ type: "message", content: [{ type: "output_text", text: "Final A" }] }, null] } }
+            : { type: "response.completed" },
+        ];
+        expect((await parseSidecarSSE(response(frames))).text).toBe(completion ? "Final AB" : "AB");
+      });
+    }
+  }
+
+  for (const conflict of [
+    { item_id: "b", output_index: 0 },
+    { item_id: "a", output_index: 1 },
+    { item_id: "b", output_index: 0, content_index: 0 },
+  ]) {
+    test(`retains conflicting identity ${JSON.stringify(conflict)} after later events`, async () => {
+      const result = await parseSidecarSSE(response([
+        { type: "response.output_text.done", item_id: "a", output_index: 0, text: "A" },
+        { type: "response.output_text.done", ...conflict, text: "B" },
+        { type: "response.output_text.done", item_id: "c", output_index: 1, text: "C" },
+        { type: "response.output_text.done", item_id: "b", output_index: 1, text: "D" },
+        { type: "response.completed" },
+      ]));
+      for (const value of ["A", "B", "C", "D"]) expect(result.text).toContain(value);
+    });
+  }
+
+  test("orders conflicting parts by their accumulated output indexes", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, text: "B" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("ABC");
+  });
+
+  test("repeated snapshots update the compatible part after conflicting identities", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, text: "B" },
+      { type: "response.output_text.done", item_id: "c", output_index: 1, text: "C" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, text: "draft" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, text: "D" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("ABCD");
+  });
+
+  test("does not emit a content-only key twice when its acquired position is occupied", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", content_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "a", content_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, content_index: 0, text: "B" },
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: "A" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("AB");
+  });
+
+  test("keeps a conflicting fully indexed stream beside a partial final slot", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
+      { type: "response.completed", response: { output: [
+        { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] }, null,
+      ] } },
+    ]));
+    expect(result.text).toContain("A");
+    expect(result.text).toContain("B");
+  });
+});
+
 describe("sidecar text-done snapshots", () => {
   test.each([false, true])("orders output-only parts among fully indexed parts, reverse arrival: %s", async reverse => {
     const frames = [
