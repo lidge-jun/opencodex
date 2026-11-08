@@ -109,9 +109,10 @@ async function nativeIntegration(argv: string[], deps: RuntimeApiDeps): Promise<
     throw new CliUsageError(`expected on or off after ${action}`, USAGE);
   }
 
-  // A native switch is a Home-only decision. The native route records the Home override and runs
-  // the client's own transition (Claude Desktop first-party included); Children keep inheriting
-  // the Home default. A Child refuses here with the Home command for its own device.
+  // A native switch is a Home-only decision. The native route (/api/native-integrations/<client>)
+  // writes the Home's switch, records no Home route intent, and runs the client's own transition
+  // (Claude Desktop first-party included); Children keep inheriting their saved default. A Child
+  // refuses here with the Home command for its own device.
   const { readLinkChildContext } = await import("./link-child");
   const routeDeps = deps as import("./route-to").RouteToDeps;
   if ((routeDeps.readChildContext ?? readLinkChildContext)()) {

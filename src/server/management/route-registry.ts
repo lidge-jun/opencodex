@@ -329,10 +329,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/selected-models", module: "server/management/model-routes", mutates: true },
   // server/management/native-integration-routes
   { method: "GET", path: "/api/native-integrations", module: "server/management/native-integration-routes", mutates: false },
-  { method: "PUT", path: "/api/native-integrations/claude", module: "server/management/native-integration-routes", mutates: true, exempt: { reason: "compatibility-alias", why: "Retained for older dashboard clients; current CLI native toggles use durable /api/route-to intent." } },
-  { method: "PUT", path: "/api/native-integrations/claude-desktop", module: "server/management/native-integration-routes", mutates: true, exempt: { reason: "compatibility-alias", why: "Retained for older dashboard clients; current CLI native toggles use durable /api/route-to intent." } },
-  { method: "PUT", path: "/api/native-integrations/codex", module: "server/management/native-integration-routes", mutates: true, exempt: { reason: "compatibility-alias", why: "Retained for older dashboard clients; current CLI native toggles use durable /api/route-to intent." } },
-  { method: "PUT", path: "/api/native-integrations/grok", module: "server/management/native-integration-routes", mutates: true, exempt: { reason: "compatibility-alias", why: "Retained for older dashboard clients; current CLI native toggles use durable /api/route-to intent." } },
+  { method: "PUT", path: "/api/native-integrations/claude", module: "server/management/native-integration-routes", mutates: true },
+  { method: "PUT", path: "/api/native-integrations/claude-desktop", module: "server/management/native-integration-routes", mutates: true },
+  { method: "PUT", path: "/api/native-integrations/codex", module: "server/management/native-integration-routes", mutates: true },
+  { method: "PUT", path: "/api/native-integrations/grok", module: "server/management/native-integration-routes", mutates: true },
   // server/management/cursor-integration-routes
   { method: "GET", path: "/api/native-integrations/cursor", module: "server/management/cursor-integration-routes", mutates: false },
   { method: "GET", path: "/api/native-integrations/cursor/local-installer", module: "server/management/cursor-integration-routes", mutates: false },

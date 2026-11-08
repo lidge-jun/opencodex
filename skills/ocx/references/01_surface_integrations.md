@@ -192,7 +192,7 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|---|
 | `--json` | boolean | Emit the client rows or toggle result as JSON. |
 
-- Each on/off saves a Home-only route override and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting the Home default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
+- Each on/off writes the Home's native switch, recording no route intent for the Home, and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting their saved default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
 
 ### `ocx integration client`
 

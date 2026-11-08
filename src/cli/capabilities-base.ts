@@ -752,7 +752,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the client rows or toggle result as JSON."}],
     mutates: true,
     json: "payload",
-    details: ["Each on/off saves a Home-only route override and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting the Home default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor."],
+    details: ["Each on/off writes the Home's native switch, recording no route intent for the Home, and applies it through the client's runtime owner, including Claude Desktop's first-party transition; Children keep inheriting their saved default. Refused disables remain failures. On a Child it is refused with the exact Home command. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor."],
     usage: "ocx integration native [list] [--json]; ocx integration native <claude|claude-desktop|codex|grok> <on|off> [--json]",
   },
   {
