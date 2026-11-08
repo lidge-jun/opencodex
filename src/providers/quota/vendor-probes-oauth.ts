@@ -430,9 +430,14 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   const captured = captureMuseQuotaOwner(provider);
   const owner = config ? bindMuseQuotaConfig(captured, config, provider) : captured;
   if (!owner) return null;
+  const probedAccountKey = accountCacheKey(provider, owner.accountId);
+  // Load any saved owner before a no-live probe can replace the shared account row.
+  runPassiveReadSync(hydrateAccountQuotaCache);
   const liveOwnerCurrent = () => {
     const live = readStateStoreLiveConfig(getConfigDir());
-    return !live || owner.isConfigCurrent?.(live) === true;
+    if (live) return owner.isConfigCurrent?.(live) === true;
+    const previous = accountQuotaCache.get(probedAccountKey);
+    return !previous || !!owner.configIdentity && previous.museConfigIdentity === owner.configIdentity && previous.identity === owner.identity;
   };
   const probedAccountId = owner.accountId;
   // A paused account is excluded from every automatic upstream use; a key mint is one.
@@ -441,7 +446,6 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   // An imported or pasted credential has no account token and never will: it is
   // capability, not provider id, that decides whether a probe is possible.
   if (!oauthAccessToken || !owner.isCurrent() || !liveOwnerCurrent()) return null;
-  const probedAccountKey = accountCacheKey(provider, probedAccountId);
   const writerGeneration = captureConfigGeneration();
   const epoch = captureProviderAccountQuotaEpoch(provider);
   const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken, {}, undefined, owner.identity);

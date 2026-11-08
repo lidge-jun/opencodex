@@ -603,6 +603,49 @@ describe("provider-level quota row for a passive provider", () => {
     } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
   });
 
+  test("a no-live Muse probe cannot overwrite a persisted row owned by another configuration", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: calls === 1 ? 40 : 80, window_duration_mins: 300 } } }); }) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      clearAccountQuotaCache(); resetMuseKeyQuotaBackoff();
+      setStateStoreLiveConfigReader(() => null);
+      const changed = structuredClone(config);
+      changed.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      expect(await fetchMuseKeyQuota("meta-muse", changed)).toBeNull();
+      await Bun.sleep(400);
+      clearAccountQuotaCache(); setLiveStateStoreConfig(config); reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
+  test("concurrent no-live Muse probes cannot join another configuration's published quota", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setStateStoreLiveConfigReader(() => null);
+    let release!: (response: Response) => void, started!: () => void;
+    const called = new Promise<void>(resolve => { started = resolve; });
+    globalThis.fetch = (() => { started(); return new Promise<Response>(resolve => { release = resolve; }); }) as typeof fetch;
+    try {
+      const first = fetchMuseKeyQuota("meta-muse", config);
+      await called;
+      const changed = structuredClone(config);
+      changed.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      const second = fetchMuseKeyQuota("meta-muse", changed);
+      release(Response.json({ is_subs_active: true, subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } }));
+      const [a, b] = await Promise.all([first, second]);
+      expect(a?.quota.fiveHourPercent).toBe(40);
+      expect(b).toBeNull();
+      setLiveStateStoreConfig(config);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
   test("a held passive Muse report rechecks the caller's configuration without retiring its live owner", async () => {
     writeTwoAccounts(true);
     const config = museConfig(), originalFetch = globalThis.fetch;
