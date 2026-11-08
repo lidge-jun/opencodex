@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { limitMistralChatImages, mistralMaxImages, MISTRAL_DEFAULT_MAX_IMAGES } from "../../src/adapters/openai-chat/mistral-image-limit";
 import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
 import { handleResponses } from "../../src/server/responses/core";
@@ -7,6 +8,7 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { repoPath } from "../helpers/repo-root";
 
 const mistral = (overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig =>
   ({ ...providerConfigSeed(getProviderRegistryEntry("mistral")!), apiKey: "test-mistral-images", ...overrides });
@@ -54,6 +56,17 @@ describe("Mistral image count limit", () => {
       type: "text", text: "[image omitted: Mistral accepts at most 8 images per request for this model; older images were dropped]",
     });
     expect(out[0].content.slice(21)).toEqual(content.slice(21));
+  });
+
+  test("does not reintroduce the historical per-image coordinate collection", () => {
+    const source = readFileSync(repoPath("src/adapters/openai-chat/mistral-image-limit.ts"), "utf8");
+    const start = source.indexOf("export function limitMistralChatImages(");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // Narrow source oracle for the old images.push({ message, part }) index, not
+    // a heap bound: required copy-on-write message/content arrays remain allowed.
+    const coordinatePush = /\.push\s*\(\s*\{\s*(?:message\s*:\s*\w+\s*,\s*part\s*:\s*\w+|part\s*:\s*\w+\s*,\s*message\s*:\s*\w+)\s*\}\s*\)/;
+    expect("images.push({ message: index, part: partIndex })").toMatch(coordinatePush);
+    expect(source.slice(start)).not.toMatch(coordinatePush);
   });
 
   test("prunes a large valid history without mutating input or copying untouched turns", () => {
