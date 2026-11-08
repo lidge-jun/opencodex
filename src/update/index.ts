@@ -9,7 +9,7 @@ import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir, getConfigPath, loadConfig } from "../config";
 import { runConfigPreflight } from "./config-preflight";
 import { readPid, readRuntimePort, getRuntimePortPath } from "../config/process-state";
@@ -169,8 +169,8 @@ export function runOwnedPnpm(
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? "")
-    || (args[0] === "store" && args.at(-1) === "path" && args.slice(1, -1).every(arg =>
-      arg === `--global-dir=${owner.globalDir}` || arg === `--config.global-bin-dir=${owner.globalBinDir}`)),
+    || (args[0] === "store" && args[1] === "path" && (args.length === 2
+      || (args.length === 3 && args[2]?.startsWith("--store-dir=") && isAbsolute(args[2].slice("--store-dir=".length))))),
   session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
   markerPath = join(getConfigDir(), "update-orchestrated.json"),
 ): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {

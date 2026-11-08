@@ -23,6 +23,8 @@ export interface PnpmGlobalOwner {
   globalRoot: string;
   globalBinDir: string;
   store?: string;
+  /** Lexical versioned store path reported by pnpm and pinned on mutations. */
+  storePath?: string;
   globalStore?: boolean;
   virtualStoreDirs?: string[];
   version?: string;
@@ -77,6 +79,7 @@ export type PnpmGlobalPackage =
       globalRoot?: string;
       globalBinDir?: string;
       store: string;
+      storePath: string;
       virtualStoreDirs: string[];
     }
   | { ok: false; reason: string };

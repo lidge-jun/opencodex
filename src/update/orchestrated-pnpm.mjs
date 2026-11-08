@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readPnpmGlobalPackage, resolvePnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { verifyPnpmInstallTree } from "./transactional-install.mjs";
 
@@ -10,7 +10,9 @@ const OWNER_PATHS = ["commandPath", "packagePath", "globalDir", "globalRoot", "g
 /** Freeze physical owner paths at observation time; failure to resolve any path refuses the update. */
 export function canonicalOrchestratedPnpmOwner(owner) {
   if (!Array.isArray(owner.virtualStoreDirs)) throw new Error("pnpm virtual-store configuration is unpinned");
-  return { ...Object.fromEntries(OWNER_PATHS.map(field => [field, realpathSync.native(owner[field])])),
+  const storePath = resolve(owner.storePath);
+  if (realpathSync.native(storePath) !== realpathSync.native(owner.store)) throw new Error("pnpm store path changed");
+  return { ...Object.fromEntries(OWNER_PATHS.map(field => [field, realpathSync.native(owner[field])])), storePath,
     virtualStoreDirs: owner.virtualStoreDirs.map(path => realpathSync.native(path)) };
 }
 
@@ -20,6 +22,7 @@ export function matchesOrchestratedPnpmOwner(expected, owner) {
     const actual = canonicalOrchestratedPnpmOwner(owner);
     const equal = (left, right) => process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
     return OWNER_PATHS.every(field => equal(actual[field], expected[field]))
+      && equal(actual.storePath, expected.storePath)
       && Array.isArray(expected.virtualStoreDirs) && actual.virtualStoreDirs.length === expected.virtualStoreDirs.length
       && actual.virtualStoreDirs.every((path, index) => equal(path, expected.virtualStoreDirs[index]));
   } catch { return false; }
@@ -46,6 +49,7 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
       || key(resolved.owner.globalRoot) !== key(owner.globalRoot)
       || key(resolved.owner.globalBinDir) !== key(owner.globalBinDir)
       || key(resolved.owner.store) !== key(owner.store)
+      || resolve(resolved.owner.storePath) !== resolve(owner.storePath)
       || !Array.isArray(owner.virtualStoreDirs) || !Array.isArray(resolved.owner.virtualStoreDirs)
       || owner.virtualStoreDirs.length !== resolved.owner.virtualStoreDirs.length
       || owner.virtualStoreDirs.some((path, index) => key(path) !== key(resolved.owner.virtualStoreDirs[index]))) return false;

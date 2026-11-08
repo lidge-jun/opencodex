@@ -11,7 +11,7 @@ const MUTATIONS = new Set(["add", "install", "update", "remove", "uninstall"]);
 /** Run a synchronous pnpm mutation outside the package, in a private workspace boundary. */
 export function withPnpmCommandCwd(args, run) {
   const virtualStoreQuery = args?.[0] === "config" && args?.[1] === "get"
-    && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args?.[2]);
+    && ["store-dir", "virtual-store-dir", "global-virtual-store-dir"].includes(args?.[2]);
   if (!MUTATIONS.has(args?.[0]) && args?.[0] !== "store" && !virtualStoreQuery) return run(PNPM_READ_CWD);
   const cwd = mkdtempSync(join(tmpdir(), "ocx-pnpm-command-"));
   const created = lstatSync(cwd);
