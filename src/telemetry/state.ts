@@ -97,14 +97,21 @@ function ownersAreValid(raw: unknown): boolean {
   });
 }
 
-function parsePendingDecision(raw: unknown): OcxTelemetryConfig | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+/** A held decision that is present but cannot be trusted returns "invalid", which blocks sending. */
+function parsePendingDecision(raw: unknown, fileTime: Date): OcxTelemetryConfig | null | "invalid" {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return "invalid";
   const value = raw as Record<string, unknown>;
-  if (value.decision !== "accepted" && value.decision !== "declined") return null;
+  if (value.decision !== "accepted" && value.decision !== "declined") return "invalid";
   const stamp = (key: string): string | null =>
     typeof value[key] === "string" && !Number.isNaN(Date.parse(value[key] as string)) ? (value[key] as string) : null;
   const decidedAt = stamp("decidedAt");
-  if (!decidedAt) return null;
+  if (!decidedAt) {
+    // A decline needs no date to apply; dropping it could let a notice-only config send.
+    if (value.decision !== "declined") return "invalid";
+    const at = stamp("noticeShownAt") ?? fileTime.toISOString();
+    return { decision: "declined", decidedAt: at, noticeShownAt: at };
+  }
   return { decision: value.decision, decidedAt, noticeShownAt: stamp("noticeShownAt") ?? decidedAt };
 }
 
@@ -147,6 +154,8 @@ export function readTelemetryStateFile(configDir = getConfigDir()): { state: Tel
     if (present(raw.envOptOutOwners) && !ownersAreValid(raw.envOptOutOwners)) {
       return { state: emptyState(), unreadable: true };
     }
+    const pendingDecision = parsePendingDecision(raw.pendingDecision, stat.mtime);
+    if (pendingDecision === "invalid") return { state: emptyState(), unreadable: true };
     const ineligibleThroughDay = typeof raw.ineligibleThroughDay === "string" ? raw.ineligibleThroughDay : null;
     const retryAfterUntil =
       typeof raw.retryAfterUntil === "string" && !Number.isNaN(Date.parse(raw.retryAfterUntil))
@@ -162,7 +171,7 @@ export function readTelemetryStateFile(configDir = getConfigDir()): { state: Tel
       retryAfterUntil,
       envOptOutActiveSince,
       envOptOutOwners: parseOwners(raw.envOptOutOwners),
-      pendingDecision: parsePendingDecision(raw.pendingDecision),
+      pendingDecision,
       everReported: raw.everReported === true,
     } };
   } catch {

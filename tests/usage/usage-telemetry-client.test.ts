@@ -1016,7 +1016,7 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     }
   });
 
-  test("a state file that cannot be inspected, or holds malformed opt-out fields, blocks sending", () => {
+  test("a state file that cannot be inspected, or holds malformed opt-out fields or a malformed held decision, blocks sending", () => {
     const statePath = telemetryStatePath(home);
     const base = { version: 1, sentDays: {} };
     for (const bad of [
@@ -1024,6 +1024,9 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
       { ...base, envOptOutActiveSince: "not-a-time" },
       { ...base, envOptOutOwners: "not-a-list" },
       { ...base, envOptOutOwners: [{ pid: "1", since: "2026-11-01T00:00:00.000Z" }] },
+      { ...base, pendingDecision: "declined" },
+      { ...base, pendingDecision: { decision: "no", decidedAt: "2026-11-01T00:00:00.000Z" } },
+      { ...base, pendingDecision: { decision: "accepted", decidedAt: "not-a-time" } },
     ]) {
       writeFileSync(statePath, JSON.stringify(bad), "utf8");
       expect(readTelemetryStateFile(home).unreadable, JSON.stringify(bad)).toBe(true);
@@ -1031,6 +1034,9 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     // Absent or null fields are legitimate.
     writeFileSync(statePath, JSON.stringify({ ...base, ineligibleThroughDay: null, envOptOutActiveSince: null, envOptOutOwners: [] }), "utf8");
     expect(readTelemetryStateFile(home).unreadable).toBe(false);
+    // A held decline with a damaged timestamp still applies.
+    writeFileSync(statePath, JSON.stringify({ ...base, pendingDecision: { decision: "declined", decidedAt: "not-a-time" } }), "utf8");
+    expect(readTelemetryStateFile(home)).toMatchObject({ unreadable: false, state: { pendingDecision: { decision: "declined" } } });
     // An lstat failure other than "not found" is not read as a missing file.
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       chmodSync(home, 0o000);

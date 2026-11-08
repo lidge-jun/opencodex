@@ -90,13 +90,15 @@ once and runs no ticks, so the marker or owner stands for the whole period: whil
 day is eligible. `endTelemetryEnvOptOut` closes the period (ineligible through the closing day) on
 that proxy's clean stop, which always covers its stop day, or on the first tick without the opt-out,
 which ends it only once no recorded owner pid is still alive and otherwise extends it to today. A
-`telemetry-state.json` that exists but cannot be read (symlink, oversized, malformed) stops sending
+`telemetry-state.json` that exists but cannot be read (symlink, oversized, malformed, or with an
+opt-out field or held decision that is present but invalid) stops sending
 (`state-unreadable`) rather than being read as empty: the tick checks it before choosing a day and
 again just before sending, the bookkeeping writes after a send or a `Retry-After` leave such a file
 alone, other writers (including every recorded decision, so sending does not stay paused) rebuild
 it as ineligible through the UTC day six hours from now, and the status snapshot reports
 `stateUnreadable`. A rebuild forgets `envOptOutOwners`, so an opted-out proxy records itself again
-every 6 hours (`TELEMETRY_ENV_OPT_OUT_REFRESH_MS`), within that window. The state code lives in
+every 6 hours (`TELEMETRY_ENV_OPT_OUT_REFRESH_MS`), within that window. A held decline whose
+timestamp is damaged still applies. The state code lives in
 `src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
 aggregation and sender stay behind the dynamic import. Each tick sends at most one completed UTC
 day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
