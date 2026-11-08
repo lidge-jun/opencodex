@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import {
   providerRequestPacingStatus,
@@ -533,6 +533,175 @@ describe("OpenGateway native empty completion", () => {
     const cfg = { port: 0, defaultProvider: "fixture", providers: { fixture: provider } } satisfies OcxConfig;
     return { cfg, sends };
   }
+
+  test("reset preflight heartbeats cannot hide a silent OpenGateway upstream", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    const firstRead = Promise.withResolvers<void>();
+    let cancelled = 0;
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      pull() { firstRead.resolve(); },
+      cancel() { cancelled++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    endpoint, { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    const req = request(true, "question", { store: false });
+    const pending = handleResponses(new Request(req, { signal: client.signal }),
+      { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+    try {
+      await firstRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(15_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(cancelled).toBe(0);
+      jest.advanceTimersByTime(5_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(cancelled).toBe(1);
+      expect(f.sends).toHaveLength(1);
+    } finally {
+      client.abort();
+      const response = await pending;
+      await response.body?.cancel().catch(() => {});
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  test("combo preflight respects real OpenGateway activity before failover", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    const firstRead = Promise.withResolvers<void>();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = 0;
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; },
+      pull() { firstRead.resolve(); },
+      cancel() { cancelled++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    endpoint, { retryOnReset: { enabled: true, replacements: 1 } });
+    let backupSends = 0;
+    const backup = { ...f.cfg.providers.fixture!, baseUrl: "https://backup.example/v1", fetch: async () => {
+      backupSends++;
+      return sse(answer());
+    } };
+    const combo: OcxConfig = { ...f.cfg, stallTimeoutSec: 20,
+      providers: { ...f.cfg.providers, backup },
+      combos: { clock: { strategy: "failover", targets: [
+        { provider: "fixture", model: "model" }, { provider: "backup", model: "model" },
+      ] } },
+    };
+    const client = new AbortController();
+    const req = request(true, "question", { model: "combo/clock", store: false });
+    const pending = handleResponses(new Request(req, { signal: client.signal }), combo, { model: "", provider: "" });
+    try {
+      await firstRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(10_000);
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.created","response":{"status":"in_progress","output":[]}}\n\n'));
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(10_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(cancelled).toBe(0);
+      expect(backupSends).toBe(0);
+      jest.advanceTimersByTime(5_000);
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","message":"busy"}}}\n\n'));
+      source.close();
+      const response = await pending;
+      expect(await response.text()).toContain("resp_answer");
+      expect(f.sends).toHaveLength(1);
+      expect(backupSends).toBe(1);
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  test("direct OpenGateway streaming retains keepalives before its upstream stall deadline", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    const firstRead = Promise.withResolvers<void>();
+    let cancelled = 0;
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      pull() { firstRead.resolve(); },
+      cancel() { cancelled++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    endpoint, { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    const req = request(true, "question", { store: false });
+    const pending = handleResponses(new Request(req, { signal: client.signal }),
+      { ...f.cfg, stallTimeoutSec: 40 }, { model: "", provider: "" });
+    try {
+      await firstRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(15_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(15_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      const response = await pending;
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain(": keepalive");
+      expect(cancelled).toBe(0);
+      expect(f.sends).toHaveLength(1);
+      await reader.cancel();
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  for (const recovery of ["reset", "empty-completion"] as const) {
+    test(`OpenGateway ${recovery} replacement keeps its own inactivity deadline`, async () => {
+      takeSpendHome();
+      jest.useFakeTimers();
+      const replacementRead = Promise.withResolvers<void>();
+      let cancelled = 0;
+      const first = recovery === "reset"
+        ? () => new Response('data: {"type":"response.created","response":{"status":"in_progress","output":[]}}\n\n',
+          { headers: { "content-type": "text/event-stream" } })
+        : () => sse(empty());
+      const f = fixture([first, () => new Response(new ReadableStream<Uint8Array>({
+        pull() { replacementRead.resolve(); },
+        cancel() { cancelled++; },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+      endpoint, { retryOnReset: { enabled: true, replacements: 1 } });
+      const client = new AbortController();
+      const req = request(true, "question", { store: false });
+      const pending = handleResponses(new Request(req, { signal: client.signal }),
+        { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+      try {
+        await replacementRead.promise;
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+        expect(f.sends).toHaveLength(2);
+        jest.advanceTimersByTime(20_000);
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+        expect(cancelled).toBe(1);
+        expect(f.sends).toHaveLength(2);
+      } finally {
+        client.abort();
+        const response = await pending;
+        await response.body?.cancel().catch(() => {});
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  }
+
+  test("OpenGateway reset replacement can complete with its original output", async () => {
+    takeSpendHome();
+    const f = fixture([
+      () => new Response('data: {"type":"response.created","response":{"status":"in_progress","output":[]}}\n\n',
+        { headers: { "content-type": "text/event-stream" } }),
+      () => sse(answer()),
+    ], endpoint, { retryOnReset: { enabled: true, replacements: 1 } });
+    const response = await handleResponses(request(true, "question", { store: false }), f.cfg, { model: "", provider: "" });
+    expect(await response.text()).toContain("resp_answer");
+    expect(f.sends).toHaveLength(2);
+  });
 
   for (const streaming of [false, true]) {
     test(`native ${streaming ? "SSE" : "JSON"} exhausted reasoning becomes incomplete without replay`, async () => {

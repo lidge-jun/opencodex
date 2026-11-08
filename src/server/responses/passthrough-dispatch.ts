@@ -168,7 +168,7 @@ import {
   reasoningEffortRejectionText,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
-import { deferProtocolSafeResetRecovery, preflightComboStreamResponse } from "./combo-stream-preflight";
+import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
@@ -176,7 +176,7 @@ import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-ze
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { createNativeContinuationDispatch } from "./native-continuation-send";
-import { guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
+import { deferPassthroughResetRecovery, guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
 
 /** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
 export interface PassthroughAdapterHandoff { kind: "adapter-handoff" }
@@ -1917,7 +1917,7 @@ export async function preparePassthroughExchange(
       && remainingTransientSendBudget(transientSendAttempts()) > 0
       && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && upstreamRequestsStream));
     if (protocolRecoveryCandidate) {
-      upstreamResponse = deferProtocolSafeResetRecovery(
+      upstreamResponse = deferPassthroughResetRecovery(
         upstreamResponse,
         { model: logCtx.model, provider: logCtx.provider },
         (error, stage, signal) => refetchAfterProtocolSafeReset(
@@ -1938,7 +1938,7 @@ export async function preparePassthroughExchange(
             },
           },
         ),
-        { allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, keepalive: canonicalBufferedJson ? "upstream-activity" : options.comboAttempt ? "none" : "periodic" },
+        { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, keepalive: canonicalBufferedJson ? "upstream-activity" : options.comboAttempt ? "none" : "periodic" },
       );
     }
     break;

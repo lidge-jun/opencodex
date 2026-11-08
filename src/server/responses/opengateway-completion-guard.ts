@@ -56,6 +56,8 @@ export interface OpenGatewayCompletionGuardOptions {
   readonly recordUsage: (usage: unknown) => void;
   readonly retryEnabled?: boolean;
   readonly stallTimeoutMs?: number;
+  /** This response's real upstream body is already guarded before reset preflight. */
+  readonly initialBodyInactivityGuarded?: boolean;
   /** Expiry releases original bytes; it never aborts a healthy upstream. */
   readonly holdTimeoutMs?: number;
 }
@@ -63,12 +65,12 @@ export interface OpenGatewayCompletionGuardOptions {
 type Inspection = { kind: "pass"; response: Response }
   | { kind: "empty" | "invalid"; snapshot: RecordValue; streaming: boolean };
 
-async function inspect(response: Response, options: OpenGatewayCompletionGuardOptions): Promise<Inspection> {
+async function inspect(response: Response, options: OpenGatewayCompletionGuardOptions, alreadyGuarded: boolean): Promise<Inspection> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const streaming = contentType.includes("text/event-stream")
     || (!contentType && isPlainObject(options.body) && options.body.stream === true);
   if (!response.body || (!streaming && !contentType.includes("application/json"))) return { kind: "pass", response };
-  const guarded = guardResponseBodyInactivity(response, options.signal, streaming ? options.stallTimeoutMs ?? 0 : 0);
+  const guarded = guardResponseBodyInactivity(response, options.signal, streaming && !alreadyGuarded ? options.stallTimeoutMs ?? 0 : 0);
   const reader = guarded.response.body?.getReader();
   if (!reader) return { kind: "pass", response };
   const framer = new BoundedSseFrameBuffer(MAX_BYTES);
@@ -213,7 +215,7 @@ export async function guardOpenGatewayCompletion(response: Response, options: Op
     && selfContainedResponsesBody(body) && !isNonReplayableResponse(response);
   let selected = response;
   for (let attempt = 0; ; attempt++) {
-    const inspected = await inspect(selected, options);
+    const inspected = await inspect(selected, options, attempt === 0 && options.initialBodyInactivityGuarded === true);
     if (inspected.kind === "pass") return inspected.response;
     const usage = inspected.snapshot.usage;
     options.recordUsage(usage);

@@ -1,10 +1,44 @@
 import type { AdapterRequest } from "../../adapters/base";
 import { formatErrorResponse } from "../../bridge";
+import { guardResponseBodyInactivity } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
 import { isPlainObject } from "../responses-snapshot-codec";
+import { deferProtocolSafeResetRecovery, type ProtocolSafeResetRecovery } from "./combo-stream-preflight";
 import { guardOpenGatewayCompletion } from "./opengateway-completion-guard";
+import { carryResponseToolOwnership } from "./response-tool-ownership";
+
+const guardedResetResponses = new WeakSet<Response>();
+
+/** The gateway clock must see upstream reads, not generated comments or held preludes. */
+export function deferPassthroughResetRecovery(
+  response: Response,
+  logCtx: RequestLogContext,
+  recover: ProtocolSafeResetRecovery,
+  options: {
+    request: AdapterRequest;
+    config: Pick<OcxConfig, "stallTimeoutSec">;
+    signal: AbortSignal;
+    allowMissingContentType: boolean;
+    keepalive: "periodic" | "upstream-activity" | "none";
+  },
+): Response {
+  const guard = options.request.url === "https://apis.opengateway.ai/v1/responses"
+    && response.status === 200 && response.body !== null;
+  const protect = (source: Response): Response => guard
+    ? carryResponseToolOwnership(source, guardResponseBodyInactivity(
+      source, options.signal, resolveStallTimeoutMs(options.config.stallTimeoutSec),
+    ).response)
+    : source;
+  const deferred = deferProtocolSafeResetRecovery(protect(response), logCtx, async (error, stage, signal) => {
+    // Recover returns only a validated, fresh body; wrapping earlier would hide its lock state.
+    const replacement = await recover(error, stage, signal);
+    return replacement ? protect(replacement) : null;
+  }, options);
+  if (guard) guardedResetResponses.add(deferred);
+  return deferred;
+}
 
 export function parseOutboundRequestBody(bodyText: string): Record<string, unknown> | undefined {
   try {
@@ -30,6 +64,7 @@ export function guardPassthroughCompletion(
     signal,
     retryEnabled: config.emptyCompletionRetry,
     stallTimeoutMs: resolveStallTimeoutMs(config.stallTimeoutSec),
+    initialBodyInactivityGuarded: guardedResetResponses.has(response),
     recordUsage: usage => { recordKeyWireAttemptUsage(logCtx, usageFromResponsesPayload(usage)); },
     retry: async () => {
       const result = await rebuildAndRefetch("empty-completion");

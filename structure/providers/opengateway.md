@@ -35,7 +35,11 @@ Text, refusal, tool/action or unknown events release the original bytes without 
 holds at most 1 MiB, 1,024 events/chunks or 30 seconds, then hands the held prefix and pending read
 to the consumer without cancelling a healthy source. Consumed/cancelled prefix references are
 released; terminal disposal and consumer cancellation do not await upstream cleanup. SSE inactivity
-keeps the existing stall-timeout policy. Rewritten responses preserve tool ownership.
+keeps the existing stall-timeout policy. When reset preflight is active, its source and any accepted
+reset replacement are guarded before preflight, so the clock follows upstream reads rather than
+synthetic keepalives or held combo frames. The completion guard skips only the duplicate clock for
+that initial selected body; a later empty-completion retry gets its own guard. Rewritten responses
+preserve tool ownership.
 `tests/responses/opengateway-completion-receipts.test.ts` covers wire outcomes and resource release;
 `tests/responses/empty-completion-core.test.ts` and `tests/responses/empty-completion-hardening.test.ts`
 cover integration and replay barriers. Other destinations and translated retry defaults are unchanged.
