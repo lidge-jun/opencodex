@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const ru: Record<TKey, string> = {
   ...connectV2Copy("ru"),
   ...startupV2Copy("ru"),
   ...proxyV2Copy("ru"),
+  ...telemetryProfileCopy("ru"),
   "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
   "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
   "claude.tierDefaults.title": "Модели CLI по умолчанию",

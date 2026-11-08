@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -141,6 +142,7 @@ export const vi: Record<TKey, string> = {
   ...connectV2Copy("vi"),
   ...startupV2Copy("vi"),
   ...proxyV2Copy("vi"),
+  ...telemetryProfileCopy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",

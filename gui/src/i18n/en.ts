@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -141,6 +142,7 @@ export const en = {
   ...connectV2Copy("en"),
   ...startupV2Copy("en"),
   ...proxyV2Copy("en"),
+  ...telemetryProfileCopy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
