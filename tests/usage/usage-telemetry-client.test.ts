@@ -43,6 +43,7 @@ import {
   nudgeTelemetryScheduler,
   endTelemetryEnvOptOut,
   readTelemetryState,
+  readTelemetryStateFile,
   recordPendingTelemetryDecision,
   recordTelemetryEnvOptOut,
   runTelemetryTick,
@@ -56,7 +57,7 @@ import {
   sendTelemetryPayload,
   setTelemetrySenderOverridesForTests,
 } from "../../src/telemetry/sender";
-import { acquireServerBackgroundLifecycle } from "../../src/server/background-lifecycle";
+import { acquireServerBackgroundLifecycle, setTelemetryEnvOptOutRefreshMsForTests } from "../../src/server/background-lifecycle";
 import type { OcxConfig } from "../../src/types";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 import { REQUEST_OUTCOME_CLASSES } from "../../src/usage/request-outcome";
@@ -874,6 +875,93 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     writeFileSync(telemetryStatePath(home), "{ not json", "utf8");
     recordPendingTelemetryDecision({ decision: "declined", decidedAt: "2026-11-07T10:00:00.000Z", noticeShownAt: "2026-11-07T10:00:00.000Z" }, home, NOW);
     expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-07");
+  });
+
+  test("a state file that becomes unreadable during a send keeps its protection, so opt-out days are never sent", async () => {
+    const statePath = telemetryStatePath(home);
+    const sentDays: string[] = [];
+    let corruptOnSend = false;
+    let reply = () => new Response("{}", { status: 202 });
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentDays.push((JSON.parse(String(init?.body)) as TelemetryPayloadV1).day);
+      if (corruptOnSend) writeFileSync(statePath, "{ not json", "utf8");
+      return reply();
+    }) as unknown as typeof fetch;
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-10-30T10:00:00.000Z", noticeShownAt: "2026-10-30T10:00:00.000Z" },
+    };
+    const tickAt = (iso: string) => runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse(iso), fetch: mockFetch });
+
+    // An env opt-out covers every day through 2026-11-05.
+    recordTelemetryEnvOptOut(home, Date.parse("2026-11-03T09:00:00.000Z"));
+    expect((await tickAt("2026-11-05T12:00:00.000Z")).sent).toBe(false);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-05");
+
+    // A 429 arrives while the file is being corrupted: the backoff write must not replace it.
+    corruptOnSend = true;
+    reply = () => new Response("{}", { status: 429, headers: { "retry-after": "60" } });
+    expect(await tickAt("2026-11-07T12:00:00.000Z")).toMatchObject({ sent: false, reason: "retry-after-backoff" });
+    expect(readTelemetryStateFile(home).unreadable).toBe(true);
+
+    // A send that succeeds while the file is corrupted must not replace it either.
+    writeFileSync(statePath, JSON.stringify({ version: 1, sentDays: {}, ineligibleThroughDay: "2026-11-05" }), "utf8");
+    reply = () => new Response("{}", { status: 202 });
+    expect(await tickAt("2026-11-07T13:00:00.000Z")).toMatchObject({ sent: true, day: "2026-11-06" });
+    expect(readTelemetryStateFile(home).unreadable).toBe(true);
+    // Every later tick refuses, so no day through 2026-11-05 is ever sent.
+    corruptOnSend = false;
+    expect(await tickAt("2026-11-09T12:00:00.000Z")).toEqual({ sent: false, reason: "state-unreadable" });
+    expect(sentDays.every(day => day > "2026-11-05")).toBe(true);
+    // The status says why nothing is sent.
+    const status = await buildTelemetryStatusSnapshot(config, { configDir: home, env: {}, now: Date.parse("2026-11-09T12:00:00.000Z") });
+    expect(status.stateUnreadable).toBe(true);
+    expect(status.previewEligible).toBe(false);
+  });
+
+  test("a state file that becomes unreadable before the pre-send check blocks the send", async () => {
+    let fetchCalls = 0;
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-10-30T10:00:00.000Z", noticeShownAt: "2026-10-30T10:00:00.000Z" },
+    };
+    const result = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: Date.parse("2026-11-07T12:00:00.000Z"),
+      aggregateDay: async (day, opts) => {
+        writeFileSync(telemetryStatePath(home), "{ not json", "utf8");
+        return aggregateTelemetryForDay(day, opts);
+      },
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response("{}", { status: 202 });
+      }) as unknown as typeof fetch,
+    });
+    expect(result).toMatchObject({ sent: false, reason: "state-unreadable" });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("D2: an opted-out proxy records itself again, so a state file rebuilt after corruption keeps it", async () => {
+    const proxyConfig = { port: 0, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    const prevTelemetry = process.env.OCX_TELEMETRY;
+    setTelemetryEnvOptOutRefreshMsForTests(25);
+    process.env.OCX_TELEMETRY = "0";
+    let lease: Awaited<ReturnType<typeof acquireServerBackgroundLifecycle>> | undefined;
+    try {
+      lease = acquireServerBackgroundLifecycle(() => {}, proxyConfig);
+      expect(readTelemetryState(home).envOptOutOwners?.map(owner => owner.pid)).toEqual([process.pid]);
+      // The file is corrupted and rebuilt by a one-off observation that does not know the owner.
+      writeFileSync(telemetryStatePath(home), "{ not json", "utf8");
+      recordTelemetryEnvOptOut(home);
+      expect(readTelemetryState(home).envOptOutOwners ?? []).toEqual([]);
+      await new Promise(resolve => setTimeout(resolve, 120));
+      expect(readTelemetryState(home).envOptOutOwners?.map(owner => owner.pid)).toEqual([process.pid]);
+    } finally {
+      await lease?.release();
+      setTelemetryEnvOptOutRefreshMsForTests(null);
+      if (prevTelemetry === undefined) delete process.env.OCX_TELEMETRY;
+      else process.env.OCX_TELEMETRY = prevTelemetry;
+    }
   });
 
   test("a telemetry-id.json deleted by another process is not served from memory", () => {
