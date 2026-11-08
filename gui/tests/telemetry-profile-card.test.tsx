@@ -4,6 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { TelemetryProfileCard } from "../src/components/telemetry-profile-card";
 import { LanguageProvider } from "../src/i18n/provider";
+import { TELEMETRY_STATUS_CHANGED_EVENT } from "../src/telemetry-api";
 import { profileLeaderboardUrl } from "../src/telemetry-profile-api";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -206,5 +207,16 @@ test("a connected profile stays visible to disconnect while anonymous telemetry 
 test("leaderboard links are built only for valid handles", () => {
   expect(profileLeaderboardUrl("a-1-b2")).toBe("https://opencodex.me/dashboard/?profile=a-1-b2#leaderboard");
   expect(profileLeaderboardUrl("x\"><script>")).toBeNull();
+});
+
+test("switching anonymous telemetry in Proxy details updates the card without waiting for the poll", async () => {
+  await mount();
+  expect(card()).not.toBeNull();
+  status = { ...status, telemetryEffective: false };
+  await act(async () => {
+    win.dispatchEvent(new win.CustomEvent(TELEMETRY_STATUS_CHANGED_EVENT, { detail: {} }) as unknown as Event);
+  });
+  await settle(50);
+  expect(card()).toBeNull();
 });
 

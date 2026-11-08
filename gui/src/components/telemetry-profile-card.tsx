@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { isConnectedRuntime } from "../api-targets";
 import { useKeyedClientResource } from "../client-resource";
 import { getActiveLocale, useT } from "../i18n/shared";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
+import { TELEMETRY_STATUS_CHANGED_EVENT } from "../telemetry-api";
 import {
   PROFILE_AVATARS,
   PROFILE_GUIDE_URL,
@@ -55,6 +56,15 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
   const rankHandle = profile && !profile.pendingDelete && !profile.revoked ? profile.handle : "";
   const rank = useKeyedClientResource<ProfileRank | null>(`telemetry-profile-rank:${apiBase}:${rankHandle}`, [apiBase, rankHandle],
     signal => rankHandle ? fetchProfileRank(apiBase, signal) : Promise.resolve(null), { pollMs: 300_000 });
+  const refreshStatus = status.refresh;
+
+  // Turning anonymous telemetry on or off elsewhere changes whether this card shows or pauses.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onChange = () => refreshStatus();
+    window.addEventListener(TELEMETRY_STATUS_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(TELEMETRY_STATUS_CHANGED_EVENT, onChange);
+  }, [refreshStatus]);
 
   const [formOpen, setFormOpen] = useState(false);
   const [handle, setHandle] = useState("");

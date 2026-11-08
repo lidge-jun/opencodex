@@ -54,3 +54,10 @@ both states for the PR via the `pr-assets` branch.
   collector exists ("Rank is unavailable right now"), taken from a throwaway proxy in an isolated home.
 - Verification: `gui/tests/telemetry-profile-card.test.tsx` (8 tests), full GUI suite 4109 pass, `lint:gui` and
   `build:gui` clean.
+
+## Follow-up (wp4 second cycle)
+
+The card refreshes on `TELEMETRY_STATUS_CHANGED_EVENT` (dispatched by `putTelemetryDecision` in
+`gui/src/telemetry-api.ts`), so switching anonymous telemetry off in Proxy details shows the paused state, or hides the
+card, without waiting for the 60-second poll. Test: dispatch the event after the server state changes and assert
+the card follows.
