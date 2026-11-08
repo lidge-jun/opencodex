@@ -42,6 +42,9 @@ msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
 
 The installer needs administrator rights and records the choice for the whole computer.
 Only `send` keeps telemetry on; `optout`, in any letter case, and any other value (`off`, `0`) turn it off.
+Each install that passes `OCX_TELEMETRY_CHOICE` records a new decision, so a deployment that reuses
+the same command for every version applies the opt-out again after each upgrade, over any dashboard
+choice made since.
 
 Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
 notice first, and a checked box never turns telemetry back on for an account that turned it off.
