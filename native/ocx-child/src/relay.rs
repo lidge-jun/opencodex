@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,8 +27,16 @@ use crate::routes::{RelayAuthKind, RouteDecision, classify_child_ingress};
 use crate::state::{ChildPaths, StateReadOutcome, read_child_state, read_verified_link_key};
 
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Whole-request bound for one-shot Home calls made by lifecycle commands.
+const FETCH_DEADLINE: Duration = Duration::from_secs(60);
+/// Whole-request bound for a parity report; per-read timeouts alone never end a trickle.
+const PARITY_DEADLINE: Duration = Duration::from_secs(10);
+const FETCH_READ_TIMEOUT: Duration = Duration::from_secs(15);
+/// Read/write timeout for a control connection handled while every worker is busy.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
 const HEADER_AND_SSE_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_CONCURRENT_WORKERS: usize = 32;
+const MAX_CONTROL_CONNECTIONS: usize = 256;
 const PEER_FEATURES: &str = "relay-auth/2,link-management-relay,link-peer-report/1";
 
 #[derive(Debug)]
@@ -47,8 +55,120 @@ pub struct RelayCredentials {
     pub raw_token: SecretBytes,
 }
 
+/// Upstream socket reader that enforces an optional whole-request deadline: each read is
+/// bounded by the time left, so a peer trickling bytes cannot extend the request.
+pub struct DeadlineStream {
+    stream: TcpStream,
+    deadline: Option<Instant>,
+    per_read: Duration,
+}
+
+impl DeadlineStream {
+    fn new(stream: TcpStream, deadline: Option<Instant>, per_read: Duration) -> Self {
+        Self {
+            stream,
+            deadline,
+            per_read,
+        }
+    }
+
+    pub fn get_ref(&self) -> &TcpStream {
+        &self.stream
+    }
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(deadline) = self.deadline {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "request deadline exceeded",
+                ));
+            }
+            let wait = (deadline - now)
+                .min(self.per_read)
+                .max(Duration::from_millis(1));
+            self.stream.set_read_timeout(Some(wait))?;
+        }
+        self.stream.read(buf)
+    }
+}
+
+/// Holds the socket of an in-flight request so another thread can abort it. Registration
+/// and cancellation share one mutex, so a request either sees the cancellation before it
+/// registers or is registered when cancellation shuts its socket down.
+#[derive(Default)]
+pub struct CancelSlot {
+    inner: Mutex<(bool, Option<TcpStream>)>,
+}
+
+impl CancelSlot {
+    fn register(&self, stream: &TcpStream) -> Result<(), UpstreamError> {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.0 {
+            return Err(UpstreamError::HomeUnreachable(
+                "request cancelled by shutdown".to_owned(),
+            ));
+        }
+        guard.1 =
+            Some(stream.try_clone().map_err(|e| {
+                UpstreamError::HomeUnreachable(format!("socket clone failed: {e}"))
+            })?);
+        Ok(())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).0
+    }
+
+    fn clear(&self) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).1 = None;
+    }
+
+    /// Abort the registered request, if any, and refuse every later registration.
+    pub fn cancel(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.0 = true;
+        if let Some(stream) = guard.1.take() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+/// Bounds for one upstream request.
+#[derive(Clone, Copy)]
+pub struct RequestLimits<'a> {
+    pub deadline: Option<Instant>,
+    pub cancel: Option<&'a CancelSlot>,
+}
+
+impl RequestLimits<'_> {
+    fn remaining(&self, cap: Duration) -> Result<Duration, UpstreamError> {
+        if self.cancel.is_some_and(CancelSlot::is_cancelled) {
+            return Err(UpstreamError::HomeUnreachable(
+                "request cancelled by shutdown".to_owned(),
+            ));
+        }
+        match self.deadline {
+            None => Ok(cap),
+            Some(deadline) => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    Err(UpstreamError::HomeUnreachable(
+                        "request deadline exceeded".to_owned(),
+                    ))
+                } else {
+                    Ok(left.min(cap))
+                }
+            }
+        }
+    }
+}
+
 pub struct AuthenticatedUpstream {
-    pub reader: BufReader<TcpStream>,
+    pub reader: BufReader<DeadlineStream>,
     pub writer: TcpStream,
     pub nonce: String,
     pub connection_generation: Option<String>,
@@ -73,16 +193,36 @@ pub fn open_authenticated_upstream(
     creds: &RelayCredentials,
     probe_only: bool,
 ) -> Result<AuthenticatedUpstream, UpstreamError> {
+    open_authenticated_upstream_with(
+        tunnel_port,
+        creds,
+        probe_only,
+        RequestLimits {
+            deadline: None,
+            cancel: None,
+        },
+    )
+}
+
+fn open_authenticated_upstream_with(
+    tunnel_port: u16,
+    creds: &RelayCredentials,
+    probe_only: bool,
+    limits: RequestLimits<'_>,
+) -> Result<AuthenticatedUpstream, UpstreamError> {
     let addr = SocketAddr::from(([127, 0, 0, 1], tunnel_port));
-    let stream = TcpStream::connect_timeout(&addr, AUTH_TIMEOUT)
+    let stream = TcpStream::connect_timeout(&addr, limits.remaining(AUTH_TIMEOUT)?)
         .map_err(|e| UpstreamError::HomeUnreachable(format!("tunnel connect failed: {e}")))?;
+    if let Some(cancel) = limits.cancel {
+        cancel.register(&stream)?;
+    }
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(AUTH_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(AUTH_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(limits.remaining(AUTH_TIMEOUT)?));
     let mut writer = stream
         .try_clone()
         .map_err(|e| UpstreamError::HomeUnreachable(format!("socket clone failed: {e}")))?;
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(DeadlineStream::new(stream, limits.deadline, AUTH_TIMEOUT));
 
     let challenge =
         create_relay_challenge(&creds.token_fingerprint, &creds.api_key_id, &creds.link_id)
@@ -177,13 +317,65 @@ pub fn fetch_home_authenticated(
     body: Option<(&str, &[u8])>,
     max_bytes: u64,
 ) -> Result<(HttpResponseHead, Vec<u8>, Option<String>), UpstreamError> {
-    let mut upstream = open_authenticated_upstream(tunnel_port, creds, false)?;
+    let limits = RequestLimits {
+        deadline: Some(Instant::now() + FETCH_DEADLINE),
+        cancel: None,
+    };
+    fetch_home_with_limits(
+        tunnel_port,
+        creds,
+        method,
+        target,
+        auth_kind,
+        body,
+        max_bytes,
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fetch_home_with_limits(
+    tunnel_port: u16,
+    creds: &RelayCredentials,
+    method: &str,
+    target: &str,
+    auth_kind: RelayAuthKind,
+    body: Option<(&str, &[u8])>,
+    max_bytes: u64,
+    limits: RequestLimits<'_>,
+) -> Result<(HttpResponseHead, Vec<u8>, Option<String>), UpstreamError> {
+    let result = fetch_home_inner(
+        tunnel_port,
+        creds,
+        method,
+        target,
+        auth_kind,
+        body,
+        max_bytes,
+        limits,
+    );
+    if let Some(cancel) = limits.cancel {
+        cancel.clear();
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fetch_home_inner(
+    tunnel_port: u16,
+    creds: &RelayCredentials,
+    method: &str,
+    target: &str,
+    auth_kind: RelayAuthKind,
+    body: Option<(&str, &[u8])>,
+    max_bytes: u64,
+    limits: RequestLimits<'_>,
+) -> Result<(HttpResponseHead, Vec<u8>, Option<String>), UpstreamError> {
+    let mut upstream = open_authenticated_upstream_with(tunnel_port, creds, false, limits)?;
+    upstream.reader.get_mut().per_read = FETCH_READ_TIMEOUT;
     let _ = upstream
         .writer
-        .set_read_timeout(Some(Duration::from_secs(15)));
-    let _ = upstream
-        .writer
-        .set_write_timeout(Some(Duration::from_secs(15)));
+        .set_write_timeout(Some(limits.remaining(FETCH_READ_TIMEOUT)?));
     let token_str = std::str::from_utf8(creds.raw_token.as_slice())
         .map_err(|_| UpstreamError::RelayAuthFailed("invalid utf8 token".to_owned()))?;
     let mut head = format!(
@@ -241,8 +433,21 @@ pub fn post_child_parity_report(
     creds: &RelayCredentials,
     report: &LinkChildParityReport,
 ) -> Result<u16, String> {
+    post_parity_with(tunnel_port, creds, report, None)
+}
+
+fn post_parity_with(
+    tunnel_port: u16,
+    creds: &RelayCredentials,
+    report: &LinkChildParityReport,
+    cancel: Option<&CancelSlot>,
+) -> Result<u16, String> {
     let json_bytes = report.to_bounded_json()?;
-    let (head, _, _) = fetch_home_authenticated(
+    let limits = RequestLimits {
+        deadline: Some(Instant::now() + PARITY_DEADLINE),
+        cancel,
+    };
+    let (head, _, _) = fetch_home_with_limits(
         tunnel_port,
         creds,
         "POST",
@@ -250,6 +455,7 @@ pub fn post_child_parity_report(
         RelayAuthKind::Bearer,
         Some(("application/json", &json_bytes)),
         1024,
+        limits,
     )
     .map_err(|e| format!("{e:?}"))?;
     Ok(head.status)
@@ -267,6 +473,8 @@ struct SharedServerState {
     /// False until the lifecycle parent commits this generation; only `/healthz` is
     /// answered before that.
     committed: Arc<AtomicBool>,
+    /// In-flight parity request, aborted by shutdown so the parity thread ends promptly.
+    parity_cancel: CancelSlot,
 }
 
 impl SharedServerState {
@@ -290,6 +498,7 @@ impl SharedServerState {
 
     fn signal_shutdown(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        self.parity_cancel.cancel();
         if let Ok(mut guard) = self.stop_cv.0.lock() {
             *guard = true;
             self.stop_cv.1.notify_all();
@@ -386,11 +595,13 @@ fn serve_foreground_inner(
         stop_cv: (Mutex::new(false), Condvar::new()),
         last_generation: Mutex::new(None),
         committed,
+        parity_cancel: CancelSlot::default(),
     });
 
     let parity_shared = Arc::clone(&shared);
     let parity_handle = thread::spawn(move || run_parity_loop(parity_shared));
     let sem = Arc::new((Mutex::new(0usize), Condvar::new()));
+    let control_active = Arc::new(AtomicUsize::new(0));
 
     for incoming in listener.incoming() {
         if shared.stop_flag.load(Ordering::SeqCst) {
@@ -403,17 +614,40 @@ fn serve_foreground_inner(
             break;
         }
         let sem_clone = Arc::clone(&sem);
-        {
-            let (lock, cv) = &*sem_clone;
+        let admitted = {
+            let (lock, _) = &*sem_clone;
             let mut active = lock.lock().unwrap_or_else(|e| e.into_inner());
-            while *active >= MAX_CONCURRENT_WORKERS {
-                active = cv.wait(active).unwrap_or_else(|e| e.into_inner());
+            if *active < MAX_CONCURRENT_WORKERS {
+                *active += 1;
+                true
+            } else {
+                false
             }
-            *active += 1;
+        };
+        if !admitted {
+            // Every worker is busy. Health checks and the authenticated shutdown still get a
+            // short-lived thread with tight timeouts, so a full pool (or a slow client in
+            // this tier) cannot keep the shutdown connection from being handled. Past the
+            // cap the connection is closed unanswered.
+            if control_active.fetch_add(1, Ordering::SeqCst) >= MAX_CONTROL_CONNECTIONS {
+                control_active.fetch_sub(1, Ordering::SeqCst);
+                continue;
+            }
+            let control_shared = Arc::clone(&shared);
+            let control_count = Arc::clone(&control_active);
+            thread::spawn(move || {
+                let _ = handle_client_connection(
+                    client_stream,
+                    &control_shared,
+                    ConnectionMode::ControlOnly,
+                );
+                control_count.fetch_sub(1, Ordering::SeqCst);
+            });
+            continue;
         }
         let worker_shared = Arc::clone(&shared);
         thread::spawn(move || {
-            let _ = handle_client_connection(client_stream, &worker_shared);
+            let _ = handle_client_connection(client_stream, &worker_shared, ConnectionMode::Full);
             let (lock, cv) = &*sem_clone;
             let mut active = lock.lock().unwrap_or_else(|e| e.into_inner());
             *active = active.saturating_sub(1);
@@ -467,7 +701,7 @@ fn run_parity_loop(shared: Arc<SharedServerState>) {
             applied_codex_settings_digest: digest,
             sequence: local_seq,
         };
-        match post_child_parity_report(st.tunnel_port, &creds, &report) {
+        match post_parity_with(st.tunnel_port, &creds, &report, Some(&shared.parity_cancel)) {
             Ok(204) => {
                 failures = 0;
                 wait_ms = 60_000;
@@ -482,10 +716,27 @@ fn run_parity_loop(shared: Arc<SharedServerState>) {
     }
 }
 
-fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> std::io::Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConnectionMode {
+    Full,
+    /// Accepted while every worker is busy, with short timeouts: `/healthz` and the
+    /// authenticated shutdown only.
+    ControlOnly,
+}
+
+fn handle_client_connection(
+    stream: TcpStream,
+    shared: &SharedServerState,
+    mode: ConnectionMode,
+) -> std::io::Result<()> {
     let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = stream.set_write_timeout(Some(HEADER_AND_SSE_TIMEOUT));
+    if mode == ConnectionMode::ControlOnly {
+        let _ = stream.set_read_timeout(Some(CONTROL_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(CONTROL_TIMEOUT));
+    } else {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+        let _ = stream.set_write_timeout(Some(HEADER_AND_SSE_TIMEOUT));
+    }
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
 
@@ -521,6 +772,20 @@ fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> st
         req.header("upgrade"),
     );
     let committed = shared.committed.load(Ordering::SeqCst);
+    if mode == ConnectionMode::ControlOnly
+        && !matches!(
+            decision,
+            RouteDecision::LocalHealthz | RouteDecision::LocalShutdown
+        )
+    {
+        return write_json_response(
+            &mut writer,
+            503,
+            "Service Unavailable",
+            &[("Retry-After", "1"), ("Cache-Control", "no-store")],
+            br#"{"error":"child_busy"}"#,
+        );
+    }
     if !committed && decision != RouteDecision::LocalHealthz {
         return write_json_response(
             &mut writer,

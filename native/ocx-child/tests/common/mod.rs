@@ -32,8 +32,7 @@ pub struct MockHomeState {
     pub observed_data_headers: Mutex<Vec<Vec<(String, String)>>>,
     pub stop: AtomicBool,
     /// 0 answers parity reports, 1 holds the socket without answering, 2 trickles an
-    /// unfinished response forever. Applies only to reports with sequence >= 2, so the
-    /// lifecycle command's own report (sequence 1) still completes.
+    /// unfinished response until the peer goes away.
     pub parity_mode: AtomicU8,
     pub parity_stalled: AtomicUsize,
 }
@@ -273,7 +272,7 @@ fn handle_mock_home_socket(
             let text = std::str::from_utf8(&body).unwrap();
             let parsed = parse_link_child_parity_report(text).expect("valid LinkChildParityReport");
             let mode = st.parity_mode.load(Ordering::SeqCst);
-            if mode != 0 && parsed.sequence >= 2 {
+            if mode != 0 {
                 st.parity_stalled.fetch_add(1, Ordering::SeqCst);
                 hold_parity_socket(&mut writer, mode, st);
                 return;

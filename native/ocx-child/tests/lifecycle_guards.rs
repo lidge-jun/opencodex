@@ -625,3 +625,116 @@ fn lifecycle_start_requires_the_recorded_generation_and_a_commit() {
     assert_eq!(code, 0, "detach failed: {err}");
     assert!(reaper.join().unwrap().success());
 }
+
+/// Attach without a daemon, then run an operator foreground relay whose exit is reaped by a
+/// background thread (as init reaps a detached daemon).
+fn attached_foreground_relay(
+    scratch: &Scratch,
+    home: &MockHomeServer,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    u16,
+    std::thread::JoinHandle<std::process::ExitStatus>,
+) {
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let tunnel = home.port.to_string();
+    let port = distinct_port(&[]);
+    let p = port.to_string();
+    let mut args = attach_args(&tunnel, LINK_ID, &p);
+    args.push("--no-daemon");
+    let out = spawn_with_creds(child_command(&ocx, &codex, port, &args))
+        .wait_with_output()
+        .unwrap();
+    assert!(out.status.success(), "attach failed: {}", text(&out));
+    let mut cmd = child_command(
+        &ocx,
+        &codex,
+        port,
+        &["serve", "--foreground", "--listen-port", &p],
+    );
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().unwrap();
+    let healthz =
+        format!("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    assert!(
+        wait_until(Duration::from_secs(5), || try_http_exchange(port, &healthz)
+            .is_some_and(|r| r.contains("200 OK"))),
+        "foreground relay never became healthy"
+    );
+    let reaper = std::thread::spawn(move || child.wait().unwrap());
+    (ocx, codex, port, reaper)
+}
+
+fn join_within(
+    reaper: std::thread::JoinHandle<std::process::ExitStatus>,
+    timeout: Duration,
+) -> bool {
+    wait_until(timeout, || reaper.is_finished()) && reaper.join().is_ok()
+}
+
+#[cfg(unix)]
+#[test]
+fn detach_stops_a_relay_whose_parity_request_stalls_or_trickles() {
+    for (mode, label) in [(1u8, "stall"), (2u8, "trickle")] {
+        let scratch = Scratch::new(&format!("parity-{label}"));
+        let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+        home.state
+            .parity_mode
+            .store(mode, std::sync::atomic::Ordering::SeqCst);
+        let (ocx, codex, port, reaper) = attached_foreground_relay(&scratch, &home);
+        assert!(
+            wait_until(Duration::from_secs(10), || home
+                .state
+                .parity_stalled
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0),
+            "{label}: relay never sent a parity report"
+        );
+        let started = std::time::Instant::now();
+        let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+        let elapsed = started.elapsed();
+        assert_eq!(code, 0, "{label}: detach failed after {elapsed:?}: {err}");
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "{label}: detach took {elapsed:?}"
+        );
+        assert!(
+            join_within(reaper, Duration::from_secs(2)),
+            "{label}: relay process still running after detach"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn detach_stops_a_relay_whose_workers_are_all_busy() {
+    let scratch = Scratch::new("saturated");
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let (ocx, codex, port, reaper) = attached_foreground_relay(&scratch, &home);
+    // Every worker blocks reading a request head that never completes.
+    let mut idle = Vec::new();
+    for _ in 0..40 {
+        let mut sock =
+            std::net::TcpStream::connect(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+                .unwrap();
+        sock.write_all(b"GET /healthz HTTP/1.1\r\n").unwrap();
+        idle.push(sock);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    let elapsed = started.elapsed();
+    assert_eq!(code, 0, "detach failed after {elapsed:?}: {err}");
+    assert!(elapsed < Duration::from_secs(4), "detach took {elapsed:?}");
+    assert!(
+        join_within(reaper, Duration::from_secs(2)),
+        "relay process still running after detach"
+    );
+    drop(idle);
+}
