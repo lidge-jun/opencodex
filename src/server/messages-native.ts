@@ -107,7 +107,7 @@ import {
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
-import { preflightNativeMessagesResponse } from "./messages-native-preflight";
+import { observeNativeMessagesReplayBoundary, preflightNativeMessagesResponse } from "./messages-native-preflight";
 import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
@@ -1009,7 +1009,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       ...resolvePassthroughBodyGuard(config, upstream.signal),
       ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
     };
-    const observed = logIds && onFirstOutput ? observeFirstChunk(response.body, onFirstOutput) : response.body;
+    const raw = options.sendBudget ? observeNativeMessagesReplayBoundary(response.body, logCtx) : response.body;
+    const observed = logIds && onFirstOutput ? observeFirstChunk(raw, onFirstOutput) : raw;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;

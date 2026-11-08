@@ -11,6 +11,49 @@ import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "./responses-undeclared-tool-gua
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** Capture replay evidence before any relay can split a physical upstream read into frames. */
+export function observeNativeMessagesReplayBoundary(body: ReadableStream<Uint8Array>, logCtx: RequestLogContext): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const inspector = new BoundedSseFrameBuffer();
+  const decoder = new TextDecoder();
+  let active = true;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) { inspector.dispose(); controller.close(); return; }
+        if (active) {
+          let errorSeen = false;
+          let finished = false;
+          try {
+            for (const frame of inspector.feed(next.value)) {
+              if (frame.continuation) continue;
+              const lines = decoder.decode(frame.block).split(/\r\n|\r|\n/);
+              const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null) ?? null;
+              const data = lines.map(line => sseFieldValue(line, "data")).filter(value => value !== null).join("\n");
+              let payload: unknown;
+              try { payload = JSON.parse(data); } catch { payload = undefined; }
+              const type = isRec(payload) && (event === null || event === payload.type) ? payload.type : undefined;
+              if (errorSeen && (event !== null || data) && type !== "ping") logCtx.streamErrorFollowed = true;
+              if (type === "error") errorSeen = true;
+              else if ((event !== null || data) && type !== "ping" && type !== "message_start") finished = true;
+            }
+            // An unfinished event can still acquire a different name or payload on the next read.
+            if (errorSeen && inspector.pendingBytes > 0) logCtx.streamErrorFollowed = true;
+            if (errorSeen || finished) { active = false; inspector.dispose(); }
+          } catch (error) {
+            if (!(error instanceof SseFrameTooLargeError || error instanceof SseFrameCountLimitError)) throw error;
+            logCtx.streamErrorFollowed = true;
+            active = false; inspector.dispose();
+          }
+        }
+        controller.enqueue(next.value);
+      } catch (error) { inspector.dispose(); controller.error(error); }
+    },
+    cancel(reason) { inspector.dispose(); return reader.cancel(reason); },
+  }, { highWaterMark: 0 });
+}
+
 /** Inspect only the bounded protocol prelude. Any block, unknown payload or cap commits. */
 export async function preflightNativeMessagesResponse(
   response: Response, logCtx: RequestLogContext, budget: TranslatorBudget,

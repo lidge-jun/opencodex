@@ -101,6 +101,47 @@ async function send(options: { stream?: boolean; config?: OcxConfig; messages?: 
 }
 
 describe("native Messages candidates in a combo", () => {
+  for (const streamed of [true, false]) {
+    test(`OAuth error and content in one upstream read cannot replay (${streamed ? "stream" : "fold"})`, async () => {
+      await saveCredential("anthropic", { access: "synthetic-combo-access", refresh: "synthetic-combo-refresh", expires: Date.now() + 3_600_000, accountId: "synthetic-combo-uuid", source: "oauth" });
+      const settings = config();
+      settings.providers.anthropic = { ...settings.providers.anth!, authMode: "oauth", apiKey: undefined };
+      delete settings.providers.anth;
+      settings.defaultProvider = "anthropic";
+      settings.combos!.waterfall!.targets[0]!.provider = "anthropic";
+      settings.anthropicAccountPool = { enabled: true };
+      settings.protocols!.rollout!.managedMessagesNativeOAuth = true;
+      answer = () => stream(prelude + refusal + textStart + textDelta + terminal);
+      const { text } = await send({ config: settings, stream: streamed });
+      expect(text).not.toContain("fallback reply");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+    });
+    test(`error followed by an incomplete ping frame cannot replay (${streamed ? "stream" : "fold"})`, async () => {
+      answer = () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          controller.enqueue(enc.encode(prelude + refusal + "event: ping\n"));
+          controller.enqueue(enc.encode(textStart + textDelta + terminal));
+          controller.close();
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+      const { text } = await send({ stream: streamed });
+      expect(text).not.toContain("fallback reply");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+    });
+    test(`error followed by an empty named content frame cannot replay (${streamed ? "stream" : "fold"})`, async () => {
+      answer = () => stream(prelude + refusal + "event: content_block_start\ndata:\n\n");
+      const { text } = await send({ stream: streamed });
+      expect(text).not.toContain("fallback reply");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+    });
+    test(`complete ping after an error remains replayable (${streamed ? "stream" : "fold"})`, async () => {
+      answer = () => stream(prelude + refusal + frame("ping"));
+      const { text } = await send({ stream: streamed });
+      expect(text).toContain("fallback reply");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com", "backup.fixture.invalid"]);
+    });
+  }
   test("canonical child preserves source system/messages/tools/cache prefix and managed auth", async () => {
     const { response, text, rows } = await send();
     expect(response.status).toBe(200);

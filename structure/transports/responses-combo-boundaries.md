@@ -174,6 +174,7 @@ empty-content `message_start` and `ping` as replayable. As in the native tap, th
 any other event returns to the ordinary combo failure classifier unless a later frame read with it commits; any content block (including
 a tool start), unknown/malformed payload (a named event without data included; comment-only blocks are skipped), terminal or byte/chunk cap commits conservatively.
 Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable, while first output waits for a content frame the tap has seen.
+For combo children, a bounded observer before frame transforms preserves the original read boundary for the replay decision. Complete harmless pings may follow a refusal; an unfinished following frame or a named empty frame commits conservatively. The observer stops after that decision or semantic output, and leaves ordinary standalone streaming and log ownership unchanged.
 Preflight retention is charged to the translator budget and released on delivery/cancellation.
 The Messages ingress offers its parsed body as that source by reference, with no ingress copy, and
 only when no effort override rewrites it.
