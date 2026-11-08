@@ -336,8 +336,12 @@ Adoption obtains a fresh matching source and generation
 inside the serialized mutation after its pre-persist hook, then synchronously rechecks ownership.
 This snapshot does not exclude external Keychain changes after observation, and the process-local
 slot does not bound surviving children across parent restarts.
-Empty credential files and JSON objects without an OAuth field remain absent; malformed JSON or
-an incomplete OAuth payload is unavailable and stops refresh before intent or health changes.
+An empty credential file or successful empty Keychain payload is unavailable. A JSON file with no
+OAuth field is absent and does not mask the Keychain; item-not-found remains authoritative absence.
+Malformed or incomplete OAuth payloads and credentials with unknown expiry are unavailable. A
+changed local generation within the refresh skew is unavailable rather than evidence of absence;
+these states stop refresh before intent or health changes. The public payload parser retains its
+zero-expiry representation for an unknown expiry.
 An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
 with no outbound proxy configured in either the startup or current environment and a single
 HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as

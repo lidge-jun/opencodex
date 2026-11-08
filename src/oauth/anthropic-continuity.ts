@@ -35,8 +35,10 @@ export async function newerClaudeCredentialForInstance(
   const observation = await observeClaudeCodeToken({ fresh: true });
   if (observation.kind === "unavailable") return observation;
   const disk = observation.kind === "present" ? observation.credential : null;
-  if (!disk || !Number.isFinite(disk.expires) || disk.expires <= now + REFRESH_SKEW_MS
-    || credentialGeneration(disk) === credentialGeneration(stored)) return { kind: "absent" };
+  if (!disk) return { kind: "absent" };
+  if (!Number.isFinite(disk.expires) || disk.expires <= 0) return { kind: "unavailable" };
+  if (credentialGeneration(disk) === credentialGeneration(stored)) return { kind: "absent" };
+  if (disk.expires <= now + REFRESH_SKEW_MS) return { kind: "unavailable" };
   const diskGeneration = credentialGeneration(disk);
   const sourceKey = (observation as Extract<typeof observation, { kind: "present" }>).sourceKey;
   const before = normalizeAnthropicIdentity(stored.anthropicIdentity, stored.access);

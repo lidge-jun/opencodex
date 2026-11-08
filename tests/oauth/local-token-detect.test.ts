@@ -116,7 +116,7 @@ describe("Claude Code credentials file fallback (Linux/Windows)", () => {
     const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
     try {
       expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" });
-      expect(read).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledTimes(raw ? 1 : 0);
     } finally { read.mockRestore(); }
   });
 
@@ -191,6 +191,33 @@ describe("Claude Code credentials file fallback (Linux/Windows)", () => {
   test("parse rejects payloads without both tokens", () => {
     expect(parseClaudeOauthPayload(JSON.stringify({ claudeAiOauth: { accessToken: "only" } }))).toBeNull();
     expect(parseClaudeOauthPayload("not json")).toBeNull();
+  });
+});
+
+describe("Claude source observation safety", () => {
+  for (const file of ["missing", "empty", "whitespace", "no-oauth"] as const) {
+    for (const state of ["present", "unavailable", "absent"] as const) {
+      test(`explicit ${file} file and ${state} Keychain retain source evidence`, async () => {
+        const dir = join(tmp, `source-${file}-${state}`);
+        mkdirSync(dir, { recursive: true });
+        process.env.CLAUDE_CONFIG_DIR = dir;
+        if (file !== "missing") writeFileSync(join(dir, ".credentials.json"), file === "no-oauth" ? "{}" : file === "empty" ? "" : " \n\t");
+        const value = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-keychain-access", refreshToken: "synthetic-keychain-refresh", expiresAt: Date.now() + 3600_000 } });
+        const read = spyOn(claudeKeychain, "read").mockResolvedValue(state === "present" ? { status: "present", value } : { status: state });
+        try {
+          const result = await observeClaudeCodeToken();
+          if (file === "empty" || file === "whitespace") expect(result).toEqual({ kind: "unavailable" });
+          else if (state === "present") expect(result).toMatchObject({ kind: "present", sourceKey: `keychain:${dir}`, credential: { access: "synthetic-keychain-access" } });
+          else expect(result).toEqual({ kind: state });
+        } finally { read.mockRestore(); }
+      });
+    }
+  }
+  test.each(["", " \n\t"])("successful empty Keychain output is unavailable (%s)", async value => {
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "empty-keychain-profile");
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "present", value });
+    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" }); }
+    finally { read.mockRestore(); }
   });
 });
 

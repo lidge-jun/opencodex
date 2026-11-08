@@ -507,6 +507,27 @@ test("initial refresh cannot join a Keychain read started before the refresh", a
   } finally { read.mockRestore(); }
 });
 
+for (const expiry of ["missing", "invalid", "expired", "nearly-expired"] as const) {
+  for (const withIntent of [false, true]) {
+    test(`local ${expiry} changed generation preserves refresh, intent and health (${withIntent})`, async () => {
+      const { id, credential } = await seed();
+      const intent = withIntent ? writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential)) : undefined;
+      const expiresAt = expiry === "missing" ? undefined : expiry === "invalid" ? "invalid" : Date.now() + (expiry === "expired" ? -1 : 59_000);
+      writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+        accessToken: "synthetic-changed-access", refreshToken: credential.refresh, expiresAt,
+      } }));
+      let calls = 0;
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async () => {
+        calls++; throw new Error("unexpected refresh");
+      } }, credential)).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(calls).toBe(0);
+      expect(getAccountCredential("anthropic", id)).toEqual(credential);
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    });
+  }
+}
+
 for (const withIntent of [false, true]) {
   test(`unavailable initial Keychain observation preserves account and ${withIntent ? "pending intent" : "refresh token"}`, async () => {
     const { id, credential } = await seed();

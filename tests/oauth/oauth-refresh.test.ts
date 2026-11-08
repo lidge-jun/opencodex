@@ -1510,8 +1510,11 @@ describe("oauth refresh hardening", () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, source: "local-cli" });
     const id = getAccountSet("anthropic")!.activeAccountId;
     await markAccountNeedsReauth("anthropic", id, true);
-    seedClaudeCredentials("same", "rt-old", 1);
+    seedClaudeCredentials("old", "rt-old", 1);
     await expect(getValidAccessToken("anthropic")).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    seedClaudeCredentials("changed", "rt-old", 1);
+    await expect(getValidAccessToken("anthropic")).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(true);
     seedClaudeCredentials("recovered", "rt-new", Date.now() + 3600_000);
     await expect(getValidAccessToken("anthropic")).resolves.toBe("recovered");
     expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();

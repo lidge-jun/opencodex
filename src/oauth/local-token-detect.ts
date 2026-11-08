@@ -119,10 +119,10 @@ export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}):
       return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : { kind: "unavailable" };
     }
     const credential = parseClaudeOauthPayload(raw);
-    if (credential) return { kind: "present", credential, sourceKey: `file:${profilePath}` };
-    // Empty and valid objects with no OAuth field are authoritative absence; a broken or
-    // incomplete OAuth payload is not evidence that no newer credential exists.
-    if (!raw) return { kind: "absent" };
+    if (credential) return credential.expires > 0
+      ? { kind: "present", credential, sourceKey: `file:${profilePath}` } : { kind: "unavailable" };
+    // A valid object without an OAuth field is absent; empty or incomplete data is unknown.
+    if (!raw) return { kind: "unavailable" };
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && !("claudeAiOauth" in parsed)) return { kind: "absent" };
@@ -134,11 +134,10 @@ export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}):
   const keychain = await claudeKeychain.read(options);
   if ((process.env.CLAUDE_CONFIG_DIR?.trim() ?? "") !== profile || claudeConfigDir() !== profilePath) return { kind: "unavailable" };
   if (profile && fromFile()?.kind !== preferredFile?.kind) return { kind: "unavailable" };
-  if (preferredFile) return keychain.status === "unavailable" ? { kind: "unavailable" } : preferredFile;
   if (keychain.status === "unavailable") return { kind: "unavailable" };
-  if (keychain.status === "present" && keychain.value.trim()) {
+  if (keychain.status === "present") {
     const credential = parseClaudeOauthPayload(keychain.value.trim());
-    return credential ? { kind: "present", credential, sourceKey: `keychain:${profilePath}` } : { kind: "unavailable" };
+    return credential && credential.expires > 0 ? { kind: "present", credential, sourceKey: `keychain:${profilePath}` } : { kind: "unavailable" };
   }
   const fallback = fromFile();
   if (fallback?.kind === "present") return fallback;
