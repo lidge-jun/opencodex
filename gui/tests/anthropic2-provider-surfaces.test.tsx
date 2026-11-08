@@ -585,6 +585,129 @@ test.each([
   }
 });
 
+test.each(["status", "post", "pagehide", "settles-during-cancel"] as const)("cancel releases the exact account login owner after delivery with pending %s", async pending => {
+  const { spyOn } = await import("bun:test");
+  const dialogs = await import("../src/action-dialogs");
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  const posts: Array<PromiseWithResolvers<Response>> = [];
+  const status = Promise.withResolvers<Response>();
+  const cancel = Promise.withResolvers<Response>();
+  const notices: string[] = [];
+  const settled: string[] = [];
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  let oauth!: ReturnType<typeof useProvidersOAuth>;
+  respond = async request => {
+    if (request.path === "/api/oauth/login") {
+      const post = Promise.withResolvers<Response>(); posts.push(post); return post.promise;
+    }
+    if (request.path === "/api/oauth/login/cancel") return cancel.promise;
+    if (request.path === "/api/oauth/status") return status.promise;
+    if (request.method === "DELETE") return Response.json({});
+    return Response.json({ activeAccountId: null, accounts: [] });
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [statuses, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: statuses,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
+      beginAccountLogin: pools.beginAccountLogin, notify: message => notices.push(message), fetchConfig: async () => {},
+      fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {},
+      bumpModelsRefresh: () => {}, onLoginSettled: provider => settled.push(provider) });
+    return null;
+  }
+  try {
+    await render(<Harness />);
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "shared"); });
+    if (pending === "status") {
+      await act(async () => { posts[0]!.resolve(Response.json({})); });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); });
+      expect(requests.filter(request => request.path === "/api/oauth/status")).toHaveLength(1);
+    }
+    await act(async () => {
+      if (pending === "pagehide") win.dispatchEvent(new win.Event("pagehide"));
+      else void oauth.cancelLoginOAuth("anthropic2");
+    });
+    if (pending === "settles-during-cancel") {
+      await act(async () => { posts[0]!.resolve(Response.json({})); });
+    }
+    await act(async () => { await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    expect(requests.filter(request => request.method === "DELETE")).toHaveLength(0);
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "shared"); void oauth.loginOAuth("anthropic"); });
+    expect(requests.filter(request => request.path === "/api/oauth/login").map(request => request.provider)).toEqual(["anthropic2", "anthropic"]);
+    await act(async () => { posts[1]!.resolve(Response.json({}, { status: 400 })); cancel.resolve(Response.json({})); });
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "shared"); });
+    expect(requests.filter(request => request.path === "/api/oauth/login").map(request => request.provider)).toEqual(["anthropic2", "anthropic", "anthropic2"]);
+    await act(async () => {
+      if (pending === "status") status.resolve(Response.json({ loggedIn: true, done: true, accounts: accounts("anthropic2") }));
+      else posts[0]!.resolve(Response.json({ url: "https://stale.example.test" }));
+    });
+    await act(async () => { void oauth.loginOAuth("anthropic2"); await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    expect(requests.filter(request => request.path === "/api/oauth/login")).toHaveLength(3);
+    expect(requests.filter(request => request.method === "DELETE")).toHaveLength(0);
+    expect(notices).toContain("prov.accountOperationBusy");
+    expect(settled).toEqual([]);
+    await act(async () => { await oauth.cancelLoginOAuth("anthropic2"); });
+    await act(async () => { await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    expect(requests.filter(request => request.method === "DELETE").map(request => request.provider)).toEqual(["anthropic2"]);
+  } finally {
+    cancel.resolve(Response.json({})); status.resolve(Response.json({}));
+    for (const post of posts) post.resolve(Response.json({}, { status: 400 }));
+    consent.mockRestore();
+  }
+});
+
+test("A to B to A cancellation cannot release the replacement account login owner", async () => {
+  const { spyOn } = await import("bun:test");
+  const dialogs = await import("../src/action-dialogs");
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  const posts: Array<PromiseWithResolvers<Response>> = [];
+  const cancel = Promise.withResolvers<Response>();
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  let oauth!: ReturnType<typeof useProvidersOAuth>;
+  respond = async request => {
+    if (request.path.endsWith("/api/oauth/login")) {
+      const post = Promise.withResolvers<Response>(); posts.push(post); return post.promise;
+    }
+    if (request.path.endsWith("/api/oauth/login/cancel")) return cancel.promise;
+    return Response.json({ activeAccountId: null, accounts: [] });
+  };
+  const noop = () => {};
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    const [statuses, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
+    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: statuses,
+      notify: noop, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    oauth = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy: noop, setStatus: noop, setLoginInfo: noop, setOauthStatus,
+      beginAccountLogin: pools.beginAccountLogin, notify: noop, fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: noop });
+    return null;
+  }
+  try {
+    await render(<Harness base="/a" />);
+    await act(async () => { void oauth.loginOAuth("anthropic2"); });
+    await render(<Harness base="/b" />);
+    await render(<Harness base="/a" />);
+    await act(async () => { void oauth.loginOAuth("anthropic2", true, "shared"); });
+    expect(posts).toHaveLength(1);
+    await act(async () => { cancel.resolve(Response.json({})); });
+    expect(posts).toHaveLength(2);
+    await act(async () => { posts[0]!.resolve(Response.json({ url: "https://stale.example.test" })); });
+    await act(async () => { await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    expect(requests.filter(request => request.method === "DELETE")).toHaveLength(0);
+    await act(async () => { await oauth.cancelLoginOAuth("anthropic2"); });
+    await act(async () => { await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    expect(requests.filter(request => request.method === "DELETE").map(request => request.path)).toEqual(["/a/api/oauth/accounts"]);
+  } finally {
+    cancel.resolve(Response.json({}));
+    for (const post of posts) post.resolve(Response.json({}, { status: 400 }));
+    consent.mockRestore();
+  }
+});
+
 test.each(["delete", "logout"] as const)("%s with failed reads retains explicit logout without claiming authentication", async operation => {
   let pools!: ReturnType<typeof useProviderAccountPools>;
   let failReads = false;

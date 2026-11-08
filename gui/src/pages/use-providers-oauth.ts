@@ -54,7 +54,8 @@ export function useProvidersOAuth({
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
-  const activeLoginGenerationsRef = useRef(new Map<string, number>());
+  // Cancellation takes this exact entry and releases its owner only after server delivery settles.
+  const activeLoginGenerationsRef = useRef(new Map<string, { generation: number; finish?: () => void }>());
 
   const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
@@ -95,13 +96,13 @@ export function useProvidersOAuth({
     const cancelActiveLogins = (clearUi: boolean) => {
       const active = [...activeLoginGenerationsRef.current];
       activeLoginGenerationsRef.current.clear();
-      for (const [provider, generation] of active) {
+      for (const [provider, { generation, finish }] of active) {
         if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
         if (clearUi) {
           setBusy(current => current === provider ? null : current);
           setLoginInfo(current => current?.provider === provider ? null : current);
         }
-        void cancelServerLogin(provider);
+        void cancelServerLogin(provider).finally(() => finish?.());
       }
     };
     const onPageHide = () => cancelActiveLogins(true);
@@ -114,8 +115,9 @@ export function useProvidersOAuth({
 
   const cancelLoginOAuth = useCallback(async (provider: string) => {
     const gen = bumpLoginGeneration(provider);
+    const active = activeLoginGenerationsRef.current.get(provider);
     activeLoginGenerationsRef.current.delete(provider);
-    await cancelServerLogin(provider);
+    try { await cancelServerLogin(provider); } finally { active?.finish?.(); }
     if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
@@ -129,7 +131,8 @@ export function useProvidersOAuth({
       return;
     }
     const generation = bumpLoginGeneration(provider);
-    activeLoginGenerationsRef.current.set(provider, generation);
+    const active = { generation, finish: finishLogin ?? undefined };
+    activeLoginGenerationsRef.current.set(provider, active);
     const reauthTargetId = accountId?.trim() || undefined;
     setBusy(provider);
     setStatus("");
@@ -261,9 +264,9 @@ export function useProvidersOAuth({
         notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
       }
     } finally {
-      finishLogin?.();
-      if (activeLoginGenerationsRef.current.get(provider) === generation) {
+      if (activeLoginGenerationsRef.current.get(provider) === active) {
         activeLoginGenerationsRef.current.delete(provider);
+        finishLogin?.();
       }
       if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
     }
