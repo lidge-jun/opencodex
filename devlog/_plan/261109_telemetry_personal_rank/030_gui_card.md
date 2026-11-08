@@ -40,3 +40,17 @@ NEW `gui/tests/telemetry-profile-card.test.tsx`: visibility rules, connect disab
 shape, connected rank rendering, disconnect confirm + DELETE, pending state, Remote Link Child hidden. Screenshot of
 both states for the PR via the `pr-assets` branch.
 
+
+## Implementation record (wp4, eab9d1e49a)
+
+- Process deviation: the card was written while the loop FSM was still at P; the A/B edges were advanced afterwards
+  with the deviation stated in the attests. The plan doc had been audited in wp1, so the code follows an audited plan.
+- `gui/src/telemetry-profile-api.ts` owns the wire parsing and `isValidProfileHandle` (moved out of the component
+  file because oxlint's `react(only-export-components)` rule rejects non-component exports there).
+- The card hides itself when `/api/telemetry/profile` is refused, which is how a Remote Link Child behaves (the path is
+  not link-readable), as well as under `isConnectedRuntime()`.
+- Avatar colours are a fixed hex map (no Tailwind classes generated from data).
+- Screenshots for the PR (kept out of the branch): the empty connect form, and the connected state before any
+  collector exists ("Rank is unavailable right now"), taken from a throwaway proxy in an isolated home.
+- Verification: `gui/tests/telemetry-profile-card.test.tsx` (8 tests), full GUI suite 4109 pass, `lint:gui` and
+  `build:gui` clean.
