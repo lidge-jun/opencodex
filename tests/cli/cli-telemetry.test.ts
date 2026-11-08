@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleConfigCommand } from "../../src/cli/config-command";
@@ -12,6 +12,7 @@ import {
   setTelemetryPromptDepsForTests,
 } from "../../src/cli/telemetry";
 import { readConfigDiagnostics } from "../../src/config/diagnostics";
+import { resolveTelemetryStatus } from "../../src/telemetry/consent";
 import {
   ensureTelemetryInstallId,
   readTelemetryInstallId,
@@ -304,6 +305,24 @@ describe("ocx telemetry CLI and interactive prompt", () => {
       expect(typeof telemetry?.decidedAt).toBe("string");
       expect(typeof telemetry?.noticeShownAt).toBe("string");
       expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).telemetry.decision).toBe("accepted");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("disable on a fresh install with no config.json creates it with the decline", async () => {
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      // The Windows installer's opt-out runs before the first proxy start has written any config.
+      unlinkSync(join(home, "config.json"));
+      expect(await handleTelemetryCommand(["disable", "--json"])).toBe(0);
+      const saved = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as { telemetry?: { decision?: string } };
+      expect(saved.telemetry?.decision).toBe("declined");
+      expect(readConfigDiagnostics().config.telemetry?.decision).toBe("declined");
+      expect(resolveTelemetryStatus(readConfigDiagnostics().config, {}).effective).toBe(false);
+      // A second decline leaves the created file in place.
+      expect(await handleTelemetryCommand(["disable", "--json"])).toBe(0);
+      expect(readConfigDiagnostics().config.telemetry?.decision).toBe("declined");
     } finally {
       log.mockRestore();
     }

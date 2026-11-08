@@ -28,6 +28,19 @@ SignPath Foundation is rolling out ([Windows Code Signing](/reference/code-signi
 release carries the signature, Windows SmartScreen may warn about an unsigned installer; choose
 **More info → Run anyway** after confirming that you downloaded it from the release page.
 
+One installer page describes the anonymous daily usage summary OpenCodex sends, links the
+[privacy statement](/reference/code-signing/#privacy), and has a **Send anonymous usage
+statistics** checkbox, checked by default. Clear it and the app saves the opt-out to your
+opencodex config the first time it starts, before any proxy runs. For a silent install, pass
+`OCX_TELEMETRY_CHOICE=optout`:
+
+```powershell
+msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
+```
+
+Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
+notice first. Updates install without this page and never change an earlier opt-out.
+
 ### Linux
 
 Download `OpenCodex-<version>-linux-x86_64.AppImage` or
