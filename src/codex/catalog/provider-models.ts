@@ -214,9 +214,9 @@ export async function fetchProviderModelsWithAuth(
     ...(prov.retainModels ?? []),
   ])];
   const configured: CatalogModel[] = configuredIds.map(id => applyProviderConfigHints(
-    name, prov, { id, provider: name, ...(prov.adapter === "trae-cn" ? { inputModalities: ["text"], supportsVerbosity: false } : {}) }, contextCap, metadataModelIdCaseFold,
+    name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold,
     captured.effectiveAlias, metadataConfigDir, false,
-  ));
+  )).map(model => prov.adapter === "trae-cn" ? { ...model, inputModalities: ["text"], supportsVerbosity: false } : model);
   const withConfiguredRetention = (
     models: CatalogModel[],
     options?: { retainComboTargets?: boolean; warnDrops?: boolean },

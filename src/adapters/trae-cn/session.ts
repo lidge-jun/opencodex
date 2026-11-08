@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandInvocation } from "../../lib/win-exec";
 import { redactSecretString } from "../../lib/redact";
-import type { AdapterEvent } from "../../types";
+import type { AdapterEvent, OcxProviderConfig } from "../../types";
 import { readJsonLines } from "../coding-agent/protocol";
 import { resolveTraeCli, traeCnChildEnv, traeCnDestinationMatches } from "./profile";
 import { parseTraeAcpMessage, parseTraeModels, traePromptEvents, traeSessionId, traeStopReason, traeUsage, TraeAcpProtocolError, type TraeAcpFrame } from "./protocol";
@@ -149,7 +149,7 @@ class TraeAcpClient {
 
   /** Expose only a bounded, redacted diagnostic when the CLI closes unexpectedly. */
   diagnostic(): string {
-    return redactSecretString(this.failure?.message || this.stderr.join("")).trim().slice(0, 512);
+    return redactSecretString(this.stderr.join("").trim() || this.failure?.message || "").trim().slice(0, 512);
   }
 
   /** Stop RPCs first, then terminate the owned process tree and bound all remaining waits. */
@@ -193,8 +193,14 @@ export interface TraeSession {
 }
 
 /** Start a cancellable ACP session in owned temporary directories; callers close successful sessions. */
-export async function openTraeSession(baseUrl: string | undefined, deps: TraeAcpDeps = {}, signal?: AbortSignal): Promise<TraeSession> {
+export async function openTraeSession(
+  baseUrl: string | undefined, deps: TraeAcpDeps = {}, signal?: AbortSignal,
+  routing: Pick<OcxProviderConfig, "proxy" | "noProxy"> = {},
+): Promise<TraeSession> {
   signal?.throwIfAborted();
+  if (routing.proxy !== undefined || routing.noProxy !== undefined) {
+    throw new TraeAcpError("TRAE CN ACP cannot honor provider proxy/noProxy overrides; the official CLI owns its network route.", "trae_proxy_unsupported");
+  }
   if (!traeCnDestinationMatches(baseUrl)) throw new TraeAcpError("TRAE CN requires its canonical provider destination", "non_canonical_destination");
   const binary = (deps.resolveBinary ?? resolveTraeCli)();
   if (!binary) throw new TraeAcpError("TRAE CN CLI not found. Install traecli and sign in through TRAE CN.", "cli_not_found");
@@ -259,7 +265,6 @@ export async function openTraeSession(baseUrl: string | undefined, deps: TraeAcp
           await client.request("session/set_model", { sessionId, modelId });
           if (signal?.aborted) return;
           let output = false;
-          let sawTool = false;
           completion = client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, dispatch);
           while (true) {
             const frame = await Promise.race([
@@ -268,7 +273,6 @@ export async function openTraeSession(baseUrl: string | undefined, deps: TraeAcp
             ]);
             if (!frame) break;
             if (frame.kind !== "update" || frame.sessionId !== sessionId) continue;
-            if (frame.update.sessionUpdate === "tool_call" || frame.update.sessionUpdate === "tool_call_update") sawTool = true;
             for (const event of traePromptEvents(sessionId, frame.update)) {
               if (event.type === "text_delta") output = true;
               emit(event);
@@ -282,12 +286,21 @@ export async function openTraeSession(baseUrl: string | undefined, deps: TraeAcp
           const result = await completion;
           const stop = traeStopReason(result);
           if (stop === "cancelled") return;
-          if (stop !== "stop" && stop !== "max_tokens") throw new TraeAcpError(`TRAE CN stopped the turn: ${stop}`, "trae_turn_stopped");
-          if (!output) throw new TraeAcpError(sawTool
-            ? "TRAE CN ended after an internal tool turn without a text response. Retry the text request or select another model."
-            : "TRAE CN ended without a text response.", "trae_empty_response");
           const usage = traeUsage(result);
+          if (stop === "refusal") {
+            emit({ type: "incomplete", reason: "content_filter", retryable: false,
+              message: "TRAE CN refused the turn.", ...(usage ? { usage } : {}) });
+            return;
+          }
+          if (stop !== "stop" && stop !== "max_tokens") throw new TraeAcpError(`TRAE CN stopped the turn: ${stop}`, "trae_turn_stopped");
+          if (!output) throw new TraeAcpError("TRAE CN ended without a text response.", "trae_empty_response");
           emit({ type: "done", stopReason: stop, ...(usage ? { usage } : {}) });
+        } catch (error) {
+          if (error instanceof TraeAcpError && error.code === "trae_acp_closed") {
+            await client.close();
+            throw new TraeAcpError(client.diagnostic() || error.message, error.code);
+          }
+          throw error;
         } finally {
           signal?.removeEventListener("abort", abort);
           completion?.catch(() => undefined);
@@ -300,6 +313,7 @@ export async function openTraeSession(baseUrl: string | undefined, deps: TraeAcp
     };
   } catch (error) {
     if (error instanceof TraeAcpError && error.code === "trae_acp_closed") {
+      await client.close();
       const detail = client.diagnostic();
       if (detail && detail !== error.message) throw new TraeAcpError(detail, error.code);
     }

@@ -59,6 +59,14 @@ async function anchoredLine(path: string, anchor: string): Promise<string> {
 }
 
 describe("documented provider preset counts match the registry", () => {
+  test("TRAE CN quickstart leaves the key empty and links CLI login setup", async () => {
+    const page = await Bun.file(repoPath(QUICKSTARTS[0].path)).text();
+    const note = page.match(/For \*\*TRAE CN\*\*[^\n]*(?:\n[^\n]+)*/)?.[0] ?? "";
+    expect(note).toMatch(/leave.*key prompt empty/);
+    expect(note).toMatch(/Install and sign in to the CLI first/);
+    expect(note).toContain("[TRAE CN setup](/guides/providers/#trae-cn-official-acp)");
+  });
+
   test("the registry is the only source of the numbers under test", () => {
     // A derived count that collapsed to zero would make every assertion below vacuous.
     expect(TOTAL).toBeGreaterThan(0);

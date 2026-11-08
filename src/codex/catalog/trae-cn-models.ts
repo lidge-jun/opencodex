@@ -32,7 +32,7 @@ export async function fetchTraeCnProviderModels(
       .map(model => ({ ...model, inputModalities: ["text"], supportsVerbosity: false })),
     outcome: { provider: name, state }, contentRevision: observeModelCacheRevision(name),
   });
-  if (!traeCnDestinationMatches(provider.baseUrl)) {
+  if (!traeCnDestinationMatches(provider.baseUrl) || provider.proxy !== undefined || provider.noProxy !== undefined) {
     markProviderDiscoveryFailed(name, { reason: "blocked" });
     return observed(configured, "degraded");
   }
@@ -42,7 +42,7 @@ export async function fetchTraeCnProviderModels(
   if (isModelsFetchCoolingDown(name)) return observed(stale ?? configured, "degraded");
   const generation = captureModelCacheGeneration(name);
   try {
-    const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 });
+    const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 }, undefined, provider);
     await session.close();
     if (!isModelCacheGenerationCurrent(name, generation)) return observed(stale ?? configured, "degraded");
     const models = session.models.map(id => applyProviderConfigHints(name, provider,

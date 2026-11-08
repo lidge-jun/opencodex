@@ -36,10 +36,9 @@ function validateInput(parsed: OcxParsedRequest): { message: string; code: strin
     return { message: "TRAE CN ACP does not currently expose client tools.", code: "unsupported_client_tools" };
   }
   if (parsed.context.messages.some(message =>
-    (Array.isArray(message.content) && message.content.some(part => part.type === "image" || part.type === "audio"))
-    || (message.role === "assistant" && message.content.some(part => part.type === "toolCall"))
+    (Array.isArray(message.content) && message.content.some(part => part.type !== "text" && part.type !== "thinking"))
     || message.role === "toolResult")) {
-    return { message: "TRAE CN ACP currently supports text conversations only; images and tool replay are not supported.", code: "unsupported_input_modality" };
+    return { message: "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported.", code: "unsupported_input_modality" };
   }
   return undefined;
 }
@@ -50,7 +49,7 @@ function errorEvent(error: unknown): Extract<AdapterEvent, { type: "error" }> {
   const code = acp ? error.code : "trae_acp_protocol_error";
   const auth = acp && /invalid token|unauthorized|not logged in|authentication/i.test(error.message);
   const message = error instanceof Error ? error.message : "TRAE CN ACP ended with an invalid protocol response.";
-  const invalid = code === "trae_model_unavailable" || code === "trae_replay_too_large";
+  const invalid = code === "trae_model_unavailable" || code === "trae_replay_too_large" || code === "trae_proxy_unsupported";
   return {
     type: "error",
     message: auth ? `${message} Sign in through TRAE CN and retry.` : message.slice(0, 512),
@@ -84,7 +83,7 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: `trae-cn|${parsed.modelId}` });
         if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
         permit = decision?.allowed ? decision.permit : undefined;
-        const session = await openTraeSession(provider.baseUrl, deps, incoming.abortSignal);
+        const session = await openTraeSession(provider.baseUrl, deps, incoming.abortSignal, provider);
         try {
           await session.prompt(parsed.modelId, replay, emit, incoming.abortSignal, {
             beforeSend: () => {

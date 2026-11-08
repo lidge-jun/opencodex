@@ -10,7 +10,7 @@ threshold. The dashboard reuses `AccountAutoSwitchControl` below account actions
 focus/draft semantics and translated copy. The hook protects same-provider selection mutations
 and stale roster reads; confirmed pool-setting changes seed new overrides immediately, without
 overwriting an existing custom draft. Old servers do not show a synthetic control. See
-[Anthropic threshold semantics](providers/anthropic-account-thresholds.md). Connection probes use the [discovery credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership), including a live check before sending. The [TRAE CN probe](providers/trae-cn.md) uses a bounded ACP session in `src/server/management/trae-cn-provider-probe.ts` and invalidates the unchanged provider catalog after success; static catalogs remain not applicable.
+[Anthropic threshold semantics](providers/anthropic-account-thresholds.md). Connection probes use the [discovery credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership), including a live check before sending. The [TRAE CN probe](providers/trae-cn.md) uses a bounded ACP session in `src/server/management/trae-cn-provider-probe.ts`, replaces the unchanged generation's roster, requests catalog convergence and refreshes owned client integrations. Connectivity and publication outcomes remain separate; static catalogs remain not applicable.
 
 Anthropic account rows now expose the shared boolean `paused` DTO and use the existing
 `PUT /api/oauth/accounts/pause` body `{ provider, accountId, paused }`. The dashboard's

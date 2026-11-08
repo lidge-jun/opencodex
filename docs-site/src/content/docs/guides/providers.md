@@ -1480,15 +1480,20 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   Successful discovery is cached by the normal provider catalog mechanism, with the last good
   catalog and a small text-only seed as degraded fallbacks.
   Set `liveModels: false` to keep a static allowlist and skip CLI discovery. After switching CLI
-  accounts, run **Test connection** to check the active account and invalidate the previous model cache.
+  accounts, run **Test connection** to check the active account, replace the cached roster and
+  refresh the Codex catalog and previously connected clients. The result reports pending or
+  failed publication separately from connectivity. Restart running Codex sessions after publication.
 - **Transport:** Each turn creates a fresh ACP session, selects the requested model with
   `session/set_model`, and maps `agent_message_chunk` and `agent_thought_chunk` to OpenCodex text
   and reasoning events. Conversation history is replayed as labelled text.
-  Replays longer than 1,000,000 characters are rejected so system instructions cannot be silently lost.
+  Replays longer than 1,000,000 UTF-16 code units (JavaScript string length) are rejected so
+  system instructions cannot be silently lost. A supplementary character such as an emoji uses two units.
 - **Capability boundary:** This initial provider supports text conversations only. It rejects
-  client tools, tool replay, and image/audio input. Permission requests from the CLI receive an
-  error. Internal tool notifications are not converted into client tool calls, and a turn that
-  ends without text is an error rather than an empty successful answer.
+  client tools, tool replay, images, audio, video and attached documents. Model capability overrides
+  cannot enable native image input or verbosity. Images require the vision sidecar to describe them first.
+  Permission requests fail with `trae_client_request_unsupported`; internal tool notifications fail
+  with `trae_tool_call_unsupported`. A normal `end_turn` or `max_tokens` completion with no text
+  fails with `trae_empty_response`. Refusals preserve usage and terminate without retry.
 - **Process isolation:** The CLI uses an empty temporary workspace, no session MCP servers or
   selected skills, and disallow rules for file and command tools. OpenCodex terminates the child
   after the turn, on cancellation, or on protocol failure. Any tool notification or permission
@@ -1496,6 +1501,9 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
 - **Destination:** `https://www.trae.cn` identifies this provider; OpenCodex does not call it
   directly. A custom destination is refused. This row is separate from TRAE International and
   from a custom OpenAI-compatible provider named `trae`.
+- **Network routing:** The official CLI owns its network route. Provider `proxy` and `noProxy`
+  overrides, including `direct` and `null`, are rejected before CLI startup. OpenCodex does not
+  change system proxy settings.
 
 ### Official Qoder CLI (Global & CN)
 

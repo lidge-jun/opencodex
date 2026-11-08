@@ -12,7 +12,9 @@ import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
 import { captureModelCacheGeneration, clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
 import { probeTraeCnProvider } from "../../src/server/management/trae-cn-provider-probe";
 import { handleProviderRoutes } from "../../src/server/management/provider-routes";
-import { isVisionSidecarConsumer } from "../../src/vision/eligibility";
+import { isModelVisionSidecarConsumer, isVisionSidecarConsumer, modelAcceptsImageInput } from "../../src/vision/eligibility";
+import { requiresVisionPreprocessing } from "../../src/vision/plan";
+import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../src/types";
 import type { IncomingMeta } from "../../src/adapters/base";
@@ -205,6 +207,9 @@ function fakeSendBudget() {
 describe("TRAE CN ACP regression contract", () => {
   let testHome: TempHome;
   const config = (): OcxProviderConfig => ({ adapter: "trae-cn", baseUrl: "https://www.trae.cn", authMode: "key", models: ["test-model"], liveModels: true });
+  const rawModels = async (row: OcxProviderConfig, cap?: number) => (await fetchProviderModelsWithAuth(
+    captureProviderGather("trae-cn", row, refreshingModelsAuthResolver), 60_000, cap, refreshingModelsAuthResolver,
+  )).models;
   beforeEach(() => { testHome = createTempHome("ocx-trae-regression-"); clearModelCache(); });
   afterEach(() => { mock.restore(); clearModelCache(); testHome.remove(); });
 
@@ -267,7 +272,7 @@ describe("TRAE CN ACP regression contract", () => {
     expect(budget.state).toEqual({ used: 0, refunded: 1, closed: 1 });
   });
 
-  for (const kind of ["tools", "required", "toolCall", "toolResult", "image", "audio", "oversized"]) {
+  for (const kind of ["tools", "required", "toolCall", "toolResult", "image", "audio", "video", "document", "oversized"]) {
     test(`rejects ${kind} before starting the CLI`, async () => {
       const request = traeRequest();
       if (kind === "tools") request.context.tools = [{ name: "read_file", description: "Read a file", inputSchema: { type: "object" } }];
@@ -275,6 +280,8 @@ describe("TRAE CN ACP regression contract", () => {
       if (kind === "toolCall") request.context.messages = [{ role: "assistant", content: [{ type: "toolCall", id: "call", name: "read_file", arguments: {} }], timestamp: 0 }];
       if (kind === "toolResult") request.context.messages = [{ role: "toolResult", toolCallId: "call", toolName: "read_file", content: "result", timestamp: 0 }];
       if (kind === "image" || kind === "audio") request.context.messages = [{ role: "user", content: [{ type: kind, data: "fixture", mimeType: "image/png" }], timestamp: 0 }] as OcxParsedRequest["context"]["messages"];
+      if (kind === "video") request.context.messages = [{ role: "user", content: [{ type: "video", videoUrl: "https://example.com/video.mp4" }], timestamp: 0 }];
+      if (kind === "document") request.context.messages = [{ role: "user", content: [{ type: "document", text: "[document: fixture]", mediaType: "application/pdf", data: "Zml4dHVyZQ==" }], timestamp: 0 }];
       if (kind === "oversized") request.context.messages.unshift({ role: "user", content: "x".repeat(1_000_001), timestamp: 0 });
       let spawned = false;
       const events: AdapterEvent[] = [];
@@ -282,6 +289,63 @@ describe("TRAE CN ACP regression contract", () => {
         .runTurn!(request, traeMeta(), event => events.push(event));
       expect(spawned).toBe(false);
       expect(events[0]).toMatchObject({ type: "error", status: 400 });
+    });
+  }
+
+  for (const proxy of ["http://127.0.0.1:8080", "socks5://127.0.0.1:1080", "direct", null]) {
+    test(`rejects provider proxy ${proxy} before CLI startup in turns, discovery and probes`, async () => {
+      const row = { ...config(), proxy };
+      const fixture = traeFixture();
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(row, fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events[0]).toMatchObject({ type: "error", code: "trae_proxy_unsupported", status: 400 });
+      const converge = mock(async (): Promise<CatalogDisposition> => ({ status: "skipped", reason: "busy", retryable: true }));
+      expect(await (await probeTraeCnProvider("trae-cn", row, converge, undefined, fixture.deps)).json()).toMatchObject({ ok: false });
+      expect(fixture.options()).toBeUndefined();
+      const open = spyOn(traeClient, "openTraeSession");
+      const result = await fetchProviderModelsWithAuth(captureProviderGather("trae-cn", row, refreshingModelsAuthResolver), 60_000, undefined, refreshingModelsAuthResolver);
+      expect(result.outcome.state).toBe("degraded");
+      expect(open).not.toHaveBeenCalled();
+      expect(converge).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const phase of ["initialize", "session/prompt"]) {
+    test(`unexpected EOF during ${phase} retains late, redacted stderr`, async () => {
+      const fixture = traeFixture((request, child) => {
+        if (request.method !== phase) return false;
+        (child.stdout as PassThrough).end();
+        child.kill = () => {
+          setTimeout(() => {
+            (child.stderr as PassThrough).write("Not logged in; run traecli login. Authorization: Bearer fixture-secret-value");
+            child.exitCode = 1;
+            child.emit("close", 1);
+          }, 1);
+          return true;
+        };
+        return true;
+      });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), { ...fixture.deps, killGraceMs: 50 }).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "error", status: 401, code: "trae_cn_not_logged_in" });
+      expect(JSON.stringify(events)).toContain("run traecli login");
+      expect(JSON.stringify(events)).not.toContain("fixture-secret-value");
+    });
+  }
+
+  for (const withText of [false, true]) {
+    test(`refusal preserves usage without retry or success (text=${withText})`, async () => {
+      const fixture = traeFixture(request => {
+        if (request.method !== "session/prompt") return false;
+        if (withText) fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Unable to help." } } } });
+        fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "refusal", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } } });
+        return true;
+      });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "content_filter", retryable: false, usage: { inputTokens: 10, outputTokens: 2 } });
+      expect(events.some(event => event.type === "done" || event.type === "error")).toBe(false);
     });
   }
 
@@ -360,20 +424,26 @@ describe("TRAE CN ACP regression contract", () => {
 
   test("static catalogs never open ACP and retain unknown text-only models", async () => {
     const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new Error("must not discover"));
-    const row = { ...config(), models: ["future-model"], liveModels: false };
+    const row = { ...config(), models: ["future-model"], liveModels: false,
+      modelCapabilities: { "future-model": { inputModalities: ["text", "image"], supportsVerbosity: true } },
+      modelInputModalities: { "future-model": ["text", "image"] } };
     const captured = captureProviderGather("trae-cn", row, refreshingModelsAuthResolver);
     const result = await fetchProviderModelsWithAuth(captured, 60_000, undefined, refreshingModelsAuthResolver);
     expect(open).not.toHaveBeenCalled();
     expect(result.outcome.state).toBe("authoritative");
     expect(result.models).toMatchObject([{ id: "future-model", inputModalities: ["text"], supportsVerbosity: false }]);
     expect(isVisionSidecarConsumer({ providers: { "trae-cn": row } }, "trae-cn", "future-model")).toBe(true);
+    expect(isModelVisionSidecarConsumer(row, "future-model")).toBe(true);
+    const visionConfig = { providers: { "trae-cn": row }, customModels: [{ provider: "trae-cn", id: "future-model", inputModalities: ["text", "image"] }] };
+    expect(modelAcceptsImageInput(visionConfig, { provider: "trae-cn", id: "future-model", inputModalities: ["text", "image"] })).toBe(false);
+    expect(requiresVisionPreprocessing(visionConfig, row, "future-model", "trae-cn")).toBe(true);
   });
 
   test("discovered models do not advertise unsupported verbosity or native image input", async () => {
     const fixture = traeFixture();
     const realOpen = traeClient.openTraeSession;
     spyOn(traeClient, "openTraeSession").mockImplementation((baseUrl, _deps, signal) => realOpen(baseUrl, fixture.deps, signal));
-    const models = await fetchProviderModels("trae-cn", { ...config(), models: [] }, 60_000);
+    const models = await rawModels({ ...config(), models: [] });
     expect(models).toMatchObject([{ id: "test-model", inputModalities: ["text"], supportsVerbosity: false }]);
     expect(fixture.child.killed).toBe(true);
   });
@@ -392,21 +462,56 @@ describe("TRAE CN ACP regression contract", () => {
         cacheState === "fresh" ? Date.now() : 1, captureModelCacheGeneration("trae-cn"));
       const row = { ...config(), retainModels: ["retained-model"] };
       if (cacheState === "cooldown") await fetchProviderModels("trae-cn", row, 60_000, 80_000);
-      const models = await fetchProviderModels("trae-cn", row, 60_000, 40_000);
+      const models = await rawModels(row, 40_000);
       expect(models.map(model => model.id)).toContain("retained-model");
       expect(models.find(model => model.id === "test-model")!.contextWindow).toBeLessThanOrEqual(40_000);
       for (const model of models) expect(model).toMatchObject({ inputModalities: ["text"], supportsVerbosity: false });
     });
   }
 
-  test("connection probe uses ACP evidence and invalidates the cached roster", async () => {
+  test("connection probe publishes the ACP roster through catalog convergence", async () => {
     const fixture = traeFixture();
     setCached("trae-cn", [{ id: "old-account-model", provider: "trae-cn" }], Date.now(), captureModelCacheGeneration("trae-cn"));
-    const response = await probeTraeCnProvider("trae-cn", config(), undefined, fixture.deps);
-    expect(await response.json()).toMatchObject({ ok: true, models: 1 });
+    const converge = mock(async (): Promise<CatalogDisposition> => {
+      expect(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id)).toEqual(["test-model"]);
+      return { status: "committed", changed: true, degraded: false, notices: [] };
+    });
+    const refreshConnectedClients = mock(async (admit: () => boolean) => { expect(admit()).toBe(true); return []; });
+    const response = await probeTraeCnProvider("trae-cn", config(), converge, undefined, { ...fixture.deps, refreshConnectedClients });
+    expect(await response.json()).toMatchObject({ ok: true, models: 1, catalogRefresh: { status: "committed" } });
     expect(fixture.requests.map(request => request.method)).toEqual(["initialize", "session/new"]);
-    expect(getFreshCached("trae-cn", 60_000, Date.now())).toBeNull();
+    expect(converge).toHaveBeenCalledTimes(1);
+    expect(refreshConnectedClients).toHaveBeenCalledTimes(1);
     expect(fixture.child.killed).toBe(true);
+  });
+
+  test("a connection probe cannot replace a newer cache generation", async () => {
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    let requestId = 0;
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/new") return false;
+      requestId = request.id;
+      started();
+      return true;
+    });
+    const converge = mock(async (): Promise<CatalogDisposition> => ({ status: "committed", changed: true, degraded: false, notices: [] }));
+    const probe = probeTraeCnProvider("trae-cn", config(), converge, undefined, fixture.deps);
+    await waiting;
+    clearModelCache("trae-cn");
+    setCached("trae-cn", [{ id: "new-account-model", provider: "trae-cn" }], Date.now(), captureModelCacheGeneration("trae-cn"));
+    fixture.send({ jsonrpc: "2.0", id: requestId, result: { sessionId: "fixture-session", models: { availableModels: [{ modelId: "old-account-model" }] } } });
+    expect(await (await probe).json()).toMatchObject({ ok: true, catalogRefresh: { status: "skipped", reason: "stale" } });
+    expect(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id)).toEqual(["new-account-model"]);
+    expect(converge).not.toHaveBeenCalled();
+  });
+
+  test("a successful probe reports pending catalog publication", async () => {
+    const fixture = traeFixture();
+    const response = await probeTraeCnProvider("trae-cn", config(), async () => ({ status: "skipped", reason: "busy", retryable: true }), undefined, fixture.deps);
+    const body = await response.json();
+    expect(body).toMatchObject({ ok: true, catalogRefresh: { status: "skipped", reason: "busy" } });
+    expect(body.message).toContain("Catalog refresh is pending");
   });
 
   test("the management connection test reaches ACP without an HTTP website probe", async () => {
@@ -415,9 +520,12 @@ describe("TRAE CN ACP regression contract", () => {
     spyOn(traeClient, "openTraeSession").mockImplementation((baseUrl, _deps, signal) => realOpen(baseUrl, fixture.deps, signal));
     const outbound = spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not fetch the vendor website"));
     const req = new Request("http://localhost/api/providers/test?name=trae-cn", { method: "POST" });
-    const response = await handleProviderRoutes({ req, url: new URL(req.url), config: { providers: { "trae-cn": config() } }, deps: {},
+    const refreshOwnedCatalogIntegrations = mock(async () => []);
+    const response = await handleProviderRoutes({ req, url: new URL(req.url), config: { providers: { "trae-cn": config() } }, deps: { refreshOwnedCatalogIntegrations },
+      convergeCodexCatalog: async () => ({ status: "committed", changed: true, degraded: false, notices: [] }),
     } as Parameters<typeof handleProviderRoutes>[0]);
     expect(await response!.json()).toMatchObject({ ok: true, models: 1 });
     expect(outbound).not.toHaveBeenCalled();
+    expect(refreshOwnedCatalogIntegrations).toHaveBeenCalledTimes(1);
   });
 });

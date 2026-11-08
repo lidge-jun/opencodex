@@ -118,14 +118,16 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
  * Any of them can require the vision preprocessor. A genuinely unknown custom model is NOT
  * guessed blind: it keeps the established pass-through behaviour. The provider-only fallback
  * keeps legacy unit callers stable; production dispatch always supplies providerName so the
- * complete capability chain is consulted.
+ * complete capability chain is consulted. TRAE CN's text-only wire contract precedes all
+ * configurable image declarations.
  */
 export function requiresVisionPreprocessing(
   config: Pick<OcxConfig, "providers"> & { customModels?: OcxConfig["customModels"] },
-  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "inputModalities" | "modelCapabilities">,
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "inputModalities" | "modelCapabilities"> & Partial<Pick<OcxProviderConfig, "adapter">>,
   modelId: string,
   providerName?: string,
 ): boolean {
+  if (provider.adapter === "trae-cn") return true;
   const runtimeDeclared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
     ? provider.modelCapabilities?.[modelId]?.inputModalities
     : undefined;
