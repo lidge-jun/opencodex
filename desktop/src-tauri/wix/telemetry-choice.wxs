@@ -18,13 +18,14 @@
     <Property Id="OCX_TELEMETRY_PREVIOUS_STAMP">
       <RegistrySearch Id="OcxTelemetryPreviousStamp" Root="HKLM" Key="Software\OpenCodex\Telemetry" Name="InstallerChoiceStamp" Type="raw" Win64="$(var.OcxTelemetryWin64)" />
     </Property>
-    <!-- A choice given on the command line is a new decision: give it a new stamp. -->
-    <SetProperty Action="OcxTelemetryStampExplicit" Id="OCX_TELEMETRY_STAMP" Value="[Date] [Time]" Before="AppSearch" Sequence="both">OCX_TELEMETRY_CHOICE</SetProperty>
+    <!-- A choice given on the command line is a new decision: give it a new stamp. The UI phase passes
+         its stamp to the install phase, so a carried choice is never re-stamped without the page. -->
+    <SetProperty Action="OcxTelemetryStampExplicit" Id="OCX_TELEMETRY_STAMP" Value="[Date] [Time]" Before="AppSearch" Sequence="both">OCX_TELEMETRY_CHOICE AND NOT OCX_TELEMETRY_STAMP</SetProperty>
     <SetProperty Action="OcxTelemetryKeepChoice" Id="OCX_TELEMETRY_CHOICE" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch" Sequence="both">NOT OCX_TELEMETRY_CHOICE AND OCX_TELEMETRY_PREVIOUS_CHOICE</SetProperty>
     <SetProperty Action="OcxTelemetryKeepStamp" Id="OCX_TELEMETRY_STAMP" Value="[OCX_TELEMETRY_PREVIOUS_STAMP]" After="OcxTelemetryKeepChoice" Sequence="both">NOT OCX_TELEMETRY_STAMP AND OCX_TELEMETRY_PREVIOUS_STAMP</SetProperty>
     <SetProperty Action="OcxTelemetryDefaultChoice" Id="OCX_TELEMETRY_CHOICE" Value="send" After="OcxTelemetryKeepStamp" Sequence="both">NOT OCX_TELEMETRY_CHOICE</SetProperty>
     <!-- The box starts checked unless this install already carries an opt-out. -->
-    <SetProperty Action="OcxTelemetryCheckBox" Id="OCX_TELEMETRY_SEND" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">OCX_TELEMETRY_CHOICE &lt;&gt; "optout"</SetProperty>
+    <SetProperty Action="OcxTelemetryCheckBox" Id="OCX_TELEMETRY_SEND" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">OCX_TELEMETRY_CHOICE ~&lt;&gt; "optout"</SetProperty>
     <ComponentGroup Id="OcxTelemetryInstallerChoice">
       <!-- Machine-wide, so an opt-out from a silent install run as SYSTEM reaches every user. -->
       <Component Id="OcxTelemetryInstallerChoiceRegistry" Directory="INSTALLDIR" Guid="B3E1C7D2-58A4-4F0E-9C6B-7A2D41E95F08" Win64="$(var.OcxTelemetryWin64)">
@@ -62,9 +63,10 @@
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>
-      <!-- Tauri's template routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins. -->
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="OcxTelemetryDlg" Order="3">1</Publish>
-      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="OcxTelemetryDlg" Order="3">1</Publish>
+      <!-- Tauri's template routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins. Only on a
+           first install: an installed product's patch route (WelcomeDlg -> VerifyReadyDlg) stays as it is. -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="OcxTelemetryDlg" Order="3">NOT Installed</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="OcxTelemetryDlg" Order="3">NOT Installed</Publish>
     </UI>
   </Fragment>
 </Wix>

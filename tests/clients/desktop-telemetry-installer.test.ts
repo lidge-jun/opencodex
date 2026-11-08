@@ -53,6 +53,108 @@ function xmlUnescape(value: string): string {
   return value.replaceAll("&quot;", '"').replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
 }
 
+type Props = Record<string, string>;
+
+/** Evaluates the subset of Windows Installer condition syntax the fragment uses. */
+function msiCondition(condition: string, props: Props): boolean {
+  const tokens = xmlUnescape(condition).match(/"[^"]*"|~<>|~=|<>|=|\(|\)|[A-Za-z_][A-Za-z0-9_.]*|\d+/g) ?? [];
+  let at = 0;
+  const peek = () => tokens[at];
+  const value = (token: string): string => (token.startsWith('"') ? token.slice(1, -1) : /^\d+$/.test(token) ? token : props[token] ?? "");
+  const primary = (): boolean => {
+    const token = tokens[at++];
+    if (token === undefined) throw new Error(`incomplete condition: ${condition}`);
+    if (token === "NOT") return !primary();
+    if (token === "(") {
+      const inner = or();
+      if (tokens[at++] !== ")") throw new Error(`unbalanced condition: ${condition}`);
+      return inner;
+    }
+    const op = peek();
+    if (op === "=" || op === "<>" || op === "~=" || op === "~<>") {
+      at += 1;
+      let left = value(token);
+      let right = value(tokens[at++]!);
+      if (op.startsWith("~")) [left, right] = [left.toLowerCase(), right.toLowerCase()];
+      return op.endsWith("<>") ? left !== right : left === right;
+    }
+    const bare = value(token);
+    return bare !== "" && bare !== "0";
+  };
+  const and = (): boolean => {
+    let result = primary();
+    while (peek() === "AND") { at += 1; result = primary() && result; }
+    return result;
+  };
+  const or = (): boolean => {
+    let result = and();
+    while (peek() === "OR") { at += 1; result = and() || result; }
+    return result;
+  };
+  const result = or();
+  if (at !== tokens.length) throw new Error(`unparsed condition: ${condition}`);
+  return result;
+}
+
+function msiFormat(template: string, props: Props, clock: string): string {
+  return template.replace(/\[([A-Za-z_]+)\]/g, (_, name: string) => (name === "Date" ? clock.split(" ")[0]! : name === "Time" ? clock.split(" ")[1]! : props[name] ?? ""));
+}
+
+interface InstallRun {
+  /** HKLM values an earlier install left, read by AppSearch. */
+  previous?: { choice: string; stamp: string };
+  /** Public properties on the msiexec command line. */
+  commandLine?: Props;
+  /** `full` shows the page; `reduced` (/qr) runs the UI sequence without dialogs; `none` (/qn, /qb, /passive) skips it. */
+  ui: "full" | "reduced" | "none";
+  /** In a full-UI run: the box state the person leaves before clicking Next (default: as preselected). */
+  box?: boolean;
+}
+
+/**
+ * Runs the fragment's SetProperty actions and the page's Next publishes through both MSI phases and
+ * returns what the component writes to HKLM. The UI phase is stamped "11/8/2026 01:00:00", the
+ * install phase "11/8/2026 02:00:00", so a re-stamp in the install phase shows.
+ */
+function simulateInstall(wxs: string, run: InstallRun): { choice: string; stamp: string; boxPreselected?: boolean } {
+  const actions = [...wxs.matchAll(/<SetProperty Action="(\w+)" Id="(\w+)" Value="([^"]*)" (?:Before|After)="\w+" Sequence="(\w+)">([^<]*)<\/SetProperty>/g)]
+    .map(([, action, id, template, sequence, condition]) => ({ action: action!, id: id!, template: template!, sequence: sequence!, condition: condition! }));
+  if (actions.length !== 5) throw new Error(`expected 5 SetProperty actions, found ${actions.length}`);
+  const secure = [...wxs.matchAll(/<Property Id="(\w+)" Secure="yes" \/>/g)].map(match => match[1]!);
+  const phase = (props: Props, sequence: "ui" | "execute", clock: string): Props => {
+    for (const step of actions) {
+      if (step.sequence !== "both" && step.sequence !== sequence) continue;
+      if (step.action === "OcxTelemetryKeepChoice" && run.previous) {
+        // AppSearch runs between OcxTelemetryStampExplicit and OcxTelemetryKeepChoice.
+        props.OCX_TELEMETRY_PREVIOUS_CHOICE = run.previous.choice;
+        props.OCX_TELEMETRY_PREVIOUS_STAMP = run.previous.stamp;
+      }
+      if (msiCondition(step.condition, props)) props[step.id] = msiFormat(step.template, props, clock);
+    }
+    return props;
+  };
+  const commandLine = run.commandLine ?? {};
+  let boxPreselected: boolean | undefined;
+  let carried: Props = {};
+  if (run.ui !== "none") {
+    const ui = phase({ ...commandLine }, "ui", "11/8/2026 01:00:00");
+    if (run.ui === "full") {
+      boxPreselected = ui.OCX_TELEMETRY_SEND === "1";
+      const box = run.box ?? boxPreselected;
+      if (box) ui.OCX_TELEMETRY_SEND = "1";
+      else delete ui.OCX_TELEMETRY_SEND;
+      const next = /<Control Id="Next"[\s\S]*?<\/Control>/.exec(wxs)?.[0] ?? "";
+      for (const [, property, template, condition] of next.matchAll(/<Publish Property="(\w+)" Value="([^"]*)">([^<]*)<\/Publish>/g)) {
+        if (msiCondition(condition!, ui)) ui[property!] = msiFormat(template!, ui, "11/8/2026 01:00:00");
+      }
+    }
+    // Only Secure public properties reach the elevated install phase.
+    carried = Object.fromEntries(secure.filter(name => ui[name] !== undefined).map(name => [name, ui[name]!]));
+  }
+  const execute = phase({ ...commandLine, ...carried }, "execute", "11/8/2026 02:00:00");
+  return { choice: execute.OCX_TELEMETRY_CHOICE ?? "", stamp: execute.OCX_TELEMETRY_STAMP ?? "", boxPreselected };
+}
+
 describe("Windows installer telemetry choice", () => {
   const wxs = readFileSync(FRAGMENT, "utf8");
 
@@ -73,7 +175,7 @@ describe("Windows installer telemetry choice", () => {
     expect(wxs).toMatch(new RegExp(`Type="CheckBox"[^>]*Property="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" CheckBoxValue="1" Text="${TELEMETRY_INSTALLER_CHECKBOX_TEXT}"`));
     // The box starts checked unless this install already carries an opt-out (command line or upgrade).
     expect(wxs).toContain(
-      `<SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} &lt;&gt; "${TELEMETRY_INSTALLER_OPT_OUT}"</SetProperty>`,
+      `<SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; "${TELEMETRY_INSTALLER_OPT_OUT}"</SetProperty>`,
     );
     // A checked box writes "send", which is never acted on, and the page says so.
     expect(wxs).toContain(`Text="${TELEMETRY_INSTALLER_KEEP_NOTE}"`);
@@ -102,10 +204,55 @@ describe("Windows installer telemetry choice", () => {
     expect(wxs).toContain(`Action="OcxTelemetryKeepChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch"`);
   });
 
+  describe("what each kind of install records in HKLM", () => {
+    const optOut = TELEMETRY_INSTALLER_OPT_OUT;
+    const send = "send";
+    const UI_STAMP = "11/8/2026 01:00:00";
+    const INSTALL_STAMP = "11/8/2026 02:00:00";
+
+    test("a fresh install with the page records the box, stamped when Next was clicked", () => {
+      expect(simulateInstall(wxs, { ui: "full" })).toEqual({ choice: send, stamp: UI_STAMP, boxPreselected: true });
+      expect(simulateInstall(wxs, { ui: "full", box: false })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: true });
+    });
+
+    test("a silent opt-out on the command line gets its own stamp, in any letter case", () => {
+      expect(simulateInstall(wxs, { ui: "none", commandLine: { OCX_TELEMETRY_CHOICE: optOut } })).toEqual({ choice: optOut, stamp: INSTALL_STAMP, boxPreselected: undefined });
+      expect(simulateInstall(wxs, { ui: "reduced", commandLine: { OCX_TELEMETRY_CHOICE: optOut } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: undefined });
+      // A full-UI install given OptOut starts with the box unchecked, so Next keeps the opt-out.
+      expect(simulateInstall(wxs, { ui: "full", commandLine: { OCX_TELEMETRY_CHOICE: "OptOut" } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: false });
+    });
+
+    test("an upgrade without the page keeps the previous choice and stamp, so nothing is re-applied", () => {
+      for (const ui of ["none", "reduced"] as const) {
+        for (const previous of [{ choice: optOut, stamp: "s1" }, { choice: send, stamp: "s1" }]) {
+          expect(simulateInstall(wxs, { ui, previous }), `${ui} ${previous.choice}`).toEqual({ ...previous, boxPreselected: undefined });
+        }
+      }
+    });
+
+    test("an upgrade never turns a previous opt-out into send unless the person checks the box", () => {
+      for (const ui of ["none", "reduced", "full"] as const) {
+        expect(simulateInstall(wxs, { ui, previous: { choice: optOut, stamp: "s1" } }).choice, ui).toBe(optOut);
+      }
+      // The page preselects the previous choice.
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: optOut, stamp: "s1" } }).boxPreselected).toBe(false);
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: send, stamp: "s1" } }).boxPreselected).toBe(true);
+      // Checking it records send, which the app never acts on: a saved decline stays declined.
+      expect(simulateInstall(wxs, { ui: "full", box: true, previous: { choice: optOut, stamp: "s1" } }).choice).toBe(send);
+    });
+
+    test("a silent install without a choice defaults to send and records no stamp", () => {
+      expect(simulateInstall(wxs, { ui: "none" })).toEqual({ choice: send, stamp: "", boxPreselected: undefined });
+    });
+  });
+
   test("the dialog sits between the welcome and install-directory pages of Tauri's sequence", () => {
     // Tauri's main.wxs routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins.
-    expect(wxs).toContain(`<Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="${TELEMETRY_INSTALLER_DIALOG}" Order="3">1</Publish>`);
-    expect(wxs).toContain(`<Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="${TELEMETRY_INSTALLER_DIALOG}" Order="3">1</Publish>`);
+    // Only on a first install, so an installed product's patch route (WelcomeDlg -> VerifyReadyDlg) is untouched.
+    expect(wxs).toContain(`<Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="${TELEMETRY_INSTALLER_DIALOG}" Order="3">NOT Installed</Publish>`);
+    expect(wxs).toContain(`<Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="${TELEMETRY_INSTALLER_DIALOG}" Order="3">NOT Installed</Publish>`);
+    expect(msiCondition("NOT Installed", {})).toBe(true);
+    expect(msiCondition("NOT Installed", { Installed: "00:00:00" })).toBe(false);
     const dialog = /<Dialog Id="OcxTelemetryDlg"[\s\S]*?<\/Dialog>/.exec(wxs)?.[0] ?? "";
     expect(dialog).toMatch(/<Control Id="Back"[\s\S]*?Value="WelcomeDlg"/);
     expect(dialog).toMatch(/<Control Id="Next"[\s\S]*?Event="NewDialog" Value="InstallDirDlg"/);
@@ -120,10 +267,13 @@ describe("Windows installer telemetry choice", () => {
     expect(rustConst("REGISTRY_VALUE")).toBe(TELEMETRY_INSTALLER_REGISTRY_VALUE);
     expect(rustConst("STAMP_VALUE")).toBe(TELEMETRY_INSTALLER_STAMP_VALUE);
     expect(rustConst("OPT_OUT")).toBe(TELEMETRY_INSTALLER_OPT_OUT);
-    // The app reads HKLM and records the applied stamp per user under HKCU.
+    // The app reads the machine-wide choice and a per-user one, and records each applied stamp under HKCU.
     const module = rustCode(RUST);
     expect(module).toContain("RegKey::predef(HKEY_LOCAL_MACHINE)");
+    expect(module).toMatch(/RegKey::predef\(HKEY_CURRENT_USER\)[\s\S]*?read\(&key, Scope::User\)/);
     expect(module).toContain("create_subkey(super::REGISTRY_KEY)");
+    expect(rustConst("APPLIED_STAMP_VALUE")).toBe("AppliedInstallerStamp");
+    expect(rustConst("APPLIED_USER_STAMP_VALUE")).toBe("AppliedUserInstallerStamp");
   });
 
   test("the app saves the opt-out before it resolves or starts a proxy, and falls back to the env opt-out", () => {
@@ -138,7 +288,7 @@ describe("Windows installer telemetry choice", () => {
     const module = rustCode(RUST);
     expect(module).toContain(`.args(["telemetry", "disable", "--json"])`);
     // A failed save is retried in the background, so a proxy the app only attaches to follows it too.
-    expect(module).toMatch(/Outcome::NotPersisted => \{[\s\S]*?tauri::async_runtime::spawn\(async move \{ retry\(app, stamp\)\.await \}\)/);
+    expect(module).toMatch(/Outcome::NotPersisted => \{[\s\S]*?tauri::async_runtime::spawn\(async move \{ retry\(app, pending\)\.await \}\)/);
   });
 
   test("the command the app runs persists the opt-out, and nothing is sent afterwards", async () => {
