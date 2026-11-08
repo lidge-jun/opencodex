@@ -21,8 +21,9 @@ export interface RouteToDeps extends RuntimeApiDeps {
 
 export function routeToStatusLines(status: RouteToStatus): string[] {
   return ["DEVICE  CLIENT  INTENT  SOURCE  APPLIED  TARGET", ...status.devices.flatMap(device =>
-    device.clients.map(row => [device.alias || device.id, row.client, row.intent, row.source,
-      row.applied ?? "-", row.target ?? "-"].join("  "))),
+    device.routeIntent === "unsupported" ? [`${device.alias || device.id}  route intent unsupported (${device.reason ?? "unsupported"})`]
+      : device.clients.map(row => [device.alias || device.id, row.client, row.intent, row.source,
+        row.applied ?? "-", row.target ?? "-"].join("  "))),
     ...(status.syncs ?? []).map(row => `sync ${row.id}: ${row.state}${row.reason ? ` (${row.reason})` : ""}`),
     ...(status.deferred ? [`Local reconciliation deferred: Home intent or the Child catalog is unavailable${status.deferred.clients.length ? ` (${status.deferred.clients.join(", ")})` : ""}.`] : [])];
 }
@@ -126,8 +127,10 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
     || (status.deferred !== undefined && (!status.deferred || status.deferred.reason !== "intent_or_catalog_pending"
       || !Array.isArray(status.deferred.clients) || status.deferred.clients.some(client => !isRouteClientId(client))))
     || (status.syncs !== undefined && (!Array.isArray(status.syncs) || status.syncs.some(row => !row || typeof row.id !== "string"
-      || !["synced", "failed", "pending"].includes(row.state) || (row.reason !== undefined && typeof row.reason !== "string"))))
-    || status.devices.some(row => !row || typeof row.id !== "string" || !Array.isArray(row.clients) || row.clients.length === 0
+      || !["synced", "failed", "pending", "unsupported"].includes(row.state) || (row.reason !== undefined && typeof row.reason !== "string"))))
+    || status.devices.some(row => !row || typeof row.id !== "string" || !Array.isArray(row.clients)
+      || (row.routeIntent === undefined ? row.clients.length === 0
+        : row.routeIntent !== "unsupported" || row.clients.length !== 0 || typeof row.reason !== "string")
       || (row.alias !== undefined && typeof row.alias !== "string")
       || row.clients.some(client => !client || !isRouteClientId(client.client)
         || (client.intent !== "on" && client.intent !== "off")

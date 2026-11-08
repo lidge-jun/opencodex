@@ -311,7 +311,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         if (current.links.some(link => link.alias === alias && link.direction === "hub-initiated")) throw new Error("link exists");
         writeStoreFor(ctx, { ...current, links: [...current.links, record!] });
       });
-      withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, undefined, readStoreFor(ctx).links.map(link => link.id)));
+      // An ephemeral ocx-child never reads route intent, so its enrollment saves none: seeding would
+      // also start ocx sync applying route intent to every Home client.
+      if (!ephemeralChild) withConfigMutationLockSync(() => seedRouteDeviceClients(ctx.config, ctx.version, id, undefined, readStoreFor(ctx).links.map(link => link.id)));
       await state.listener.ensureStarted();
       if (state.listener.status().state !== "listening") return await failed(fail("listener_unavailable", "The link listener is unavailable.", 503));
       await state.supervisor.ensureStarted();

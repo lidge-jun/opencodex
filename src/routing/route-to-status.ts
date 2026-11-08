@@ -15,13 +15,29 @@ export interface RouteToDeviceStatus {
   desiredDigest: string;
   appliedRouteIntentDigest: string | null;
   clients: RouteToClientStatus[];
+  /**
+   * Present only on a device that never reads route intent: an ephemeral `ocx-child` refreshes the
+   * Home catalog through ocx sync and nothing else, so it has no client rows.
+   */
+  routeIntent?: "unsupported";
+  reason?: typeof EPHEMERAL_NO_ROUTE_INTENT;
 }
+
+/** Why an ephemeral `ocx-child` link has no route intent. */
+export const EPHEMERAL_NO_ROUTE_INTENT = "ephemeral-child-no-route-intent" as const;
+
+export type RouteToSyncRow = { id: string; state: "synced" | "failed" | "pending" | "unsupported"; reason?: string };
 
 export interface RouteToStatus {
   schema: "ocx.route-to/1";
   devices: RouteToDeviceStatus[];
-  syncs?: Array<{ id: string; state: "synced" | "failed" | "pending"; reason?: string }>;
+  syncs?: RouteToSyncRow[];
   deferred?: { reason: "intent_or_catalog_pending"; clients: RouteClientId[] };
+}
+
+/** The status row of an ephemeral Child: route intent is unsupported, never stale or pending. */
+export function unsupportedRouteToDevice(id: string, alias: string): RouteToDeviceStatus {
+  return { id, alias, desiredDigest: "", appliedRouteIntentDigest: null, clients: [], routeIntent: "unsupported", reason: EPHEMERAL_NO_ROUTE_INTENT };
 }
 
 /**

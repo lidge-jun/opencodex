@@ -11,7 +11,7 @@ import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type
 import { clearRouteClientIntent, recordHomeNativeDecision, RouteIntentStateUnreadableError, setRouteClientIntent } from "../../routing/route-intent-state";
 import { initializeHomeRouteIntentDefaults, projectChildRouteIntent, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { homeHasLinks } from "../../routing/home-route-capture";
-import { routeToDeviceStatus, type RouteToStatus } from "../../routing/route-to-status";
+import { EPHEMERAL_NO_ROUTE_INTENT, routeToDeviceStatus, unsupportedRouteToDevice, type RouteToStatus, type RouteToSyncRow } from "../../routing/route-to-status";
 import { refreshRouteNativeSettings, withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
@@ -20,12 +20,17 @@ export interface RouteToRouteDeps {
   applyHome?: (ctx: ManagementContext, overwriteConflict: boolean, overwriteClient?: RouteClientId) => Promise<RouteClientOutcome[]>;
   /** Isolated transaction test seam; production uses the shared local materializer. */
   materializeHome?: (config: OcxConfig, version: string, overwriteConflict: boolean, overwriteClient?: RouteClientId) => Promise<RouteClientOutcome[]>;
-  syncChild?: (link: LinkRecord, ctx: ManagementContext, overwriteConflict: boolean, overwriteClient?: RouteClientId) => Promise<{ state: "synced" | "failed" | "pending"; reason?: string }>;
+  syncChild?: (link: LinkRecord, ctx: ManagementContext, overwriteConflict: boolean, overwriteClient?: RouteClientId) => Promise<Omit<RouteToSyncRow, "id">>;
 }
 
 function devices(ctx: ManagementContext): LinkRecord[] {
   // Unlike an empty store, unreadable trust metadata must never select another device.
   return (ctx.deps.readLinkStore?.() ?? readLinkStore(linkStorePath())).links;
+}
+
+/** An ephemeral ocx-child never reads route intent: nothing addresses it as a route device. */
+function ephemeral(link: LinkRecord | undefined): boolean {
+  return link?.childKind === "ephemeral";
 }
 
 function resolveDevice(value: string | undefined, links: LinkRecord[]): string | undefined {
@@ -49,6 +54,7 @@ async function view(ctx: ManagementContext, selected?: string): Promise<RouteToS
   }
   for (const link of links) {
     if (selection !== "all" && selection !== link.id) continue;
+    if (ephemeral(link)) { rows.push(unsupportedRouteToDevice(link.id, link.alias)); continue; }
     const peer = homeLinkChildParity.get(link.id);
     rows.push(routeToDeviceStatus(link.id, link.alias, projectChildRouteIntent(ctx.config, ctx.version, link.id),
       peer.routeClientOutcomes ?? [], peer.appliedRouteIntentDigest ?? null));
@@ -103,6 +109,8 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     response.headers.set("cache-control", "no-store");
     return response;
   };
+  const unsupported = (link: LinkRecord): Response => reply({ error: `${link.alias} runs the ephemeral ocx-child, which never reads route intent, so nothing was changed. ocx sync refreshes its Home catalog.`,
+    code: "route_intent_unsupported", reason: EPHEMERAL_NO_ROUTE_INTENT, device: link.id }, 409);
   if (config.runtimeRole === "client") return reply({ error: "Route-to decisions are owned by the Home", code: "link_child_read_only" }, 403);
   let desiredCommitted = false;
   try {
@@ -126,10 +134,13 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
         || (body.overwriteConflict !== undefined && typeof body.overwriteConflict !== "boolean")) return reply({ error: "invalid_request" }, 400);
       const links = devices(ctx);
       const selected = body.device === "all" ? "all" : resolveDevice(body.device as string | undefined ?? "home", links);
+      const only = links.find(link => link.id === selected);
+      if (ephemeral(only)) return unsupported(only!);
       if (selected === "all" || selected === "home") await applyHome(ctx, body.overwriteConflict === true, deps);
-      const syncs: Array<{ id: string; state: string; reason?: string }> = [];
+      const syncs: RouteToSyncRow[] = [];
       for (const link of links) {
         if (selected !== "all" && selected !== link.id) continue;
+        if (ephemeral(link)) { syncs.push({ id: link.id, state: "unsupported", reason: EPHEMERAL_NO_ROUTE_INTENT }); continue; }
         const run = deps.syncChild ?? (await import("../../routing/route-to-sync-child")).syncRouteToChild;
         syncs.push({ id: link.id, ...await run(link, ctx, body.overwriteConflict === true) });
       }
@@ -138,6 +149,8 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     const write = parseWrite(body);
     if (!write) return reply({ error: "invalid_request" }, 400);
     const selected = resolveDevice(write.device, devices(ctx));
+    const target = devices(ctx).find(link => link.id === selected);
+    if (ephemeral(target)) return unsupported(target!);
     // On the Home itself a native client's decision is its native switch, written by the apply below.
     const homeNative = selected === "home" && isHomeNativeRouteClient(write.client) ? write.client : undefined;
     const switchBefore = homeNative ? durableHomeSwitch(ctx.config, homeNative) : undefined;
@@ -158,7 +171,7 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       // A Home native decision is committed only once the apply writes its switch (below).
       if (!homeNative) desiredCommitted = true;
       // Desired state remains committed if subsequent reconciliation fails.
-      if (selected === undefined) for (const link of devices(ctx)) homeRouteIntentWatch.notify(link.id);
+      if (selected === undefined) for (const link of devices(ctx)) { if (!ephemeral(link)) homeRouteIntentWatch.notify(link.id); }
       else if (selected !== "home") homeRouteIntentWatch.notify(selected);
     });
     // A default is also the Home's desired state. A device write waits for that Child's tick.

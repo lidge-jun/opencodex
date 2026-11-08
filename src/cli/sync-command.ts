@@ -235,7 +235,10 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           return { state: "failed", reason: "platform-probe-failed", exit: null };
         }
         try {
-          const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), argv: remotePinnedSyncArgv(link.id, platform, deps.args.includes("--overwrite-conflict"), flags.overwriteClient) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
+          // An ephemeral ocx-child gets the plain catalog sync: it never reads route intent, so it
+          // has nothing to overwrite and refuses the flags.
+          const overwrite = link.childKind !== "ephemeral" && deps.args.includes("--overwrite-conflict");
+          const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), argv: remotePinnedSyncArgv(link.id, platform, overwrite, overwrite ? flags.overwriteClient : undefined) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
           return { ...classifySyncResult(result), exit: result.code };
         } catch (error) {
           if (error instanceof FanoutProcessError) return { state: error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed" ? "timed-out" : "failed", reason: error.reason, exit: null };

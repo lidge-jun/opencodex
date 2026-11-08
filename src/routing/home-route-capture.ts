@@ -23,9 +23,13 @@ function captured(state: RouteIntentState): boolean {
   return HOME_NATIVE_ROUTE_CLIENTS.every(client => state.defaults[client] !== undefined);
 }
 
-/** Unreadable trust metadata counts as linked: a Child may still depend on these defaults. */
+/**
+ * Whether a linked Child inherits these defaults. An ephemeral `ocx-child` never reads route intent,
+ * so a Home whose only links are ephemeral has nothing to protect. Unreadable trust metadata counts
+ * as linked: a Child may still depend on these defaults.
+ */
 export function homeHasLinks(): boolean {
-  try { return readLinkStore(linkStorePath()).links.length > 0; } catch { return true; }
+  try { return readLinkStore(linkStorePath()).links.some(link => link.childKind !== "ephemeral"); } catch { return true; }
 }
 
 export interface CaptureHomeRouteDefaultsOptions {

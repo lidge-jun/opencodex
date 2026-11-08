@@ -6,9 +6,12 @@ import type { ManagementContext } from "../server/management/context";
 import type { RouteClientId } from "../link/route-intent";
 import type { LinkRecord } from "../link/store";
 import { homeRouteIntentWatch } from "../link/route-intent-watch";
+import { EPHEMERAL_NO_ROUTE_INTENT, type RouteToSyncRow } from "./route-to-status";
 
 /** Reuse pinned sync: never run on a machine that has disconnected or joined another Home. */
-export async function syncRouteToChild(link: LinkRecord, ctx: ManagementContext, overwriteConflict = false, overwriteClient?: RouteClientId): Promise<{ state: "synced" | "failed" | "pending"; reason?: string }> {
+export async function syncRouteToChild(link: LinkRecord, ctx: ManagementContext, overwriteConflict = false, overwriteClient?: RouteClientId): Promise<Omit<RouteToSyncRow, "id">> {
+  // An ephemeral ocx-child never reads route intent; its catalog sync would apply none of it.
+  if (link.childKind === "ephemeral") return { state: "unsupported", reason: EPHEMERAL_NO_ROUTE_INTENT };
   if (link.direction === "client-initiated") {
     const notified = homeRouteIntentWatch.notify(link.id);
     return { state: "pending", reason: overwriteConflict
