@@ -350,8 +350,11 @@ describe("interrupted metadata writes (#8093)", () => {
     writeFileSync(truncated, JSON.stringify(manifest(dir)).slice(0, 40));
     writeFileSync(otherHome, JSON.stringify({ ...manifest(dir), ownerId: crypto.randomUUID() }));
     const result = removeOwnedConfigState(dir);
-    expect(result.status).toBe("partial");
-    expect([...result.residualPaths].sort()).toEqual([userData, truncated, otherHome].sort());
+    expect({ ...result, residualPaths: [...result.residualPaths].sort() }).toEqual({
+      status: "partial",
+      reason: "unowned files remain in the config directory",
+      residualPaths: [userData, truncated, otherHome].sort(),
+    });
     expect(readFileSync(userData, "utf8")).toBe("user data");
   }));
 
