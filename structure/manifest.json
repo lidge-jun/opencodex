@@ -1438,7 +1438,10 @@
         "src/telemetry/",
         "src/types/telemetry.ts",
         "src/server/management/telemetry-routes.ts",
-        "src/cli/telemetry.ts"
+        "src/cli/telemetry.ts",
+        "src/config/telemetry-carry.ts",
+        "src/server/management/consent-session.ts",
+        "src/server/background-lifecycle.ts"
       ]
     }
   ],
