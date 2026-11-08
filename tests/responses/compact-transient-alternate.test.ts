@@ -175,6 +175,39 @@ test("malformed retained compact input does not poison pooled account health", a
   expect(failures(OTHER)).toBe(0);
 });
 
+test("malformed retained compact input is rejected before a pooled credential refresh", async () => {
+  // expiresAt inside the 60s refresh skew makes getValidCodexToken refresh, so an
+  // unvalidated envelope would spend a token-refresh fetch before the 400.
+  writeFileSync(join(home, "codex-accounts.json"), JSON.stringify(Object.fromEntries(
+    [WORK, OTHER].map(id => [id, {
+      credential: {
+        accessToken: `${id}-access`,
+        refreshToken: `${id}-grant`,
+        expiresAt: Date.now() + 30_000,
+        chatgptAccountId: `acc-${id}`,
+      },
+      generation: 1,
+      refreshGrantFingerprint: createHash("sha256").update(`codex-refresh-grant:${id}-grant`).digest("hex"),
+    }]),
+  )));
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    return Response.json({ access_token: "refreshed-access", refresh_token: "refreshed-grant", expires_in: 3600 });
+  }) as typeof fetch;
+  const request = new Request("http://localhost/v1/responses/compact", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "gpt-5.5", input: [{ type: "compaction", encrypted_content: "ocx2:invalid" }] }),
+  });
+
+  const response = await handleResponsesCompact(request, poolConfig(), { model: "", provider: "" });
+
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+  expect(fetchCalls).toBe(0);
+});
+
 describe("native compact moves a surviving transient 5xx to one alternate account (#6969)", () => {
   test("A's ladder, then B from the final recovery reserve, serves the compact", async () => {
     upstream(overloaded(), overloaded(), overloaded(), compacted);

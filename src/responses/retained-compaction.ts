@@ -35,14 +35,31 @@ export function decodeRetainedCompaction(value: string): RetainedCompaction | nu
   } catch { return null; }
 }
 
+function isRetainedCompactionEnvelopeItem(item: unknown): item is { type: string; encrypted_content: string } {
+  if (!item || typeof item !== "object") return false;
+  const candidate = item as { type?: unknown; encrypted_content?: unknown };
+  return typeof candidate.type === "string"
+    && ["compaction", "compaction_summary", "context_compaction"].includes(candidate.type)
+    && typeof candidate.encrypted_content === "string"
+    && candidate.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX);
+}
+
+/** First malformed proxy-owned retained envelope in `input`, if any. */
+export function findInvalidRetainedCompactionEnvelope(input: unknown): InvalidRetainedCompactionEnvelopeError | null {
+  if (!Array.isArray(input)) return null;
+  for (const item of input) {
+    if (!isRetainedCompactionEnvelopeItem(item)) continue;
+    if (!decodeRetainedCompaction(item.encrypted_content)) return new InvalidRetainedCompactionEnvelopeError();
+  }
+  return null;
+}
+
 /** Expand only our structured envelopes; callers retain their existing native/ocx1 policy. */
 export function expandRetainedCompactionInput(input: unknown): unknown {
   if (!Array.isArray(input)) return input;
-  if (!input.some(item => item && typeof item === "object" && ["compaction", "compaction_summary", "context_compaction"].includes(item.type)
-    && typeof item.encrypted_content === "string" && item.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX))) return input;
+  if (!input.some(isRetainedCompactionEnvelopeItem)) return input;
   return input.flatMap(item => {
-    if (!item || typeof item !== "object" || !["compaction", "compaction_summary", "context_compaction"].includes(item.type)
-      || typeof item.encrypted_content !== "string" || !item.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX)) return [item];
+    if (!isRetainedCompactionEnvelopeItem(item)) return [item];
     const data = decodeRetainedCompaction(item.encrypted_content);
     if (!data) throw new InvalidRetainedCompactionEnvelopeError();
     return [

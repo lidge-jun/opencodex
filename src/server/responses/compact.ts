@@ -152,7 +152,7 @@ import { requiresPlaintextReasoningReplay } from "../../adapters/openai-response
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
-import { InvalidRetainedCompactionEnvelopeError } from "../../responses/retained-compaction";
+import { findInvalidRetainedCompactionEnvelope, InvalidRetainedCompactionEnvelopeError } from "../../responses/retained-compaction";
 import { nativeCompactResponseSchema } from "../../responses/schema";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
@@ -700,6 +700,10 @@ export async function handleResponsesCompact(
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
+  // A malformed proxy-owned envelope is a caller error, so reject it before routing or
+  // credential resolution can spend a token refresh on a request that cannot succeed.
+  const invalidEnvelope = findInvalidRetainedCompactionEnvelope(raw.input);
+  if (invalidEnvelope) return formatErrorResponse(400, "invalid_request_error", invalidEnvelope.message);
   options.onRequestBodyRead?.();
   // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
   // a local rather than written back to `raw.model`: assigning to the property widens it out
