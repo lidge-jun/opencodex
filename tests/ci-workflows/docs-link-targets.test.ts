@@ -207,7 +207,7 @@ describe("docs link targets", () => {
 
   test("README, code-signing policy, telemetry guide, server reference, and structure doc match D1-D19", () => {
     const expectedPrivacy =
-      "Privacy: opencodex sends one anonymous daily usage summary (version, platform and counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer (\"Send anonymous usage statistics\", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Project-wide aggregates are public. Everything else goes only to the providers and services you configure.";
+      "Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, platform and counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer (\"Send anonymous usage statistics\", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Project-wide aggregates are public. Everything else goes only to the providers and services you configure.";
 
     const readme = readFileSync(repoPath("README.md"), "utf8");
     expect(readme).not.toContain("will not transfer any information to other networked systems");
