@@ -192,6 +192,23 @@ function inspectAncestorDependency(packageDir, name, store, escaped) {
   }
 }
 
+/** pnpm's metadata and executable directories are not packages, but their links still must stay inside the store. */
+function inspectPnpmMetadata(path, store, escaped, kind) {
+  const pending = [path], seen = new Set();
+  while (pending.length) {
+    const current = pending.pop();
+    let real;
+    try { real = realpathSync(current); }
+    catch { escaped.add("pnpm " + kind + " link could not be resolved: " + basename(current)); continue; }
+    if (!inside(real, store)) { escaped.add("pnpm " + kind + " link escapes the selected store: " + basename(current)); continue; }
+    if (seen.has(real)) continue;
+    if (seen.size >= 10000) { escaped.add("pnpm metadata graph exceeds verification limit"); return; }
+    seen.add(real);
+    try { if (statSync(real).isDirectory()) for (const name of readdirSync(real)) pending.push(join(real, name)); }
+    catch { escaped.add("pnpm " + kind + " link could not be resolved: " + basename(current)); }
+  }
+}
+
 /** Check reachable global-store package roots and declared dependency links, including cycles. */
 function inspectGlobalPnpmGraph(packageDir, store, escaped) {
   const pending = [packageDir], seen = new Set();
@@ -211,7 +228,10 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
       try {
         if (!inside(realpathSync(root), store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
         for (const name of readdirSync(root)) {
-          if (name.startsWith(".")) continue;
+          if ([".bin", ".pnpm", ".modules.yaml"].includes(name)) {
+            inspectPnpmMetadata(join(root, name), store, escaped, name === ".bin" ? "binary" : "metadata");
+            continue;
+          }
           if (!name.startsWith("@")) { names.add(name); continue; }
           const scope = join(root, name);
           try {
@@ -234,7 +254,8 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
         if (required) {
           escaped.add("pnpm required dependency is missing from the selected store: " + name);
         }
-        inspectAncestorDependency(path, name, store, escaped);
+        if (Object.hasOwn(manifest.dependencies ?? {}, name) || Object.hasOwn(manifest.optionalDependencies ?? {}, name)
+          || Object.hasOwn(manifest.peerDependencies ?? {}, name)) inspectAncestorDependency(path, name, store, escaped);
       }
     }
   }

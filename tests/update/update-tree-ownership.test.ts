@@ -407,6 +407,29 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm dependency link escapes the selected store: foreign");
   });
 
+  test("refuses a hidden dependency link outside the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    mkdirSync(join(zod, "node_modules"));
+    const outside = join(root, "outside", "hidden"); writeDependency(outside, "hidden");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
+    symlinkSync(outside, join(zod, "node_modules", ".hidden"), "dir");
+    expect(realpathSync(createRequire(join(zod, "entry.js")).resolve(".hidden"))).toBe(realpathSync(join(outside, "index.js")));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: .hidden");
+  });
+
+  test("refuses a pnpm binary link that escapes the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const target = realpathSync(exposed), bin = join(target, "node_modules", ".bin");
+    mkdirSync(bin); const outside = join(root, "outside-executable"); writeFileSync(outside, "binary");
+    symlinkSync(outside, join(bin, "tool"));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm binary link escapes the selected store: tool");
+  });
+
   test.each(["dangling", "outside"])("refuses an existing %s package dependency root", kind => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const target = realpathSync(exposed), ownRoot = join(target, "node_modules");
