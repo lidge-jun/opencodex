@@ -85,11 +85,12 @@ const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
 * The minimum wins: an account at 5% of its five-hour window is unusable right now even if
 * its monthly allowance is barely touched.
 */
-function headroomOf(provider: string, accountId: string, requestedModelId?: string | null, account?: ProviderAccount, config?: OcxConfig): number | null {
-  const evidence = provider === "kiro" && account ? kiroAccountEvidence(account) : null;
+function headroomOf(provider: string, accountId: string, requestedModelId?: string | null, account?: ProviderAccount, config?: OcxConfig,
+  evidence?: Map<string, ReturnType<typeof getCachedProviderAccountQuota>>): number | null {
+  const kiroEvidence = provider === "kiro" && account ? kiroAccountEvidence(account) : null;
   const quota = provider === "kiro"
-    ? evidence?.quotaPercent === undefined ? null : { monthlyPercent: evidence.quotaPercent, updatedAt: Date.now() }
-    : getCachedProviderAccountQuota(provider, accountId, config);
+    ? kiroEvidence?.quotaPercent === undefined ? null : { monthlyPercent: kiroEvidence.quotaPercent, updatedAt: Date.now() }
+    : cachedDecisionQuota(provider, accountId, config, evidence);
   if (!quota) return null;
   // Null, not a low rank: this must reproduce "no evidence" so a stale roster degrades to
   // the unranked ring rather than to a differently wrong answer.
@@ -111,6 +112,14 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
   ].filter((value): value is number => typeof value === "number");
   if (percents.length === 0) return null;
   return 100 - Math.max(...percents);
+}
+
+function cachedDecisionQuota(provider: string, accountId: string, config?: OcxConfig,
+  evidence?: Map<string, ReturnType<typeof getCachedProviderAccountQuota>>): ReturnType<typeof getCachedProviderAccountQuota> {
+  if (evidence?.has(accountId)) return evidence.get(accountId) ?? null;
+  const quota = getCachedProviderAccountQuota(provider, accountId, config);
+  evidence?.set(accountId, quota);
+  return quota;
 }
 
 /**
@@ -153,8 +162,9 @@ export function accountResetTimestamp(
   requestedModelId?: string | null,
   now = Date.now(),
   config?: OcxConfig,
+  evidence?: Map<string, ReturnType<typeof getCachedProviderAccountQuota>>,
 ): number | null {
-  const quota = getCachedProviderAccountQuota(provider, accountId, config);
+  const quota = cachedDecisionQuota(provider, accountId, config, evidence);
   if (!quota) return null;
   const family = classifyModelFamilyForQuota(provider, requestedModelId);
   // Model-attributed rows are diagnostics; one must never become the account's reset time.
@@ -192,25 +202,29 @@ export function rankAccountsByResetFirst(
   config?: OcxConfig,
 ): string[] {
   if (ring.length < 2) return [...ring];
-  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts, config);
-  const healthy = ranked.filter(id => !isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id), config));
+  const evidence = new Map<string, ReturnType<typeof getCachedProviderAccountQuota>>();
+  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts, config, evidence);
+  const exhausted = (id: string) => provider === "kiro" && accounts?.get(id)
+    ? kiroAccountEvidence(accounts.get(id)!).exhausted === true
+    : (headroomOf(provider, id, requestedModelId, accounts?.get(id), config, evidence) ?? 1) <= 0;
+  const healthy = ranked.filter(id => !exhausted(id));
   if (healthy.length < 2) return ranked;
   if (
     hasPassiveAccountQuota(provider)
-    && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id), config) !== null)
+    && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id), config, evidence) !== null)
   ) return ranked;
 
   const withReset = healthy.map((id, index) => ({
     id,
-    resetAt: accountResetTimestamp(provider, id, requestedModelId, now, config) ?? Number.POSITIVE_INFINITY,
-    headroom: headroomOf(provider, id, requestedModelId, accounts?.get(id), config) ?? 0,
+    resetAt: accountResetTimestamp(provider, id, requestedModelId, now, config, evidence) ?? Number.POSITIVE_INFINITY,
+    headroom: headroomOf(provider, id, requestedModelId, accounts?.get(id), config, evidence) ?? 0,
     index,
   }));
 
   withReset.sort((a, b) => (a.resetAt - b.resetAt) || (b.headroom - a.headroom) || (a.index - b.index));
   const sortedHealthy = withReset.map(r => r.id);
-  const exhausted = ranked.filter(id => isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id), config));
-  return [...sortedHealthy, ...exhausted];
+  const spent = ranked.filter(exhausted);
+  return [...sortedHealthy, ...spent];
 }
 
 /**
@@ -225,6 +239,7 @@ export function rankAccountsByHeadroom(
   requestedModelId?: string | null,
   accounts?: ReadonlyMap<string, ProviderAccount>,
   config?: OcxConfig,
+  evidence = new Map<string, ReturnType<typeof getCachedProviderAccountQuota>>(),
 ): string[] {
   if (ring.length < 2) return [...ring];
 
@@ -232,7 +247,7 @@ export function rankAccountsByHeadroom(
   // Same rule as hasHeadroomEvidence: a passive provider's partial roster must not rank
   // at all. The failover path calls this directly (selectFailoverAccount), so the guard
   // cannot live only in the pre-dispatch predicate.
-  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id), config) !== null)) {
+  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id), config, evidence) !== null)) {
     return [...ring];
   }
   const ranked: Ranked[] = ring.map((id, index) => {
@@ -240,10 +255,10 @@ export function rankAccountsByHeadroom(
     // 100% and still be servable when overage is enabled, and the verdict knows that.
     const account = accounts?.get(id);
     const exhaustion = provider === "kiro" && account ? kiroAccountEvidence(account).exhausted : undefined;
-    const headroom = headroomOf(provider, id, requestedModelId, account, config);
+    const headroom = headroomOf(provider, id, requestedModelId, account, config, evidence);
     if (exhaustion !== undefined || headroom !== null) sawEvidence = true;
 
-    if (isAccountQuotaExhausted(provider, id, requestedModelId, account, config)
+    if ((provider === "kiro" && account ? exhaustion === true : headroom !== null && headroom <= 0)
       || (provider === "kiro" && exhaustion === undefined && headroom !== null && headroom <= 0))
       return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
     if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };

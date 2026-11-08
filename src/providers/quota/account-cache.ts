@@ -281,7 +281,7 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
     const credential = getAccountCredential(provider, accountId);
     if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
   }
-  if (entry?.isCurrent && !entry.isCurrent()) return null;
+  if (!(provider === "meta-muse" && config) && entry?.isCurrent && !entry.isCurrent()) return null;
   if (entry?.quota && isDisplayOnlyQuota(entry.quota)) return null;
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }

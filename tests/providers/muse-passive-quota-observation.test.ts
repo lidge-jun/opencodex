@@ -6,7 +6,8 @@
  * that is exactly the gap an audit flagged here -- so these tests drive the real
  * inspector and the real route handler rather than the helpers underneath them.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +44,7 @@ import { clearGenericFailoverHealth, preferredInitialAccount } from "../../src/o
 import { sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
-import { hasHeadroomEvidence, rankAccountsByHeadroom } from "../../src/oauth/account-quota-rank";
+import { hasHeadroomEvidence, rankAccountsByHeadroom, rankAccountsByResetFirst } from "../../src/oauth/account-quota-rank";
 import { readPersistedAccountQuotas } from "../../src/providers/account-quota-disk";
 import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
 import { readQuotaPool } from "../../src/quota-pool/assemble";
@@ -541,6 +542,32 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
+  test("reset-first Muse ranking reads each account's ownership once per decision", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    setLiveStateStoreConfig(config);
+    const reset = Date.now() + 3_600_000;
+    for (const [id, percent] of [[ACCOUNT_ID, 70], ["account-b", 10]] as const) {
+      await setActiveAccount("meta-muse", id);
+      recordWithOwner("meta-muse", id, { fiveHourPercent: percent, fiveHourResetAt: reset, updatedAt: Date.now() },
+        captureConfigGeneration(), bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", id), config, "meta-muse"));
+    }
+    const realRead = fs.readFileSync;
+    let reads = 0;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]) === join(testDir, "auth.json")) reads++;
+      return (realRead as (...args: Parameters<typeof fs.readFileSync>) => ReturnType<typeof fs.readFileSync>)(...args);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(rankAccountsByResetFirst("meta-muse", [ACCOUNT_ID, "account-b"], undefined, Date.now(), undefined, config)).toEqual(["account-b", ACCOUNT_ID]);
+      expect(reads).toBeLessThanOrEqual(2);
+    } finally { spy.mockRestore(); }
+    const path = join(testDir, "auth.json"), store = JSON.parse(readFileSync(path, "utf8"));
+    store["meta-muse"].accounts[1].credential.access = "external-replacement";
+    writeFileSync(path, JSON.stringify(store), { mode: 0o600 });
+    expect(rankAccountsByResetFirst("meta-muse", [ACCOUNT_ID, "account-b"], undefined, Date.now(), undefined, config)).toEqual([ACCOUNT_ID, "account-b"]);
+  });
+
   test.each(["live", "no-live"] as const)("Muse account ranking and pool reject a detached configuration (%s)", async mode => {
     writeTwoAccounts();
     const config = museConfig();
