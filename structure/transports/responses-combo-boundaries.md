@@ -93,6 +93,8 @@ array, including empty, so removing a preference cannot retain an earlier build'
 replaced image function only when that send still declares the hosted capability. A filtered tool or
 lowered `none` selector never erases caller intent: missing calls retain the usual pre-commit fallback
 or post-commit typed failure. Caller hosted non-function selectors retain their terminal owner.
+The outbound request parser shared with passthrough lives in `src/server/responses/outbound-request-body.ts`,
+so required-tool checks do not import the stream recovery owner.
 Completed item events and terminal snapshots can satisfy it; a call start alone cannot.
 Missing calls turn `response.completed` into `response.failed` with
 `required_tool_contract_unsatisfied`, retaining response identity, output and usage.

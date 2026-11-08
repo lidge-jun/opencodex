@@ -6,12 +6,14 @@ import { guardResponseBodyInactivity } from "../../lib/response-body-inactivity"
 import { resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
-import { isPlainObject } from "../responses-snapshot-codec";
 import { selectProtocolSafeResetResponse, type ProtocolSafeResetRecovery } from "./combo-stream-preflight";
 import { bindPublishedMainQuotaDispatch } from "./core-codex-account";
 import type { ResponsesAdmissionState } from "./core-options";
 import { guardOpenGatewayCompletion } from "./opengateway-completion-guard";
+import { parseOutboundRequestBody } from "./outbound-request-body";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
+
+export { parseOutboundRequestBody } from "./outbound-request-body";
 
 // A guarded published reset response, mapped to when its selection began holding the head.
 const guardedResetResponses = new WeakMap<Response, number>();
@@ -77,15 +79,6 @@ export function selectPassthroughResetResponse(
       bindPublishedMainQuotaDispatch(published, owner === "replacement" ? replacementOwner : originalOwner);
     },
   });
-}
-
-export function parseOutboundRequestBody(bodyText: string): Record<string, unknown> | undefined {
-  try {
-    const body: unknown = JSON.parse(bodyText);
-    return isPlainObject(body) ? body : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function guardPassthroughCompletion(
