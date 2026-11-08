@@ -404,6 +404,9 @@ export function http400ErrorRecord(message: string): Record<string, unknown> | u
       }
       return record;
     }
+    if (typeof root.message === "string" || typeof root.detail === "string") {
+      return root;
+    }
     return undefined;
   } catch {
     return undefined;
@@ -431,9 +434,10 @@ export function isMalformedResponseFormatRequest(status: number, message: string
 export function isOpenRouterOpaque400Record(record?: Record<string, unknown>): boolean {
   if (!record) return false;
   const metadata = record.metadata;
+  const errorType = record.type === "error" ? undefined : record.type;
   return record.message === "Provider returned error"
     && (record.code === 400 || record.code === "400")
-    && record.type === undefined
+    && errorType === undefined
     && metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)
     && (metadata as Record<string, unknown>).raw === "ERROR";
 }

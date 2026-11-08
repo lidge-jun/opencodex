@@ -443,6 +443,37 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("retries a zero-output flat opaque OpenRouter numeric 400 SSE frame without status", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const body = await result.response.json();
+    expect(body.error).toMatchObject({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR" },
+    });
+  });
+
+  test("retries a zero-output flat opaque OpenRouter numeric 400 SSE frame with explicit status 400", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+  });
+
   test("treats a wrapped invalid_request_error with upstream_error as terminal", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",

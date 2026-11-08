@@ -284,6 +284,28 @@ describe("combo failure cooldown scope", () => {
       openRouterOpaque400: rootDetailFailure.openRouterOpaque400,
       malformedResponseFormat: rootDetailFailure.malformedResponseFormat,
     })).toBe("target");
+
+    const flatOpaqueBody = JSON.stringify({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    });
+    expect(isOpenRouterOpaque400Envelope(flatOpaqueBody)).toBe(true);
+    const flatFailure = await consumeComboFailure(new Response(flatOpaqueBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(flatFailure.openRouterOpaque400).toBe(true);
+    expect(comboFailureDecision(400, flatFailure.classificationText, {
+      code: flatFailure.upstreamCode,
+      openRouterOpaque400: flatFailure.openRouterOpaque400,
+      malformedResponseFormat: flatFailure.malformedResponseFormat,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, flatFailure.classificationText, {
+      code: flatFailure.upstreamCode,
+      openRouterOpaque400: flatFailure.openRouterOpaque400,
+      malformedResponseFormat: flatFailure.malformedResponseFormat,
+    })).toBe("none");
   });
 
   test.each([400, 422])("HTTP %s per-request free-tier cap still hops without cooldown scope", status => {
