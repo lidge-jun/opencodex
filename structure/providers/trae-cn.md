@@ -41,7 +41,10 @@ Scoped Windows environment keys are matched case-insensitively, and the native l
 absolute executable/dispatcher path. Unsupported supervision fails before launching an unowned CLI.
 No numeric PID is reopened.
 Unconfirmed shutdown is an error and retains owned temporary files; the adapter publishes its terminal
-event after cleanup, preserving received usage even when cleanup fails. A failed workspace allocation removes an
+event only after the parent has bounded both supervisor and stream waits. The parent keeps draining
+stderr after it suppresses diagnostic retention and attempts forced termination if the supervisor misses its deadline.
+Missing Job accounting proof remains an error, including when a status write cannot be delivered.
+Received usage is preserved even when cleanup fails. A failed workspace allocation removes an
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send. The adapter
 also emits a replay-unsafe heartbeat at that write, so combo preflight cannot resend the turn
 after an empty result or another post-dispatch failure. Startup failures and unavailable models
@@ -72,3 +75,9 @@ website or accepts a cached roster as login evidence. The cache remains provider
 switches require this explicit refresh. Each prompt still checks its model against a new session roster.
 
 User setup: [TRAE CN guide](../../docs-site/src/content/docs/guides/trae-cn.md).
+
+The adapter regression file includes a sanitized session/model response captured from CLI 0.120.19.
+Its installed-CLI discovery check runs only with `OCX_TRAE_CN_LIVE_TEST=1`, an absolute
+`OCX_TRAE_CN_LIVE_BINARY` and an explicit absolute `TRAE_HOME` containing an existing sign-in.
+Test HOME isolation stays enabled. The check opens and closes a session without sending a model
+prompt; ordinary tests remain offline.

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, once } from "node:events";
 import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { posix, win32 } from "node:path";
+import { isAbsolute, posix, win32 } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { PassThrough, Writable } from "node:stream";
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
@@ -13,6 +13,7 @@ import { commandInvocation } from "../../src/lib/win-exec";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
+import { parseTraeAcpMessage, parseTraeModels, traeSessionId } from "../../src/adapters/trae-cn/protocol";
 import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
 import { captureModelCacheGeneration, clearModelCache, getFreshCached, observeModelCacheRevision, setCached } from "../../src/codex/model-cache";
@@ -26,6 +27,7 @@ import * as managementConvergence from "../../src/codex/management-convergence";
 import * as catalogAdmission from "../../src/codex/catalog-admission";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import type { AdapterEvent } from "../../src/types";
 import type { IncomingMeta } from "../../src/adapters/base";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -37,7 +39,7 @@ import {
 } from "../../src/adapters/registry";
 import { resolveAdapter } from "../../src/server/adapter-resolve";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
-import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const EXPECTED_ADAPTER_NAMES = {
   "workbuddy-ai": "workbuddy-ai",
@@ -203,17 +205,17 @@ function traeRequest(): OcxParsedRequest {
 }
 
 function traeMeta(extra: Partial<IncomingMeta> = {}): IncomingMeta {
-  return { headers: new Headers(), translatorBudget: createTranslatorBudget(), ...extra };
+  return { headers: new Headers(), translatorBudget: createTestTranslatorBudget(), ...extra };
 }
 
-function fakeSendBudget() {
+function fakeSendBudget({ reserveAllowed = true, useAllowed = true } = {}) {
   const state = { used: 0, refunded: 0, closed: 0 };
   const budget = {
     beginSpendProducer: () => ({ close: () => { state.closed++; } }),
-    reserveDispatch: () => ({ allowed: true, permit: {
-      use: () => { state.used++; return true; },
+    reserveDispatch: () => reserveAllowed ? ({ allowed: true, permit: {
+      use: () => { if (!useAllowed) return false; state.used++; return true; },
       release: () => { if (!state.used) state.refunded++; },
-    } }),
+    } }) : { allowed: false },
   } as unknown as NonNullable<IncomingMeta["sendBudget"]>;
   return { state, budget };
 }
@@ -226,6 +228,50 @@ describe("TRAE CN ACP regression contract", () => {
   )).models;
   beforeEach(() => { testHome = createTempHome("ocx-trae-regression-"); clearModelCache(); });
   afterEach(() => { mock.restore(); clearModelCache(); testHome.remove(); });
+
+  // Captured from traecli --version 0.120.19 on 2026-11-08T16:22:30Z.
+  // Session/model strings are replaced and unrelated fields omitted; the opt-in test below checks the installed CLI.
+  test("recorded CLI 0.120.19 session/new keeps the reported model shape", () => {
+    const frame = parseTraeAcpMessage({ jsonrpc: "2.0", id: 2, result: {
+      sessionId: "recorded-session", models: {
+        currentModelId: "recorded-model-1", availableModels: [
+          {"modelId": "recorded-model-1", "name": "Recorded model 1", "description": "Redacted description"},
+          {"modelId": "recorded-model-2", "name": "Recorded model 2", "description": "Redacted description"},
+          {"modelId": "recorded-model-3", "name": "Recorded model 3", "description": "Redacted description"},
+          {"modelId": "recorded-model-4", "name": "Recorded model 4", "description": "Redacted description"},
+          {"modelId": "recorded-model-5", "name": "Recorded model 5", "description": "Redacted description"},
+          {"modelId": "recorded-model-6", "name": "Recorded model 6", "description": "Redacted description"},
+          {"modelId": "recorded-model-7", "name": "Recorded model 7", "description": "Redacted description"},
+          {"modelId": "recorded-model-8", "name": "Recorded model 8", "description": "Redacted description"},
+          {"modelId": "recorded-model-9", "name": "Recorded model 9", "description": "Redacted description"},
+          {"modelId": "recorded-model-10", "name": "Recorded model 10", "description": "Redacted description"},
+          {"modelId": "recorded-model-11", "name": "Recorded model 11", "description": "Redacted description"},
+          {"modelId": "recorded-model-12", "name": "Recorded model 12", "description": "Redacted description"},
+          {"modelId": "recorded-model-13", "name": "Recorded model 13", "description": "Redacted description"},
+          {"modelId": "recorded-model-14", "name": "Recorded model 14", "description": "Redacted description"},
+          {"modelId": "recorded-model-15", "name": "Recorded model 15", "description": "Redacted description"},
+        ],
+      },
+    } });
+    expect(frame.kind).toBe("response");
+    if (frame.kind !== "response") throw new Error("Expected recorded response");
+    expect(traeSessionId(frame.result)).toBe("recorded-session");
+    const models = parseTraeModels(frame.result);
+    expect(models).toHaveLength(15);
+    expect(models.slice(0, 2)).toEqual(["recorded-model-1", "recorded-model-2"]);
+    expect(models.at(-1)).toBe("recorded-model-15");
+  });
+
+  test.skipIf(process.env.OCX_TRAE_CN_LIVE_TEST !== "1")("installed TRAE CLI discovery (opt-in)", async () => {
+    const binary = process.env.OCX_TRAE_CN_LIVE_BINARY;
+    const cliHome = process.env.TRAE_HOME;
+    if (!binary || !isAbsolute(binary) || !cliHome || !isAbsolute(cliHome)) {
+      throw new Error("The opt-in check requires absolute OCX_TRAE_CN_LIVE_BINARY and TRAE_HOME paths; keep test HOME isolation enabled.");
+    }
+    const session = await traeClient.openTraeSession(config().baseUrl, { timeoutMs: 30_000, resolveBinary: () => binary });
+    try { expect(session.models.length).toBeGreaterThan(0); }
+    finally { await session.close(); }
+  }, 90_000);
 
   test("streams text, reasoning and usage; charges only the prompt write", async () => {
     const fixture = traeFixture();
@@ -247,6 +293,23 @@ describe("TRAE CN ACP regression contract", () => {
     expect(existsSync(String(fixture.options()!.env!.HOME))).toBe(false);
     expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
   });
+
+  for (const reserveAllowed of [false, true]) {
+    test("dispatch-budget rejection writes no prompt: reservation=" + reserveAllowed, async () => {
+      const fixture = traeFixture();
+      const budget = fakeSendBudget({ reserveAllowed, useAllowed: false });
+      const events: AdapterEvent[] = [];
+      let sends = 0;
+      await expect(createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta({
+        sendBudget: budget.budget, onPhysicalSend: () => { sends++; },
+      }), event => events.push(event))).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+      expect(fixture.requests.some(request => request.method === "session/prompt")).toBe(false);
+      expect(sends).toBe(0);
+      expect(events).toEqual([]);
+      expect(budget.state).toEqual({ used: 0, refunded: reserveAllowed ? 1 : 0, closed: 1 });
+      if (!reserveAllowed) expect(fixture.requests).toHaveLength(0);
+    });
+  }
 
   for (const phase of ["initialize", "session/new", "session/set_model", "session/prompt"]) {
     test(`abort during ${phase} tears down the child and directories`, async () => {
@@ -463,6 +526,8 @@ describe("TRAE CN ACP regression contract", () => {
       await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
       expect(events.at(-1)).toMatchObject({ type: "done" });
       expect(events.some(event => event.type === "error")).toBe(false);
+      expect(fixture.requests.filter(request => request.method === "session/set_model").map(request => request.params))
+        .toEqual([{ sessionId: "fixture-session", modelId: "test-model" }]);
       expect(fixture.requests.filter(request => request.method === "session/prompt")).toHaveLength(1);
     });
   }
@@ -710,6 +775,20 @@ describe("TRAE CN ACP regression contract", () => {
     expect(invalid.processTreeExited).toBe(false);
   });
 
+  test("Windows cleanup stays bounded without a responding supervisor or status pipe", async () => {
+    const fixture = traeFixture();
+    const kill = spyOn(fixture.child, "kill").mockReturnValue(false);
+    const session = await traeClient.openTraeSession(config().baseUrl, {
+      ...fixture.deps, platform: "win32", home: testHome.root, cwd: testHome.root,
+    });
+    const started = performance.now();
+    await expect(session.close()).rejects.toThrow("shutdown was not confirmed");
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+    expect(fixture.child.stdout!.destroyed).toBe(true);
+    expect(fixture.child.stderr!.destroyed).toBe(true);
+  });
+
   test("a Windows stdout forwarding failure reports transport failure and closes the Job", async () => {
     const fixture = traeFixture((request, child) => {
       if (request.method !== "session/prompt") return false;
@@ -750,22 +829,25 @@ describe("TRAE CN ACP regression contract", () => {
     expect(existsSync(testHome.root)).toBe(true);
   });
 
-  for (const inheritedPipes of [true, false]) {
-    test.skipIf(process.platform !== "win32")("Windows Job reaps a helper after its dispatcher exits: inherited pipes=" + inheritedPipes, async () => {
+  for (const stop of ["exit", "marker", "eof"]) for (const inheritedPipes of [true, false]) {
+    test.skipIf(process.platform !== "win32")("Windows Job cleanup: stop=" + stop + ", inherited pipes=" + inheritedPipes, async () => {
       const heartbeat = testHome.path("heartbeat");
-      const dispatcher = testHome.path("dispatcher exited");
+      const dispatcher = testHome.path("dispatcher ready");
+      const argv = testHome.path("argv.json");
       const script = testHome.path("cli fixture.mjs");
       const shim = testHome.path("cli fixture.cmd");
       const helper = "const fs=require('node:fs');setInterval(()=>fs.writeFileSync(" + JSON.stringify(heartbeat) + ",String(Date.now())),10);";
       writeFileSync(script, [
         "import {spawn} from 'node:child_process';import fs from 'node:fs';",
+        "fs.writeFileSync(" + JSON.stringify(argv) + ",JSON.stringify(process.argv.slice(2)));",
         "spawn(process.execPath,['-e'," + JSON.stringify(helper) + "],{stdio:" + JSON.stringify(inheritedPipes ? ["ignore", "inherit", "inherit"] : "ignore") + "}).unref();",
         "while(!fs.existsSync(" + JSON.stringify(heartbeat) + ")) await new Promise(r=>setTimeout(r,10));",
-        "fs.writeFileSync(" + JSON.stringify(dispatcher) + ",'exited');process.exit(0);",
+        "fs.writeFileSync(" + JSON.stringify(dispatcher) + ",'ready');" + (stop === "exit" ? "process.exit(0);" : "setInterval(()=>{},1000);"),
       ].join("\n"));
       writeFileSync(shim, '@"' + process.execPath + '" "' + script + '" %*\r\n');
       const env = traeCnChildEnv(process.env, "win32");
-      const invocation = commandInvocation(shim, ["acp", "serve"], "win32", { env });
+      const args = ["acp", "serve", "a&b", "with space"];
+      const invocation = commandInvocation(shim, args, "win32", { env });
       const job = await prepareTraeWindowsJob(invocation, testHome.root, testHome.root, 2000, env);
       const child = nodeSpawn(job.file, job.args, { ...job.options, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       const closed = once(child, "close");
@@ -778,16 +860,37 @@ describe("TRAE CN ACP regression contract", () => {
       child.stdin!.write("{}\n");
       const watchdog = setTimeout(() => { child.kill("SIGKILL"); }, 15_000);
       try {
+        if (stop !== "exit") {
+          const readyDeadline = Date.now() + 10_000;
+          while (!existsSync(dispatcher) && child.exitCode === null && Date.now() < readyDeadline) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          expect(existsSync(dispatcher)).toBe(true);
+          expect(child.exitCode).toBeNull();
+          const started = performance.now();
+          // Keep stdin open for the marker case so EOF cannot hide a broken marker reader.
+          if (stop === "marker") child.stdin!.write("__OCX_STOP_TRAE__\n");
+          else child.stdin!.end();
+          await closed;
+          expect(performance.now() - started).toBeLessThan(5000);
+        }
         await closed;
         frames.finish();
         expect(failures).toEqual([]);
         expect(diagnostic).toBe("");
         expect(frames.processTreeExited).toBe(true);
         expect(existsSync(dispatcher)).toBe(true);
+        expect(JSON.parse(readFileSync(argv, "utf8"))).toEqual(args);
         const after = readFileSync(heartbeat, "utf8");
         await new Promise(resolve => setTimeout(resolve, 100));
         expect(readFileSync(heartbeat, "utf8")).toBe(after);
-      } finally { clearTimeout(watchdog); await job.cleanup(); }
+      } finally {
+        clearTimeout(watchdog);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        child.stdin?.destroy();
+        await closed.catch(() => undefined);
+        await job.cleanup();
+      }
     }, 20_000);
   }
 
