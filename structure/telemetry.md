@@ -42,6 +42,10 @@ Only a human can transition an undecided install to active sending:
 - Interactive prompts run from `src/cli/star-prompt.ts`, `src/service/cli.ts`, and
   `src/cli/init.ts`; agent-driven, non-TTY, or service starts print a once-per-version notice
   and record neither `noticeShownAt` nor `decision`.
+- `src/telemetry/disclosure.ts` is the one source for the disclosure text: the CLI prompt prints
+  it and the Windows installer dialog is generated from it (`structure/desktop-shell.md`,
+  "Windows installer telemetry choice"). A decline on a fresh install creates `config.json`
+  through `initializePersistedConfigIfMissing`.
 
 ## Identity, aggregation, and scheduling
 
