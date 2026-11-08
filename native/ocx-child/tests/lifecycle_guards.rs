@@ -148,6 +148,12 @@ fn two_child_homes_sharing_one_codex_home_are_serialized_and_exclusive() {
 
     let out_a = a.wait_with_output().unwrap();
     assert!(out_a.status.success(), "A attach failed: {}", text(&out_a));
+    assert!(
+        !String::from_utf8_lossy(&out_a.stdout).contains(KEY_ID)
+            && !String::from_utf8_lossy(&out_a.stderr).contains(KEY_ID),
+        "attach output must not name the link key id: {}",
+        text(&out_a)
+    );
     let after_a = snapshot_dir(&codex);
     let out_b = b.wait_with_output().unwrap();
     assert!(
@@ -459,6 +465,81 @@ fn daemon_exits_without_serving_when_its_parent_dies_before_commit() {
     assert_eq!(code, 0, "detach after the parent crash failed: {err}");
 }
 
+#[cfg(unix)]
+#[test]
+fn attach_rollback_commits_the_restarted_prior_relay_only_after_removing_its_record() {
+    let scratch = Scratch::new("rollback-restart");
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let tunnel = home.port.to_string();
+    let port = distinct_port(&[]);
+    let p = port.to_string();
+    let out = spawn_with_creds(child_command(
+        &ocx,
+        &codex,
+        port,
+        &attach_args(&tunnel, LINK_ID, &p),
+    ))
+    .wait_with_output()
+    .unwrap();
+    assert!(out.status.success(), "first attach failed: {}", text(&out));
+    let prior_pid = read_state(&ocx)["daemonPid"].as_u64().unwrap() as u32;
+    let _prior_leftover = KillOnDrop(Some(prior_pid));
+
+    // Re-attach on another port. The prior relay is serving when the rollback snapshot is
+    // taken and is stopped before the new daemon starts; the occupied new port then fails the
+    // start, so rollback has to restart the prior relay.
+    let new_port = distinct_port(&[port]);
+    let np = new_port.to_string();
+    let barrier = Barrier::new(&scratch.0, "rollback-restart");
+    let mut cmd = child_command(&ocx, &codex, new_port, &attach_args(&tunnel, LINK_ID, &np));
+    barrier.apply(&mut cmd, "attach-before-daemon-start,daemon-before-commit");
+    let parent = spawn_with_creds(cmd);
+    assert!(
+        barrier.wait_reached("attach-before-daemon-start", Duration::from_secs(20)),
+        "re-attach never reached the daemon start"
+    );
+    let blocker =
+        std::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], new_port)))
+            .expect("occupy the new listen port");
+    barrier.release("attach-before-daemon-start");
+    let reached_commit = barrier.wait_reached("daemon-before-commit", Duration::from_secs(20));
+    let record_at_commit = ocx.join("child").join("attach-rollback.json").exists();
+    let restarted_pid = read_state(&ocx)["daemonPid"].as_u64().map(|pid| pid as u32);
+    let _restarted_leftover = KillOnDrop(restarted_pid);
+    barrier.release("daemon-before-commit");
+    let out = parent.wait_with_output().unwrap();
+    drop(blocker);
+    assert!(
+        reached_commit,
+        "rollback never restarted the prior relay: {}",
+        text(&out)
+    );
+    assert!(
+        !record_at_commit,
+        "the restarted prior relay was committed while the rollback record still existed"
+    );
+    assert!(!out.status.success(), "re-attach unexpectedly succeeded");
+    assert!(
+        !ocx.join("child").join("attach-rollback.json").exists(),
+        "rollback record left behind: {}",
+        text(&out)
+    );
+    let healthz =
+        format!("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let health = try_http_exchange(port, &healthz).unwrap_or_default();
+    assert!(
+        health.contains("200 OK") && health.contains("\"generationCommitted\":true"),
+        "prior relay not serving after rollback: {health} / {}",
+        text(&out)
+    );
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    assert_eq!(code, 0, "detach after rollback failed: {err}");
+}
+
 /// Starts `serve --foreground --lifecycle-start` the way a lifecycle parent does, with a
 /// start line for `generation`.
 fn spawn_lifecycle_serve(ocx: &Path, codex: &Path, port: u16, generation: &str) -> Child {
@@ -737,4 +818,125 @@ fn detach_stops_a_relay_whose_workers_are_all_busy() {
         "relay process still running after detach"
     );
     drop(idle);
+}
+
+#[cfg(unix)]
+#[test]
+fn control_connections_that_trickle_their_request_head_are_cut_off() {
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let scratch = Scratch::new("control-trickle");
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let (ocx, codex, port, reaper) = attached_foreground_relay(&scratch, &home);
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    // Every worker blocks reading a request head that never completes.
+    let mut idle = Vec::new();
+    for _ in 0..40 {
+        let mut sock = std::net::TcpStream::connect(addr).unwrap();
+        sock.write_all(b"GET /healthz HTTP/1.1\r\n").unwrap();
+        idle.push(sock);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    // Fill every control slot with a sender that writes one header byte every 300 ms, inside
+    // the per-read timeout, and record when the relay closes each connection.
+    let started = std::time::Instant::now();
+    let closed = Arc::new(AtomicUsize::new(0));
+    let mut senders = Vec::new();
+    for _ in 0..256 {
+        let closed = Arc::clone(&closed);
+        senders.push(std::thread::spawn(move || {
+            let Ok(mut sock) = std::net::TcpStream::connect(addr) else {
+                closed.fetch_add(1, Ordering::SeqCst);
+                return;
+            };
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
+            let mut head = b"GET /healthz HTTP/1.1\r\nx-slow: "
+                .iter()
+                .copied()
+                .chain(std::iter::repeat(b'a'));
+            let mut buf = [0u8; 256];
+            while started.elapsed() < Duration::from_secs(8) {
+                let byte = [head.next().unwrap()];
+                if sock.write_all(&byte).is_err() {
+                    break;
+                }
+                match sock.read(&mut buf) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    _ => break,
+                }
+            }
+            if started.elapsed() < Duration::from_secs(8) {
+                closed.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+    }
+    let all_cut = wait_until(Duration::from_millis(4_500), || {
+        closed.load(Ordering::SeqCst) == 256
+    });
+    let cut_count = closed.load(Ordering::SeqCst);
+    let detach_started = std::time::Instant::now();
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    let elapsed = detach_started.elapsed();
+    for sender in senders {
+        let _ = sender.join();
+    }
+    assert!(
+        all_cut,
+        "only {cut_count} of 256 trickling control connections were closed within 4.5 s"
+    );
+    assert_eq!(code, 0, "detach failed after {elapsed:?}: {err}");
+    assert!(elapsed < Duration::from_secs(4), "detach took {elapsed:?}");
+    assert!(
+        join_within(reaper, Duration::from_secs(2)),
+        "relay process still running after detach"
+    );
+    drop(idle);
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_open_refuses_a_symlink_swapped_in_after_the_symlink_check() {
+    let scratch = Scratch::new("lock-symlink");
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let lock = ocx.join("child.lock");
+    let target = scratch.0.join("outside-target");
+    let barrier = Barrier::new(&scratch.0, "lock-open");
+    let mut cmd = child_command(&ocx, &codex, distinct_port(&[]), &["detach"]);
+    cmd.stdin(Stdio::null());
+    barrier.apply(&mut cmd, "lock-before-open");
+    let child = cmd.spawn().unwrap();
+    assert!(
+        barrier.wait_reached("lock-before-open", Duration::from_secs(20)),
+        "detach never reached the lock open"
+    );
+    let _ = fs::remove_file(&lock);
+    std::os::unix::fs::symlink(&target, &lock).unwrap();
+    barrier.release("lock-before-open");
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        !target.exists(),
+        "the lock open followed a symlink and created {}: {}",
+        target.display(),
+        text(&out)
+    );
+    assert!(
+        !out.status.success(),
+        "detach ran without its lock: {}",
+        text(&out)
+    );
+    assert!(
+        fs::symlink_metadata(&lock)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }

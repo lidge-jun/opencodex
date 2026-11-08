@@ -32,8 +32,14 @@ const FETCH_DEADLINE: Duration = Duration::from_secs(60);
 /// Whole-request bound for a parity report; per-read timeouts alone never end a trickle.
 const PARITY_DEADLINE: Duration = Duration::from_secs(10);
 const FETCH_READ_TIMEOUT: Duration = Duration::from_secs(15);
-/// Read/write timeout for a control connection handled while every worker is busy.
+/// Per-read and per-write timeout for a control connection handled while every worker is busy.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
+/// Deadline for every request head a control connection reads, so a sender that trickles
+/// bytes inside `CONTROL_TIMEOUT` still releases its control slot.
+const CONTROL_DEADLINE: Duration = Duration::from_secs(2);
+/// Connect bound for a request that shutdown can cancel: a socket can be registered for
+/// cancellation only once connected, so this bounds how long shutdown can wait on a connect.
+const CANCELLABLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const HEADER_AND_SSE_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_CONCURRENT_WORKERS: usize = 32;
 const MAX_CONTROL_CONNECTIONS: usize = 256;
@@ -211,7 +217,12 @@ fn open_authenticated_upstream_with(
     limits: RequestLimits<'_>,
 ) -> Result<AuthenticatedUpstream, UpstreamError> {
     let addr = SocketAddr::from(([127, 0, 0, 1], tunnel_port));
-    let stream = TcpStream::connect_timeout(&addr, limits.remaining(AUTH_TIMEOUT)?)
+    let connect_cap = if limits.cancel.is_some() {
+        CANCELLABLE_CONNECT_TIMEOUT
+    } else {
+        AUTH_TIMEOUT
+    };
+    let stream = TcpStream::connect_timeout(&addr, limits.remaining(connect_cap)?)
         .map_err(|e| UpstreamError::HomeUnreachable(format!("tunnel connect failed: {e}")))?;
     if let Some(cancel) = limits.cancel {
         cancel.register(&stream)?;
@@ -308,6 +319,27 @@ fn open_authenticated_upstream_with(
     })
 }
 
+/// Request head carrying the link token, built in one allocation of its final size so no
+/// partial copy is left behind, and wiped on drop.
+fn token_request_head(
+    before: &str,
+    auth_kind: RelayAuthKind,
+    token: &[u8],
+    after: &str,
+) -> SecretBytes {
+    let name: &[u8] = match auth_kind {
+        RelayAuthKind::ApiKeyHeader => b"x-opencodex-api-key: ",
+        RelayAuthKind::Bearer => b"Authorization: Bearer ",
+    };
+    let mut head = Vec::with_capacity(before.len() + name.len() + token.len() + 2 + after.len());
+    head.extend_from_slice(before.as_bytes());
+    head.extend_from_slice(name);
+    head.extend_from_slice(token);
+    head.extend_from_slice(b"\r\n");
+    head.extend_from_slice(after.as_bytes());
+    SecretBytes::new(head)
+}
+
 pub fn fetch_home_authenticated(
     tunnel_port: u16,
     creds: &RelayCredentials,
@@ -376,30 +408,24 @@ fn fetch_home_inner(
     let _ = upstream
         .writer
         .set_write_timeout(Some(limits.remaining(FETCH_READ_TIMEOUT)?));
-    let token_str = std::str::from_utf8(creds.raw_token.as_slice())
+    std::str::from_utf8(creds.raw_token.as_slice())
         .map_err(|_| UpstreamError::RelayAuthFailed("invalid utf8 token".to_owned()))?;
-    let mut head = format!(
+    let before = format!(
         "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{tunnel_port}\r\nAccept-Encoding: identity\r\nConnection: close\r\n{LINK_RELAY_SESSION_HEADER}: {}\r\n",
         upstream.nonce
     );
-    match auth_kind {
-        RelayAuthKind::ApiKeyHeader => {
-            head.push_str(&format!("x-opencodex-api-key: {token_str}\r\n"));
-        }
-        RelayAuthKind::Bearer => {
-            head.push_str(&format!("Authorization: Bearer {token_str}\r\n"));
-        }
-    }
+    let mut after = String::new();
     if let Some((ct, payload)) = body {
-        head.push_str(&format!(
+        after.push_str(&format!(
             "Content-Type: {ct}\r\nContent-Length: {}\r\n",
             payload.len()
         ));
     }
-    head.push_str("\r\n");
+    after.push_str("\r\n");
+    let head = token_request_head(&before, auth_kind, creds.raw_token.as_slice(), &after);
     upstream
         .writer
-        .write_all(head.as_bytes())
+        .write_all(head.as_slice())
         .map_err(|e| UpstreamError::HomeUnreachable(format!("request write failed: {e}")))?;
     if let Some((_, payload)) = body {
         upstream
@@ -478,22 +504,19 @@ struct SharedServerState {
 }
 
 impl SharedServerState {
-    fn load_live_creds(&self) -> Result<(RelayCredentials, String), &'static str> {
+    fn load_live_creds(&self) -> Result<RelayCredentials, &'static str> {
         let state = match read_child_state(&self.paths.state_file) {
             StateReadOutcome::Valid(s) => s,
             _ => return Err("link_credential_unavailable"),
         };
         let raw_token = read_verified_link_key(&self.paths.key_file, &state.token_fingerprint)
             .map_err(|_| "link_credential_unavailable")?;
-        Ok((
-            RelayCredentials {
-                api_key_id: state.api_key_id,
-                link_id: state.link_id,
-                token_fingerprint: state.token_fingerprint,
-                raw_token,
-            },
-            state.shutdown_secret,
-        ))
+        Ok(RelayCredentials {
+            api_key_id: state.api_key_id,
+            link_id: state.link_id,
+            token_fingerprint: state.token_fingerprint,
+            raw_token,
+        })
     }
 
     fn signal_shutdown(&self) {
@@ -626,9 +649,10 @@ fn serve_foreground_inner(
         };
         if !admitted {
             // Every worker is busy. Health checks and the authenticated shutdown still get a
-            // short-lived thread with tight timeouts, so a full pool (or a slow client in
-            // this tier) cannot keep the shutdown connection from being handled. Past the
-            // cap the connection is closed unanswered.
+            // short-lived control thread, so a full worker pool cannot keep the shutdown
+            // connection from being handled. A control connection holds its slot for at most
+            // `CONTROL_DEADLINE` per request head; past `MAX_CONTROL_CONNECTIONS` concurrent
+            // ones, a new connection is closed unanswered.
             if control_active.fetch_add(1, Ordering::SeqCst) >= MAX_CONTROL_CONNECTIONS {
                 control_active.fetch_sub(1, Ordering::SeqCst);
                 continue;
@@ -685,7 +709,7 @@ fn run_parity_loop(shared: Arc<SharedServerState>) {
             wait_ms = 5_000;
             continue;
         };
-        let Ok((creds, _)) = shared.load_live_creds() else {
+        let Ok(creds) = shared.load_live_creds() else {
             wait_ms = 5_000;
             continue;
         };
@@ -719,8 +743,8 @@ fn run_parity_loop(shared: Arc<SharedServerState>) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConnectionMode {
     Full,
-    /// Accepted while every worker is busy, with short timeouts: `/healthz` and the
-    /// authenticated shutdown only.
+    /// Accepted while every worker is busy, with short timeouts and a request-head deadline:
+    /// `/healthz` and the authenticated shutdown only.
     ControlOnly,
 }
 
@@ -730,15 +754,18 @@ fn handle_client_connection(
     mode: ConnectionMode,
 ) -> std::io::Result<()> {
     let _ = stream.set_nodelay(true);
-    if mode == ConnectionMode::ControlOnly {
+    let head_deadline = if mode == ConnectionMode::ControlOnly {
         let _ = stream.set_read_timeout(Some(CONTROL_TIMEOUT));
         let _ = stream.set_write_timeout(Some(CONTROL_TIMEOUT));
+        // One deadline covers the whole control exchange, including the shutdown proof frame.
+        Some(Instant::now() + CONTROL_DEADLINE)
     } else {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
         let _ = stream.set_write_timeout(Some(HEADER_AND_SSE_TIMEOUT));
-    }
+        None
+    };
     let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(DeadlineStream::new(stream, head_deadline, CONTROL_TIMEOUT));
 
     let req = match read_request_head(&mut reader) {
         Ok(r) => r,
@@ -934,7 +961,7 @@ fn handle_local_readyz<W: Write>(
             &body,
         );
     };
-    let Ok((creds, _)) = shared.load_live_creds() else {
+    let Ok(creds) = shared.load_live_creds() else {
         let body = serde_json::to_vec(&serde_json::json!({
             "service": "opencodex",
             "version": OCX_PROTOCOL_COMPAT_VERSION,
@@ -1009,7 +1036,7 @@ fn handle_local_readyz<W: Write>(
 }
 
 fn relay_request(
-    client_reader: &mut BufReader<TcpStream>,
+    client_reader: &mut BufReader<DeadlineStream>,
     client_writer: &mut TcpStream,
     req: &HttpRequestHead,
     shared: &SharedServerState,
@@ -1042,6 +1069,7 @@ fn relay_request(
         Vec::new()
     } else {
         let _ = client_reader
+            .get_ref()
             .get_ref()
             .set_read_timeout(Some(HEADER_AND_SSE_TIMEOUT));
         match read_bounded_body(client_reader, validated.framing, LINK_RELAY_BODY_MAX_BYTES) {
@@ -1076,7 +1104,7 @@ fn relay_request(
             br#"{"error":"link_credential_unavailable"}"#,
         );
     };
-    let Ok((creds, _)) = shared.load_live_creds() else {
+    let Ok(creds) = shared.load_live_creds() else {
         return write_json_response(
             client_writer,
             503,
@@ -1128,7 +1156,7 @@ fn relay_request(
         .writer
         .set_write_timeout(Some(HEADER_AND_SSE_TIMEOUT));
 
-    let Ok(token_str) = std::str::from_utf8(creds.raw_token.as_slice()) else {
+    if std::str::from_utf8(creds.raw_token.as_slice()).is_err() {
         return write_json_response(
             client_writer,
             503,
@@ -1136,32 +1164,26 @@ fn relay_request(
             &[],
             br#"{"error":"link_credential_unavailable"}"#,
         );
-    };
+    }
 
-    let mut out_head = format!(
+    let before = format!(
         "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept-Encoding: identity\r\nConnection: close\r\n{LINK_RELAY_SESSION_HEADER}: {}\r\n",
         req.method, req.target, st.tunnel_port, upstream.nonce
     );
-    match auth_kind {
-        RelayAuthKind::ApiKeyHeader => {
-            out_head.push_str(&format!("x-opencodex-api-key: {token_str}\r\n"));
-        }
-        RelayAuthKind::Bearer => {
-            out_head.push_str(&format!("Authorization: Bearer {token_str}\r\n"));
-        }
-    }
+    let mut after = String::new();
     for (k, v) in &validated.sanitized {
         if k.eq_ignore_ascii_case("accept-encoding") {
             continue;
         }
-        out_head.push_str(&format!("{k}: {v}\r\n"));
+        after.push_str(&format!("{k}: {v}\r\n"));
     }
     if req.method != "GET" && req.method != "HEAD" {
-        out_head.push_str(&format!("Content-Length: {}\r\n", req_body.len()));
+        after.push_str(&format!("Content-Length: {}\r\n", req_body.len()));
     }
-    out_head.push_str("\r\n");
+    after.push_str("\r\n");
+    let out_head = token_request_head(&before, auth_kind, creds.raw_token.as_slice(), &after);
 
-    if upstream.writer.write_all(out_head.as_bytes()).is_err()
+    if upstream.writer.write_all(out_head.as_slice()).is_err()
         || (!req_body.is_empty() && upstream.writer.write_all(&req_body).is_err())
         || upstream.writer.flush().is_err()
     {

@@ -176,6 +176,174 @@ fn sync_preserves_new_external_cache_models_through_detach() {
     );
 }
 
+fn cache_fixture(label: &str) -> (ScratchGuard, ChildPaths, HomeCodexSettings) {
+    let scratch = std::env::temp_dir().join(format!(
+        "ocx-child-{label}-{}-{}",
+        std::process::id(),
+        ocx_child::platform::random_hex(6).unwrap()
+    ));
+    let guard = ScratchGuard(scratch.clone());
+    let paths = ChildPaths::new(scratch.join("opencodex"), scratch.join("codex"));
+    fs::create_dir_all(&paths.opencodex_home).unwrap();
+    fs::create_dir_all(&paths.codex_home).unwrap();
+    let settings = HomeCodexSettings {
+        fast_mode: None,
+        multi_agent_mode: None,
+        web_search_sidecar_enabled: true,
+        subagent_defaults: None,
+    };
+    (guard, paths, settings)
+}
+
+fn cache_models(paths: &ChildPaths) -> Vec<serde_json::Value> {
+    let cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(paths.codex_models_cache_path()).unwrap()).unwrap();
+    cache["models"].as_array().unwrap().clone()
+}
+
+const NATIVE_GPT55_CACHE: &[u8] = br#"{"fetched_at":"2026-01-01T00:00:00Z","client_version":"1.0.0","models":[{"slug":"gpt-5.5","display_name":"native"}]}"#;
+const HOME_GPT55_CATALOG: &[u8] = br#"{"models":[{"slug":"gpt-5.5","display_name":"home"}]}"#;
+
+#[test]
+fn sync_after_external_cache_edit_keeps_home_entries_over_restored_pre_attach_versions() {
+    let (_guard, paths, settings) = cache_fixture("sync-shared-slug");
+    fs::write(paths.codex_models_cache_path(), NATIVE_GPT55_CACHE).unwrap();
+    let sync = || {
+        apply_attach_or_sync(
+            &owned(&paths),
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            HOME_GPT55_CATALOG,
+            &settings,
+        )
+    };
+    sync().unwrap();
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(paths.codex_models_cache_path()).unwrap()).unwrap();
+    cache["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"slug":"local-added"}));
+    fs::write(
+        paths.codex_models_cache_path(),
+        serde_json::to_vec(&cache).unwrap(),
+    )
+    .unwrap();
+    for round in 0..2 {
+        sync().unwrap_or_else(|e| panic!("sync round {round} failed: {e}"));
+        let models = cache_models(&paths);
+        assert_eq!(
+            models,
+            vec![
+                serde_json::json!({"slug":"gpt-5.5","display_name":"home"}),
+                serde_json::json!({"slug":"local-added"}),
+            ],
+            "round {round}"
+        );
+    }
+    offline_detach(&detach_guard(&paths), false).unwrap();
+    assert_eq!(
+        cache_models(&paths),
+        vec![
+            serde_json::json!({"slug":"gpt-5.5","display_name":"native"}),
+            serde_json::json!({"slug":"local-added"}),
+        ]
+    );
+}
+
+#[test]
+fn sync_interrupted_before_the_cache_write_still_strips_the_previous_catalog() {
+    for retry_sync in [false, true] {
+        let (_guard, paths, settings) = cache_fixture("interrupted-cache");
+        let sync = |catalog: &[u8], fault: Option<JournalWriteFault>| {
+            apply_attach_or_sync_with_fault(
+                &owned(&paths),
+                "lnk_0123456789abcdef",
+                "link:t",
+                10100,
+                catalog,
+                &settings,
+                fault,
+            )
+        };
+        sync(br#"{"models":[{"slug":"remote-v1"}]}"#, None).unwrap();
+        let mut cache: serde_json::Value =
+            serde_json::from_slice(&fs::read(paths.codex_models_cache_path()).unwrap()).unwrap();
+        cache["models"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"slug":"local-added"}));
+        fs::write(
+            paths.codex_models_cache_path(),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+        // The new catalog and its backup are written, the cache still holds remote-v1.
+        let err = sync(
+            br#"{"models":[{"slug":"remote-v2"}]}"#,
+            Some(JournalWriteFault::AfterCatalogWrite),
+        )
+        .unwrap_err();
+        assert!(err.contains("AfterCatalogWrite"), "{err}");
+        if retry_sync {
+            sync(br#"{"models":[{"slug":"remote-v2"}]}"#, None).unwrap();
+            let slugs: Vec<_> = cache_models(&paths)
+                .iter()
+                .map(|m| m["slug"].as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(slugs, ["remote-v2", "local-added"]);
+        }
+        offline_detach(&detach_guard(&paths), false).unwrap();
+        assert_eq!(
+            cache_models(&paths),
+            vec![serde_json::json!({"slug":"local-added"})],
+            "retry_sync={retry_sync}"
+        );
+    }
+}
+
+#[test]
+fn sync_and_detach_treat_codex_reserialized_home_entries_as_child_owned() {
+    for sync_before_detach in [true, false] {
+        let (_guard, paths, settings) = cache_fixture("reserialized-home");
+        fs::write(paths.codex_models_cache_path(), NATIVE_GPT55_CACHE).unwrap();
+        let sync = || {
+            apply_attach_or_sync(
+                &owned(&paths),
+                "lnk_0123456789abcdef",
+                "link:t",
+                10100,
+                HOME_GPT55_CATALOG,
+                &settings,
+            )
+        };
+        sync().unwrap();
+        // Codex refreshes the stale wrapper and writes the Home entry back with its own defaults.
+        let rewritten = br#"{"fetched_at":"2026-11-08T00:00:00Z","client_version":"0.99.0","etag":"abc","models":[{"display_name":"home","slug":"gpt-5.5","visibility":"list"},{"slug":"codex-new"}]}"#;
+        fs::write(paths.codex_models_cache_path(), rewritten).unwrap();
+        if sync_before_detach {
+            sync().expect("sync must accept a Codex rewrite of Home entries");
+            assert_eq!(
+                cache_models(&paths),
+                vec![
+                    serde_json::json!({"slug":"gpt-5.5","display_name":"home"}),
+                    serde_json::json!({"slug":"codex-new"}),
+                ]
+            );
+        }
+        offline_detach(&detach_guard(&paths), false).unwrap();
+        assert_eq!(
+            cache_models(&paths),
+            vec![
+                serde_json::json!({"slug":"gpt-5.5","display_name":"native"}),
+                serde_json::json!({"slug":"codex-new"}),
+            ],
+            "sync_before_detach={sync_before_detach}"
+        );
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConformanceSuite {

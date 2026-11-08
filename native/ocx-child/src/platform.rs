@@ -114,6 +114,49 @@ impl Drop for SecretBytes {
     }
 }
 
+/// A secret string that is wiped on drop, so every copy of it (a clone, or a state read that is
+/// dropped) is scrubbed. Serialized as a plain string; `Debug` never prints it.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString(<redacted>)")
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        // SAFETY: Zero bytes are valid UTF-8, so the string stays valid while it is wiped.
+        volatile_zero_bytes(unsafe { self.0.as_bytes_mut() });
+    }
+}
+
 pub fn volatile_zero_bytes(buf: &mut [u8]) {
     for byte in buf.iter_mut() {
         // SAFETY: `byte` is a valid mutable reference to an initialized `u8` inside `buf`.
@@ -297,6 +340,43 @@ pub fn random_hex(byte_len: usize) -> Result<String, String> {
     fill_random_bytes(&mut buf)?;
     Ok(hex_encode(&buf))
 }
+
+/// `O_NOFOLLOW` for the open(2) flags of this target, from the libc crate's definitions.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const O_NOFOLLOW: i32 = 0x0100;
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "powerpc",
+        target_arch = "powerpc64",
+        target_arch = "m68k"
+    )
+))]
+const O_NOFOLLOW: i32 = 0x8000;
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "android"),
+        not(any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "powerpc",
+            target_arch = "powerpc64",
+            target_arch = "m68k"
+        ))
+    ),
+    target_os = "solaris",
+    target_os = "illumos"
+))]
+const O_NOFOLLOW: i32 = 0x2_0000;
 
 pub fn reject_symlink(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -562,6 +642,12 @@ mod windows_private_acl {
             }
         }
         Ok((user, system, admins, acl_buf))
+    }
+
+    /// Verify, without changing it, that an existing file carries the protected owner-only DACL.
+    pub fn verify_private_file(path: &Path) -> Result<(), String> {
+        let (user, mut system, mut admins, _acl) = private_acl(false)?;
+        verify(path, false, &user, &mut system, &mut admins)
     }
 
     pub fn harden_and_verify(path: &Path, directory: bool) -> Result<(), String> {
@@ -1021,6 +1107,7 @@ impl FileLock {
             LockParentAction::Refuse => return Err(LockAcquireError::Io),
         }
         reject_symlink(path).map_err(|_| LockAcquireError::Io)?;
+        crate::test_hooks::barrier("lock-before-open");
         #[cfg(windows)]
         let existed = path.exists();
         let mut opts = OpenOptions::new();
@@ -1028,13 +1115,33 @@ impl FileLock {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+            opts.mode(0o600).custom_flags(O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         let file = opts.open(path).map_err(|_| LockAcquireError::Io)?;
+        // The open did not follow a link; refuse anything that is not a plain file anyway.
+        let metadata = file.metadata().map_err(|_| LockAcquireError::Io)?;
+        if !metadata.is_file() {
+            return Err(LockAcquireError::Io);
+        }
         #[cfg(windows)]
-        if !existed {
-            windows_private_acl::harden_and_verify(path, false)
-                .map_err(|_| LockAcquireError::Io)?;
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(LockAcquireError::Io);
+            }
+            let private = if existed {
+                windows_private_acl::verify_private_file(path)
+            } else {
+                windows_private_acl::harden_and_verify(path, false)
+            };
+            private.map_err(|_| LockAcquireError::Io)?;
         }
         #[cfg(unix)]
         {
@@ -1107,7 +1214,7 @@ pub fn spawn_detached_serve(
     opencodex_home: &Path,
     codex_home: &Path,
     listen_port: u16,
-    start_line: &str,
+    start_line: &[u8],
 ) -> Result<std::process::Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg("serve")
@@ -1117,11 +1224,10 @@ pub fn spawn_detached_serve(
         .arg(listen_port.to_string())
         .env("OPENCODEX_HOME", opencodex_home)
         .env("CODEX_HOME", codex_home)
-        .env_remove(crate::test_hooks::BARRIER_DIR_ENV)
-        .env_remove(crate::test_hooks::BARRIERS_ENV)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    crate::test_hooks::strip_barrier_env(&mut cmd);
 
     #[cfg(unix)]
     {
@@ -1147,9 +1253,7 @@ pub fn spawn_detached_serve(
         .spawn()
         .map_err(|e| format!("failed to spawn detached ocx-child serve: {e}"))?;
     let write_result = match child.stdin.as_mut() {
-        Some(stdin) => stdin
-            .write_all(start_line.as_bytes())
-            .and_then(|()| stdin.flush()),
+        Some(stdin) => stdin.write_all(start_line).and_then(|()| stdin.flush()),
         None => Err(std::io::Error::other("missing child stdin")),
     };
     if let Err(e) = write_result {

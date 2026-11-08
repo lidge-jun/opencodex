@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { classifySyncResult, runHomeFanout } from "../../src/cli/sync-fanout";
@@ -24,8 +24,11 @@ import type { OcxConfig } from "../../src/types";
 
 function findOrBuildOcxChildBinary(): string {
   const exeSuffix = process.platform === "win32" ? ".exe" : "";
-  const releaseBin = repoPath("native", "ocx-child", "target", "release", `ocx-child${exeSuffix}`);
-  const debugBin = repoPath("native", "ocx-child", "target", "debug", `ocx-child${exeSuffix}`);
+  // Cargo resolves a relative CARGO_TARGET_DIR against its working directory, which is ours.
+  const cargoTargetDir = process.env.CARGO_TARGET_DIR?.trim();
+  const targetDir = cargoTargetDir ? resolve(cargoTargetDir) : repoPath("native", "ocx-child", "target");
+  const releaseBin = join(targetDir, "release", `ocx-child${exeSuffix}`);
+  const debugBin = join(targetDir, "debug", `ocx-child${exeSuffix}`);
   const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
   const cargo = Bun.which("cargo") ?? join(realHome, ".cargo", "bin", `cargo${exeSuffix}`);
   if (existsSync(cargo)) {
