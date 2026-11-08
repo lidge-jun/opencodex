@@ -73,6 +73,24 @@ impl CodexHomeError {
     }
 }
 
+/// Failure of one guarded restoration step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreStepError {
+    /// A home no longer matches its captured identity; restoration must stop and keep every
+    /// recovery record.
+    HomeChanged(String),
+    /// The write or removal itself failed.
+    Failed(String),
+}
+
+impl RestoreStepError {
+    pub fn into_message(self) -> String {
+        match self {
+            Self::HomeChanged(msg) | Self::Failed(msg) => msg,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimPolicy {
     /// Claim an unowned home, or continue owning ours. Refuses while our detach is incomplete.
@@ -205,6 +223,24 @@ impl CodexHomeGuard {
             );
         }
         Ok(())
+    }
+
+    /// Run one restoration write, rename or removal, re-verifying both home identities
+    /// immediately before and immediately after it. Paths must come from `paths()`.
+    ///
+    /// This narrows, but cannot close, the window between the check and the system call: a
+    /// process running as the same user can still swap a directory in between. Such a process
+    /// gains nothing from that, since it can already write these files directly.
+    pub fn restore_step<T>(
+        &self,
+        op: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, RestoreStepError> {
+        crate::test_hooks::barrier("restore-before-write");
+        self.verify_homes().map_err(RestoreStepError::HomeChanged)?;
+        let out = op().map_err(RestoreStepError::Failed);
+        crate::test_hooks::barrier("restore-after-write");
+        self.verify_homes().map_err(RestoreStepError::HomeChanged)?;
+        out
     }
 
     fn read_owner(&self) -> Result<OwnerStatus, CodexHomeError> {

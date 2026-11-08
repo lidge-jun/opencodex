@@ -6,7 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
-use crate::codex_home::CodexHomeGuard;
+use crate::codex_home::{CodexHomeGuard, RestoreStepError};
 use crate::codex_settings::HomeCodexSettings;
 use crate::platform::{
     DirectoryIdentity, directory_identity, ensure_private_dir, reject_symlink, sha256_hex,
@@ -758,9 +758,13 @@ fn offline_detach_inner(
                                 DetachError::Conflict(format!("bad snapshot base64: {e}"))
                             })
                         })?;
-                    write_regular_atomic(&config_path, &orig).map_err(DetachError::Io)?;
+                    guard
+                        .restore_step(|| write_regular_atomic(&config_path, &orig))
+                        .map_err(step_err)?;
                 } else {
-                    remove_optional_file(&config_path).map_err(DetachError::Io)?;
+                    guard
+                        .restore_step(|| remove_optional_file(&config_path))
+                        .map_err(step_err)?;
                 }
                 DetachOutcome::ExactRestore
             } else {
@@ -770,11 +774,14 @@ fn offline_detach_inner(
                     surgical_detach_config(text, &journal.ledger).map_err(DetachError::Conflict)?;
                 match stripped {
                     Some(updated) => {
-                        write_regular_atomic(&config_path, updated.as_bytes())
-                            .map_err(DetachError::Io)?;
+                        guard
+                            .restore_step(|| write_regular_atomic(&config_path, updated.as_bytes()))
+                            .map_err(step_err)?;
                     }
                     None => {
-                        remove_optional_file(&config_path).map_err(DetachError::Io)?;
+                        guard
+                            .restore_step(|| remove_optional_file(&config_path))
+                            .map_err(step_err)?;
                     }
                 }
                 DetachOutcome::SurgicalRestore
@@ -785,26 +792,28 @@ fn offline_detach_inner(
     if !keep_catalog {
         if journal.pre_attach_catalog_existed {
             if let Some(prior_bytes) = &prior_catalog {
-                write_regular_atomic(catalog_path, prior_bytes).map_err(DetachError::Io)?;
+                guard
+                    .restore_step(|| write_regular_atomic(catalog_path, prior_bytes))
+                    .map_err(step_err)?;
             }
         } else {
-            remove_optional_file(catalog_path).map_err(DetachError::Io)?;
+            guard
+                .restore_step(|| remove_optional_file(catalog_path))
+                .map_err(step_err)?;
         }
     }
 
     match cache_plan {
         CacheDetachPlan::Noop => {}
-        CacheDetachPlan::Remove => match fs::remove_file(&cache_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(DetachError::Io(format!(
-                    "failed removing models_cache.json: {e}"
-                )));
-            }
-        },
+        CacheDetachPlan::Remove => {
+            guard
+                .restore_step(|| remove_optional_file(&cache_path))
+                .map_err(step_err)?;
+        }
         CacheDetachPlan::Write(reconciled) => {
-            write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
+            guard
+                .restore_step(|| write_regular_atomic(&cache_path, &reconciled))
+                .map_err(step_err)?;
         }
     }
 
@@ -828,13 +837,23 @@ fn offline_detach_inner(
         }
     }
     journal.previous_models_cache_sha256 = None;
-    write_journal(&paths.journal_file, &journal).map_err(DetachError::Io)?;
+    guard
+        .restore_step(|| write_journal(&paths.journal_file, &journal))
+        .map_err(step_err)?;
 
     if !defer_cleanup {
-        remove_optional_file(&paths.catalog_backup_file).map_err(DetachError::Io)?;
-        remove_optional_file(&paths.journal_file).map_err(DetachError::Io)?;
+        guard
+            .restore_step(|| remove_optional_file(&paths.catalog_backup_file))
+            .map_err(step_err)?;
+        guard
+            .restore_step(|| remove_optional_file(&paths.journal_file))
+            .map_err(step_err)?;
     }
     Ok(outcome)
+}
+
+fn step_err(e: RestoreStepError) -> DetachError {
+    DetachError::Io(e.into_message())
 }
 
 /// Preserves newly observed native models (`opencodex_account_observed_native`) and prior cache

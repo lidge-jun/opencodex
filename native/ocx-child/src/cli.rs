@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::codex_home::{ClaimPolicy, CodexHomeError, CodexHomeGuard, OwnershipPhase};
+use crate::codex_home::{
+    ClaimPolicy, CodexHomeError, CodexHomeGuard, OwnershipPhase, RestoreStepError,
+};
 use crate::codex_settings::{
     HomeCodexSettings, HomeCodexSettingsDocument, HomeIdentity, codex_settings_digest,
     parse_home_codex_settings_document,
@@ -500,39 +502,27 @@ impl AttachRollbackSnapshot {
         Ok(true)
     }
 
+    /// Restore one file. An ordinary failure is collected in `errors` so the remaining files
+    /// are still attempted; a changed home stops restoration at once (`Err`).
     fn restore_path(
+        guard: &CodexHomeGuard,
         path: &std::path::Path,
         bytes: Option<&[u8]>,
         private: bool,
         errors: &mut Vec<String>,
-    ) {
-        crate::test_hooks::barrier("restore-before-write");
-        Self::restore_path_inner(path, bytes, private, errors);
-        crate::test_hooks::barrier("restore-after-write");
-    }
-
-    fn restore_path_inner(
-        path: &std::path::Path,
-        bytes: Option<&[u8]>,
-        private: bool,
-        errors: &mut Vec<String>,
-    ) {
-        match bytes {
-            Some(b) => {
-                let res = if private {
-                    write_private_atomic(path, b)
-                } else {
-                    write_regular_atomic(path, b)
-                };
-                if let Err(e) = res {
-                    errors.push(format!("restore {}: {e}", path.display()));
-                }
+    ) -> Result<(), String> {
+        let result = guard.restore_step(|| match bytes {
+            Some(b) if private => write_private_atomic(path, b),
+            Some(b) => write_regular_atomic(path, b),
+            None => remove_optional_file(path),
+        });
+        match result {
+            Ok(()) => Ok(()),
+            Err(RestoreStepError::Failed(e)) => {
+                errors.push(format!("restore {}: {e}", path.display()));
+                Ok(())
             }
-            None => {
-                if let Err(e) = remove_optional_file(path) {
-                    errors.push(e);
-                }
-            }
+            Err(RestoreStepError::HomeChanged(e)) => Err(format!("attach rollback stopped: {e}")),
         }
     }
 
@@ -540,51 +530,36 @@ impl AttachRollbackSnapshot {
         let paths = guard.paths();
         self.validate_homes(paths)?;
         let mut errors = Vec::new();
-        Self::restore_path(
-            &paths.codex_config_path(),
-            self.config.as_deref(),
-            false,
-            &mut errors,
-        );
-        Self::restore_path(
-            &paths.codex_catalog_path(),
-            self.catalog.as_deref(),
-            false,
-            &mut errors,
-        );
-        Self::restore_path(
-            &paths.codex_models_cache_path(),
-            self.models_cache.as_deref(),
-            false,
-            &mut errors,
-        );
+        for (path, bytes) in [
+            (paths.codex_config_path(), self.config.as_deref()),
+            (paths.codex_catalog_path(), self.catalog.as_deref()),
+            (
+                paths.codex_models_cache_path(),
+                self.models_cache.as_deref(),
+            ),
+        ] {
+            Self::restore_path(guard, &path, bytes, false, &mut errors)?;
+        }
         if errors.is_empty() {
-            Self::restore_path(
-                &paths.catalog_backup_file,
-                self.catalog_backup.as_deref(),
-                true,
-                &mut errors,
-            );
-            Self::restore_path(
-                &paths.key_file,
-                self.key.as_ref().map(SecretBytes::as_slice),
-                true,
-                &mut errors,
-            );
-            Self::restore_path(
-                &paths.state_file,
-                self.state_bytes.as_deref(),
-                true,
-                &mut errors,
-            );
+            for (path, bytes) in [
+                (&paths.catalog_backup_file, self.catalog_backup.as_deref()),
+                (
+                    &paths.key_file,
+                    self.key.as_ref().map(SecretBytes::as_slice),
+                ),
+                (&paths.state_file, self.state_bytes.as_deref()),
+            ] {
+                Self::restore_path(guard, path, bytes, true, &mut errors)?;
+            }
         }
         if errors.is_empty() {
             Self::restore_path(
+                guard,
                 &paths.journal_file,
                 self.journal.as_deref(),
                 true,
                 &mut errors,
-            );
+            )?;
         }
         if let Some(mut prev) = self.prior_state.clone()
             && self.prior_was_serving
@@ -617,7 +592,10 @@ impl AttachRollbackSnapshot {
             }
         }
         if errors.is_empty() {
-            remove_optional_file(&paths.rollback_file)?;
+            // The rollback record goes only after restoration verified both homes.
+            guard
+                .restore_step(|| remove_optional_file(&paths.rollback_file))
+                .map_err(RestoreStepError::into_message)?;
             Ok(())
         } else {
             Err(format!("attach rollback incomplete: {}", errors.join("; ")))
@@ -1573,8 +1551,8 @@ fn cmd_detach(args: &[String]) -> u8 {
         &paths.catalog_backup_file,
         &paths.journal_file,
     ] {
-        if let Err(e) = remove_optional_file(path) {
-            eprintln!("detach cleanup failed: {e}");
+        if let Err(e) = codex_guard.restore_step(|| remove_optional_file(path)) {
+            eprintln!("detach cleanup failed: {}", e.into_message());
             return 1;
         }
     }
