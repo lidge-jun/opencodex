@@ -89,6 +89,14 @@ function parseOwners(raw: unknown): TelemetryEnvOptOutOwner[] {
   return owners;
 }
 
+function ownersAreValid(raw: unknown): boolean {
+  return Array.isArray(raw) && raw.length <= 64 && raw.every(entry => {
+    if (!entry || typeof entry !== "object") return false;
+    const { pid, since } = entry as Record<string, unknown>;
+    return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 && typeof since === "string" && !Number.isNaN(Date.parse(since));
+  });
+}
+
 function parsePendingDecision(raw: unknown): OcxTelemetryConfig | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
@@ -102,15 +110,17 @@ function parsePendingDecision(raw: unknown): OcxTelemetryConfig | null {
 
 /**
  * Read the state, noting whether a file exists but cannot be trusted (a symlink, oversized or
- * malformed). Such a file must not be read as empty: that would forget opt-out days.
+ * malformed, or with an opt-out field that is present but invalid). Such a file must not be read as
+ * empty: that would forget opt-out days. Only a file that does not exist reads as empty.
  */
 export function readTelemetryStateFile(configDir = getConfigDir()): { state: TelemetryState; unreadable: boolean } {
   const path = telemetryStatePath(configDir);
   let stat;
   try {
     stat = lstatSync(path);
-  } catch {
-    return { state: emptyState(), unreadable: false };
+  } catch (error) {
+    const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
+    return { state: emptyState(), unreadable: !missing };
   }
   try {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) return { state: emptyState(), unreadable: true };
@@ -124,18 +134,25 @@ export function readTelemetryStateFile(configDir = getConfigDir()): { state: Tel
         sentDays[day] = at;
       }
     }
-    const ineligibleThroughDay =
-      typeof raw.ineligibleThroughDay === "string" && parseCalendarUtcDayMs(raw.ineligibleThroughDay) !== null
-        ? raw.ineligibleThroughDay
-        : null;
+    // Opt-out fields may be absent or null; present but invalid means the file cannot be trusted.
+    const present = (value: unknown) => value !== undefined && value !== null;
+    if (present(raw.ineligibleThroughDay)
+      && !(typeof raw.ineligibleThroughDay === "string" && parseCalendarUtcDayMs(raw.ineligibleThroughDay) !== null)) {
+      return { state: emptyState(), unreadable: true };
+    }
+    if (present(raw.envOptOutActiveSince)
+      && !(typeof raw.envOptOutActiveSince === "string" && !Number.isNaN(Date.parse(raw.envOptOutActiveSince)))) {
+      return { state: emptyState(), unreadable: true };
+    }
+    if (present(raw.envOptOutOwners) && !ownersAreValid(raw.envOptOutOwners)) {
+      return { state: emptyState(), unreadable: true };
+    }
+    const ineligibleThroughDay = typeof raw.ineligibleThroughDay === "string" ? raw.ineligibleThroughDay : null;
     const retryAfterUntil =
       typeof raw.retryAfterUntil === "string" && !Number.isNaN(Date.parse(raw.retryAfterUntil))
         ? raw.retryAfterUntil
         : null;
-    const envOptOutActiveSince =
-      typeof raw.envOptOutActiveSince === "string" && !Number.isNaN(Date.parse(raw.envOptOutActiveSince))
-        ? raw.envOptOutActiveSince
-        : null;
+    const envOptOutActiveSince = typeof raw.envOptOutActiveSince === "string" ? raw.envOptOutActiveSince : null;
     return { unreadable: false, state: {
       version: 1,
       sentDays,
@@ -209,10 +226,19 @@ export function recordPendingTelemetryDecision(
  */
 export function clearPendingTelemetryDecision(configDir = getConfigDir(), now = Date.now()): void {
   const { state: current, unreadable } = readTelemetryStateFile(configDir);
-  if (!unreadable && !current.pendingDecision) return;
-  const state = unreadable ? readTelemetryStateForWrite(configDir, now) : current;
-  state.pendingDecision = null;
-  writeTelemetryState(state, configDir, now);
+  if (unreadable) {
+    // Best effort: the decision is already saved. If the rebuild fails, the file stays unreadable,
+    // which keeps sending blocked.
+    try {
+      const rebuilt = readTelemetryStateForWrite(configDir, now);
+      rebuilt.pendingDecision = null;
+      writeTelemetryState(rebuilt, configDir, now);
+    } catch { /* keep the unreadable file */ }
+    return;
+  }
+  if (!current.pendingDecision) return;
+  current.pendingDecision = null;
+  writeTelemetryState(current, configDir, now);
 }
 
 /**

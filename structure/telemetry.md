@@ -24,7 +24,9 @@ via `adoptPersistedTelemetry` in `src/config/live-reconcile.ts`.
 `src/telemetry/consent.ts` (`resolveTelemetryStatus`) evaluates precedence in order:
 `OCX_TELEMETRY` (`0`, `false`, `off`, `no`), `DO_NOT_TRACK` (`1`, `true`, `yes`),
 `decision === "declined"`, `decision === "accepted"`, undecided with `noticeShownAt`
-(`default-on`), and undecided without notice (`awaiting-notice`).
+(`default-on`), and undecided without notice (`awaiting-notice`). It reads only the config's
+`telemetry` block: a whole config is never treated as a block, so a top-level `noticeShownAt` or
+`decision` (which `ocx config set` can write) is not consent.
 
 Only a human can transition an undecided install to active sending:
 

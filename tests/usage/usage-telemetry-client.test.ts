@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readConfigDiagnostics, telemetryConfigError } from "../../src/config/diagnostics";
@@ -180,13 +180,13 @@ describe("consent status matrix and config schema wiring", () => {
       envOverride: null,
     });
 
-    expect(resolveTelemetryStatus({ noticeShownAt: "2026-11-06T00:00:00.000Z" }, {})).toMatchObject({
+    expect(resolveTelemetryStatus({ telemetry: { noticeShownAt: "2026-11-06T00:00:00.000Z" } }, {})).toMatchObject({
       effective: true,
       reason: "default-on",
       decision: null,
     });
 
-    expect(resolveTelemetryStatus({ decision: "accepted", decidedAt: "2026-11-06T00:00:00.000Z" }, {})).toMatchObject({
+    expect(resolveTelemetryStatus({ telemetry: { decision: "accepted", decidedAt: "2026-11-06T00:00:00.000Z" } }, {})).toMatchObject({
       effective: true,
       reason: "accepted",
       decision: "accepted",
@@ -194,7 +194,7 @@ describe("consent status matrix and config schema wiring", () => {
 
     expect(
       resolveTelemetryStatus(
-        { decision: "declined", decidedAt: "2026-11-06T00:00:00.000Z", noticeShownAt: "2026-11-05T00:00:00.000Z" },
+        { telemetry: { decision: "declined", decidedAt: "2026-11-06T00:00:00.000Z", noticeShownAt: "2026-11-05T00:00:00.000Z" } },
         {},
       ),
     ).toMatchObject({
@@ -205,7 +205,7 @@ describe("consent status matrix and config schema wiring", () => {
 
     for (const val of ["0", "false", "off", "no", " FALSE "]) {
       expect(
-        resolveTelemetryStatus({ decision: "accepted" }, { OCX_TELEMETRY: val, DO_NOT_TRACK: "1" }),
+        resolveTelemetryStatus({ telemetry: { decision: "accepted" } }, { OCX_TELEMETRY: val, DO_NOT_TRACK: "1" }),
       ).toMatchObject({
         effective: false,
         reason: "env-ocx-telemetry",
@@ -214,11 +214,35 @@ describe("consent status matrix and config schema wiring", () => {
     }
 
     for (const val of ["1", "true", "yes", " TRUE "]) {
-      expect(resolveTelemetryStatus({ decision: "accepted" }, { DO_NOT_TRACK: val })).toMatchObject({
+      expect(resolveTelemetryStatus({ telemetry: { decision: "accepted" } }, { DO_NOT_TRACK: val })).toMatchObject({
         effective: false,
         reason: "env-do-not-track",
         envOverride: "DO_NOT_TRACK",
       });
+    }
+  });
+
+  test("consent is read only from the telemetry block, never from top-level config keys", async () => {
+    // `ocx config set noticeShownAt …` writes a top-level key; it must not count as the notice.
+    const topLevel = { noticeShownAt: "2026-01-01T00:00:00.000Z", decision: "accepted", decidedAt: "2026-01-01T00:00:00.000Z" };
+    expect(resolveTelemetryStatus(topLevel as never, {})).toMatchObject({ effective: false, reason: "awaiting-notice", decision: null });
+    const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-toplevel-"));
+    try {
+      let fetchCalls = 0;
+      const result = await runTelemetryTick({
+        configDir: home,
+        readConfig: () => topLevel as never,
+        env: {},
+        now: Date.parse("2026-11-07T12:00:00.000Z"),
+        fetch: (async () => {
+          fetchCalls += 1;
+          return new Response("{}", { status: 202 });
+        }) as unknown as typeof fetch,
+      });
+      expect(result).toMatchObject({ sent: false, reason: "awaiting-notice" });
+      expect(fetchCalls).toBe(0);
+    } finally {
+      removeTreeWithRetry(home);
     }
   });
 
@@ -992,6 +1016,38 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     }
   });
 
+  test("a state file that cannot be inspected, or holds malformed opt-out fields, blocks sending", () => {
+    const statePath = telemetryStatePath(home);
+    const base = { version: 1, sentDays: {} };
+    for (const bad of [
+      { ...base, ineligibleThroughDay: "not-a-day" },
+      { ...base, envOptOutActiveSince: "not-a-time" },
+      { ...base, envOptOutOwners: "not-a-list" },
+      { ...base, envOptOutOwners: [{ pid: "1", since: "2026-11-01T00:00:00.000Z" }] },
+    ]) {
+      writeFileSync(statePath, JSON.stringify(bad), "utf8");
+      expect(readTelemetryStateFile(home).unreadable, JSON.stringify(bad)).toBe(true);
+    }
+    // Absent or null fields are legitimate.
+    writeFileSync(statePath, JSON.stringify({ ...base, ineligibleThroughDay: null, envOptOutActiveSince: null, envOptOutOwners: [] }), "utf8");
+    expect(readTelemetryStateFile(home).unreadable).toBe(false);
+    // An lstat failure other than "not found" is not read as a missing file.
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      chmodSync(home, 0o000);
+      try {
+        expect(readTelemetryStateFile(home).unreadable).toBe(true);
+      } finally {
+        chmodSync(home, 0o700);
+      }
+    }
+  });
+
+  test("a decision over a state path that cannot be rewritten still completes", () => {
+    const statePath = telemetryStatePath(home);
+    mkdirSync(statePath);
+    expect(() => clearPendingTelemetryDecision(home, NOW)).not.toThrow();
+  });
+
   test("a telemetry-id.json deleted by another process is not served from memory", () => {
     const { identity } = ensureTelemetryInstallId(home);
     expect(readTelemetryInstallId(home)?.installId).toBe(identity.installId);
@@ -1219,6 +1275,24 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
       if (prevDnt === undefined) delete process.env.DO_NOT_TRACK;
       else process.env.DO_NOT_TRACK = prevDnt;
     }
+  });
+
+  test("sendTelemetryPayload refuses redirects, so a report never goes to another host", async () => {
+    const payload = buildTelemetryPayloadV1({
+      aggregate: aggregateTelemetryEntriesForDay("2026-11-06", []),
+      installDayHash: "c".repeat(64),
+      newInstall: false,
+      now: NOW,
+    });
+    let redirect: RequestRedirect | undefined;
+    await sendTelemetryPayload(payload, {
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        redirect = init?.redirect;
+        return new Response("{}", { status: 202 });
+      }) as unknown as typeof fetch,
+      now: NOW,
+    });
+    expect(redirect).toBe("error");
   });
 
   test("sendTelemetryPayload enforces its timeout and does not retry", async () => {
