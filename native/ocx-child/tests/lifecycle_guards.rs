@@ -813,3 +813,82 @@ fn detach_stops_a_relay_whose_workers_are_all_busy() {
     );
     drop(idle);
 }
+
+#[cfg(unix)]
+#[test]
+fn control_connections_that_trickle_their_request_head_are_cut_off() {
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let scratch = Scratch::new("control-trickle");
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let (ocx, codex, port, reaper) = attached_foreground_relay(&scratch, &home);
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    // Every worker blocks reading a request head that never completes.
+    let mut idle = Vec::new();
+    for _ in 0..40 {
+        let mut sock = std::net::TcpStream::connect(addr).unwrap();
+        sock.write_all(b"GET /healthz HTTP/1.1\r\n").unwrap();
+        idle.push(sock);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    // Fill every control slot with a sender that writes one header byte every 300 ms, inside
+    // the per-read timeout, and record when the relay closes each connection.
+    let started = std::time::Instant::now();
+    let closed = Arc::new(AtomicUsize::new(0));
+    let mut senders = Vec::new();
+    for _ in 0..256 {
+        let closed = Arc::clone(&closed);
+        senders.push(std::thread::spawn(move || {
+            let Ok(mut sock) = std::net::TcpStream::connect(addr) else {
+                closed.fetch_add(1, Ordering::SeqCst);
+                return;
+            };
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
+            let mut head = b"GET /healthz HTTP/1.1\r\nx-slow: "
+                .iter()
+                .copied()
+                .chain(std::iter::repeat(b'a'));
+            let mut buf = [0u8; 256];
+            while started.elapsed() < Duration::from_secs(8) {
+                let byte = [head.next().unwrap()];
+                if sock.write_all(&byte).is_err() {
+                    break;
+                }
+                match sock.read(&mut buf) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    _ => break,
+                }
+            }
+            if started.elapsed() < Duration::from_secs(8) {
+                closed.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+    }
+    let all_cut = wait_until(Duration::from_millis(4_500), || {
+        closed.load(Ordering::SeqCst) == 256
+    });
+    let cut_count = closed.load(Ordering::SeqCst);
+    let detach_started = std::time::Instant::now();
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    let elapsed = detach_started.elapsed();
+    for sender in senders {
+        let _ = sender.join();
+    }
+    assert!(
+        all_cut,
+        "only {cut_count} of 256 trickling control connections were closed within 4.5 s"
+    );
+    assert_eq!(code, 0, "detach failed after {elapsed:?}: {err}");
+    assert!(elapsed < Duration::from_secs(4), "detach took {elapsed:?}");
+    assert!(
+        join_within(reaper, Duration::from_secs(2)),
+        "relay process still running after detach"
+    );
+    drop(idle);
+}

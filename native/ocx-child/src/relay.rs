@@ -32,8 +32,11 @@ const FETCH_DEADLINE: Duration = Duration::from_secs(60);
 /// Whole-request bound for a parity report; per-read timeouts alone never end a trickle.
 const PARITY_DEADLINE: Duration = Duration::from_secs(10);
 const FETCH_READ_TIMEOUT: Duration = Duration::from_secs(15);
-/// Read/write timeout for a control connection handled while every worker is busy.
+/// Per-read and per-write timeout for a control connection handled while every worker is busy.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
+/// Deadline for every request head a control connection reads, so a sender that trickles
+/// bytes inside `CONTROL_TIMEOUT` still releases its control slot.
+const CONTROL_DEADLINE: Duration = Duration::from_secs(2);
 const HEADER_AND_SSE_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_CONCURRENT_WORKERS: usize = 32;
 const MAX_CONTROL_CONNECTIONS: usize = 256;
@@ -626,9 +629,10 @@ fn serve_foreground_inner(
         };
         if !admitted {
             // Every worker is busy. Health checks and the authenticated shutdown still get a
-            // short-lived thread with tight timeouts, so a full pool (or a slow client in
-            // this tier) cannot keep the shutdown connection from being handled. Past the
-            // cap the connection is closed unanswered.
+            // short-lived control thread, so a full worker pool cannot keep the shutdown
+            // connection from being handled. A control connection holds its slot for at most
+            // `CONTROL_DEADLINE` per request head; past `MAX_CONTROL_CONNECTIONS` concurrent
+            // ones, a new connection is closed unanswered.
             if control_active.fetch_add(1, Ordering::SeqCst) >= MAX_CONTROL_CONNECTIONS {
                 control_active.fetch_sub(1, Ordering::SeqCst);
                 continue;
@@ -719,8 +723,8 @@ fn run_parity_loop(shared: Arc<SharedServerState>) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConnectionMode {
     Full,
-    /// Accepted while every worker is busy, with short timeouts: `/healthz` and the
-    /// authenticated shutdown only.
+    /// Accepted while every worker is busy, with short timeouts and a request-head deadline:
+    /// `/healthz` and the authenticated shutdown only.
     ControlOnly,
 }
 
@@ -730,15 +734,18 @@ fn handle_client_connection(
     mode: ConnectionMode,
 ) -> std::io::Result<()> {
     let _ = stream.set_nodelay(true);
-    if mode == ConnectionMode::ControlOnly {
+    let head_deadline = if mode == ConnectionMode::ControlOnly {
         let _ = stream.set_read_timeout(Some(CONTROL_TIMEOUT));
         let _ = stream.set_write_timeout(Some(CONTROL_TIMEOUT));
+        // One deadline covers the whole control exchange, including the shutdown proof frame.
+        Some(Instant::now() + CONTROL_DEADLINE)
     } else {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
         let _ = stream.set_write_timeout(Some(HEADER_AND_SSE_TIMEOUT));
-    }
+        None
+    };
     let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(DeadlineStream::new(stream, head_deadline, CONTROL_TIMEOUT));
 
     let req = match read_request_head(&mut reader) {
         Ok(r) => r,
@@ -1009,7 +1016,7 @@ fn handle_local_readyz<W: Write>(
 }
 
 fn relay_request(
-    client_reader: &mut BufReader<TcpStream>,
+    client_reader: &mut BufReader<DeadlineStream>,
     client_writer: &mut TcpStream,
     req: &HttpRequestHead,
     shared: &SharedServerState,
@@ -1042,6 +1049,7 @@ fn relay_request(
         Vec::new()
     } else {
         let _ = client_reader
+            .get_ref()
             .get_ref()
             .set_read_timeout(Some(HEADER_AND_SSE_TIMEOUT));
         match read_bounded_body(client_reader, validated.framing, LINK_RELAY_BODY_MAX_BYTES) {
