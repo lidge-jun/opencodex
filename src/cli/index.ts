@@ -728,11 +728,11 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   // System-wide env injection AFTER signal handlers are registered (crash safety:
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
-  const systemEnv = await injectSystemEnv(port, config).catch(() => ({ injected: false }));
+  const systemEnv = await injectSystemEnv(port, config).catch(() => { console.error("System environment reconciliation unavailable."); return { injected: false, reason: "unavailable" }; });
   // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
   // appending unconditionally so stale OpenCodex-owned hooks are removed as well. A sibling
   // skips it: reconciling to "not injected" would uninstall the live owner's ~/.zshrc hook.
-  if (!siblingStart) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+  if (!siblingStart && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected));
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Codex sync owns the ready/failed verdict, but its successful transition is
   // deferred until the best-effort Claude roster and Desktop registry settle. This
@@ -858,9 +858,9 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
       // secondary-listener settings may differ. Explicit sync or server startup
       // owns catalog refresh; ensure must not overwrite a working destination.
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-      const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
-      if (siblingOfLivePort() === null) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
-      if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
+      const systemEnv = await injectSystemEnv(live.port, config).catch(() => { console.error("System environment reconciliation unavailable."); return { injected: false, reason: "unavailable" }; });
+      if (siblingOfLivePort() === null && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+      if (!systemEnv.injected && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") await syncClaudeAgentDefsAtProxyStartup(config, live.port);
       // Refresh the Grok Build fence too (same contract as start). Keep the observed
       // bind scope for admission and its responding address for the destination.
       // The reconciler re-reads immediately before each client-file mutation;

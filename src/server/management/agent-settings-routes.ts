@@ -1862,7 +1862,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow", "contextAccounting"] as const;
     if (systemEnvInputs.some(field => body[field] !== undefined)) {
       try {
-        await applySystemEnvToggle(config, config.port);
+        const result = await applySystemEnvToggle(config, config.port);
+        if ("reverted" in result && result.reason === "coordination unavailable") warnings.push("Failed to apply system environment setting: coordination unavailable");
       } catch (err) {
         warnings.push(`Failed to apply system environment setting: ${err instanceof Error ? err.message : String(err)}`);
       }

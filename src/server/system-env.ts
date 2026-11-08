@@ -17,6 +17,8 @@ export type { SystemEnvDeps } from "./system-env-shell";
 import { systemEnvMarkerMode, writeShellEnvFile, removeShellEnvFile } from "./system-env-shell";
 import { resolveClaudeKeychainPresence } from "../claude/auth-detect";
 import type { SystemEnvDeps } from "./system-env-shell";
+import * as configMutation from "../config/mutation-lock";
+import * as configDiagnostics from "../config/diagnostics";
 
 const SYSTEM_ENV_NAMES = [
   "ANTHROPIC_BASE_URL",
@@ -74,6 +76,10 @@ const BIND_HOST_PATTERN = /^[A-Za-z0-9.\-_]{1,253}$|^\[[0-9A-Fa-f:.]{2,45}\]$/;
 type SystemEnvResult = { injected: boolean; reason?: string };
 type RevertResult = { reverted: boolean; reason?: string };
 type CleanupResult = { cleaned: boolean; reason?: string };
+let systemEnvGeneration = 0;
+function savedConfigMatches(config: string, snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]): boolean {
+  return snapshot.source === "default" || (snapshot.source === "file" && !snapshot.error && JSON.stringify(snapshot.config) === config);
+}
 
 export function getSystemEnvTrackingPath(): string {
   return join(getConfigDir(), "system-env-port");
@@ -200,6 +206,9 @@ export async function injectSystemEnv(
   config: OcxConfig,
   deps: SystemEnvDeps = {},
 ): Promise<SystemEnvResult> {
+  const generation = ++systemEnvGeneration;
+  const isCurrent = () => generation === systemEnvGeneration;
+  const superseded = (): SystemEnvResult => ({ injected: false, reason: "superseded" });
   // The launchd domain is machine-wide; a sibling instance leaves it to the live owner.
   if (siblingOfLivePort() !== null) return { injected: false, reason: "sibling instance" };
   if (process.platform !== "darwin") return { injected: false, reason: "not macOS" };
@@ -208,7 +217,29 @@ export async function injectSystemEnv(
   // Default OFF — only inject when explicitly enabled by the user.
   if (config.claudeCode?.systemEnv !== true) return { injected: false, reason: "systemEnv disabled" };
 
-  await cleanStaleSystemEnv();
+  const desired = JSON.stringify(config);
+  let initialSource: "default" | "file" | undefined;
+  const desiredStillCurrent = (snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]) => {
+    if (JSON.stringify(config) !== desired) return false;
+    if (snapshot.source === "fallback" || (initialSource !== undefined && snapshot.source !== initialSource)) return false;
+    return savedConfigMatches(desired, snapshot);
+  };
+  const configGeneration = configMutation.withConfigMutationLockSync(() => {
+    const snapshot = configDiagnostics.readConfigFileSnapshot().diagnostics;
+    if (!desiredStillCurrent(snapshot) || snapshot.source === "fallback") return undefined;
+    initialSource = snapshot.source;
+    return configMutation.readConfigGenerationInCurrentMutationTransaction().value;
+  });
+  if (configGeneration === undefined) return superseded();
+  const commitIfCurrent = (commit: () => void): boolean => configMutation.withConfigMutationLockSync(() => {
+    if (!isCurrent() || configMutation.readConfigGenerationInCurrentMutationTransaction().value !== configGeneration
+      || !desiredStillCurrent(configDiagnostics.readConfigFileSnapshot().diagnostics)) return false;
+    commit();
+    return true;
+  });
+
+  await cleanStaleSystemEnvFor(generation, commitIfCurrent);
+  if (!commitIfCurrent(() => {})) return superseded();
 
   // A launchd-started `claude` is a LOCAL client: it dials the unauthenticated loopback
   // listener when one is enabled, because on a tailnet-bound hub nothing answers on
@@ -222,6 +253,7 @@ export async function injectSystemEnv(
   const keychainPresence = deps.authDetect?.keychainProbe
     ? (() => { try { return deps.authDetect!.keychainProbe!(); } catch { return "unknown" as const; } })()
     : await resolveClaudeKeychainPresence();
+  if (!commitIfCurrent(() => {})) return superseded();
   const resolvedDeps = { ...deps, authDetect: { ...deps.authDetect, keychainProbe: () => keychainPresence } };
   const markerMode = systemEnvMarkerMode(config, resolvedDeps);
   // The data-plane credential this host can present to its own public listener: env token,
@@ -259,131 +291,144 @@ export async function injectSystemEnv(
   const injectedKeys: string[] = existingTracking
     ? [...(existingTracking.injectedKeys ?? SYSTEM_ENV_NAMES)]
     : [];
+  // Complete the asynchronous catalog lookup before writing any launchd variables.
+  const userAutoCompact = injectedKeys.includes("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    ? undefined
+    : launchctlGetenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+  const auto = resolveAutoContext(config.claudeCode, userAutoCompact);
+  const { modelEnv, windows } = await computeEffectiveModelEnv(config, auto);
+  if (!isCurrent()) return superseded();
   const inject = (name: string, value: string) => {
     setLaunchctlEnv(name, value);
     if (!injectedKeys.includes(name)) injectedKeys.push(name);
     writeTracking(port, injectedKeys, tracked);
   };
 
+  let wrote = false;
   try {
-    // Versions before 2.11 injected this key, which prevents Claude's gateway model
-    // discovery. Records written after it left the tracking list no longer name it,
-    // so membership cannot find it — clear it whenever the live value is the only
-    // one we ever injected. A user-set "1" is indistinguishable and is cleared too.
-    if (launchctlGetenv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL") === "1") {
-      unsetLaunchctlEnv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL");
-    }
-    inject("ANTHROPIC_BASE_URL", destination.origin);
-    inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
-    if (markerMode === "proxy") {
-      if (hostAdmissionToken) {
-        // The guard above proved this exists whenever the destination demands one.
-        inject("ANTHROPIC_AUTH_TOKEN", hostAdmissionToken);
-      } else if (config.apiKeys?.length) {
-        inject("ANTHROPIC_AUTH_TOKEN", config.apiKeys[0].key);
-      } else if (launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
-        inject("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER);
+    const applied = commitIfCurrent(() => {
+      wrote = true;
+      // Versions before 2.11 injected this key, which prevents Claude's gateway model
+      // discovery. Records written after it left the tracking list no longer name it,
+      // so membership cannot find it — clear it whenever the live value is the only
+      // one we ever injected. A user-set "1" is indistinguishable and is cleared too.
+      if (launchctlGetenv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL") === "1") {
+        unsetLaunchctlEnv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL");
       }
-    } else if (injectedKeys.includes("ANTHROPIC_AUTH_TOKEN")) {
-      const currentToken = launchctlGetenv("ANTHROPIC_AUTH_TOKEN");
-      if (currentToken
-        && (currentToken === PROXY_MARKER || isProxyAdmissionSecret(currentToken, config))) {
-        // Subscription switch-back (devlog 260720_claude_authmode_persist): remove
-        // opencodex-owned dummy or admission tokens so a launchd-started Claude regains
-        // its own claude.ai OAuth. User-set tokens are never touched.
-        unsetLaunchctlEnv("ANTHROPIC_AUTH_TOKEN");
-        const tokenIdx = injectedKeys.indexOf("ANTHROPIC_AUTH_TOKEN");
-        if (tokenIdx >= 0) injectedKeys.splice(tokenIdx, 1);
-        writeTracking(port, injectedKeys, tracked);
+      inject("ANTHROPIC_BASE_URL", destination.origin);
+      inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
+      if (markerMode === "proxy") {
+        if (hostAdmissionToken) {
+          // The guard above proved this exists whenever the destination demands one.
+          inject("ANTHROPIC_AUTH_TOKEN", hostAdmissionToken);
+        } else if (config.apiKeys?.length) {
+          inject("ANTHROPIC_AUTH_TOKEN", config.apiKeys[0].key);
+        } else if (launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
+          inject("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER);
+        }
+      } else if (injectedKeys.includes("ANTHROPIC_AUTH_TOKEN")) {
+        const currentToken = launchctlGetenv("ANTHROPIC_AUTH_TOKEN");
+        if (currentToken
+          && (currentToken === PROXY_MARKER || isProxyAdmissionSecret(currentToken, config))) {
+          // Subscription switch-back (devlog 260720_claude_authmode_persist): remove
+          // opencodex-owned dummy or admission tokens so a launchd-started Claude regains
+          // its own claude.ai OAuth. User-set tokens are never touched.
+          unsetLaunchctlEnv("ANTHROPIC_AUTH_TOKEN");
+          const tokenIdx = injectedKeys.indexOf("ANTHROPIC_AUTH_TOKEN");
+          if (tokenIdx >= 0) injectedKeys.splice(tokenIdx, 1);
+          writeTracking(port, injectedKeys, tracked);
+        }
       }
-    }
-    // Lever keys (devlog 136 B6): user-wins — skip any key the user already set in the
-    // launchd domain, and track ONLY the keys we actually injected so revert cannot
-    // delete a pre-existing user value (audit 139 #3). A key we already track is ours
-    // (revertSystemEnv unsets it regardless of value), so it is refreshed, not skipped.
-    const producedLevers = new Set<string>();
-    const injectLever = (name: string, value: string) => {
-      producedLevers.add(name);
-      if (launchctlGetenv(name) !== undefined && !injectedKeys.includes(name)) return;
-      inject(name, value);
-    };
-    // Model slots (default + tier defaults + legacy small-fast) with [1m] auto-marking
-    // (devlog 260712 B2, audit R2#3/R4#3): in-process context-window computation under
-    // the same 3s bound; on timeout the tier keys are simply not injected this run.
-    // Auto-context: a user-owned launchd value drives the marking predicate so the
-    // marker and threshold never separate (audit 021 #2); injectLever's user-wins
-    // check below keeps that value untouched.
-    const userAutoCompact = injectedKeys.includes("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
-      ? undefined
-      : launchctlGetenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
-    const auto = resolveAutoContext(config.claudeCode, userAutoCompact);
-    const { modelEnv, windows } = await computeEffectiveModelEnv(config, auto);
-    for (const [name, value] of Object.entries(modelEnv)) {
-      if (name === "ANTHROPIC_MODEL") continue; // legacy slot handled by shell file only (back-compat)
-      injectLever(name, value);
-    }
-    // Picker labels (#6926) only for alias tier slots this instance owns after the loop above: a
-    // launchd slot the user set keeps whatever label it has, and a label nothing produces any
-    // more is unset by the produced-key sweep below like any other tracked lever.
-    for (const slot of CLAUDE_TIER_LABEL_SLOTS) {
-      const value = modelEnv[slot];
-      const label = value === undefined ? undefined : claudeTierDisplayName(value);
-      if (label !== undefined && injectedKeys.includes(slot)) injectLever(`${slot}_NAME`, label);
-    }
-    const maxCtx = config.claudeCode?.maxContextTokens;
-    if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
-      injectLever("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
-    }
-    // Auto-context (devlog 260712 020): user-wins lever, inert when maxContextTokens set.
-    if (auto.enabled) injectLever("CLAUDE_CODE_AUTO_COMPACT_WINDOW", String(auto.compactWindow));
-    if (config.claudeCode?.alwaysEnableEffort === true) {
-      injectLever("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
-    }
-    // Tool-search deferral (#4838): same opt-in contract as `ocx claude`, so a machine
-    // whose Claude Code is launched from Dock/launchd gets the setting it configured
-    // instead of only terminal sessions. injectLever keeps a user-owned launchd value.
-    const toolSearch = claudeToolSearchEnv(config.claudeCode?.toolSearch);
-    if (toolSearch !== undefined) injectLever("ENABLE_TOOL_SEARCH", toolSearch);
-    // A lever injected on an earlier run that this config no longer produces (a cleared
-    // smallFastModel, a removed tier slot, or the DISABLE_COMPACT older releases paired with
-    // maxContextTokens) would otherwise stay in launchd until the proxy stops, and a
-    // same-port restart keeps the tracking record. Only tracked keys are touched, so a user-owned value is never removed.
-    for (const name of [...injectedKeys]) {
-      if ((SYSTEM_ENV_NAMES as readonly string[]).includes(name) || producedLevers.has(name)) continue;
-      // Older releases only ever injected DISABLE_COMPACT=1. Any other value was set by hand,
-      // so ownership is released without deleting it.
-      if (name === "DISABLE_COMPACT" && launchctlGetenv(name) !== "1") {
+      // Lever keys (devlog 136 B6): user-wins — skip any key the user already set in the
+      // launchd domain, and track ONLY the keys we actually injected so revert cannot
+      // delete a pre-existing user value (audit 139 #3). A key we already track is ours
+      // (revertSystemEnv unsets it regardless of value), so it is refreshed, not skipped.
+      const producedLevers = new Set<string>();
+      const injectLever = (name: string, value: string) => {
+        producedLevers.add(name);
+        if (launchctlGetenv(name) !== undefined && !injectedKeys.includes(name)) return;
+        inject(name, value);
+      };
+      // Model slots (default + tier defaults + legacy small-fast) with [1m] auto-marking
+      // (devlog 260712 B2, audit R2#3/R4#3): in-process context-window computation under
+      // the same 3s bound; on timeout the tier keys are simply not injected this run.
+      // Auto-context: a user-owned launchd value drives the marking predicate so the
+      // marker and threshold never separate (audit 021 #2); injectLever's user-wins
+      // check below keeps that value untouched.
+      for (const [name, value] of Object.entries(modelEnv)) {
+        if (name === "ANTHROPIC_MODEL") continue; // legacy slot handled by shell file only (back-compat)
+        injectLever(name, value);
+      }
+      // Picker labels (#6926) only for alias tier slots this instance owns after the loop above: a
+      // launchd slot the user set keeps whatever label it has, and a label nothing produces any
+      // more is unset by the produced-key sweep below like any other tracked lever.
+      for (const slot of CLAUDE_TIER_LABEL_SLOTS) {
+        const value = modelEnv[slot];
+        const label = value === undefined ? undefined : claudeTierDisplayName(value);
+        if (label !== undefined && injectedKeys.includes(slot)) injectLever(`${slot}_NAME`, label);
+      }
+      const maxCtx = config.claudeCode?.maxContextTokens;
+      if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
+        injectLever("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
+      }
+      // Auto-context (devlog 260712 020): user-wins lever, inert when maxContextTokens set.
+      if (auto.enabled) injectLever("CLAUDE_CODE_AUTO_COMPACT_WINDOW", String(auto.compactWindow));
+      if (config.claudeCode?.alwaysEnableEffort === true) {
+        injectLever("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
+      }
+      // Tool-search deferral (#4838): same opt-in contract as `ocx claude`, so a machine
+      // whose Claude Code is launched from Dock/launchd gets the setting it configured
+      // instead of only terminal sessions. injectLever keeps a user-owned launchd value.
+      const toolSearch = claudeToolSearchEnv(config.claudeCode?.toolSearch);
+      if (toolSearch !== undefined) injectLever("ENABLE_TOOL_SEARCH", toolSearch);
+      // A lever injected on an earlier run that this config no longer produces (a cleared
+      // smallFastModel, a removed tier slot, or the DISABLE_COMPACT older releases paired with
+      // maxContextTokens) would otherwise stay in launchd until the proxy stops, and a
+      // same-port restart keeps the tracking record. Only tracked keys are touched, so a user-owned value is never removed.
+      for (const name of [...injectedKeys]) {
+        if ((SYSTEM_ENV_NAMES as readonly string[]).includes(name) || producedLevers.has(name)) continue;
+        // Older releases only ever injected DISABLE_COMPACT=1. Any other value was set by hand,
+        // so ownership is released without deleting it.
+        if (name === "DISABLE_COMPACT" && launchctlGetenv(name) !== "1") {
+          injectedKeys.splice(injectedKeys.indexOf(name), 1);
+          writeTracking(port, injectedKeys, tracked);
+          continue;
+        }
+        unsetLaunchctlEnv(name);
         injectedKeys.splice(injectedKeys.indexOf(name), 1);
         writeTracking(port, injectedKeys, tracked);
-        continue;
       }
-      unsetLaunchctlEnv(name);
-      injectedKeys.splice(injectedKeys.indexOf(name), 1);
-      writeTracking(port, injectedKeys, tracked);
-    }
 
-    // Shell-hook env file: works for new shells in already-running Terminal.app.
-    writeShellEnvFile(port, config, modelEnv, auto, resolvedDeps);
+      // Shell-hook env file: works for new shells in already-running Terminal.app.
+      writeShellEnvFile(port, config, modelEnv, auto, resolvedDeps);
+    });
+    if (!applied) return superseded();
 
     // Gateway-model cache pre-write (devlog 030): plain `claude` sessions read the
     // picker list from ~/.claude/cache/gateway-models.json and cannot refresh it
     // without a token — keep it in sync with this proxy's /v1/models. Best-effort.
     try {
-      const { refreshGatewayModelCacheFromProxy } = await import("../claude/gateway-cache");
-      await refreshGatewayModelCacheFromProxy(port, { admissionConfig: config });
+      const { fetchGatewayModels, writeGatewayModelCache } = await import("../claude/gateway-cache");
+      if (!isCurrent()) return superseded();
+      const snapshot = await fetchGatewayModels(port, { admissionConfig: config });
+      if (!isCurrent()) return superseded();
+      if (snapshot && !commitIfCurrent(() => { writeGatewayModelCache(snapshot.baseUrl, snapshot.models); })) return superseded();
     } catch { /* best-effort */ }
+    if (!isCurrent()) return superseded();
 
     // Roster agent definitions (devlog 070): same launch-time sync for plain `claude`.
     // Reuses the window map computed above (audit 071 #5 — no second acquisition).
     try {
       const { injectClaudeAgentDefs } = await import("../claude/agents-inject");
-      injectClaudeAgentDefs(config, windows);
+      if (!isCurrent()) return superseded();
+      if (!commitIfCurrent(() => { injectClaudeAgentDefs(config, windows); })) return superseded();
     } catch { /* best-effort */ }
 
-    writeTracking(port, injectedKeys, tracked);
+    if (!isCurrent()) return superseded();
+    if (!commitIfCurrent(() => { writeTracking(port, injectedKeys, tracked); })) return superseded();
   } catch (error) {
-    rollbackInjectedKeys(port, injectedKeys, tracked);
-    removeShellEnvFile();
+    if (!isCurrent()) return superseded();
+    if (wrote && !commitIfCurrent(() => { rollbackInjectedKeys(port, injectedKeys, tracked); removeShellEnvFile(); })) return superseded();
     console.error("Failed to inject system environment; rolled back launchctl changes:", error);
     throw error;
   }
@@ -393,10 +438,27 @@ export async function injectSystemEnv(
 
 export async function applySystemEnvToggle(config: OcxConfig, port: number): Promise<SystemEnvResult | RevertResult> {
   if (config.claudeCode?.systemEnv === true) return injectSystemEnv(port, config);
-  return revertSystemEnv();
+  if (process.platform !== "darwin") return revertSystemEnv();
+  return configMutation.withConfigMutationLockSync(() => {
+    if (!savedConfigMatches(JSON.stringify(config), configDiagnostics.readConfigFileSnapshot().diagnostics)) {
+      return { reverted: false, reason: "superseded" };
+    }
+    return revertSystemEnv();
+  });
 }
 
 export function revertSystemEnv(): RevertResult {
+  systemEnvGeneration++;
+  if (process.platform !== "darwin") return { reverted: false, reason: "not macOS" };
+  try {
+    return configMutation.withConfigMutationLockSync(() => {
+      configMutation.bumpGenerationForCooperatingConfigWrite();
+      return revertSystemEnvCurrent();
+    });
+  } catch { return { reverted: false, reason: "coordination unavailable" }; }
+}
+
+function revertSystemEnvCurrent(): RevertResult {
   if (process.platform !== "darwin") return { reverted: false, reason: "not macOS" };
 
   const tracking = readTracking();
@@ -430,6 +492,10 @@ export function revertSystemEnv(): RevertResult {
 }
 
 export async function cleanStaleSystemEnv(): Promise<CleanupResult> {
+  return cleanStaleSystemEnvFor(++systemEnvGeneration);
+}
+
+async function cleanStaleSystemEnvFor(generation: number, commitIfCurrent?: (commit: () => void) => boolean): Promise<CleanupResult> {
   const tracking = readTracking();
   if (!tracking) return { cleaned: false, reason: "no tracking file" };
 
@@ -448,7 +514,22 @@ export async function cleanStaleSystemEnv(): Promise<CleanupResult> {
     // A failed or timed-out health check means the tracked proxy is stale.
   }
 
-  const reverted = revertSystemEnv();
+  if (generation !== systemEnvGeneration || JSON.stringify(readTracking()) !== JSON.stringify(tracking)) {
+    return { cleaned: false, reason: "superseded" };
+  }
+  let reverted: RevertResult = { reverted: false, reason: "superseded" };
+  const revert = () => {
+    if (JSON.stringify(readTracking()) === JSON.stringify(tracking)) reverted = revertSystemEnvCurrent();
+  };
+  if (commitIfCurrent) {
+    if (!commitIfCurrent(revert)) return { cleaned: false, reason: "superseded" };
+  } else {
+    configMutation.withConfigMutationLockSync(() => {
+      if (JSON.stringify(readTracking()) !== JSON.stringify(tracking)) return;
+      configMutation.bumpGenerationForCooperatingConfigWrite();
+      revert();
+    });
+  }
   if (!reverted.reverted) return { cleaned: false, reason: reverted.reason };
   return { cleaned: true };
 }

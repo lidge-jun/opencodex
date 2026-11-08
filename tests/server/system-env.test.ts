@@ -2,9 +2,14 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import { claudeKeychain } from "../../src/lib/claude-keychain";
+import * as configMutation from "../../src/config/mutation-lock";
+import * as configDiagnostics from "../../src/config/diagnostics";
+import { getDefaultConfig, loadConfig } from "../../src/config";
+import { createTempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
 import type { OcxConfig } from "../../src/types";
 import {
+  applySystemEnvToggle,
   cleanStaleSystemEnv,
   getShellEnvFilePath,
   injectSystemEnv,
@@ -33,6 +38,10 @@ let readSpy: ReturnType<typeof spyOn>;
 let writeSpy: ReturnType<typeof spyOn>;
 let unlinkSpy: ReturnType<typeof spyOn>;
 let mkdirSpy: ReturnType<typeof spyOn>;
+let configLockSpy: ReturnType<typeof spyOn>;
+let configGenerationSpy: ReturnType<typeof spyOn>;
+let configSnapshotSpy: ReturnType<typeof spyOn>;
+let configBumpSpy: ReturnType<typeof spyOn>;
 let trackingFile: string | undefined;
 let launchctlBaseUrl: string | undefined;
 let launchctlEnvValues: Record<string, string | undefined>;
@@ -53,6 +62,12 @@ function launchctlCommands(): string[] {
 
 beforeEach(() => {
   setPlatform("darwin");
+  configLockSpy = spyOn(configMutation, "withConfigMutationLockSync").mockImplementation((fn => fn()) as never);
+  configGenerationSpy = spyOn(configMutation, "readConfigGenerationInCurrentMutationTransaction").mockReturnValue({ value: 0 });
+  configBumpSpy = spyOn(configMutation, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => {});
+  configSnapshotSpy = spyOn(configDiagnostics, "readConfigFileSnapshot").mockReturnValue({
+    diagnostics: { source: "default", error: null, config: baseConfig },
+  });
   trackingFile = undefined;
   launchctlBaseUrl = undefined;
   launchctlEnvValues = {};
@@ -82,6 +97,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  configSnapshotSpy.mockRestore();
+  configBumpSpy.mockRestore();
+  configGenerationSpy.mockRestore();
+  configLockSpy.mockRestore();
   execSpy.mockRestore();
   execFileSpy.mockRestore();
   keychainSpy.mockRestore();
@@ -859,4 +878,63 @@ test("system-env preserves the shell seam without a back-import", () => {
   const shellSource = fs.readFileSync(repoPath("src/server/system-env-shell.ts"), "utf8");
   expect(shellSource.split("\n").some(line => /from\s+["']\.\/system-env["']/.test(line))).toBe(false);
   expect(fs.readFileSync(repoPath("src/server/system-env.ts"), "utf8")).toContain("catalog_busy");
+});
+
+test("a cooperating config write in a synthetic child fences an in-flight injection", async () => {
+  configSnapshotSpy.mockRestore(); configBumpSpy.mockRestore(); configGenerationSpy.mockRestore(); configLockSpy.mockRestore();
+  readSpy.mockRestore(); writeSpy.mockRestore(); unlinkSpy.mockRestore(); mkdirSpy.mockRestore();
+  const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  const home = createTempHome("ocx-sysenv-generation-");
+  process.env.HOME = home.root;
+  process.env.USERPROFILE = home.root;
+  process.env.CLAUDE_CONFIG_DIR = home.path("claude");
+  let started!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  let pending: ReturnType<typeof injectSystemEnv> | undefined;
+  try {
+    const config = { ...getDefaultConfig(), claudeCode: { systemEnv: true } };
+    configMutation.withConfigMutationLockSync(() => {
+      fs.writeFileSync(home.path("config.json"), JSON.stringify(config));
+      configMutation.bumpGenerationForCooperatingConfigWrite();
+    });
+    const loaded = loadConfig();
+    expect(await injectSystemEnv(4567, loaded)).toEqual({ injected: true });
+    keychainSpy.mockImplementation(async () => { started(); await blocked; return { status: "absent" }; });
+    pending = injectSystemEnv(4567, loaded);
+    await entered;
+    const writes = launchctlCommands().filter(command => command.startsWith("launchctl setenv ")).length;
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { Database } from "bun:sqlite";
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const root = process.env.OPENCODEX_HOME;
+      const file = join(root, "config.json");
+      const db = new Database(join(root, "config-mutation.sqlite"));
+      db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      const config = JSON.parse(readFileSync(file, "utf8"));
+      config.claudeCode.systemEnv = false;
+      writeFileSync(file, JSON.stringify(config));
+      db.exec("UPDATE config_generation SET value = value + 1 WHERE singleton = 1; COMMIT");
+      db.close();
+    `], { cwd: home.root, env: {
+      HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.root, CODEX_HOME: home.codexHome,
+      CLAUDE_CONFIG_DIR: home.path("claude"), TEMP: home.root, TMP: home.root,
+      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    }, stdout: "pipe", stderr: "pipe" });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect({ exitCode, stdout, stderr }).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+    release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(launchctlCommands().filter(command => command.startsWith("launchctl setenv "))).toHaveLength(writes);
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    expect(await applySystemEnvToggle(loadConfig(), 4567)).toEqual({ reverted: true });
+  } finally {
+    release(); if (pending) await pending.catch(() => {}); home.remove();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });

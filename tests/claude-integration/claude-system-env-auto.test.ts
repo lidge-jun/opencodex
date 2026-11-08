@@ -3,9 +3,12 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectSystemEnv } from "../../src/server/system-env";
+import { applySystemEnvToggle, injectSystemEnv, revertSystemEnv } from "../../src/server/system-env";
 import { PROXY_MARKER } from "../../src/claude/auth-detect";
 import { claudeKeychain } from "../../src/lib/claude-keychain";
+import * as contextWindows from "../../src/claude/context-windows";
+import * as configMutation from "../../src/config/mutation-lock";
+import * as configDiagnostics from "../../src/config/diagnostics";
 import type { OcxConfig } from "../../src/types";
 
 /**
@@ -25,6 +28,10 @@ let keychainSpy: ReturnType<typeof spyOn>;
 let readSpy: ReturnType<typeof spyOn>;
 let writeSpy: ReturnType<typeof spyOn>;
 let mkdirSpy: ReturnType<typeof spyOn>;
+let configLockSpy: ReturnType<typeof spyOn>;
+let configGenerationSpy: ReturnType<typeof spyOn>;
+let configSnapshotSpy: ReturnType<typeof spyOn>;
+let configBumpSpy: ReturnType<typeof spyOn>;
 let shellEnvContents = "";
 let previousConfigDir: string | undefined;
 let previousHome: string | undefined;
@@ -44,6 +51,12 @@ const baseConfig = {
 
 beforeEach(() => {
   setPlatform("darwin");
+  configLockSpy = spyOn(configMutation, "withConfigMutationLockSync").mockImplementation((fn => fn()) as never);
+  configGenerationSpy = spyOn(configMutation, "readConfigGenerationInCurrentMutationTransaction").mockReturnValue({ value: 0 });
+  configBumpSpy = spyOn(configMutation, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => {});
+  configSnapshotSpy = spyOn(configDiagnostics, "readConfigFileSnapshot").mockReturnValue({
+    diagnostics: { source: "default", error: null, config: baseConfig },
+  });
   shellEnvContents = "";
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
   previousHome = process.env.HOME;
@@ -76,6 +89,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  configSnapshotSpy.mockRestore();
+  configBumpSpy.mockRestore();
+  configGenerationSpy.mockRestore();
+  configLockSpy.mockRestore();
   execSpy.mockRestore();
   keychainSpy.mockRestore();
   readSpy.mockRestore();
@@ -97,6 +114,210 @@ afterEach(() => {
 test("auto with no detectable auth writes the proxy marker", async () => {
   await injectSystemEnv(4567, baseConfig);
   expect(shellEnvContents).toContain(`ANTHROPIC_AUTH_TOKEN='${PROXY_MARKER}'`);
+});
+
+test("disabling system environment during a pending Keychain probe prevents late injection", async () => {
+  let started!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  keychainSpy.mockImplementation(async () => { started(); await blocked; return { status: "absent" }; });
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered;
+    await applySystemEnvToggle({ ...baseConfig, claudeCode: { systemEnv: false } }, 4567);
+    release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(0);
+    expect(shellEnvContents).toBe("");
+  } finally { release(); }
+});
+
+test("a simulated external config generation change invalidates a pending injection", async () => {
+  let started!: () => void, release!: () => void, generation = 0;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  configGenerationSpy.mockImplementation(() => ({ value: generation }));
+  keychainSpy.mockImplementation(async () => { started(); await blocked; return { status: "absent" }; });
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered; generation++; release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(0);
+    expect(shellEnvContents).toBe("");
+  } finally { release(); }
+});
+
+test("an already stale enabled configuration cannot override the saved disabled state", async () => {
+  configSnapshotSpy.mockReturnValue({
+    diagnostics: { source: "file", error: null, config: { ...baseConfig, claudeCode: { systemEnv: false } } }, raw: "synthetic",
+  });
+  expect(await injectSystemEnv(4567, baseConfig)).toMatchObject({ injected: false });
+  expect(keychainSpy).not.toHaveBeenCalled();
+  expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+    && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(0);
+});
+
+test("a stale disabled settings request cannot revert a newer enabled configuration", async () => {
+  configSnapshotSpy.mockReturnValue({ diagnostics: { source: "file", error: null, config: baseConfig }, raw: "synthetic" });
+  expect(await applySystemEnvToggle({ ...baseConfig, claudeCode: { systemEnv: false } }, 4567))
+    .toEqual({ reverted: false, reason: "superseded" });
+  expect(configBumpSpy).not.toHaveBeenCalled();
+});
+
+test("an explicit revert advances the shared generation even without a tracking file", async () => {
+  expect(configBumpSpy).not.toHaveBeenCalled();
+  await applySystemEnvToggle({ ...baseConfig, claudeCode: { systemEnv: false } }, 4567);
+  expect(configBumpSpy).toHaveBeenCalledTimes(1);
+});
+
+test("an unavailable config coordinator refuses a revert without touching launchd", () => {
+  configLockSpy.mockImplementation(() => { throw new Error("synthetic coordinator busy"); });
+  expect(revertSystemEnv()).toEqual({ reverted: false, reason: "coordination unavailable" });
+  expect(execSpy).not.toHaveBeenCalled();
+});
+
+test("removing the saved configuration during a pending probe prevents injection", async () => {
+  let started!: () => void, release!: () => void, present = true;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  configSnapshotSpy.mockImplementation(() => ({
+    diagnostics: { source: present ? "file" : "default", error: null, config: baseConfig },
+    ...(present ? { raw: "synthetic" } : {}),
+  }));
+  keychainSpy.mockImplementation(async () => { started(); await blocked; return { status: "absent" }; });
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered; present = false; release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(0);
+  } finally { release(); }
+});
+
+test("newer enabled settings supersede a pending Keychain observation", async () => {
+  let started!: () => void, release!: () => void, calls = 0;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  keychainSpy.mockImplementation(async () => {
+    if (++calls === 1) { started(); await blocked; }
+    return { status: "absent" };
+  });
+  try {
+    const old = injectSystemEnv(4567, baseConfig);
+    await entered;
+    const newer = await injectSystemEnv(4567, { ...baseConfig, claudeCode: { systemEnv: true, authMode: "subscription" } });
+    expect(newer).toMatchObject({ injected: true });
+    const writes = execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv").length;
+    release();
+    expect(await old).toMatchObject({ injected: false });
+    expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(writes);
+    expect(shellEnvContents).not.toContain(PROXY_MARKER);
+  } finally { release(); }
+});
+
+test("disabling system environment while model resolution is pending prevents later writes", async () => {
+  let started!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const windows = spyOn(contextWindows, "boundedContextWindows").mockImplementation(async () => {
+    started(); await blocked; return {};
+  });
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered;
+    await applySystemEnvToggle({ ...baseConfig, claudeCode: { systemEnv: false } }, 4567);
+    const writes = execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv").length;
+    release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(execSpy.mock.calls.filter(call => call[0] === "/bin/launchctl"
+      && (call[1] as string[] | undefined)?.[0] === "setenv")).toHaveLength(writes);
+    expect(shellEnvContents).toBe("");
+  } finally { release(); windows.mockRestore(); }
+});
+
+test("disabling during gateway fetch prevents late cache and tracking writes", async () => {
+  let started!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const savedFetch = globalThis.fetch;
+  const values = new Map<string, string>();
+  let tracking: string | undefined, cacheWrites = 0;
+  const unlink = spyOn(fs, "unlinkSync").mockImplementation(((path: string) => {
+    if (String(path).includes("system-env-port")) tracking = undefined;
+    if (String(path).includes("claude-env.sh")) shellEnvContents = "";
+  }) as never);
+  execSpy.mockImplementation(((file: string, args?: string[]) => {
+    if (file !== "/bin/launchctl") return "";
+    if (args?.[0] === "getenv") return values.get(args[1]!) ?? "";
+    if (args?.[0] === "setenv") values.set(args[1]!, args[2]!);
+    if (args?.[0] === "unsetenv") values.delete(args[1]!);
+    return "";
+  }) as never);
+  readSpy.mockImplementation(((path: string) => {
+    if (String(path).includes("system-env-port") && tracking !== undefined) return tracking;
+    throw Object.assign(new Error("synthetic missing file"), { code: "ENOENT" });
+  }) as never);
+  writeSpy.mockImplementation(((path: string, data: string) => {
+    if (String(path).includes("system-env-port")) tracking = String(data);
+    if (String(path).includes("claude-env.sh")) shellEnvContents = String(data);
+    if (String(path).includes("gateway-models.json")) cacheWrites++;
+  }) as never);
+  globalThis.fetch = (async () => {
+    started(); await blocked;
+    return Response.json({ data: [{ id: "synthetic-claude-model" }] });
+  }) as typeof fetch;
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered;
+    expect(values.get("ANTHROPIC_BASE_URL")).toBe("http://127.0.0.1:4567");
+    expect(await applySystemEnvToggle({ ...baseConfig, claudeCode: { systemEnv: false } }, 4567)).toMatchObject({ reverted: true });
+    release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(values.size).toBe(0);
+    expect(tracking).toBeUndefined();
+    expect(shellEnvContents).toBe("");
+    expect(cacheWrites).toBe(0);
+  } finally { release(); globalThis.fetch = savedFetch; unlink.mockRestore(); }
+});
+
+test("a stale health probe cannot undo a newer system environment revert", async () => {
+  let started!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const savedFetch = globalThis.fetch;
+  let tracking: string | undefined = JSON.stringify({ pid: 1, port: 4567, injectedAt: "synthetic",
+    injectedKeys: ["ANTHROPIC_BASE_URL"] });
+  const values = new Map([["ANTHROPIC_BASE_URL", "http://127.0.0.1:4567"]]);
+  const unlink = spyOn(fs, "unlinkSync").mockImplementation(((path: string) => {
+    if (String(path).includes("system-env-port")) tracking = undefined;
+  }) as never);
+  execSpy.mockImplementation(((file: string, args?: string[]) => {
+    if (file !== "/bin/launchctl") return "";
+    if (args?.[0] === "getenv") return values.get(args[1]!) ?? "";
+    if (args?.[0] === "setenv") values.set(args[1]!, args[2]!);
+    if (args?.[0] === "unsetenv") values.delete(args[1]!);
+    return "";
+  }) as never);
+  readSpy.mockImplementation(((path: string) => {
+    if (String(path).includes("system-env-port") && tracking !== undefined) return tracking;
+    throw Object.assign(new Error("synthetic missing file"), { code: "ENOENT" });
+  }) as never);
+  globalThis.fetch = (async () => { started(); await blocked; return new Response(null, { status: 503 }); }) as typeof fetch;
+  try {
+    const pending = injectSystemEnv(4567, baseConfig);
+    await entered;
+    expect(await applySystemEnvToggle({ ...baseConfig, claudeCode: { systemEnv: false } }, 4567)).toMatchObject({ reverted: true });
+    release();
+    expect(await pending).toMatchObject({ injected: false });
+    expect(tracking).toBeUndefined();
+    expect(values.size).toBe(0);
+    expect(keychainSpy).not.toHaveBeenCalled();
+  } finally { release(); globalThis.fetch = savedFetch; unlink.mockRestore(); }
 });
 
 test("launchd and shell use one Keychain presence snapshot", async () => {

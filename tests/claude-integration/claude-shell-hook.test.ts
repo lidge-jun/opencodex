@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { claudeCodeCliInstalled, reconcileShellHook } from "../../src/server/system-env";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const originalPlatform = process.platform;
 let originalHome: string | undefined;
@@ -178,9 +179,16 @@ describe("Claude Code shell-hook reconciliation", () => {
   });
 
   test("start and ensure reconcile the hook from the actual injection result", async () => {
-    const source = await Bun.file(new URL("../../src/cli/index.ts", import.meta.url)).text();
+    const source = await Bun.file(repoPath("src/cli/index.ts")).text();
 
     expect(source).not.toMatch(/\n\s*installShellHook\(\);/);
     expect(source.match(/reconcileShellHook\(systemEnv\.injected\)/g)).toHaveLength(2);
+  });
+
+  test("superseded startup work cannot remove the hook or sync agents from stale settings", async () => {
+    const source = await Bun.file(repoPath("src/cli/index.ts")).text();
+    expect(source).toContain('if (!siblingStart && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected))');
+    expect(source).toContain('if (siblingOfLivePort() === null && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected))');
+    expect(source).toContain('if (!systemEnv.injected && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") await syncClaudeAgentDefsAtProxyStartup(config, live.port)');
   });
 });

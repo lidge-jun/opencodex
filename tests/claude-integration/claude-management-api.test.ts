@@ -763,6 +763,18 @@ test("authMode-only PUT triggers system-env reconciliation (audit R2 #1)", async
   }
 });
 
+test("PUT reports when system environment reversion cannot acquire its coordinator", async () => {
+  const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "coordination unavailable" });
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ systemEnv: false }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { warnings: string[] }).warnings).toContain("Failed to apply system environment setting: coordination unavailable");
+  } finally { applySpy.mockRestore(); await server.stop(true); }
+});
+
 // Model-slot and lever fields feed injectSystemEnv, so changing one must reconcile launchd too;
 // before, only systemEnv/authMode did, and a cleared smallFastModel stayed injected until restart.
 test.each([

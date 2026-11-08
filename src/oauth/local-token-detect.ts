@@ -4,7 +4,7 @@
  * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
  */
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import * as os from "node:os";
 import { join } from "node:path";
 import type { OAuthCredentials } from "./types";
 import { claudeKeychain } from "../lib/claude-keychain";
@@ -12,7 +12,7 @@ import { claudeKeychain } from "../lib/claude-keychain";
 const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
 
 export function detectGrokCliToken(): OAuthCredentials | null {
-  const authPath = join(process.env.HOME ?? homedir(), ".grok", "auth.json");
+  const authPath = join(process.env.HOME ?? os.homedir(), ".grok", "auth.json");
   if (!existsSync(authPath)) return null;
 
   try {
@@ -69,7 +69,7 @@ export function shouldAdoptGrokGeneration(
 /** Claude Code config dir: `CLAUDE_CONFIG_DIR` override, else `~/.claude`. */
 function claudeConfigDir(): string {
   const explicit = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return explicit ? explicit : join(homedir(), ".claude");
+  return explicit ? explicit : join(os.homedir(), ".claude");
 }
 
 /**

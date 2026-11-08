@@ -3,6 +3,7 @@ import { claudeKeychain } from "../../src/lib/claude-keychain";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
+import * as os from "node:os";
 import { join } from "node:path";
 import {
   detectGrokCliToken,
@@ -86,13 +87,22 @@ describe("Claude Code credentials file fallback (Linux/Windows)", () => {
     writeFileSync(join(dir, ".claude", ".credentials.json"), JSON.stringify({ claudeAiOauth: {
       accessToken: "synthetic-file", refreshToken: "synthetic-refresh", expiresAt: 1234,
     } }));
-    process.env.HOME = dir;
-    process.env.USERPROFILE = dir;
+    process.env.HOME = join(tmp, "different-synthetic-home");
+    process.env.USERPROFILE = process.env.HOME;
     delete process.env.CLAUDE_CONFIG_DIR;
-    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "unavailable" });
-    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" }); }
+    const home = spyOn(os, "homedir").mockReturnValue(dir);
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
+    try {
+      expect(JSON.parse(readClaudeCredentialsFile()!)).toMatchObject({ claudeAiOauth: { accessToken: "synthetic-file" } });
+      expect(await observeClaudeCodeToken()).toMatchObject({ kind: "present", sourceKey: `file:${join(dir, ".claude")}`,
+        credential: { access: "synthetic-file" } });
+      read.mockResolvedValue({ status: "unavailable" });
+      expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" });
+      expect(home).toHaveBeenCalled();
+    }
     finally {
       read.mockRestore();
+      home.mockRestore();
       if (previousProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousProfile;
       if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     }
