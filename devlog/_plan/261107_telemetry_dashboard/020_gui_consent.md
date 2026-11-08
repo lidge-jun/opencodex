@@ -14,10 +14,10 @@ endpoint (060 D13).
   `reason === "awaiting-notice"` or `"default-on"` without a decision. That covers first run and
   installs that update into this version (they have no decision yet): the post-update popup.
 - The checkbox is **pre-checked**. Continue sends `PUT /api/telemetry { decision: checked ? "accepted" :
-  "declined" }` (this also records the notice server-side). Escape, the backdrop and the close button
-  record nothing, and the install stays undecided for the next start (060 D13). Opening the dialog
-  alone records nothing, so an unread or automated page load never enables sending. Initial focus
-  is on the heading, so a stray Enter cannot press Continue.
+  "declined" }` (this also records the notice server-side). Escape and the backdrop record nothing,
+  and the install stays undecided for the next start (060 D13). Opening the dialog alone records
+  nothing, so an unread or automated page load never enables sending. Focus is moved to the heading
+  right after `showModal()`, so a stray Enter cannot press Continue.
 - The card lists what is sent and what is never sent and has a "What is sent" disclosure with the
   exact preview JSON from the status endpoint.
 - `TelemetrySettingsPanel` renders in Proxy details (`SettingsSection id="proxy-telemetry"` in

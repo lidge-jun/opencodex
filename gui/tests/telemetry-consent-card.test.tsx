@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Window } from "happy-dom";
 import { act, useState } from "react";
 import type { Root } from "react-dom/client";
@@ -25,6 +27,8 @@ let statusResponse: TelemetryStatusSnapshot;
 let calls: Array<{ method: string; path: string; body?: unknown }>;
 let failMethods: Set<string>;
 let statusEvents: TelemetryStatusSnapshot[];
+/** When set, PUT /api/telemetry answers with this instead of saving. */
+let putReply: (() => Response) | null;
 
 function makeStatus(overrides: Partial<TelemetryStatusSnapshot> = {}): TelemetryStatusSnapshot {
   return {
@@ -81,6 +85,7 @@ beforeEach(() => {
   calls = [];
   failMethods = new Set();
   statusEvents = [];
+  putReply = null;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -95,6 +100,7 @@ beforeEach(() => {
         return Response.json({ state: "not-starred", url: "https://github.com/lidge-jun/opencodex" });
       }
       if (path === "/api/telemetry" && method === "PUT") {
+        if (putReply) return putReply();
         const decision = (body as { decision: "accepted" | "declined" }).decision;
         statusResponse = {
           ...statusResponse,
@@ -197,8 +203,9 @@ test("opens with pre-checked checkbox, shows preview JSON, and records nothing o
   expect(card).toBeTruthy();
   expect(card?.querySelector("h3")?.textContent).toBe("Help improve opencodex with anonymous usage stats");
   expect(card?.querySelector(".modal-desc")?.textContent).toContain(
-    "public project dashboard at opencodex.me/dashboard",
+    "telemetry.opencodex.me; only project-wide totals are published at opencodex.me/dashboard",
   );
+  expect(card?.querySelector(".modal-desc")?.textContent).toContain("OCX_TELEMETRY=0 or DO_NOT_TRACK=1");
   expect(card?.querySelector("summary")?.textContent).toBe("Preview the JSON");
   const checkbox = host.querySelector<HTMLInputElement>(".telemetry-consent-checkbox")!;
   expect(checkbox).toBeTruthy();
@@ -483,4 +490,65 @@ test("App does not enable DesktopStarOnboarding or TelemetryConsentCard on a Rem
   expect(host.querySelector(".star-onboarding")).toBeNull();
   expect(calls.some(c => c.path === "/api/telemetry")).toBe(false);
   expect(host.querySelector("dialog.telemetry-consent-overlay")).toBeNull();
+});
+
+test("focus starts on the heading after showModal, so a stray Enter cannot accept", async () => {
+  setup();
+  await mountCard();
+  const heading = host.querySelector(".telemetry-consent-card h3");
+  expect(heading).toBeTruthy();
+  expect(win.document.activeElement).toBe(heading as unknown as Element);
+  const continueBtn = host.querySelector(".telemetry-consent-card .btn-primary");
+  expect(win.document.activeElement).not.toBe(continueBtn as unknown as Element);
+  expect(calls).toEqual([{ method: "GET", path: "/api/telemetry" }]);
+});
+
+test("links the full privacy policy, the same URL the CLI and installer show", async () => {
+  setup();
+  await mountCard();
+  const link = host.querySelector<HTMLAnchorElement>(".telemetry-consent-card a.telemetry-policy-link");
+  expect(link?.textContent).toBe("Read the full privacy policy");
+  expect(link?.getAttribute("href")).toBe(telemetryApi.TELEMETRY_POLICY_URL);
+  expect(link?.getAttribute("target")).toBe("_blank");
+  const disclosure = readFileSync(join(import.meta.dir, "..", "..", "src", "telemetry", "disclosure.ts"), "utf8");
+  expect(disclosure).toContain(`export const TELEMETRY_POLICY_URL = "${telemetryApi.TELEMETRY_POLICY_URL}";`);
+  const items = host.querySelector(".telemetry-consent-card")?.textContent ?? "";
+  expect(items).toContain("A per-day install hash that changes every day");
+  expect(items).toContain("account IDs or emails");
+});
+
+test("a session the server refuses for consent explains how to choose instead of a generic error", async () => {
+  setup();
+  putReply = () =>
+    Response.json(
+      { ok: false, code: "agent_consent_required", error: "Telemetry consent requires a human dashboard session." },
+      { status: 403 },
+    );
+  await mountCard();
+  await act(async () => {
+    click(host.querySelector(".telemetry-consent-card .btn-primary")!);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  // Nothing was recorded, the popup stays, and the notice names the ways that work.
+  expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
+  const notice = host.querySelector(".telemetry-consent-card .notice-err")?.textContent ?? "";
+  expect(notice).toContain("restored from a remembered device");
+  expect(notice).toContain("ocx telemetry disable");
+  expect(notice).not.toContain("Could not save telemetry preference");
+});
+
+test("a saved decision whose reply and re-read both fail still counts as saved", async () => {
+  setup();
+  await mountCard();
+  putReply = () => new Response("not json", { status: 200 });
+  failMethods.add("GET /api/telemetry");
+  await act(async () => {
+    click(host.querySelector(".telemetry-consent-card .btn-primary")!);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(calls.filter(call => call.method === "PUT")).toEqual([
+    { method: "PUT", path: "/api/telemetry", body: { decision: "accepted" } },
+  ]);
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+  expect(host.querySelector(".notice-err")).toBeNull();
 });
