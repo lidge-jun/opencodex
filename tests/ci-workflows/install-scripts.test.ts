@@ -240,13 +240,10 @@ exit 0
     const script = await readText("scripts/release.ts");
 
     expect(script).toContain("waitForReleaseWorkflowRun");
-    // The invariant is that the dispatched run is located by workflow, branch
-    // and commit — not that the call is a shell string. Every external command
-    // now goes through the shared launcher as an argv array, because Bun.$
-    // resolved PATH itself and walked past the Windows `.cmd` test shims.
+    // Pin the workflow and dev branch without filtering by a mutable pre-dispatch SHA.
     expect(script).toContain('"gh", "run", "list", "--workflow", "release.yml", "--branch"');
-    expect(script).toContain('"--commit"');
-    expect(script).toContain("createdAt,databaseId,headSha,status,url");
+    expect(script).not.toContain('"--commit"');
+    expect(script).toContain("createdAt,databaseId,headSha,status,url,headBranch,event,workflowDatabaseId");
     expect(script).toContain("await watchRun(releaseRun.databaseId)");
   });
 

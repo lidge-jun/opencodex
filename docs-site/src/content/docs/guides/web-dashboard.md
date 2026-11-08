@@ -164,6 +164,10 @@ to save an incomplete snapshot; choose another order or repair the history befor
 
 ### Account selection
 
+For a provider's OAuth accounts, finish the current sign-in or account removal before starting
+the other operation. If the account list and sign-in status cannot be refreshed, the status remains
+unverified and **Log out** is available to explicitly retry recovery.
+
 Account selection is shared with request routing. Selecting an OAuth account takes effect on the
 next request even when a pool is enabled. A healthy selection is not replaced merely because
 another generic OAuth account has more unused quota. If the account returns 429, automatic
@@ -538,6 +542,8 @@ them. Both switches apply immediately; **Save** never changes them. When interce
 **Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker, a per-model list of what Claude Desktop shows (see [Choose which models Claude Desktop lists](/guides/claude-code/#choose-which-models-claude-desktop-lists)), and model families under **Advanced**. One status row shows whether Claude Desktop runs the profile, with a separate chip for whether dashboard edits are saved, and **Save** and **Save & apply** beside it.
 
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
+
+If an account change is still in progress, wait for it to finish before retrying logout. After an account removal, the dashboard rechecks the provider's login status; if it cannot verify the result, refresh the account list before retrying the removal.
 
 The bookmarks `#claude` and `#claude/code` open this page, and the former `#claude/settings` redirects to `#claude/code`; `#claude/desktop` selects the separate Claude Desktop tab. The old `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Legacy `#integrations/claude` and `#integrations/claude/desktop` bookmarks still redirect to `#claude/code` and `#claude/desktop`, respectively. Arrow keys move between tabs; Home and End select the first and last tab.
 

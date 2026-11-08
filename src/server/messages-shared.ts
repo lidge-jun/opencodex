@@ -28,6 +28,7 @@ import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { estimateTokens } from "../lib/token-estimate";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { httpStatusFromTerminalError } from "../lib/errors";
 import { AnthropicRequestError, isRec, type Rec } from "../claude/inbound-records";
 import type { RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
@@ -146,6 +147,7 @@ export function tapAnthropicSseForLog(
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
+  let errorSeen = false;
   // stop_reason of the latest message event the client received as a complete SSE event. Any
   // later message event (resumed content) clears it; pings and comments do not.
   let lastDeliveredStop: string | null = null;
@@ -165,6 +167,7 @@ export function tapAnthropicSseForLog(
     if (!dataLine) return;
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { data = null; }
+    if (errorSeen && !(isRec(data) && named(event, data, "ping"))) logCtx.streamErrorFollowed = true;
     if (!isRec(data)) {
       // A malformed event after a stop reason means the turn kept going and was cut.
       if (delivered) lastDeliveredStop = null;
@@ -178,6 +181,12 @@ export function tapAnthropicSseForLog(
     }
     if (named(event, data, "message_stop") || named(event, data, "error")) {
       terminalSeen = true;
+      if (data.type === "error") {
+        errorSeen = true;
+        const error = isRec(data.error) ? data.error : {};
+        logCtx.streamErrorStatus = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
+          code: typeof error.code === "string" ? error.code : undefined, message: typeof error.message === "string" ? error.message : undefined });
+      }
     } else if (delivered && !named(event, data, "ping")) {
       const delta = isRec(data.delta) ? data.delta : undefined;
       lastDeliveredStop = named(event, data, "message_delta") && typeof delta?.stop_reason === "string"
@@ -210,6 +219,9 @@ export function tapAnthropicSseForLog(
       const end = text.length - (heldLf ? 1 : 0);
       appendPart(text.slice(start, end));
     }
+    // The relay may reframe this read: a combo child judges a retryable error by what followed it here.
+    if (errorSeen && !logCtx.streamErrorFollowed
+      && (frameParts.length > 0 || !isHarmlessSseTail(pendingParts.join("")))) logCtx.streamErrorFollowed = true;
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
   // it, or a held trailing CR. Count it before deciding how the turn ended (the Responses relay
@@ -312,6 +324,7 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
+    recordUsage();
     finalize(499, { closeReason: "client_cancel" });
     clientFilter?.dispose();
     try { tapController?.close(); } catch { /* downstream already torn down */ }
@@ -457,6 +470,7 @@ export function tapAnthropicSseForLog(
         settled = true;
         idle.cancel();
         detachAbort();
+        recordUsage();
         finalize(499, { closeReason: "client_cancel" });
       }
       reader.cancel(reason).catch(() => {});

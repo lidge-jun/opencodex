@@ -302,6 +302,18 @@ const nativeFailRows = [
     "disposition": "fixed local literal at the mapped native producer"
   },
   {
+    "call": "if (req.signal.aborted) return fail(499, \"Client cancelled request\", \"api_error\");",
+    "disposition": "fixed local literal at the mapped native producer"
+  },
+  {
+    "call": "if (isTranslatorBudgetExceededError(error)) return fail(502, \"upstream translation buffer exceeded the safe limit\", \"api_error\", \"translation_buffer_limit\");",
+    "disposition": "fixed local literal at the mapped native producer"
+  },
+  {
+    "call": "return fail(502, \"upstream Messages stream failed before output\", \"api_error\");",
+    "disposition": "fixed local literal at the mapped native producer"
+  },
+  {
     "call": "return fail(499, \"Client cancelled request\", \"api_error\");",
     "disposition": "fixed local literal at the mapped native producer"
   },
