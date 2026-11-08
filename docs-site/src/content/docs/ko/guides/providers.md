@@ -587,7 +587,9 @@ provider test는 추론이 아닌 모델 목록 조회를 검사합니다. 정�
 게이트웨이는 모델 목록 엔드포인트가 없어도 응답을 생성할 수 있습니다. 운영자가 지원하는 원본 ID를 제공했다면
 기존 프로바이더의 다른 필드는 유지하고 `liveModels: false`, `models: ["vendor/model"]`을 설정하세요.
 예시 ID는 제공받은 정확한 값으로 바꿉니다. [정적 모델 설정](/ko/reference/configuration/providers/)을 참고하세요.
-저장 후 `ocx sync`를 실행하고 live 카탈로그를 다시 확인합니다. 또는 아래 비용 확인을 거치는 응답 생성 명령에
+프록시가 실행 중일 때 `config.json`을 직접 수정했다면 저장 후 프록시를 재시작해 변경을 불러오세요.
+서비스 설치는 `ocx service restart`, 그 외에는 `ocx stop` 후 `ocx start`를 사용합니다. 그다음 `ocx sync`를 실행하고
+live 카탈로그를 다시 확인합니다. 또는 아래 비용 확인을 거치는 응답 생성 명령에
 제공받은 원본 ID를 직접 사용할 수 있습니다. 이 테스트에는 카탈로그 행이 필요하지 않습니다.
 
 live 카탈로그에서 실제 `id`, `namespaced`, `disabled`, `initialSelectionPending`을 확인하세요.
@@ -618,7 +620,7 @@ ocx models live --provider my-gateway --json
 필요하면 `ocx sync`로 클라이언트 카탈로그에 반영한 뒤 Codex 모델 선택기에 해당 모델이 나타나는지 확인하세요.
 실행 중인 클라이언트는 이전 목록을 메모리에 유지할 수 있습니다. 진행 중인 작업을 보존하고 목록이 계속 오래된 상태라면
 [클라이언트 재시작 안내](/reference/cli/lifecycle/#ocx-sync---restart-codex---restart-app-server-only)를 따르세요.
-클라이언트나 프록시 재시작은 기본 복구 단계가 아닙니다.
+위의 설정 파일 직접 수정 외에는 클라이언트나 프록시 재시작이 기본 복구 단계가 아닙니다.
 
 지원되는 키 인증 원격 설정에서 실제 응답 생성 요청 하나를 검증하려면 행이나 게이트웨이 운영자로부터 얻은
 **업스트림 원본 `id`**를 프로바이더 접두사를 추가하지 않고 그대로 사용합니다.
