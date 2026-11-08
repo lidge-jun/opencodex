@@ -30,6 +30,7 @@ const identityWaiters = createAdmissionGate("claude_cli_identity_waiters", MAX_I
 const inflight = new Map<string, Promise<Snapshot | null>>();
 const memory = new Map<string, Snapshot>();
 let identityCache: { scope: string; at: number; value: Promise<Identity | null> } | undefined;
+let identityGeneration = 0;
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
@@ -55,6 +56,8 @@ async function readLocalIdentity(fresh = false): Promise<Identity | null> {
  * a burst of turns costs one Keychain lookup; an account switch is noticed within the cache window.
  */
 function localIdentity(fresh = false): Promise<Identity | null> {
+  // Even a capacity-refused fresh check invalidates pending older observations.
+  if (fresh) { identityGeneration++; identityCache = undefined; }
   const lease = identityWaiters.tryAcquire();
   if (!lease) return Promise.resolve(null);
   try {
@@ -64,11 +67,14 @@ function localIdentity(fresh = false): Promise<Identity | null> {
     if (!fresh && identityCache && identityCache.scope === scope && now - identityCache.at < CACHE_MS) {
       value = identityCache.value;
     } else {
-      value = readLocalIdentity(fresh).catch(() => null);
+      if (!fresh) identityGeneration++;
+      const generation = identityGeneration;
+      value = readLocalIdentity(fresh).then(identity => generation === identityGeneration ? identity : null).catch(() => null);
       identityCache = { scope, at: now, value };
       void value.then(identity => { if (!identity && identityCache?.value === value) identityCache = undefined; });
     }
-    return value.finally(() => lease.release());
+    const generation = identityGeneration;
+    return value.then(identity => generation === identityGeneration ? identity : null).finally(() => lease.release());
   } catch (error) {
     lease.release();
     throw error;

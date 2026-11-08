@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as childProcess from "node:child_process";
 import { tmpdir } from "node:os";
@@ -41,6 +42,57 @@ const seed = (quota: unknown, now: number) => {
 };
 
 describe("Claude usage admission cache", () => {
+  test("a saturated fresh recheck invalidates pending old identity and cached refusal", async () => {
+    const ownerState = tempState(), waitingState = tempState();
+    const profile = ownerState + "-profile";
+    mkdirSync(profile);
+    const previousProfile = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = profile;
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const token = (name: string) => JSON.stringify({ claudeAiOauth: {
+      accessToken: `synthetic-${name}`, refreshToken: `synthetic-${name}-refresh`, expiresAt: now + 3_600_000,
+    } });
+    const keyA = createHash("sha256").update("synthetic-a-refresh").digest("hex");
+    writeFileSync(waitingState, JSON.stringify({ identity: keyA, checkedAt: now, refusalUntil: now + 3_600_000 }));
+    let quotaStarted!: () => void, releaseQuota!: () => void, secondStarted!: () => void, releaseOldRead!: () => void;
+    const quotaEntered = new Promise<void>(resolve => { quotaStarted = resolve; });
+    const quotaBlocked = new Promise<void>(resolve => { releaseQuota = resolve; });
+    const secondEntered = new Promise<void>(resolve => { secondStarted = resolve; });
+    const oldReadBlocked = new Promise<void>(resolve => { releaseOldRead = resolve; });
+    let reads = 0;
+    const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+      reads++;
+      if (reads === 2) { secondStarted(); await oldReadBlocked; return { status: "present", value: token("a") }; }
+      return { status: "present", value: token(reads === 1 ? "a" : "b") };
+    });
+    const spawnGuard = spyOn(childProcess, "spawn").mockImplementation((() => { throw new Error("real spawn forbidden"); }) as never);
+    const guard = spyOn(testHomeGuard, "isTestHomeGuardArmed").mockReturnValue(false);
+    let waiting: Array<ReturnType<typeof checkClaudeUsageAdmission>> = [];
+    try {
+      const owner = checkClaudeUsageAdmission("", { statePath: ownerState, probe: async () => {
+        quotaStarted(); await quotaBlocked; return freshQuota;
+      } });
+      await quotaEntered;
+      now += 61_000;
+      waiting = Array.from({ length: 256 }, () => checkClaudeUsageAdmission("", { statePath: waitingState }));
+      await secondEntered;
+      releaseQuota();
+      expect((await owner).state).toBe("unknown");
+      releaseOldRead();
+      const states = await Promise.all(waiting);
+      expect(states.every(result => result.state === "unknown")).toBe(true);
+      const next = await checkClaudeUsageAdmission("", { statePath: waitingState, probe: async access => {
+        expect(access).toBe("synthetic-b"); return freshQuota;
+      } });
+      expect(next.state).toBe("available");
+    } finally {
+      releaseQuota(); releaseOldRead(); await Promise.allSettled(waiting);
+      guard.mockRestore(); spawnGuard.mockRestore(); read.mockRestore(); clock.mockRestore();
+      if (previousProfile === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousProfile;
+    }
+  });
+
   test("a blocked cached local identity limits concurrent preflights and releases permits", async () => {
     const statePath = tempState();
     const profile = statePath + "-profile";
