@@ -26,3 +26,11 @@ export function isInPnpmGlobalStoreLinks(path, exists = () => false) {
   return !!customStore && exists(`${customStore}/files`)
     && ["index", "index.db", "index.fallback"].some(name => exists(`${customStore}/${name}`));
 }
+
+/** A configured alternate directory is evidence only when the enclosing store has pnpm markers. */
+export function isInMarkedPnpmCustomStore(path, exists = () => false) {
+  const normalized = String(path).replaceAll("\\", "/");
+  const store = normalized.match(/^(.*\/v\d+)\/[^/]+\/(?:[^/]+\/)*node_modules\//i)?.[1];
+  return !!store && exists(`${store}/files`)
+    && ["index", "index.db", "index.fallback"].some(name => exists(`${store}/${name}`));
+}

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
+import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
 
 const OPENCODEX_MISE_BACKEND = "npm:@bitkyc08/opencodex";
 const OPENCODEX_MISE_BACKEND_DIR = "npm-bitkyc08-opencodex";
@@ -254,6 +254,7 @@ function detectInstallCandidate(packagePath, exists) {
   if (
     /(?:^|\/)node_modules\/\.pnpm(?:\/|$)/i.test(normalized)
     || isInPnpmGlobalStoreLinks(normalized, exists)
+    || isInMarkedPnpmCustomStore(normalized, exists)
   ) return "pnpm";
 
   // `--preserve-symlinks` can leave a v10/v11 group path visible. Corroborate it with the

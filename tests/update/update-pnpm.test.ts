@@ -59,6 +59,12 @@ describe("pnpm installation detection", () => {
     expect(detectInstallFromPath("/opt/releases/v2/links/work/other/2/hash/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
   });
 
+  test("recognises an alternate virtual-store directory inside a marked custom store", () => {
+    const path = "/opt/custom-cache/v11/custom-links/pkg/2/h/node_modules/@bitkyc08/opencodex/bin";
+    expect(detectInstallFromPath(path, { exists: candidate => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index"].includes(candidate) })).toBe("pnpm");
+    expect(detectInstallFromPath(path, { exists: () => false })).toBe("npm");
+  });
+
   test("follows a preserved npm-looking symlink to the pnpm package target", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-pnpm-detect-link-"));
     try {
