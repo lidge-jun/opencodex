@@ -204,7 +204,8 @@ export function resolveChildBinarySource(
     }
   }
 
-  const ocxHome = options.opencodexHome ?? env.OPENCODEX_HOME?.trim() ?? join(env.HOME || homedir(), ".opencodex");
+  // An empty OPENCODEX_HOME counts as unset, as in ocx-child; joining "" would search the cwd.
+  const ocxHome = options.opencodexHome || env.OPENCODEX_HOME?.trim() || join(env.HOME || homedir(), ".opencodex");
   const version = options.version ?? packageVersion("0.0.0");
   const cachedCandidate = join(ocxHome, "cache", "ocx-child", version, artifactFile);
   const cacheRes = verifyManifestCandidate(cachedCandidate, targetTriple, "cache", hostPlatform);

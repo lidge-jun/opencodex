@@ -134,6 +134,34 @@ describe("child-binary-source SHA256SUMS and boundary guards", () => {
 
     expect(resolveChildBinarySource(null)).toEqual({ ok: false, reason: "unsupported_target" });
   });
+
+  test("an empty OPENCODEX_HOME falls back to ~/.opencodex for the artifact cache instead of the working directory", () => {
+    const fakeHome = join(scratch, "empty-ocx-home-user");
+    const cacheDir = join(fakeHome, ".opencodex", "cache", "ocx-child", "2.98.0");
+    mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+    const bytes = Buffer.from("cached-child-binary", "utf8");
+    writeFileSync(join(cacheDir, childArtifactFilename("linux-arm64")), bytes, { mode: 0o700 });
+    writeFileSync(join(cacheDir, "SHA256SUMS"), createHash("sha256").update(bytes).digest("hex") + "  " + childArtifactFilename("linux-arm64") + "\n", { mode: 0o600 });
+    const empty = join(scratch, "empty-elsewhere");
+    mkdirSync(empty, { recursive: true });
+    const resolved = resolveChildBinarySource("linux-arm64", {
+      env: { OPENCODEX_HOME: "", HOME: fakeHome },
+      version: "2.98.0",
+      repoRoot: empty,
+      execPath: join(empty, "bun"),
+      allowLocalRelease: false,
+    });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.artifact.source).toBe("cache");
+    const blank = resolveChildBinarySource("linux-arm64", {
+      env: { OPENCODEX_HOME: "   ", HOME: fakeHome },
+      version: "2.98.0",
+      repoRoot: empty,
+      execPath: join(empty, "bun"),
+      allowLocalRelease: false,
+    });
+    expect(blank.ok).toBe(true);
+  });
 });
 
 describe("remote-plant POSIX & Windows command contracts", () => {
