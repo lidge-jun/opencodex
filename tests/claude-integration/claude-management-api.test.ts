@@ -10,6 +10,7 @@ import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/cl
 import * as desktopProfiles from "../../src/claude/desktop-profile";
 import { buildClaudeDesktopState } from "../../src/server/management/shared";
 import * as systemEnv from "../../src/server/system-env";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
@@ -27,6 +28,7 @@ let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
 let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+let keychainProbe: ReturnType<typeof spyOn>;
 
 // Keep the production SQLite kernel while each fixture owns its lock namespace.
 function startServer(port?: number, deps: NonNullable<Parameters<typeof startServerImpl>[1]> = {}) {
@@ -42,6 +44,7 @@ function startServer(port?: number, deps: NonNullable<Parameters<typeof startSer
 }
 
 beforeEach(() => {
+  keychainProbe = spyOn(claudeKeychain, "probe").mockResolvedValue({ status: "absent" });
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -63,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  keychainProbe.mockRestore();
   lifecycleLock.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -80,6 +84,7 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
   try {
     const r = await fetch(new URL("/api/claude-code", server.url));
     expect(r.status).toBe(200);
+    expect(keychainProbe).toHaveBeenCalledTimes(1);
     const d = await r.json() as Record<string, any>;
     expect(d.enabled).toBe(true);
     expect(d).toMatchObject({ cliFirstParty: false, cliFirstPartyApplied: false,

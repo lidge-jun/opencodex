@@ -49,6 +49,27 @@ function fixture(platform = "darwin", limit = 64) {
 }
 
 describe("Claude Keychain admission", () => {
+  test("a blocked shared probe refuses callers beyond its bounded admission limit", async () => {
+    const f = fixture();
+    const admitted = Array.from({ length: 256 }, () => f.service.probe());
+    const child = f.children[0]!;
+    let overflow: unknown;
+    const refused = f.service.probe().then(result => { overflow = result; });
+    await Promise.resolve();
+    try {
+      expect(f.children).toHaveLength(1);
+      expect(f.clock.timers.size).toBe(1);
+      expect(overflow).toEqual({ status: "unavailable" });
+    } finally {
+      child.start(); child.exit(44);
+      await Promise.all([...admitted, refused]);
+    }
+    const next = f.service.probe();
+    expect(f.children).toHaveLength(2);
+    f.children[1]!.start(); f.children[1]!.exit(44);
+    expect(await next).toEqual({ status: "absent" });
+  });
+
   test.each(["read", "probe"] as const)("a %s caller deadline does not keep a Bun parent alive for a blocked synthetic child", async mode => {
     const servicePath = join(import.meta.dir, "../../src/lib/claude-keychain.ts");
     const childScript = 'process.stdin.resume(); process.stdin.on("end", () => process.exit(0));';

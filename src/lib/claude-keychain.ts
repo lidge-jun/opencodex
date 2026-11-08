@@ -21,6 +21,7 @@ const READ_DEADLINE_MS = 5000;
 const PROBE_DEADLINE_MS = 1500;
 const FAILURE_COOLDOWN_MS = 60_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+const MAX_FLIGHT_CALLERS = 256;
 const unavailable = { status: "unavailable" } as const;
 type Result = KeychainReadResult | KeychainProbeResult;
 type Waiter = { resolve: (result: Result) => void; timer: unknown };
@@ -36,6 +37,7 @@ type Flight = {
   size: number;
   waiter?: Waiter;
   promise?: Promise<Result>;
+  callers: number;
 };
 
 /** A process-local admission slot; an unavailable result is never evidence of absence. */
@@ -56,6 +58,7 @@ export function createClaudeKeychainService(options: ClaudeKeychainOptions = {})
     const waiter = flight.waiter;
     if (!waiter) return;
     flight.waiter = undefined;
+    flight.callers = 0;
     clearTimer(waiter.timer);
     waiter.resolve(result);
   }
@@ -85,6 +88,8 @@ export function createClaudeKeychainService(options: ClaudeKeychainOptions = {})
     settle(flight, unavailable);
   }
   function wait(flight: Flight): Promise<Result> {
+    if (flight.callers >= MAX_FLIGHT_CALLERS) return Promise.resolve(unavailable);
+    flight.callers++;
     if (flight.promise) return flight.promise;
     flight.promise = new Promise(resolve => {
       const waiter: Waiter = { resolve, timer: undefined };
@@ -106,7 +111,7 @@ export function createClaudeKeychainService(options: ClaudeKeychainOptions = {})
     if (now() < cooldownUntil) return Promise.resolve(unavailable);
     const flight: Flight = {
       kind, spawned: false, exited: false, outputClosed: kind === "probe", code: null,
-      failed: false, quarantined: false, chunks: [], size: 0,
+      failed: false, quarantined: false, chunks: [], size: 0, callers: 0,
     };
     slot = flight;
     const result = wait(flight);

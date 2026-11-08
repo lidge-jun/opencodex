@@ -84,6 +84,52 @@ function deferred() {
 }
 const noRefresh = { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new Error("refresh must not run"); } };
 
+test("an already cancelled refresh does not read Keychain or create an intent", async () => {
+  const { id, credential } = await seed();
+  const controller = new AbortController();
+  controller.abort();
+  const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
+  try {
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, noRefresh, credential, {
+      signal: controller.signal,
+    })).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(read).not.toHaveBeenCalled();
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+    expect(getAccountCredential("anthropic", id)).toEqual(credential);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+  } finally { read.mockRestore(); }
+});
+
+for (const pendingState of ["pending", "cleanup-pending"] as const) {
+  test(`cancellation during an absent observation preserves ${pendingState} intent and account health`, async () => {
+    const { id, credential } = await seed();
+    const written = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    const intent = pendingState === "pending" ? written
+      : storeModule.markOAuthRefreshIntentCleanupPending("anthropic", id, written, "pre-dispatch")!;
+    expect(intent).toBeDefined();
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "profile-without-credential");
+    const started = deferred(), release = deferred();
+    const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+      started.resolve(); await release.promise; return { status: "absent" };
+    });
+    const controller = new AbortController();
+    let refreshCalls = 0;
+    try {
+      const outcome = refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async () => {
+        refreshCalls++; throw new Error("unexpected refresh");
+      } }, credential, { signal: controller.signal }).catch(error => error);
+      await started.promise;
+      controller.abort();
+      release.resolve();
+      expect(await outcome).toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(refreshCalls).toBe(0);
+      expect(getAccountCredential("anthropic", id)).toEqual(credential);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+    } finally { release.resolve(); read.mockRestore(); }
+  });
+}
+
 test("a preferred profile becoming valid during initial Keychain observation preserves the intent", async () => {
   const { id, credential } = await seed();
   const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
@@ -576,7 +622,12 @@ for (const cleanup of ["definitive-rejection", "pre-dispatch"] as const) {
       const rejected = cleanup === "definitive-rejection"
         ? new AnthropicTokenError("synthetic rejection", 503, undefined) : new Error("synthetic pre-dispatch abort");
       const controller = new AbortController();
-      if (cleanup === "pre-dispatch") controller.abort(rejected);
+      const realWrite = storeModule.writeOAuthRefreshIntent;
+      const write = spyOn(storeModule, "writeOAuthRefreshIntent").mockImplementation((...args) => {
+        const intent = realWrite(...args);
+        if (cleanup === "pre-dispatch" && !controller.signal.aborted) controller.abort(rejected);
+        return intent;
+      });
       const realClear = storeModule.clearOAuthRefreshIntentIfMatch;
       let clears = 0;
       const clear = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation((...args) => {
@@ -617,7 +668,7 @@ for (const cleanup of ["definitive-rejection", "pre-dispatch"] as const) {
           expect(getAccountCredential("anthropic", id)?.access).toBe("synthetic-a-refreshed");
         }
         expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
-      } finally { clear.mockRestore(); warn.mockRestore(); }
+      } finally { write.mockRestore(); clear.mockRestore(); warn.mockRestore(); }
     });
   }
 }

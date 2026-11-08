@@ -864,7 +864,9 @@ export async function refreshAnthropicAccountWithLock(
     const owns = captureAnthropicCredentialOwnerForInstance(provider, accountSet, accountId);
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
+    if (deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
     const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
+    if (deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
     if (observed.kind === "unavailable") throw new OAuthTokenRefreshStaleError();
     const assertOwner = (store: AuthStore, checkDisk = true) => {
       if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
