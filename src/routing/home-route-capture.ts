@@ -3,9 +3,10 @@
  * are now: ocx restore, Messages off, Claude Desktop apply and the Claude toggle are Home-only.
  *
  * One idempotent capture freezes the four native defaults into route-intent.json. It runs before
- * any Home native switch writer changes a switch, when the Home's link listener binds, before a
- * Child projection, and inside every route-intent initialization. Once a default is saved it is
- * never captured again; only a Home default write (`ocx route to <client> on|off`) changes it.
+ * a Home default write and at Child enrollment, and, only once the Home has a link, when its link
+ * listener binds and before any Home-only decision changes a switch. On a Home with no link a Child
+ * enrolled later inherits the switches as they stand at enrollment. Reads never capture. Once a
+ * default is saved it is never captured again; only a Home default write changes it.
  */
 import { readConfigDiagnostics } from "../config";
 import { withConfigMutationLockSync } from "../config/mutation-lock";

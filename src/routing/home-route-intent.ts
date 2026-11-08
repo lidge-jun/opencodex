@@ -7,7 +7,7 @@ import { listAsideProfileStores } from "../integrations/aside-profile-context";
 import { asideHomeDir } from "../clients/config-export";
 import { isHomeNativeRouteClient, parseRouteClientIntent, projectHomeRouteIntent, ROUTE_CLIENT_IDS, type HomeRouteIntentDocument, type RouteClientId, type RouteIntentState } from "../link/route-intent";
 import { dropHomeNativeOverrides, readRouteIntentState, updateRouteIntentState } from "./route-intent-state";
-import { captureHomeRouteDefaults, durableHomeNativeRouteDefaults, fillHomeNativeRouteDefaults, homeHasLinks, type CaptureHomeRouteDefaultsOptions } from "./home-route-capture";
+import { durableHomeNativeRouteDefaults, fillHomeNativeRouteDefaults, homeHasLinks, type CaptureHomeRouteDefaultsOptions } from "./home-route-capture";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import type { OcxConfig } from "../types";
 
@@ -93,9 +93,11 @@ export function initializeHomeRouteIntentDefaults(config: OcxConfig, version: st
   });
 }
 
-/** What a Child inherits. Never reads the Home's live native switches; see home-route-capture. */
+/**
+ * What a Child inherits. Never reads the Home's live native switches; see home-route-capture.
+ * A pure read: enrollment and the link listener's start have already captured the native defaults.
+ */
 export function projectChildRouteIntent(config: OcxConfig, version: string, deviceId: string): HomeRouteIntentDocument {
-  captureHomeRouteDefaults(config);
   return projectHomeRouteIntent(config, version, deviceId, readHomeRouteIntentState(config));
 }
 

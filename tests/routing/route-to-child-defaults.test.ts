@@ -122,12 +122,20 @@ test("Claude Desktop on the Home never enables it on Children", () => scenario(`
   expect((await childIntent())['claude-desktop']).toEqual({ enabled: false });
 `), SPAWN_BUDGET_MS);
 
-test("the first Child read saves the defaults it projects", () => scenario(`
+test("Child reads write nothing; enrollment saves the defaults they project", () => scenario(`
+  const { seedRouteDeviceClients } = await import('./src/routing/home-route-intent');
+  // The link route-intent read and the route-to status rows are pure reads.
   expect((await childIntent()).codex).toEqual({ enabled: true });
-  expect(readRouteIntentState().defaults).toMatchObject({ codex: { enabled: true }, claude: { enabled: true },
-    grok: { enabled: false }, 'claude-desktop': { enabled: false } });
+  const status = await management(handleRouteToRoutes, 'GET', '/api/route-to?device=all');
+  expect(status.status).toBe(200);
+  expect(existsSync(routeIntentStatePath())).toBe(false);
+  // Enrollment seeds the new Child before its first read, freezing the switches as they stand.
   expect(setIntegrationEnabled('codex', false).ok).toBe(true);
-  expect((await childIntent()).codex).toEqual({ enabled: true });
+  seedRouteDeviceClients(loadConfig(), 'test', 'lnk_0123456789abcdef', undefined, ['lnk_0123456789abcdef']);
+  expect(readRouteIntentState().defaults).toMatchObject({ codex: { enabled: false }, claude: { enabled: true },
+    grok: { enabled: false }, 'claude-desktop': { enabled: false } });
+  expect(setIntegrationEnabled('codex', true).ok).toBe(true);
+  expect((await childIntent()).codex).toEqual({ enabled: false });
 `), SPAWN_BUDGET_MS);
 
 test("the link listener saves the defaults from the Home's switches before it serves", () => scenario(`
