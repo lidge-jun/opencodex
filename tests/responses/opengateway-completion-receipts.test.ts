@@ -58,11 +58,22 @@ describe("OpenGateway completion exact-head receipts", () => {
     expect(await f.result.text()).toContain("already produced");
   });
 
-  test("a terminal snapshot carrying output_text is not well-formed empty (#8333)", async () => {
-    const terminal = { ...snapshot(), output_text: "already produced" };
-    const f = await run(Response.json(terminal));
-    expect(f.retries).toBe(0);
-    expect(await f.result.json()).toMatchObject({ output_text: "already produced" });
+  test("a terminal snapshot carrying output_text is delivered unchanged (#8333)", async () => {
+    // A truncated reading must not turn it into a failure either.
+    for (const usage of [{ input_tokens: 2, output_tokens: 1 }, { input_tokens: 2, output_tokens: 64 }]) {
+      const terminal = { ...snapshot(usage), output_text: "already produced" };
+      const json = await run(Response.json(terminal), { max_output_tokens: 64 });
+      expect(json.retries).toBe(0);
+      expect(json.result.status).toBe(200);
+      expect(await json.result.json()).toEqual(terminal);
+      const stream = await run(sse([{ type: "response.completed", response: terminal }]), { max_output_tokens: 64 });
+      expect(stream.retries).toBe(0);
+      expect(stream.result.status).toBe(200);
+      const text = await stream.result.text();
+      expect(text).toContain('"type":"response.completed"');
+      expect(text).not.toContain("response.failed");
+      expect(text).toContain("already produced");
+    }
   });
 
   test("null or empty output_text is no evidence, so an empty completion still retries (#8333)", async () => {

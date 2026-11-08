@@ -34,7 +34,7 @@ function snapshotTextCommits(snapshot: RecordValue): boolean {
 function wellFormedEmpty(snapshot: unknown): snapshot is RecordValue {
   return isPlainObject(snapshot) && typeof snapshot.id === "string" && snapshot.id.trim().length > 0
     && snapshot.object === "response" && snapshot.status === "completed" && Array.isArray(snapshot.output)
-    && snapshot.error == null && snapshot.incomplete_details == null && !snapshotTextCommits(snapshot)
+    && snapshot.error == null && snapshot.incomplete_details == null
     && snapshot.output.every(item => isPlainObject(item) && typeof item.id === "string" && item.id.length > 0
       && (item.type === "reasoning" || (item.type === "message" && item.role === "assistant"
         && item.status === "completed" && Array.isArray(item.content) && !item.content.some(partCommits))));
@@ -154,7 +154,7 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
         let snapshot: unknown;
         try { snapshot = JSON.parse(decoder.decode(joinSseFrameBytes(held.flatMap(chunk => chunk ? [chunk] : [])))); }
         catch { return terminal(undefined); }
-        if (isPlainObject(snapshot) && (outputCommits(snapshot.output)
+        if (isPlainObject(snapshot) && (outputCommits(snapshot.output) || snapshotTextCommits(snapshot)
           || snapshot.error != null || ["failed", "incomplete", "queued", "in_progress"].includes(String(snapshot.status)))) return pass();
         return terminal(snapshot);
       }
@@ -171,7 +171,7 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
         if (!isPlainObject(event)) return pass();
         if (event.replayUnsafe === true) return pass();
         if (event.type === "response.completed") {
-          if (isPlainObject(event.response) && outputCommits(event.response.output)) return pass();
+          if (isPlainObject(event.response) && (outputCommits(event.response.output) || snapshotTextCommits(event.response))) return pass();
           return terminal(event.response);
         }
         if (eventCommits(event)) return pass();
