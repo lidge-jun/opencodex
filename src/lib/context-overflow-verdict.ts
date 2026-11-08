@@ -75,6 +75,8 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
 }
 
 const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/i;
+const MODAL_PROHIBITION = /\b(?:must|may|shall)\s+(?:not|never)\b|\b(?:mustn)['\u2019]t\b/i;
+const OVERFLOW_COUNT_EVIDENCE = /\b\d+\s*(?:tokens?)?\s*(?:>|exceeds?|past)\s*\d+\b|\b(?:exceeded|exceeds|past|over)\s+(?:the\s+)?(?:limit|maximum|context\s+(?:window|length|limit))\s+by\s+\d+\b/i;
 
 /** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
@@ -87,31 +89,29 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     matchSlice.lastIndexOf("\n"),
   );
   const verdictClause = lastBoundary !== -1 ? matchSlice.slice(lastBoundary + 1) : matchSlice;
+  if (MODAL_PROHIBITION.test(verdictClause)) {
+    if (!OVERFLOW_COUNT_EVIDENCE.test(text)) return true;
+  }
   const nonModalVerdict = verdictClause
     .replace(/\b(?:must|may|shall)\s+(?:not|never)\b/gi, "")
     .replace(/\b(?:mustn)['\u2019]t\b/gi, "");
   if (NEGATED_CONTEXT_VERDICT.test(nonModalVerdict)) return true;
   // Phrase matches can begin at the verb and omit its negating auxiliary (`does not exceed`).
-  // Check only a directly attached negator so unrelated wording such as `No tokens remain and
-  // the model's context window is full` still counts as an affirmed overflow verdict.
-  const before = text.slice(Math.max(0, start - 48), start);
-  const lastClauseBoundary = Math.max(
-    before.lastIndexOf(";"),
-    before.lastIndexOf("."),
-    before.lastIndexOf("!"),
-    before.lastIndexOf("?"),
-    before.lastIndexOf("\n"),
-  );
-  const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary + 1) : before;
+  // Check the clause immediately preceding the match across clause boundaries.
+  const before = text.slice(Math.max(0, start - 120), start);
+  const boundaryMatches = Array.from(before.matchAll(/[;!?.\n]|\b(?:and|but|because|although|though|while|whereas)\b/gi));
+  const lastClauseBoundary = boundaryMatches.length > 0
+    ? (boundaryMatches[boundaryMatches.length - 1].index ?? -1) + boundaryMatches[boundaryMatches.length - 1][0].length
+    : -1;
+  const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary) : before;
   // Modal prohibitions ("must not exceed", "may not exceed", "shall not exceed") describe the limit
-  // that was violated rather than asserting the absence of an overflow.
-  if (/\b(?:must|may|shall)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
-    || /\b(?:mustn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)) {
-    return false;
+  // that was violated rather than asserting the absence of an overflow. Without evidence that this
+  // request actually crossed the limit or over-limit counts, a policy rule stays non-overflow.
+  if (MODAL_PROHIBITION.test(clauseBefore)) {
+    return !OVERFLOW_COUNT_EVIDENCE.test(text);
   }
-  return /\b(?:not|no|never|neither|nor)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
-    || /\b(?:do|does|did|is|are|was|were|has|have|had|will|would|can|could|should|might)\s+(?:not|never)(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore)
-    || /\b(?:don|doesn|didn|isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn|can|couldn|shouldn|mightn)['\u2019]t(?:\s+[a-z]{1,16})?\s*$/i.test(clauseBefore);
+  return /\b(?:not|never|neither|nor)\b|n['\u2019]t\b/i.test(clauseBefore)
+    || /\b(?:in\s+no\s+way|by\s+no\s+means)\b/i.test(clauseBefore);
 }
 
 function hasAffirmedVerdict(text: string, verdict: RegExp): boolean {
@@ -177,8 +177,14 @@ export function isDefiniteContextOverflow(status: number, message: string, match
       .find((candidate): candidate is Record<string, unknown> =>
         !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
         && typeof (candidate as Record<string, unknown>).message === "string");
+    const errorObject = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+      ? record.error as Record<string, unknown>
+      : undefined;
     if (source) {
-      if (isParameterValidationRecord(source)) return false;
+      if (isParameterValidationRecord(record)
+        || (response !== undefined && isParameterValidationRecord(response))
+        || (errorObject !== undefined && isParameterValidationRecord(errorObject))
+        || isParameterValidationRecord(source)) return false;
       text = (source.message as string).trim();
       continue;
     }
@@ -196,9 +202,6 @@ export function isDefiniteContextOverflow(status: number, message: string, match
     if (!errorTextSource || typeof errorTextSource.value !== "string") return false;
     // A string-valued leaf can sit inside `response.error` while the outer envelope carries
     // the validation code. Check both records before trusting the leaf's context wording.
-    const errorObject = record.error && typeof record.error === "object" && !Array.isArray(record.error)
-      ? record.error as Record<string, unknown>
-      : undefined;
     if (isParameterValidationRecord(record)
       || (errorObject !== undefined && isParameterValidationRecord(errorObject))
       || isParameterValidationRecord(errorTextSource.owner)) return false;
