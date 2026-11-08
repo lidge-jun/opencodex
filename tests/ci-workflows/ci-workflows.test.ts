@@ -227,14 +227,12 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
     expect(workflow).toContain(`shards=${windowsShards.length}`);
 
-    // The aggregate gate is the check a human trusts. Three ways to break it
-    // silently: drop `if: always()` so it skips (and a skipped job reports
-    // success), shrink `needs:` so it stops covering a job, or add a job and
-    // forget to gate it. Deriving the expected list from the workflow's own job
-    // keys closes all three — a hardcoded list rots on the next job added.
+    // The aggregate must always run for ordinary events and cover every job
+    // except the standalone diagnostic, whose condition is independently pinned.
     const gate = ci.jobs?.ci as { if?: unknown; needs?: string[] } | undefined;
-    expect(gate?.if).toBe("always()");
-    const ungated = new Set(["ci"]);
+    expect(gate?.if).toBe("always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')");
+    expect(ci.jobs?.["windows-native-claim"]?.if).toBe("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' && github.event.inputs.lane == 'windows-native-claim'");
+    const ungated = new Set(["ci", "windows-native-claim"]);
     expect([...(gate?.needs ?? [])].sort())
       .toEqual(Object.keys(ci.jobs ?? {}).filter(name => !ungated.has(name)).sort());
 
@@ -336,10 +334,10 @@ describe("GitHub Actions hardening", () => {
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
     // everything, including Windows, which is what empty-or-all encodes.
     expect(ci.on?.workflow_dispatch?.inputs?.lane).toEqual({
-      description: "all (default), release-gates, or macos-control",
+      description: "all (default), release-gates, macos-control, or windows-native-claim",
       type: "choice",
       default: "all",
-      options: ["all", "release-gates", "macos-control"],
+      options: ["all", "release-gates", "macos-control", "windows-native-claim"],
     });
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
