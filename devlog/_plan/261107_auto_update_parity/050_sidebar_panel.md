@@ -5,11 +5,12 @@ independent roadmap audit. Do not implement from this draft yet.
 
 ## Outcome and boundaries
 
-The existing download orb in the dashboard footer exposes desktop update state
-and opens the update panel described by the coordinator. For browser/package
+The proposed dashboard footer would expose desktop update state through the
+existing download orb and open the planned update panel. For browser/package
 installations, the existing dashboard update flow remains available. The native
 update page retains sole native update-command authority
-(`desktop/src-tauri/src/lib.rs:267`, `desktop/src-tauri/src/window.rs:115`).
+(`desktop/src-tauri/src/lib.rs:272` at the inventory baseline,
+`desktop/src-tauri/src/window.rs:115`).
 The footer's displayed version must fit ordinary stable versions; long versions
 remain fully readable without overlapping action buttons, at normal and narrow
 widths and in supported zoom modes.
@@ -54,8 +55,8 @@ The native publisher adds `schema: 2`, a monotonically increasing per-session
 and a bounded integer `progressPercent` (0–100 or null) to the existing
 session/current/latest/availability/check-time fields. Allowed
 phases are `idle`, `checking`, `current`, `available`, `downloading`, `ready`,
-`installing` and `failed`; failed has a closed, non-sensitive `errorCode` or
-null, never raw errors or release notes. Enforce an exact key set and
+`installing` and `failed`; failed requires a closed, non-sensitive `errorCode`,
+while other phases use null, never raw errors or release notes. Enforce an exact key set and
 phase-specific constraints under the existing 1 KiB request cap
 (`src/server/management/sidebar-routes.ts:113`; native proxy cap must also be
 kept). Sequence ordering is per session: a late lower sequence cannot overwrite
@@ -96,13 +97,15 @@ desktop projection DTO without changing package badges.
 The existing `GET /api/update/badge?surface=desktop&session=<uuid>` and its
 `UpdateBadge` DTO retain their legacy field names and non-null two-channel type
 (`src/update/badge.ts:6`). If the current snapshot has verified installed
-provenance for `latest` or `preview`, the old endpoint returns the old shape
-with that channel. If the snapshot is missing, expired, v1 without proven
-provenance, has null installed provenance, or is `nightly`, it returns HTTP 409
-with bounded code `desktop_channel_unavailable`; it never fabricates a channel
-or returns a third enum to an old client. The old sidebar already treats a
-non-success fetch as unknown and the download button remains available. The
-package endpoint without `surface=desktop` remains unchanged.
+provenance for `latest` or `preview`, the old endpoint would return the old
+shape with that channel. For a v1 snapshot it would preserve the current
+availability projection and legacy `defaultUpdateTag(currentVersion)` label;
+that compatibility label is not verified provenance or installation authority.
+Missing or expired snapshots retain the existing unknown response. A v2
+snapshot whose provenance is absent or is `nightly` would return HTTP 409 with
+bounded code `desktop_channel_unavailable`, rather than invent a third legacy
+enum. The package endpoint without `surface=desktop` remains unchanged. Test
+an old sidebar against a new server and both v1 and v2 shell snapshots.
 
 Add separately registered `GET /api/update/desktop-badge-v2?session=<uuid>`
 with the same dashboard-session read authorization as the existing GET. Its
@@ -168,8 +171,9 @@ The exact size cap applies after serialization, including multibyte text.
 Test equal `-preview.*` version strings with distinct authenticated preview and
 nightly provenance; policy loss and channel switching; candidate invalidation;
 session/runtime replacement; old v1 snapshots; malformed/oversized v2; and
-stale ordering. Assert each projected channel separately and refuse any inferred
-preview when provenance is absent.
+stale ordering. Assert each v2 provenance channel separately and refuse inferred
+preview as provenance or installation authority. Test the legacy v1 display-only
+compatibility label and availability exception described above.
 
 The v1 encoder uses only the existing exact six-field shape. `idle`,
 `checking`, `current`, `available` and `installing` preserve their old
@@ -208,7 +212,16 @@ names and legacy compatibility tests must be frozen with the engine unit.
 
 Proposed `ocx.desktop.update/2` is a closed result with `schema`,
 `currentVersion`, `candidate`, `checkedAtMs`, `phase`, `progressPercent`, `errorCode`,
-`policy`, `releaseNotes`, `omittedReleaseCount` and `deferred`. `candidate` is null or
+`stageReadiness`, `checkError`, `policyState`, `policyObservation`, `policy`, `releaseNotes`,
+`omittedReleaseCount` and `deferred`. `stageReadiness` independently reports
+`none`, `ready` or `unknown`; `checkError` is a bounded code or null. A failed
+check may coexist with a retained ready stage, so the panel shows the error and
+the valid install action together. `policyState` distinguishes valid, corrupt,
+unreadable and missing-after-initialization policy; `policy` is null unless
+valid. For a safely observed corrupt or missing-after-initialization record,
+`policyObservation` is a bounded opaque owner-issued token;
+otherwise it is null. It contains no record contents or credentials and expires
+on owner restart. `candidate` is null or
 `{id, version, channel}` where `id` is the lowercase SHA-256 identity of the
 verified candidate; `policy` is `{revision, channel, check, download, install}`
 with the values defined by `030`; `releaseNotes` is an array of at most six
@@ -220,6 +233,23 @@ Phase, progress and error follow the table above; a target-requiring phase must
 have a candidate. Construct release links from an allowlisted release origin
 and the validated exact version; do not navigate to a feed-supplied arbitrary
 URL. A malformed or unavailable status is displayed as unknown.
+
+For corrupt or missing-after-initialization policy, disable revision-bound preference changes and offer the
+proposed `update_panel_repair_policy({expectedObservation, channel})` only from
+the guarded local update page after a deliberate operator action. The native
+policy owner serializes repair with normal writes, rechecks that the observation
+still describes the same record or verified absence, preserves any recoverable prior data privately,
+and atomically creates a valid policy with the explicitly chosen channel and
+manual check, download and install settings, using a newly reserved revision
+above the durable high-water mark described in `030`. If the mark cannot be
+established, repair refuses; it never reuses an earlier revision. A changed observation refuses the
+repair and returns fresh status. If the record cannot be read or safely
+preserved, repair refuses and the panel shows recovery guidance; it never
+silently replaces an unreadable record. Successful repair returns a valid policy
+and revision before normal changes resume. Owner and panel tests must cover
+corrupt, unreadable and lost records, refusal, successful repair, stale observations,
+stale policy changes and prepared actions across repair, high-water loss,
+concurrent writes and owner restart.
 
 The signed release owner supplies same-channel notes for releases newer than
 the installed version through the selected candidate. It verifies every
@@ -237,7 +267,8 @@ reference groups and limits are `apps/desktop/src/updates/releaseNotes.ts:19`,
 `update_panel_status` accepts no arguments and returns that object.
 `update_panel_policy` accepts exactly `{expectedRevision, channel, check,
 download, install}`; the revision is a nonnegative safe integer and the
-values are closed enums. `update_prepare`, `update_defer` and
+values are closed enums. `update_panel_repair_policy` accepts exactly a valid
+owner-issued `{expectedObservation, channel}`. `update_prepare`, `update_defer` and
 `update_activate` accept exactly `{candidateId}`. Mutation commands return
 `{schema: "ocx.desktop.update-command/1", outcome, reason, status}` where
 `outcome` is `accepted` or `refused`, `reason` is a closed non-sensitive code
@@ -294,7 +325,8 @@ runtime network fetch for translations.
 - Old desktop snapshot is accepted by the newer server and preserves its prior
   available/unknown meaning; unknown phases and malformed fields are rejected.
 - Missing, expired or another session's snapshot shows unknown; a check failure
-  never displays up-to-date. A current result, available version, progress,
+  never displays up-to-date; a retained ready stage stays installable while the
+  check error is shown. A current result, available version, progress,
   staged result and failure each produce distinguishable labels and states.
 - A browser dashboard click reaches its existing package dialog; a desktop click
   reaches the bundled panel. Requests from a non-update page cannot invoke

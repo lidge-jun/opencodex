@@ -94,15 +94,23 @@ zaman yukarı akışta yenilemeye zorlamaz.
 
 Kullanım, panel, sağlayıcı çalışma alanı, sağlayıcı kataloğu ve API anahtarı görünümleri, okunabilir kayıt kalmasa bile dışlanan kayıtlar için uyarı gösterir. Sayılar, tarihler ve kullanım sıralamaları yalnızca okunabilir kayıtlara dayanır. Geçmiş eksikse en çok kullanılan model sırası kaydedilmez; başka bir sıra seçin veya yeniden denemeden önce geçmişi onarın.
 
+### Uygulamaya göre kullanım
+
+Usage, geçerli erişim kapsamı içinde **Tüm uygulamalar**, **Tüm cihazlar** ve **30 gün** seçili olarak açılır. Sayfa açıkken uygulama, cihaz veya zaman aralığını daraltabilirsiniz; yeniden açıldığında varsayılanlar geri gelir.
+
+Tüm uygulamalar seçiliyken Models ve Providers bölümlerinden sonra **Uygulamalar** dökümü görünür. Seçilen cihazlar ve dönem için uygulama başına toplam jetonlardaki payı, jeton sayısını, tahmini API liste fiyatı maliyetini, istek sayısını ve kullanımı ölçülen istek sayısını gösterir. Codex CLI, masaüstü ve IDE kullanımı Codex altında birleştirilir. İstemci bilgisi olmayan eski kayıtlar **Sınıflandırılmamış** olarak gösterilir; **Bilinmeyen** ve **Diğer** kategorilerinden ayrıdır. Tek bir uygulama seçildiğinde döküm gizlenir. Dökümü sağlamayan proxy için kullanılamadığı belirtilir; boş döküm, raporda uygulama kullanımı olmadığı anlamına gelir.
+
 ### İstek günlüklerini filtreleme
 
 İstek ayrıntıları, genel proxy hatası metni yerine kaydedilmiş upstream hata nedenini öncelikli gösterir. Fiziksel gönderim sayısı geçerliyse her zaman gösterilir; eksik veya geçersiz muhasebe bilgisi sıfır yerine **Unavailable** olarak görüntülenir. **Retries**, yalnızca muhasebesi tamamen kesinleşmiş ve tutarlı tek bir deneme kaydı bulunduğunda ilk gönderimden sonraki ek gönderim sayısını gösterir. Birden fazla deneme, çözümlenmemiş veya tutarsız muhasebe ve kayıplı attempt normalizasyonu, uydurma yeniden deneme sayısı yerine retries alanını gizler. Bilinmeyen kalıcı nedenler, ham atıf olmadan durum tabanlı başlığa döner. **Upstream reason**, sınıflandırılmış bir sağlayıcı durumunu (örneğin hız sınırı, kota veya kredinin tükenmesi, bağlam penceresinin aşılması, desteklenmeyen konum, hesap doğrulaması gerekmesi veya modelin kullanılamaması), **Failure detail** ise takılma zaman aşımı veya bayt sınırı gibi proxy tarafından yazılan metni gösterir; yeni satırlar sağlayıcının kendi hata metnini saklamaz. Eski `usage.jsonl` dosyalarında hâlâ bulunabilir, ancak pano okurken bu metni atar.
 
-Filtreler yüklü günlükte yüzey, yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
+Logs, uygulama sekmeleri yerine tüm uygulamaların isteklerini birlikte gösterir ve her isteğe yalnızca simge içeren bir istemci rozeti ekler. Tanınan istemciler SVG logolarını, bilinmeyen veya diğer istemciler ise nötr bir soru işareti simgesini kullanır. Uygulama adları görünür metin olmadan ekran okuyuculara sunulmaya devam eder. İstemci bilgisinin olmaması, Codex veya istek hatası anlamına gelmez. Rozet, sağlayıcı ve protokolden bağımsız olarak istemci uygulamasını belirtir; uygulama filtresi değildir.
+
+Filtreler yüklü günlükte yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
 
 Son 15 dakika, saat ve gün pencereleri Logs sekmesinde otomatik yenileme kapalıyken de 30 saniyede bir güncellenir. Hız, tam istek süresindeki saniyelik çıktı jetonudur: 15 altı, 15 dahil 50 altı, en az 50; hız filtresi açıkken ölçülemeyenler dışlanır. Başarı 2xx, hata 4xx/5xx anlamındadır.
 
-Sayaç eşleşen ve yüklü toplam sayıları gösterir; sıfırlama tüm satırları geri getirir. Eşleşme olmaması boş günlükten ayrılır. Yüzey seçimi oklar ve Home/End ile çalışır. Yüklü günlüğün dışındaki geçmiş sorgulanmaz.
+Sayaç eşleşen ve yüklü toplam sayıları gösterir; sıfırlama tüm satırları geri getirir. Eşleşme olmaması boş günlükten ayrılır. Yüklü günlüğün dışındaki geçmiş sorgulanmaz.
 
 ### Bir bölüme bağlantı verme
 

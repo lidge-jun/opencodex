@@ -1,7 +1,7 @@
 import { resolveThinkingEnabled } from "../../clients/reasoning-controls";
 import { declaredModelCapabilities, resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { registryEntryForProviderDestination } from "../../providers/registry";
-import { configuredReasoningEfforts, mapReasoningEffort, resolveEffortAtOrBelow } from "../../reasoning-effort";
+import { configuredReasoningEfforts, isDeclaredReasoningEffort, isReasoningEffortOmitted, mapReasoningEffort, reasoningEffortMapFor, resolveEffortAtOrBelow } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
 import type { AdapterRequest } from "../base";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
@@ -44,7 +44,12 @@ export function declaresIndependentChatReasoningControls(provider: OcxProviderCo
 export function nativeChatUltraWireEffort(provider: OcxProviderConfig, modelId: string): string | undefined {
   const ladder = configuredReasoningEfforts(provider, modelId);
   if (ladder?.includes("ultra")) return "ultra";
-  if (declaresThinkingToggleWire(provider, modelId)) return ladder ? resolveEffortAtOrBelow("max", ladder) ?? "max" : "max";
+  if (declaresThinkingToggleWire(provider, modelId)) {
+    // Keep the original alias for the independent policy to omit effort and select thinking.
+    if (declaresIndependentChatReasoningEffort(provider, modelId)
+      && isReasoningEffortOmitted(reasoningEffortMapFor(provider, modelId)?.max)) return "max";
+    return ladder ? resolveEffortAtOrBelow("max", ladder) ?? "max" : "max";
+  }
   return mapReasoningEffort(provider, modelId, "ultra");
 }
 
@@ -100,8 +105,20 @@ export function applyExplicitChatReasoningWirePolicy(options: {
     if (capabilities.supportsThinkingToggle === false) delete body.thinking;
     return { handled: true };
   }
+  const omitIndependentEffort = toggleWire && declaresIndependentChatReasoningEffort(provider, modelId)
+    && requestedStrength !== undefined
+    && isReasoningEffortOmitted(reasoningEffortMapFor(provider, modelId)?.[requestedStrength]);
+  // A native caller's ultra stays on the wire when the provider explicitly advertises it.
+  // In that case the max alias belongs to a different value, even though the shared mapper folds ultra.
+  if (omitIndependentEffort && !(requestedEffort === "ultra" && body.reasoning_effort === "ultra")) {
+    delete body.reasoning_effort;
+  }
   const resolvedThinkingEnabled = toggleWire && !toggleDisabled
-    ? resolveThinkingEnabled(provider, modelId, { thinkingEnabled, reasoning: requestedEffort })
+    ? resolveThinkingEnabled(provider, modelId, {
+      thinkingEnabled: thinkingEnabled ?? (omitIndependentEffort && requestedStrength !== undefined && isDeclaredReasoningEffort(requestedStrength)
+        ? requestedStrength !== "none" : undefined),
+      reasoning: requestedEffort,
+    })
     : undefined;
   if (toggleDisabled) {
     delete body.thinking;
@@ -166,6 +183,11 @@ export function applyExplicitChatReasoningWirePolicy(options: {
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
   if (requestedEffort === "none") {
+    if (omitIndependentEffort) {
+      delete body.reasoning_effort;
+      delete body.reasoning;
+      return { handled: true };
+    }
     if (nativeOpenAI) {
       delete body.reasoning;
       body.reasoning_effort = "none";

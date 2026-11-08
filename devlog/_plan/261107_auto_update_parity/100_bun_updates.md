@@ -18,8 +18,9 @@ publisher-verified activation or rollback.
    fixtures before they are claimed as supported. Validate every installed file
    and link against signed inventory; preparation must not write to the live
    global tree or execute a downloaded helper.
-3. At activation reacquire the existing home sync/update and installation
-   ownership leases, revalidate stage, policy and owner, then obtain the `020`
+3. At activation reacquire the existing home sync/update guard and service
+   ownership lease. Obtain installation-wide coordination only after `020`
+   designs and proves it; revalidate stage, policy and owner, then obtain the `020`
    idle update-stop reservation. Journal a manager-mediated selected-root
    transition and verify its package, metadata and bin links before execution;
    do not claim that the manager changes those files atomically. Retain the

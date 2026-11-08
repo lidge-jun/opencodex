@@ -53,7 +53,10 @@ review have passed; no update behavior is claimed to be implemented.
    missing, invalid, or unverifiable signatures must refuse the automatic path.
    Desktop stable/preview/nightly labels must correspond to feeds that actually
    exist. npm provenance is a candidate for investigation, not yet a verified
-   consumer contract. Existing explicit package commands retain their behavior.
+   consumer contract. Existing explicit package commands keep their current
+   behavior until a verified-supply migration ships. That migration should
+   retain their interfaces but may refuse operations that previously succeeded;
+   document the impact and supported alternatives for each manager.
 2. **Automatic activation admission.** Extend the existing automatic restart
    fence and handoff (`src/server/management/system-restart.ts:385`) with an
    identity-bound, expiring update reservation that proves no work remains and

@@ -1,8 +1,6 @@
 import { matchesLogConversationId } from "../log-conversation-id";
 import type { DeliveryMode } from "../../../src/protocols/contract";
 import { parseProtocolTraceV1 } from "../../../src/protocols/dto";
-import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
-import { logMatchesSurface } from "./logs-surface-filter";
 
 export type LogTimeWindow = "all" | "15m" | "1h" | "24h";
 export type LogStatusFilter = "all" | "success" | "errors";
@@ -13,7 +11,6 @@ export const LOG_PROTOCOL_MODE_FILTERS: readonly LogProtocolModeFilter[] = [
 ];
 
 export interface LogFilterState {
-  surface: LogSurfaceFilter;
   model: string;
   provider: string;
   status: LogStatusFilter;
@@ -28,7 +25,6 @@ export interface LogFilterState {
 }
 
 export const DEFAULT_LOG_FILTER_STATE: LogFilterState = {
-  surface: "all",
   model: "",
   provider: "",
   status: "all",
@@ -48,7 +44,6 @@ export interface FilterableLogEntry {
   resolvedModel?: unknown;
   servedModel?: unknown;
   provider?: unknown;
-  surface?: LogSurface;
   status?: unknown;
   conversationId?: string;
   shadowCallRewrittenFrom?: unknown;
@@ -61,8 +56,7 @@ export interface FilterableLogEntry {
 
 /** Return whether any filter differs from the inert default state. */
 export function hasActiveLogFilters(filters: LogFilterState): boolean {
-  return filters.surface !== "all"
-    || filters.model.trim() !== ""
+  return filters.model.trim() !== ""
     || filters.provider.trim() !== ""
     || filters.status !== "all"
     || filters.timeWindow !== "all"
@@ -109,7 +103,6 @@ export function filterLogs<T extends FilterableLogEntry>(
   const protocolMode = filters.protocolMode ?? "all";
 
   return logs.filter(log => {
-    if (!logMatchesSurface(log, filters.surface)) return false;
     if (filters.interceptedOnly && typeof log.shadowCallRewrittenFrom !== "string") return false;
     if (protocolMode !== "all") {
       // Validated like the detail panel, so a row the panel reports as "no path data" is the

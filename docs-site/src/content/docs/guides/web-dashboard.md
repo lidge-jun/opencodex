@@ -164,12 +164,30 @@ to save an incomplete snapshot; choose another order or repair the history befor
 
 ### Account selection
 
+For a provider's OAuth accounts, finish the current sign-in or account removal before starting
+the other operation. If the account list and sign-in status cannot be refreshed, the status remains
+unverified and **Log out** is available to explicitly retry recovery.
+
 Account selection is shared with request routing. Selecting an OAuth account takes effect on the
 next request even when a pool is enabled. A healthy selection is not replaced merely because
 another generic OAuth account has more unused quota. If the account returns 429, automatic
 failover can still select another usable account with the pool off. A committed automatic
 selection updates the dashboard immediately; account changes do not wait for the quota refresh
 timer. Requests already sent upstream retain their original credentials.
+
+### Usage by app
+
+Usage opens with **All apps**, **All devices**, and **30d** selected within
+the current access scope. You can narrow the app, device, or time range while the page is
+open; reopening it restores these defaults.
+
+With **All apps** selected, **Apps** appears after Models and Providers. It shows each app's
+share of total tokens, token count, estimated API list-price cost, request count, and measured
+request count for the selected devices and time range. Codex CLI, desktop, and IDE usage is
+grouped under Codex. Historical records without client attribution appear as **Unclassified**,
+separately from **Unknown** and **Other**. Selecting one app hides this breakdown. A proxy
+that does not supply the breakdown shows it as unavailable; an empty breakdown means no app
+usage in the report.
 
 ### Filtering request logs
 
@@ -183,7 +201,13 @@ its request and attempt failure cause is `transport-ambiguous`, with resend perm
 A Codex move to another account after HTTP 402 appears as **Account quota exhausted (402)**
 in the attempt's recovery details and counts as a quota recovery in exported metrics.
 
-Logs filters combine surface, intercepted requests, provider, exact model, status, time,
+Logs shows all apps together, with an icon-only client chip on each request instead of
+app tabs. Recognized clients use their SVG logos; unknown or other clients use a neutral
+question-mark icon. App names remain available to screen readers without visible text.
+Missing client attribution does not imply Codex or a request failure. The chip identifies
+the client app, independently of the provider and protocol, and is not an app filter.
+
+Logs filters combine intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces
 but does not match partial names. Choices that disappear from the ring reset to All.
@@ -215,9 +239,8 @@ Historical logs are not rewritten and missing generation timestamps are not inve
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all
-rows and returns keyboard focus to the All surface control; “No matching requests”
-differs from an empty log ring. Use arrow keys or Home/End in
-the surface selector. These controls do not query historical records beyond the loaded ring.
+rows; “No matching requests” differs from an empty log ring. These controls do not query
+historical records beyond the loaded ring.
 
 The language picker includes **Português** (Brazilian Portuguese, `pt-BR`). Portuguese browser languages select it automatically unless a supported language preference is already saved.
 
@@ -519,6 +542,8 @@ them. Both switches apply immediately; **Save** never changes them. When interce
 **Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker, a per-model list of what Claude Desktop shows (see [Choose which models Claude Desktop lists](/guides/claude-code/#choose-which-models-claude-desktop-lists)), and model families under **Advanced**. One status row shows whether Claude Desktop runs the profile, with a separate chip for whether dashboard edits are saved, and **Save** and **Save & apply** beside it.
 
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
+
+If an account change is still in progress, wait for it to finish before retrying logout. After an account removal, the dashboard rechecks the provider's login status; if it cannot verify the result, refresh the account list before retrying the removal.
 
 The bookmarks `#claude` and `#claude/code` open this page, and the former `#claude/settings` redirects to `#claude/code`; `#claude/desktop` selects the separate Claude Desktop tab. The old `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Legacy `#integrations/claude` and `#integrations/claude/desktop` bookmarks still redirect to `#claude/code` and `#claude/desktop`, respectively. Arrow keys move between tabs; Home and End select the first and last tab.
 

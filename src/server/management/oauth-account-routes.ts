@@ -40,7 +40,7 @@ import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { emailMaskingEnabled } from "../../lib/privacy";
+import { emailMaskingEnabled, maskedAccountLabel } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -527,7 +527,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               needsReauth: summary.needsReauth === true,
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
-          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
+          const maskedLabel = maskedAccountLabel(full?.credential.email);
+          return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),

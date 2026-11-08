@@ -70,10 +70,8 @@ the minisign global signature over the raw signature and trusted comment
 signature box for artifacts; do not invent a different cryptographic meaning
 for an existing `.sig` file.
 
-For release and tree metadata, propose a closed `ocx.update.signatures/1` JSON
-envelope `{schema, signatures}`. Root transitions use the separate closed
-`ocx.update.root-transition-signatures/1` envelope with the same entry shape.
-Each entry is
+For root, release and tree metadata, propose a separate closed
+`ocx.update.signatures/1` JSON envelope `{schema, signatures}`. Each entry is
 `{keyFingerprint, signatureBox}`, where `keyFingerprint` is lowercase SHA-256
 of the 32-byte Ed25519 public key and `signatureBox` is canonical standard
 base64 of the four-line Tauri minisign box. Each signature authenticates the
@@ -81,21 +79,20 @@ exact accompanying metadata file bytes; no parse-and-reserialize step occurs
 before verification. The expected metadata schema and verification role are
 chosen by the consumer and checked after cryptographic verification; a root
 record cannot be accepted as a release record. Limit root metadata to 64 KiB,
-release metadata to 1 MiB and tree inventory to 16 MiB. Ordinary signature
-envelopes are limited to 64 KiB and 16 signatures; transition envelopes are
-limited to 256 KiB and 32 signatures. Each root key set remains limited to 16
-keys. A transition envelope may contain only distinct keys from the old/new
-union; verify each set's threshold independently over the same successor bytes.
-An overlapping key may count once for each set when its packet identifier
-matches both root records. Reject duplicate fingerprints,
+release metadata to 1 MiB, tree inventory to 16 MiB, signature envelope to
+64 KiB, and keys to 16 per root or release role. A root-rotation envelope may
+carry up to 32 signatures so disjoint old and new root thresholds can both be
+satisfied; other role envelopes remain limited to 16. Reject duplicate fingerprints,
 noncanonical encodings, unknown algorithms, short packet IDs that disagree with
 the full authorized key, malformed UTF-8, invalid global comments, duplicate
 JSON keys and schema/role mismatches. Initial key threshold is one, as stated
 above; threshold counting is over distinct authorized full fingerprints.
 
-The embedded initial root delegates release keys per channel and role; the
+The proposed embedded initial root delegates release keys per channel and role; the
 verified release record selects exactly one authorized artifact key fingerprint
-for each target. The native client verifies the root and release first, selects
+for each target. Until a multi-signature artifact bridge is designed and
+independently reviewed, the desktop-artifact threshold is exactly one; other
+thresholds retain their own role rules. The native client would verify the root and release first, select
 the target's delegated key, then passes the corresponding verified minisign
 public-key box to the updater builder's `pubkey` override. The locally installed
 `tauri-plugin-updater` 2.14.1 exposes this override in `src/updater.rs:348`;
@@ -108,20 +105,10 @@ only when signatures by distinct keys meet both the current-root and proposed-
 root thresholds; write the validated root and high-water mark atomically before
 using newly delegated keys. Replayed or partially authorized root transitions,
 unknown channels, mismatched key IDs and an interrupted persistence step refuse.
-Producer, acquisition, persisted replay and native-verifier tests must use the
-transition-specific schema and cap; ordinary metadata must reject that schema.
+Include a disjoint old/new root-key vector at the maximum thresholds, plus
+desktop artifact role and rotation vectors.
 
-For desktop assets require a verified minisign trusted comment containing the
-matching signed version on both fresh and restored updates. The pinned plugin
-enforces this on restored metadata, but its fresh-check behavior depends on
-`require_signed_version` (local crate `src/updater.rs:673`, `:1928`); the
-implementation must set and test that option or prove an equivalent mandatory
-check. Include shared fixture-key vectors for valid and invalid boxes, changed
-bytes/comments/version, old/new root threshold transitions, replay, partial
-write and cross-channel key selection. Run the existing Rust plugin verifier and
-the Bun/Node verifier against the same fixture bytes; differing results block
-the unit. Operational signer provisioning, offline root custody and recovery
-after lost keys still require a separate independent security PASS.
+Desktop artifact verification and the release-verification path require independent security review and validation before implementation.
 
 ## Platform and owner matrix to implement
 
@@ -150,8 +137,9 @@ Missing history remains explicitly unknown and never changes artifact trust.
 Client preparation verifies signed metadata and archive bytes, extracts as
 data without lifecycle scripts, validates every inventory entry and rejects
 unlisted entries, then binds the owned stage and installation identity to an
-opaque prepared handle. At activation, reacquire the existing ownership and
-sync/update guards, revalidate the handle and stage, and execute only the
+opaque prepared handle. At activation, reacquire the existing service ownership
+and sync/update guards, obtain the installation-wide coordination required by
+`020` once designed and proven, revalidate the handle and stage, and execute only the
 verified absolute paths after the guarded stop. The client must not fetch a
 replacement dependency or run a package lifecycle script after verifying a
 different archive. Publisher-signed output authenticates the publisher's
@@ -161,10 +149,12 @@ The user requires signatures for automatic updates, stronger than GOAT's
 documented HTTPS-plus-checksum runtime supply
 (`docs/internals/remote-updates.md:163`, GOAT reference revision). A missing,
 invalid, unknown-publisher or mismatched signature yields a visible refusal,
-never a fallback to unsigned bytes. The package unit must migrate every
-affected manual and automatic installation path to verified supply while
-preserving the command's documented interface; compatibility with existing
-installations does not waive the new signature requirement.
+never a fallback to unsigned bytes on the migrated path. Existing manual
+commands retain their current behavior until each manager's verified adapter
+and recovery contract are ready. Each later migration must preserve documented
+command interfaces while clearly reporting that missing verified supply can
+cause a previously successful installation to be refused; it must not claim an
+unimplemented manager has already migrated.
 
 Channel parity is an open deliverable, not a UI-label substitution: current
 release authority accepts `main`/`latest` and `preview`/`preview`
@@ -177,26 +167,21 @@ published. This task may implement and test the release machinery but may not
 publish a release. An unavailable feed remains an explicit outstanding item,
 not proof of parity.
 
-The research lane proposes separate signed stable, preview and nightly
-manifests through the existing manual release workflow. The earlier idea of
+Separate signed stable, preview and nightly manifests are a desired outcome,
+not a demonstrated publication route. The earlier idea of
 stamping a version into a workflow checkout after CI is rejected: current
 release publication requires successful push CI for the exact source commit
 (`.github/workflows/release.yml:1077`) and all version sources to match that
 commit (`scripts/ci/release-preflight.sh:59`). A transformed source tree has
 not received that proof and this task cannot weaken the CI policy.
 
-Concrete release-routing proposal for audit: keep the existing
-`workflow_dispatch` event, `main`/`preview` ref guard and job permission sets.
-On the `preview` ref, add `nightly` as an explicit distinct release channel
-and npm dist-tag, with the existing `X.Y.Z-preview.YYYYMMDD[.N]` version shape
-already committed in all four version sources. The channel comes from signed
-metadata and the explicit release input, not the prerelease spelling; a
-nightly publication must not move `latest` or `preview`. A maintainer prepares
-the version through the repository's normal release-line process and waits for
-the existing successful push CI on that exact preview commit before dispatch.
-This preserves the documented preview branch version shape while giving the
-nightly channel its own signed feed. No part of this task creates the release
-commit or publishes a release.
+The existing release authority permits only `main`/`latest` and
+`preview`/`preview`. A separate nightly npm tag or feed has no proven route
+under those unchanged gates. Keep nightly unavailable until an independently
+reviewed publication design demonstrates compatibility with the current
+branch/tag policy, workflow triggers, permissions and CI requirements; do not
+change those gates to make this roadmap work. No part of this task creates a
+release commit or publishes a release.
 
 The four sources are `package.json`, `desktop/src-tauri/tauri.conf.json`,
 `desktop/src-tauri/Cargo.toml` and the `opencodex-desktop` entry in
@@ -211,22 +196,18 @@ digests; verification checks the source bytes against the checkout and receipt
 before signing. Release-generated packaging output is separately identified and
 verified, not represented as a tested source commit.
 
-Update both early and final branch/tag/version gates, release argument parsing,
+Preserve both early and final branch/tag/version gates, release argument parsing,
 cross-channel global-floor checks, prerelease classification and resume logic
-together (`scripts/release.ts:499`, `scripts/ci/release-preflight.sh:34`,
-`.github/workflows/release.yml:1051`, `:1371`). The operator selects an unused
-version that satisfies `version-line.ts`'s existing global tag floor and dev
-pre-move checks; no assumption that `nightly` sorts after `preview` is made.
-Resume is valid only for the same SHA, version, signed record and artifact
-digests, with the existing publication-side identity checks intact. Fixture
-tests must show nightly cannot move either existing dist-tag, that all sources
-and the exact-SHA CI gate remain binding, and that changed or absent receipts
-fail closed. npm trusted-publisher configuration and the initial signed feed
-remain operational prerequisites; no feed is claimed live until separately
-published by a maintainer.
+(`scripts/release.ts:499`, `scripts/ci/release-preflight.sh:34`,
+`.github/workflows/release.yml:1051`, `:1371`). Resume remains bound to the same
+SHA and version under existing publication-side identity checks. Any future
+compatible channel design must prove that existing tags and exact-SHA CI remain
+protected and that changed or absent receipts fail closed. npm trusted-publisher
+configuration and the initial signed feed remain operational prerequisites; no
+feed is claimed live until separately published by a maintainer.
 
-Because nightly and preview share the `-preview.*` version spelling, a version
-string cannot identify the channel. Every supported installed owner stores an
+If a compatible nightly route can be established, version spelling alone must
+not be used to infer its channel. Every supported installed owner stores an
 owner-private authenticated provenance record binding installation identity,
 exact artifact digest, signed release-record digest and channel. The installer
 writes it only after verification and preserves it across startup and recovery;
@@ -248,7 +229,10 @@ Update the complete channel field chain: Node launcher `bin/ocx.mjs:129`,
 and schemas; preserve existing two-channel wire shapes. A new nightly owner
 refuses legacy check/apply requests that would infer preview, returning an
 actionable upgrade-client state. A new server receiving an old Desktop snapshot
-without authenticated channel projects `unknown` rather than asserting preview.
+without authenticated channel projects unknown provenance in the new DTO.
+For the legacy endpoint it preserves the existing availability projection and
+compatibility channel label as specified in `050`; that label is not provenance
+or installation authority.
 Do not send a nightly artifact to an old updater that cannot preserve its
 channel. Test first install, lost/corrupt policy, old/new clients and rollback,
 and prove no inferred cross-channel installation occurs.
@@ -263,6 +247,42 @@ Missing, stale, malformed, unavailable or unverified metadata leaves the
 channel unknown or unavailable. The first in-scope release infrastructure unit
 must prove exact source-version and record-to-artifact binding with fixtures;
 this routing is still a proposal until the independent security audit passes.
+
+The proposed `ocx.update.channel-freshness/1` is a closed UTF-8 JSON object
+with `schema`, `channel`, a positive safe-integer `freshnessSeq`, the selected
+`releaseSeq` and exact `releaseDigest`, `issuedAt`, `expiresAt`, and
+`rootRevision`. The existing proposed detached envelope signs its exact bytes
+using a release-role key delegated for that channel by the currently accepted
+root. Renewal increments `freshnessSeq` even when the release is unchanged.
+The installation's update owner would persist the highest accepted freshness
+sequence and its exact digest per channel: a lower sequence or equal sequence
+with different bytes is refused; equal sequence and digest is a retry. The
+freshness record must match the selected verified release, be within its
+validity window and name the accepted, unexpired root; otherwise unattended
+activation defers without discarding a separately valid retained stage.
+
+The proposed publisher would publish new immutable freshness records through a
+publication path authorized under the existing workflow triggers and policy;
+any mutable locator is merely an untrusted index. Neither the publisher nor the
+path is established. No workflow trigger change is authorized. The publication
+mechanism must be demonstrated under that constraint before implementation.
+After a root rotation, the publisher would issue freshness under the newly
+accepted root; a stale-root record cannot authorize an effect. If renewal or
+rotation publication is unavailable, the channel remains unavailable rather
+than accepting expired or previously authorized metadata. Test quiet release
+periods, renewal without a release, expiry, stale sequence, digest substitution,
+root/key rotation, lost publication, concurrent checks and restart. This is a
+draft contract, pending independent security and operational review.
+
+**Open publication and validity blockers:** current release preflight refuses
+republishing an existing version, and published release assets are immutable.
+No proven renewal location or discovery path exists yet for a quiet channel
+under the current trigger and permission constraints. The draft must also set
+an independently reviewed maximum validity window, ordering and clock-skew
+rules, and show how the unchanged release remains verifiable after root/key
+rotation. Do not implement or claim freshness parity until a compatible
+publisher and fixtures establish those properties without changing workflow
+triggers or CI policy.
 
 Proposed rollout for unattended package and fleet activation: stable waits 48
 hours after a signed rollout-not-before value, then opens deterministically
@@ -290,6 +310,43 @@ accepted time, retain the state and defer until corrected. Test rollback,
 restart, same-sequence substitution and write failure. These local checks do
 not establish a trusted wall clock against a deliberate forward jump; document
 that limit and do not describe them as a publication timestamp proof.
+
+Only an independently established first installation may initialize absent
+root, release and freshness high-water state. If any required state is missing,
+corrupt, unreadable or its initialization is ambiguous after that point, retain
+remaining evidence and disable unattended update effects; do not treat the loss
+as a first install or reset sequence and digest marks. An explicitly authorized
+local recovery may resume only after independently establishing non-regressive
+root, release and freshness marks and persisting them atomically under the same
+owner lock. If their prior bounds cannot be established, refuse automatic recovery
+and require a separately reviewed recovery procedure. Defining and proving that
+recovery evidence and its authority is an implementation blocker. Test each lost,
+corrupt and unreadable record after initialization, stale or incomplete recovery
+evidence, failed persistence, concurrent checks and restart; prove that recovery
+never accepts a lower mark or a different digest for the same sequence.
+
+The planned recovery must also handle an accidental forward clock jump followed
+by correction: a deliberate local operator action may reset the accepted-time
+and first-observation timing baselines only after fresh validation, while
+preserving all sequence and digest high-water marks. Restart the observation
+delay from the corrected time; never make a target eligible earlier. Exercise
+forward-jump, correction, restart and attempted rollback cases in isolation.
+The installation's local update-policy owner would perform this action through
+an explicitly authorized local control, serialized under the same durable
+state lock as discovery, high-water writes and other timing resets. It must
+re-read the latest state under that lock, persist the reset atomically, and
+refuse if ownership, prior state or validation cannot be established. Tests
+must include concurrent checks and resets, stale controls, interrupted writes,
+failed persistence and restart, proving that no sequence or digest mark moves
+backward. Inside this authorized, effect-free recovery operation only, validate
+the corrected operator-confirmed clock and freshly verified metadata without
+using the suspect prior wall-time baseline as a gate. Continue enforcing all
+signature, channel, sequence, digest and root high-water checks. Re-read state
+under the lock, atomically persist the corrected timing baselines, then resume
+normal validation; no update effect is permitted before that commit. Invalid
+clock or metadata, state changes, or failed persistence leave the old state and
+automatic effects disabled. Test this exact recovery, concurrent checks and
+failed resets across restart.
 
 ## Candidate file map to resolve
 

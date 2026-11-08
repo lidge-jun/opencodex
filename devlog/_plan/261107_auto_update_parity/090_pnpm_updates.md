@@ -19,8 +19,9 @@ tree cannot be renamed into pnpm's virtual store and treated as pnpm ownership.
    the signed inventory and the selected owner. Never write to the live global
    group during preparation. The exact pnpm invocation and relocatable layout
    are an explicit experiment and audit blocker, not a presumed supported flag.
-3. Before activation, reacquire the existing sync/update and installation
-   ownership leases, revalidate policy, stage and selected pnpm owner, then use
+3. Before activation, reacquire the existing home sync/update guard and service
+   ownership lease. Obtain installation-wide coordination only after `020`
+   designs and proves it; revalidate policy, stage and selected pnpm owner, then use
    the `020` update-stop reservation. Use a manager-mediated selected-owner
    transition, journaled before each operation; do not describe it as an atomic
    group/bin swap. Bind and verify the generated shims, selected final store,
