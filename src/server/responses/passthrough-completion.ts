@@ -29,9 +29,8 @@ export function isResetReplacementStream(candidate: Response, upstreamRequestsSt
  *
  * The selection waits at most one heartbeat interval, and never longer than the stall budget, for
  * a head; see `selectProtocolSafeResetResponse`. A consumer that measures silence on the bytes it
- * receives (the gateway completion guard, the canonical buffered collector) cannot tell a held
- * prelude, its later replay or a generated comment from an upstream read, and it starts after the
- * selection already waited. Both bodies are therefore guarded before preflight, so each physical
+ * receives cannot tell a held prelude, its later replay or a generated comment from an upstream
+ * read, and it starts after selection already waited. Both bodies are guarded before preflight, so each physical
  * attempt's stall budget runs on its own upstream reads from its own head. The guard's failure is
  * a timeout, which the reset gate never treats as replayable. The published head carries the main
  * quota proof of the physical attempt that produced it, because the replacement send renews the
@@ -53,11 +52,9 @@ export function selectPassthroughResetResponse(
 ): Promise<Response> {
   const openGateway = options.request.url === "https://apis.opengateway.ai/v1/responses"
     && response.status === 200 && response.body !== null;
-  const guard = openGateway || options.keepalive === "upstream-activity";
   const stallMs = resolveStallTimeoutMs(options.config.stallTimeoutSec, { localUpstream: isLocalUpstream(options.request.url) });
-  const protect = (source: Response): Response => guard
-    ? carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs).response)
-    : source;
+  const protect = (source: Response): Response =>
+    carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs).response);
   const quotaOwner = (): MainQuotaDispatch | undefined =>
     admission.authCtx.kind === "main" ? admission.authCtx.mainQuotaDispatch : undefined;
   const originalOwner = quotaOwner();

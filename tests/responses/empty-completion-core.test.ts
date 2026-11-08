@@ -534,6 +534,200 @@ describe("OpenGateway native empty completion", () => {
     return { cfg, sends };
   }
 
+  for (const replayable of [false, true]) {
+    test(`direct non-gateway reset selection bounds upstream silence (replayable=${replayable})`, async () => {
+      takeSpendHome();
+      jest.useFakeTimers();
+      const firstRead = Promise.withResolvers<void>();
+      let cancelled = 0;
+      const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+        pull() { firstRead.resolve(); },
+        cancel() { cancelled++; },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+      "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
+      const client = new AbortController();
+      const pending = handleResponses(new Request(request(true, "question", replayable ? { store: false } : {}),
+        { signal: client.signal }), { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+      try {
+        await firstRead.promise;
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+        jest.advanceTimersByTime(15_000);
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+        const response = await pending;
+        const reader = response.body!.getReader();
+        expect(new TextDecoder().decode((await reader.read()).value)).toContain(": keepalive");
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 100; i++) await Promise.resolve();
+        expect(cancelled).toBe(1);
+        expect(f.sends).toHaveLength(1);
+        await reader.cancel();
+      } finally {
+        client.abort();
+        await pending.catch(() => undefined);
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  }
+
+  test("direct reset selection resets its deadline on real upstream bytes", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    const firstRead = Promise.withResolvers<void>();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = 0;
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; },
+      pull() { firstRead.resolve(); },
+      cancel() { cancelled++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    const pending = handleResponses(new Request(request(true, "question", { store: false }), { signal: client.signal }),
+      { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+    try {
+      await firstRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(10_000);
+      source.enqueue(new TextEncoder().encode('data: {"type":"response.created","response":{"status":"in_progress","output":[]}}\n\n'));
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(5_000);
+      const response = await pending;
+      const reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain(": keepalive");
+      jest.advanceTimersByTime(14_999);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(cancelled).toBe(0);
+      jest.advanceTimersByTime(1);
+      for (let i = 0; i < 100; i++) await Promise.resolve();
+      expect(cancelled).toBe(1);
+      expect(f.sends).toHaveLength(1);
+      await reader.cancel();
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  test("direct reset replacement has its own silence deadline", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    const replacementRead = Promise.withResolvers<void>();
+    let cancelled = 0;
+    const f = fixture([
+      () => new Response('data: {"type":"response.created","response":{"status":"in_progress","output":[]}}\n\n',
+        { headers: { "content-type": "text/event-stream" } }),
+      () => new Response(new ReadableStream<Uint8Array>({
+        pull() { replacementRead.resolve(); },
+        cancel() { cancelled++; },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }),
+    ], "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    const pending = handleResponses(new Request(request(true, "question", { store: false }), { signal: client.signal }),
+      { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+    try {
+      const response = await pending;
+      const reader = response.body!.getReader();
+      const read = reader.read();
+      await replacementRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(f.sends).toHaveLength(2);
+      jest.advanceTimersByTime(15_000);
+      jest.advanceTimersByTime(5_000);
+      for (let i = 0; i < 100; i++) await Promise.resolve();
+      expect(cancelled).toBe(1);
+      expect(f.sends).toHaveLength(2);
+      await read.catch(() => undefined);
+      await reader.cancel();
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  test("direct committed output remains visible when its source later stalls", async () => {
+    takeSpendHome();
+    jest.useFakeTimers();
+    let cancelled = 0;
+    let sent = false;
+    const nextRead = Promise.withResolvers<void>();
+    const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"visible"}\n\n'));
+        } else nextRead.resolve();
+      },
+      cancel() { cancelled++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+    "https://fixture.test/v1/responses", { retryOnReset: { enabled: true, replacements: 1 } });
+    const client = new AbortController();
+    const pending = handleResponses(new Request(request(true, "question", { store: false }), { signal: client.signal }),
+      { ...f.cfg, stallTimeoutSec: 20 }, { model: "", provider: "" });
+    try {
+      const response = await pending;
+      const reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("visible");
+      const read = reader.read();
+      await nextRead.promise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(20_000);
+      for (let i = 0; i < 100; i++) await Promise.resolve();
+      expect(cancelled).toBe(1);
+      expect(f.sends).toHaveLength(1);
+      await read.catch(() => undefined);
+      await reader.cancel();
+    } finally {
+      client.abort();
+      await pending.catch(() => undefined);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  for (const policy of ["explicit-off", "local-default"] as const) {
+    test(`direct reset selection honors ${policy} and cancels on downstream abort`, async () => {
+      takeSpendHome();
+      jest.useFakeTimers();
+      const firstRead = Promise.withResolvers<void>();
+      let cancelled = 0;
+      const f = fixture([() => new Response(new ReadableStream<Uint8Array>({
+        pull() { firstRead.resolve(); },
+        cancel() { cancelled++; return new Promise<void>(() => {}); },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } })],
+      policy === "local-default" ? "http://127.0.0.1:7777/v1/responses" : "https://fixture.test/v1/responses",
+      { retryOnReset: { enabled: true, replacements: 1 }, ...(policy === "local-default" ? { allowPrivateNetwork: true } : {}) });
+      const client = new AbortController();
+      const pending = handleResponses(new Request(request(true, "question", { store: false }), { signal: client.signal }),
+        { ...f.cfg, ...(policy === "explicit-off" ? { stallTimeoutSec: 0 } : {}) }, { model: "", provider: "" });
+      try {
+        await firstRead.promise;
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+        jest.advanceTimersByTime(15_000);
+        const response = await pending;
+        const reader = response.body!.getReader();
+        expect(new TextDecoder().decode((await reader.read()).value)).toContain(": keepalive");
+        jest.advanceTimersByTime(300_000);
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+        expect(cancelled).toBe(0);
+        client.abort();
+        for (let i = 0; i < 100; i++) await Promise.resolve();
+        expect(cancelled).toBe(1);
+        expect(f.sends).toHaveLength(1);
+        await reader.cancel().catch(() => {});
+      } finally {
+        client.abort();
+        await pending.catch(() => undefined);
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  }
+
   test("reset preflight heartbeats cannot hide a silent OpenGateway upstream", async () => {
     takeSpendHome();
     jest.useFakeTimers();
