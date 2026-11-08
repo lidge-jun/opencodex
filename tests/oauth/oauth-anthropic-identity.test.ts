@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
 import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../../src/oauth";
-import { AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
+import { AnthropicOAuthFlow, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
 import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
 import { captureOAuthAccountSelection, loadAuthStore, mutateStore, removeAccount, saveAccountCredential, setAccountPaused } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
@@ -83,6 +83,71 @@ function deferred() {
   return { promise, resolve };
 }
 const noRefresh = { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new Error("refresh must not run"); } };
+
+for (const mode of ["only", "fallback"] as const) {
+  test(`local ${mode} login refuses an older in-flight Keychain read`, async () => {
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "login-profile-without-file");
+    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), pid: 1 });
+    let source = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-old",
+      refreshToken: "synthetic-old-refresh", expiresAt: 1 } });
+    let captured = "";
+    const service = createClaudeKeychainService({ platform: "darwin", spawn: () => {
+      captured = source; return child as unknown as KeychainChild;
+    } });
+    const earlier = service.read(); child.emit("spawn"); child.stdout.write(captured);
+    source = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-new",
+      refreshToken: "synthetic-new-refresh", expiresAt: Date.now() + 3_600_000 } });
+    const entered = deferred();
+    const read = spyOn(claudeKeychain, "read").mockImplementation(options => {
+      const result = service.read(options); entered.resolve(); return result;
+    });
+    const browser = spyOn(AnthropicOAuthFlow.prototype, "login").mockResolvedValue({
+      access: "synthetic-browser", refresh: "synthetic-browser-refresh", expires: Date.now() + 3_600_000,
+    });
+    let posts = 0;
+    globalThis.fetch = (async (_url, init) => {
+      if (init?.method === "POST") posts++;
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+    try {
+      const outcome = loginAnthropic({}, { importLocal: mode }).catch(error => error);
+      await entered.promise;
+      child.emit("exit", 0, null); child.stdout.emit("end"); child.stdout.emit("close");
+      await earlier;
+      const result = await outcome;
+      expect(posts).toBe(0);
+      expect(result).toBeInstanceOf(Error);
+      expect(read).toHaveBeenCalledWith({ fresh: true });
+      expect(browser).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); browser.mockRestore(); }
+  });
+}
+
+test("cancelling local login during a Keychain read never dispatches an expired refresh token", async () => {
+  process.env.CLAUDE_CONFIG_DIR = join(tmp, "cancelled-login-profile");
+  const started = deferred(), release = deferred();
+  const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+    started.resolve(); await release.promise;
+    return { status: "present", value: JSON.stringify({ claudeAiOauth: {
+      accessToken: "synthetic-old", refreshToken: "synthetic-old-refresh", expiresAt: 1,
+    } }) };
+  });
+  const controller = new AbortController();
+  const cancelled = new Error("synthetic login cancelled");
+  let posts = 0;
+  globalThis.fetch = (async (_url, init) => {
+    if (init?.method === "POST") posts++;
+    return new Response(null, { status: 503 });
+  }) as typeof fetch;
+  try {
+    const outcome = loginAnthropic({ signal: controller.signal }, { importLocal: "only" }).catch(error => error);
+    await started.promise;
+    controller.abort(cancelled);
+    release.resolve();
+    expect(await outcome).toBe(cancelled);
+    expect(posts).toBe(0);
+  } finally { release.resolve(); read.mockRestore(); }
+});
 
 test("an already cancelled refresh does not read Keychain or create an intent", async () => {
   const { id, credential } = await seed();

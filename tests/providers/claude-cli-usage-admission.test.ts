@@ -1,16 +1,20 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as childProcess from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
+import { claudeKeychain, createClaudeKeychainService, type KeychainChild } from "../../src/lib/claude-keychain";
+import * as testHomeGuard from "../../src/lib/test-home-guard";
 import { buildChildEnv, createClaudeCliAdapter } from "../../src/adapters/claude-cli/adapter";
 import { CLAUDE_CLI_PROFILE } from "../../src/adapters/claude-cli/profiles";
 import {
   checkClaudeUsageAdmission,
   formatClaudeReset,
   parseClaudeReset,
+  peekClaudeUsageObservation,
   recordClaudeUsageRefusal,
   setClaudeUsagePreflightForTests,
 } from "../../src/adapters/claude-cli/usage-admission";
@@ -37,6 +41,95 @@ const seed = (quota: unknown, now: number) => {
 };
 
 describe("Claude usage admission cache", () => {
+  test("a blocked cached local identity limits concurrent preflights and releases permits", async () => {
+    const statePath = tempState();
+    const profile = statePath + "-profile";
+    mkdirSync(profile);
+    const previousProfile = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = profile;
+    let started!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+      started(); await blocked; return { status: "absent" };
+    });
+    const spawnGuard = spyOn(childProcess, "spawn").mockImplementation((() => { throw new Error("real spawn forbidden"); }) as never);
+    const guard = spyOn(testHomeGuard, "isTestHomeGuardArmed").mockReturnValue(false);
+    const requests = Array.from({ length: 256 }, () => checkClaudeUsageAdmission("", { statePath }));
+    let overflow: string | undefined;
+    const extra = checkClaudeUsageAdmission("", { statePath }).then(result => { overflow = result.state; });
+    try {
+      await entered;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(overflow).toBe("unknown");
+      release(); await Promise.all([...requests, extra]);
+      expect((await checkClaudeUsageAdmission("", { statePath })).state).toBe("unknown");
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      release(); await Promise.all([...requests, extra]);
+      guard.mockRestore(); spawnGuard.mockRestore(); read.mockRestore();
+      if (previousProfile === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousProfile;
+    }
+  });
+
+  test("a fresh identity cannot join a pre-switch Keychain flight or cache its old quota", async () => {
+    const statePath = tempState();
+    const profile = join(statePath + "-profile");
+    mkdirSync(profile);
+    const previousProfile = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = profile;
+    let source = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-a", refreshToken: "synthetic-a-refresh", expiresAt: Date.now() + 3_600_000 } });
+    const children: Array<EventEmitter & { stdout: PassThrough; pid: number; payload: string }> = [];
+    const service = createClaudeKeychainService({ platform: "darwin", spawn: () => {
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), pid: 1, payload: source });
+      children.push(child); return child as unknown as KeychainChild;
+    } });
+    const finish = (child: typeof children[number]) => {
+      child.emit("spawn"); child.stdout.write(child.payload);
+      child.emit("exit", 0, null); child.stdout.emit("end"); child.stdout.emit("close");
+    };
+    let firstRead!: () => void, secondRead!: () => void, probeStarted!: () => void, releaseProbe!: () => void;
+    const first = new Promise<void>(resolve => { firstRead = resolve; });
+    const second = new Promise<void>(resolve => { secondRead = resolve; });
+    const started = new Promise<void>(resolve => { probeStarted = resolve; });
+    const release = new Promise<void>(resolve => { releaseProbe = resolve; });
+    let reads = 0, probes = 0;
+    const read = spyOn(claudeKeychain, "read").mockImplementation(options => {
+      const result = service.read(options);
+      reads++;
+      if (reads === 1) firstRead();
+      if (reads === 2) secondRead();
+      if (reads >= 3) { const child = children.at(-1)!; queueMicrotask(() => finish(child)); }
+      return result;
+    });
+    // Keep a second fail-closed guard around the explicitly synthetic test seam.
+    const spawnGuard = spyOn(childProcess, "spawn").mockImplementation((() => { throw new Error("real spawn forbidden"); }) as never);
+    const guard = spyOn(testHomeGuard, "isTestHomeGuardArmed").mockReturnValue(false);
+    try {
+      const pending = checkClaudeUsageAdmission("claude-sonnet-5-5", { statePath, probe: async access => {
+        probes++; expect(access).toBe("synthetic-a"); probeStarted(); await release;
+        return { ...freshQuota, weeklyPercent: 100 };
+      } });
+      await first; finish(children[0]!); await started;
+      const earlier = service.read();
+      source = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-b", refreshToken: "synthetic-b-refresh", expiresAt: Date.now() + 3_600_000 } });
+      releaseProbe(); await second; finish(children[1]!); await earlier;
+      expect((await pending).state).toBe("unknown");
+      expect(peekClaudeUsageObservation({ statePath })).toBeNull();
+      expect(existsSync(statePath)).toBe(false);
+      expect(read).toHaveBeenLastCalledWith({ fresh: true });
+      const retry = await checkClaudeUsageAdmission("claude-sonnet-5-5", { statePath, probe: async access => {
+        probes++; expect(access).toBe("synthetic-b"); return freshQuota;
+      } });
+      expect(retry.state).toBe("available");
+      expect(probes).toBe(2);
+    } finally {
+      releaseProbe(); guard.mockRestore(); spawnGuard.mockRestore(); read.mockRestore();
+      if (previousProfile === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousProfile;
+    }
+  });
+
   test("an expired window scoped to another model family does not force a re-read", async () => {
     const now = Date.now();
     const statePath = seed({ ...freshQuota, customWindows: [{ label: "Opus", percent: 100, resetAt: now - 1000, scope: "model" }] }, now);

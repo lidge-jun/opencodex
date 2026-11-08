@@ -5,6 +5,7 @@ import * as modelRows from "../../src/server/management/model-rows";
 import * as managementShared from "../../src/server/management/shared";
 import { armClaudeCodeBaseline, getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import * as systemEnv from "../../src/server/system-env";
+import { claudeKeychain } from "../../src/lib/claude-keychain";
 import { buildClaudeReplayConfig } from "../../src/server/claude-messages";
 import { parseRequest } from "../../src/responses/parser";
 import { planVisionSidecar } from "../../src/vision";
@@ -27,7 +28,9 @@ let accountSpy: ReturnType<typeof spyOn<typeof store, "getAccountSet">>;
 let rowsSpy: ReturnType<typeof spyOn<typeof modelRows, "listManagementModelRows">>;
 let catalogSpy: ReturnType<typeof spyOn<typeof managementShared, "fetchInitializedModels">>;
 let allModelsSpy: ReturnType<typeof spyOn<typeof managementShared, "fetchAllModels">>;
+let keychainProbe: ReturnType<typeof spyOn>;
 beforeEach(() => {
+  keychainProbe = spyOn(claudeKeychain, "probe").mockResolvedValue({ status: "absent" });
   home = createTempHome("ocx-helper-instance-settings-");
   accounts = {};
   accountSpy = spyOn(store, "getAccountSet").mockImplementation(provider => accounts[provider] ?? null);
@@ -36,6 +39,7 @@ beforeEach(() => {
   allModelsSpy = spyOn(managementShared, "fetchAllModels").mockResolvedValue([]);
 });
 afterEach(() => {
+  keychainProbe.mockRestore();
   accountSpy.mockRestore();
   rowsSpy.mockRestore();
   catalogSpy.mockRestore();
@@ -88,6 +92,7 @@ test.each([false, true])("normal Claude management saves retain retired disable 
     };
     for (const fastMode of [true, false]) {
       const state = await (await request(live, "/api/claude-code")).json() as ClaudeCodeState;
+      expect(keychainProbe).toHaveBeenCalled();
       const body = claudeCodeSaveBody({ ...state, fastMode }, []);
       expect((await request(live, "/api/claude-code", body)).status).toBe(200);
       live = loadConfig();

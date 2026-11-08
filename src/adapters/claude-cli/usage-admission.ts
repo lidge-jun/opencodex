@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
+import { createAdmissionGate } from "../../lib/admission";
 import { detectClaudeCodeTokenAsync } from "../../oauth/local-token-detect";
 import { readAnthropicUsageQuota } from "../../providers/claude-cli-usage";
 import type { ProviderQuota } from "../../providers/quota-types";
@@ -24,17 +25,19 @@ export type AdmissionDeps = {
   statePath?: string;
 };
 const CACHE_MS = 60_000;
+const MAX_IDENTITY_WAITERS = 256;
+const identityWaiters = createAdmissionGate("claude_cli_identity_waiters", MAX_IDENTITY_WAITERS);
 const inflight = new Map<string, Promise<Snapshot | null>>();
 const memory = new Map<string, Snapshot>();
 let identityCache: { scope: string; at: number; value: Promise<Identity | null> } | undefined;
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
-async function readLocalIdentity(): Promise<Identity | null> {
+async function readLocalIdentity(fresh = false): Promise<Identity | null> {
   // A test process never reads the operator's real sign-in or spends it on a usage probe;
   // tests that exercise admission inject `deps.identity`.
   if (isTestHomeGuardArmed()) return null;
-  const credential = await detectClaudeCodeTokenAsync();
+  const credential = await detectClaudeCodeTokenAsync({ fresh });
   if (!credential || !nonEmpty(credential.access)) return null;
   let account: unknown;
   try {
@@ -52,12 +55,24 @@ async function readLocalIdentity(): Promise<Identity | null> {
  * a burst of turns costs one Keychain lookup; an account switch is noticed within the cache window.
  */
 function localIdentity(fresh = false): Promise<Identity | null> {
-  const scope = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";
-  const now = Date.now();
-  if (!fresh && identityCache && identityCache.scope === scope && now - identityCache.at < CACHE_MS) return identityCache.value;
-  const value = readLocalIdentity().catch(() => null);
-  identityCache = { scope, at: now, value };
-  return value;
+  const lease = identityWaiters.tryAcquire();
+  if (!lease) return Promise.resolve(null);
+  try {
+    const scope = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";
+    const now = Date.now();
+    let value: Promise<Identity | null>;
+    if (!fresh && identityCache && identityCache.scope === scope && now - identityCache.at < CACHE_MS) {
+      value = identityCache.value;
+    } else {
+      value = readLocalIdentity(fresh).catch(() => null);
+      identityCache = { scope, at: now, value };
+      void value.then(identity => { if (!identity && identityCache?.value === value) identityCache = undefined; });
+    }
+    return value.finally(() => lease.release());
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
 }
 async function resolveIdentity(deps: AdmissionDeps, fresh = false): Promise<Identity | null> {
   try { return await (deps.identity ?? localIdentity)(fresh); } catch { return null; }

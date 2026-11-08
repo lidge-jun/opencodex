@@ -127,8 +127,8 @@ export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}):
   return fallback ?? { kind: "absent" };
 }
 
-export async function detectClaudeCodeTokenAsync(): Promise<OAuthCredentials | null> {
-  const observation = await observeClaudeCodeToken();
+export async function detectClaudeCodeTokenAsync(options: { fresh?: boolean } = {}): Promise<OAuthCredentials | null> {
+  const observation = await observeClaudeCodeToken(options);
   return observation.kind === "present" ? observation.credential : null;
 }
 
