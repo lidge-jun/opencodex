@@ -151,6 +151,14 @@ const ECHOED_REQUEST_CONTENT_REFUSAL = JSON.stringify({
     reason: "testing cybersecurity policy",
   },
 });
+const PREFIXED_ECHOED_ORIGIN_REJECTED_REFUSAL =
+  'Gateway error 400: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."},"request":{"input":"origin_rejected"}}';
+const PREFIXED_ECHOED_CYBER_POLICY_REFUSAL =
+  'Gateway error 400: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."},"request":{"input":"Request blocked by upstream cybersecurity policy"}}';
+const PREFIXED_ECHOED_BIO_POLICY_REFUSAL =
+  'Gateway error 400: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."},"request":{"input":"bio_policy violation"}}';
+const PREFIXED_POLICY_REFUSAL =
+  'Gateway error 400: {"error":{"code":"cyber_policy","param":"reasoning_effort","message":"Request blocked by upstream cybersecurity policy"},"request":{"input":"ordinary text"}}';
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -930,6 +938,98 @@ describe("rejected reasoning rungs", () => {
     expect(response.status).toBe(200);
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test.each([
+    ["origin_rejected", PREFIXED_ECHOED_ORIGIN_REJECTED_REFUSAL],
+    ["cyber_policy", PREFIXED_ECHOED_CYBER_POLICY_REFUSAL],
+    ["bio_policy", PREFIXED_ECHOED_BIO_POLICY_REFUSAL],
+  ])("replays downgrade when prefixed JSON diagnostic echoes %s in request input (openai-chat)", async (_name, payload) => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(payload, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return chatSuccess();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test.each([
+    ["origin_rejected", PREFIXED_ECHOED_ORIGIN_REJECTED_REFUSAL],
+    ["cyber_policy", PREFIXED_ECHOED_CYBER_POLICY_REFUSAL],
+    ["bio_policy", PREFIXED_ECHOED_BIO_POLICY_REFUSAL],
+  ])("replays downgrade when prefixed JSON diagnostic echoes %s in request input (openai-responses)", async (_name, payload) => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(payload, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ id: "resp-ok" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("stops before effort replay on genuine policy refusal inside prefixed diagnostic carrier (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(PREFIXED_POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on genuine policy refusal inside prefixed diagnostic carrier (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(PREFIXED_POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
 
   test("stops before effort replay on incomplete outer object ending with inner brace (openai-chat)", async () => {

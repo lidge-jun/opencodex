@@ -26,8 +26,8 @@ import { join } from "node:path";
 // and leaves COMBO_NAMESPACE in its temporal dead zone for entry points that start at combos/types.ts.
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
-import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
-export { isHardPolicyOrOriginRefusal };
+import { extractJsonEnvelope, isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
+export { extractJsonEnvelope, isHardPolicyOrOriginRefusal };
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
 
@@ -461,39 +461,6 @@ const EFFORT_COMPATIBLE_TYPES = new Set([
   "upstream_error",
 ]);
 
-function extractJsonEnvelope(text: string): unknown | undefined {
-  let s = text.trim();
-  for (let d = 0; d < 3; d += 1) {
-    if (s.startsWith("Provider error 400: ")) {
-      s = s.slice("Provider error 400: ".length).trim();
-    } else if (s.startsWith("Provider error: ")) {
-      s = s.slice("Provider error: ".length).trim();
-    }
-    if (s.startsWith("data:") && !s.includes("\n")) {
-      s = s.slice("data:".length).trim();
-    }
-  }
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    try {
-      return JSON.parse(s.slice(firstBrace, lastBrace + 1));
-    } catch {
-      // ignore
-    }
-  }
-  const firstBracket = s.indexOf("[");
-  const lastBracket = s.lastIndexOf("]");
-  if (firstBracket !== -1 && lastBracket > firstBracket) {
-    try {
-      return JSON.parse(s.slice(firstBracket, lastBracket + 1));
-    } catch {
-      // ignore
-    }
-  }
-  return undefined;
-}
-
 function isIncompleteStructuredWrapper(text: string): boolean {
   let s = text.trim();
   for (let d = 0; d < 3; d += 1) {
@@ -501,6 +468,10 @@ function isIncompleteStructuredWrapper(text: string): boolean {
       s = s.slice("Provider error 400: ".length).trim();
     } else if (s.startsWith("Provider error: ")) {
       s = s.slice("Provider error: ".length).trim();
+    } else if (s.startsWith("Gateway error 400: ")) {
+      s = s.slice("Gateway error 400: ".length).trim();
+    } else if (s.startsWith("Gateway error: ")) {
+      s = s.slice("Gateway error: ".length).trim();
     }
     if (s.startsWith("data:") && !s.includes("\n")) {
       s = s.slice("data:".length).trim();
@@ -514,7 +485,7 @@ function isIncompleteStructuredWrapper(text: string): boolean {
       return true;
     }
   }
-  if (/^(?:Provider error (?:400:\s*)?|data:\s*)[{\[]/i.test(text.trim())) {
+  if (/^(?:(?:Provider|Gateway) error (?:400:\s*)?|data:\s*)[{\[]/i.test(text.trim())) {
     return true;
   }
   const firstBrace = s.indexOf("{");
