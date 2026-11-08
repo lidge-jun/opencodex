@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -237,8 +238,9 @@ describe("release pipeline contract", () => {
       expect(Object.keys(receipt.assets).sort()).toEqual(["a.zip", "a.zip.sha256"]);
       expect(receipt.assets["a.zip"]).toBe(createHash("sha256").update("archive").digest("hex"));
       expect(execute(verify!).exitCode).toBe(0);
+      expect(execute(verify!, { GITHUB_RUN_ATTEMPT: "2" }).exitCode).toBe(0);
       for (const extra of [{ SOURCE_SHA: "c".repeat(40) }, { WORKFLOW_SHA: "c".repeat(40) },
-        { RELEASE_VERSION: "2.1.1" }, { GITHUB_RUN_ATTEMPT: "2" }]) {
+        { RELEASE_VERSION: "2.1.1" }, { GITHUB_RUN_ATTEMPT: "0" }]) {
         expect(execute(verify!, extra).exitCode, JSON.stringify(extra)).not.toBe(0);
       }
       writeFileSync(join(root, "dist/release/a.zip"), "modified");
@@ -259,6 +261,136 @@ describe("release pipeline contract", () => {
     expect(verify?.permissions).toEqual({ contents: "read", actions: "read" });
     expect(verify?.steps?.find(step => step.name === "Create verified npm receipt")?.run).toContain("sha256");
     expect(verify?.if).toBeUndefined();
+  });
+
+  test.skipIf(process.platform === "win32")("trusted npm receipt creation rejects missing or wrong package gitHead", () => {
+    const create = release.jobs?.["verify-npm"]?.steps?.find(step => step.name === "Create verified npm receipt")?.run;
+    expect(create).toBeDefined();
+    const root = mkdtempSync(join(tmpdir(), "ocx-githead-receipt-"));
+    try {
+      mkdirSync(join(root, "npm-artifact")); mkdirSync(join(root, "package"));
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@fixture/pkg" }));
+      const archive = join(root, "npm-artifact/package.tgz"), output = join(root, "output");
+      writeFileSync(output, "");
+      const source = "a".repeat(40);
+      const run = (gitHead?: string) => {
+        writeFileSync(join(root, "package/package.json"), JSON.stringify({ name: "@fixture/pkg", version: "9.8.7", ...(gitHead ? { gitHead } : {}) }));
+        const packed = Bun.spawnSync(["tar", "-czf", archive, "package"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+        expect(packed.exitCode, packed.stderr.toString()).toBe(0);
+        return Bun.spawnSync(["bash", "-e", "-c", create!], { cwd: root, env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source, WORKFLOW_SHA: "b".repeat(40),
+          RELEASE_VERSION: "9.8.7", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1", GITHUB_OUTPUT: output,
+        }, stdout: "pipe", stderr: "pipe" });
+      };
+      expect(run().exitCode).not.toBe(0);
+      expect(existsSync(join(root, "npm-artifact/receipt.json"))).toBe(false);
+      expect(run("c".repeat(40)).exitCode).not.toBe(0);
+      expect(existsSync(join(root, "npm-artifact/receipt.json"))).toBe(false);
+      const valid = run(source); expect(valid.exitCode, valid.stderr.toString()).toBe(0);
+      expect(JSON.parse(readFileSync(join(root, "npm-artifact/receipt.json"), "utf8")).gitHead).toBe(source);
+    } finally { removeTreeWithRetry(root); }
+  });
+
+  test.skipIf(process.platform === "win32")("real npm publish of the packed tarball sends the selected gitHead to a loopback registry", async () => {
+    const build = release.jobs?.["package-npm"]?.steps?.find(step => step.name === "Build npm package")?.run;
+    const publish = release.jobs?.publish?.steps?.find(step => step.id === "publication")?.run;
+    expect(build).toBeDefined(); expect(publish).toBeDefined();
+    const root = mkdtempSync(join(tmpdir(), "ocx-npm-local-registry-"));
+    let document: Record<string, any> | undefined;
+    let requestPath = "";
+    let publishRequests = 0;
+    const server = createServer((request, response) => {
+      if (request.method !== "PUT") { response.writeHead(404); response.end(); return; }
+      publishRequests += 1;
+      requestPath = request.url ?? "";
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        try { document = JSON.parse(Buffer.concat(chunks).toString("utf8")); response.writeHead(201, { "content-type": "application/json" }); response.end('{"ok":true}'); }
+        catch { response.writeHead(400); response.end(); }
+      });
+    });
+    try {
+      await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+      const address = server.address();
+      if (!address || typeof address === "string") throw Error("loopback registry unavailable");
+      const registry = `http://127.0.0.1:${address.port}/`;
+      const candidate = join(root, "candidate"), publisher = join(root, "publisher"), scratch = join(root, "runner-temp");
+      mkdirSync(candidate); mkdirSync(publisher); mkdirSync(scratch);
+      writeFileSync(join(root, "npmrc"), `//127.0.0.1:${address.port}/:_authToken=local-fixture-token\n`);
+      writeFileSync(join(root, "global-npmrc"), "");
+      writeFileSync(join(candidate, "package.json"), JSON.stringify({
+        name: "@fixture/ocx-githead", version: "9.8.7", files: ["index.js"],
+        scripts: { prepublishOnly: "node -e \"\"", prepack: "node -e \"\"", publish: "node -e \"require('fs').writeFileSync(process.env.FIXTURE_MARKER,'bad')\"" },
+      }));
+      writeFileSync(join(candidate, "index.js"), "export default 1;\n");
+      writeFileSync(join(publisher, "workflow.txt"), "different workflow revision\n");
+      const baseEnv = { PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", FIXTURE_MARKER: join(root, "lifecycle-ran"),
+        GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.test",
+        NPM_CONFIG_USERCONFIG: join(root, "npmrc"), NPM_CONFIG_GLOBALCONFIG: join(root, "global-npmrc"), NPM_CONFIG_CACHE: join(root, "npm-cache"),
+        NPM_CONFIG_REGISTRY: registry, NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false" };
+      const git = (cwd: string, ...args: string[]) => {
+        const result = Bun.spawnSync(["git", ...args], { cwd, env: baseEnv, stdout: "pipe", stderr: "pipe" });
+        expect(result.exitCode, result.stderr.toString()).toBe(0); return result.stdout.toString().trim();
+      };
+      git(candidate, "init", "-q"); git(candidate, "add", "package.json", "index.js"); git(candidate, "commit", "-q", "-m", "source");
+      const source = git(candidate, "rev-parse", "HEAD");
+      git(publisher, "init", "-q"); git(publisher, "add", "workflow.txt"); git(publisher, "commit", "-q", "-m", "workflow");
+      expect(git(publisher, "rev-parse", "HEAD")).not.toBe(source);
+      const wrongProc = Bun.spawn(["bash", "-e", "-c", build!], { cwd: candidate,
+        env: { ...baseEnv, SOURCE_SHA: "0".repeat(40), RELEASE_VERSION: "9.8.7", RUNNER_TEMP: scratch }, stdout: "pipe", stderr: "pipe" });
+      const [wrongExit] = await Promise.all([wrongProc.exited, new Response(wrongProc.stdout).text(), new Response(wrongProc.stderr).text()]);
+      expect(wrongExit).not.toBe(0);
+      expect(JSON.parse(readFileSync(join(candidate, "package.json"), "utf8")).gitHead).toBeUndefined();
+      expect(existsSync(join(candidate, "dist/npm/package.tgz"))).toBe(false);
+      const buildProc = Bun.spawn(["bash", "-e", "-c", build!], { cwd: candidate, env: { ...baseEnv, SOURCE_SHA: source, RELEASE_VERSION: "9.8.7", RUNNER_TEMP: scratch }, stdout: "pipe", stderr: "pipe" });
+      const [buildExit, buildOut, buildErr] = await Promise.all([buildProc.exited, new Response(buildProc.stdout).text(), new Response(buildProc.stderr).text()]);
+      expect(buildExit, buildOut + buildErr).toBe(0);
+      const tarball = join(candidate, "dist/npm/package.tgz");
+      const manifest = Bun.spawnSync(["tar", "-xOzf", tarball, "package/package.json"], { stdout: "pipe", stderr: "pipe" });
+      expect(manifest.exitCode, manifest.stderr.toString()).toBe(0);
+      expect(JSON.parse(manifest.stdout.toString()).gitHead).toBe(source);
+      const output = join(root, "output"), summary = join(root, "summary"); writeFileSync(output, ""); writeFileSync(summary, "");
+      const proc = Bun.spawn(["bash", "-e", "-c", publish!], { cwd: publisher, env: { ...baseEnv, NPM_TARBALL: tarball,
+        NPM_DIST_TAG: "latest", RESUME: "false", SOURCE_SHA: source, RELEASE_VERSION: "9.8.7", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary }, stdout: "pipe", stderr: "pipe" });
+      const [exit, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+      expect(exit, stdout + stderr).toBe(0);
+      expect(publishRequests).toBe(1);
+      expect(requestPath.toLowerCase()).toBe("/@fixture%2focx-githead");
+      expect(document?.versions?.["9.8.7"]?.gitHead).toBe(source);
+      expect(readFileSync(output, "utf8")).toContain("published=true");
+      expect(existsSync(join(root, "lifecycle-ran"))).toBe(false);
+      const attachments = Object.values(document?._attachments ?? {}) as Array<{ data?: string }>;
+      expect(attachments).toHaveLength(1);
+      expect(createHash("sha256").update(Buffer.from(attachments[0]!.data!, "base64")).digest("hex"))
+        .toBe(createHash("sha256").update(readFileSync(tarball)).digest("hex"));
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      removeTreeWithRetry(root);
+    }
+  }, 30000);
+
+  test.skipIf(process.platform === "win32")("published npm source must match the selected SHA before GitHub release creation", () => {
+    const steps = release.jobs?.publish?.steps ?? [];
+    const gate = steps.find(step => step.name === "Verify published npm source");
+    const create = steps.find(step => step.name === "Create GitHub release");
+    expect(gate?.run).toBeDefined();
+    expect(steps.indexOf(gate!)).toBeGreaterThan(steps.findIndex(step => step.id === "publication"));
+    expect(steps.indexOf(gate!)).toBeLessThan(steps.indexOf(create!));
+    const source = "a".repeat(40);
+    const mock = String.raw`
+      npm() { printf '%s\n' "$REGISTRY_HEAD"; }
+      timeout() { shift 2; "$@"; }
+      sleep() { :; }
+    `;
+    const run = (head: string) => Bun.spawnSync(["bash", "-e", "-c", mock + gate!.run!], {
+      cwd: repoPath(), env: { PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source,
+        RELEASE_VERSION: "9.8.7", REGISTRY_HEAD: head }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(run(JSON.stringify(source)).exitCode).toBe(0);
+    expect(run(JSON.stringify("b".repeat(40))).exitCode).not.toBe(0);
+    expect(run("null").exitCode).not.toBe(0);
+    expect(run("").exitCode).not.toBe(0);
   });
 
   test("OIDC publication uses only trusted workflow code and the verified tarball", () => {
@@ -282,7 +414,7 @@ describe("release pipeline contract", () => {
     try {
       mkdirSync(join(root, "npm-artifact")); mkdirSync(join(root, "package"));
       writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@fixture/pkg" }));
-      writeFileSync(join(root, "package/package.json"), JSON.stringify({ name: "@fixture/pkg", version: "9.8.7" }));
+      writeFileSync(join(root, "package/package.json"), JSON.stringify({ name: "@fixture/pkg", version: "9.8.7", gitHead: "a".repeat(40) }));
       const archive = join(root, "npm-artifact/package.tgz");
       const packed = Bun.spawnSync(["tar", "-czf", archive, "package"], { cwd: root, stdout: "pipe", stderr: "pipe" });
       expect(packed.exitCode, packed.stderr.toString()).toBe(0);
@@ -300,7 +432,7 @@ describe("release pipeline contract", () => {
       const created = createReceipt("9.8.7");
       expect(created.exitCode, created.stderr.toString()).toBe(0);
       expect(JSON.parse(readFileSync(join(root, "npm-artifact/receipt.json"), "utf8"))).toEqual({
-        sourceSha: source, workflowSha: workflow, version: "9.8.7", runId: "123", attempt: "1", packageName: "@fixture/pkg", sha256: digest,
+        sourceSha: source, workflowSha: workflow, version: "9.8.7", runId: "123", attempt: "1", packageName: "@fixture/pkg", gitHead: source, sha256: digest,
       });
       expect(readFileSync(output, "utf8")).toBe(`sha256=${digest}\n`);
       const execute = (extra: Record<string, string> = {}) => Bun.spawnSync(["bash", "-e", "-c", verify!], { cwd: root,
@@ -309,10 +441,22 @@ describe("release pipeline contract", () => {
         stdout: "pipe", stderr: "pipe" });
       const valid = execute();
       expect(valid.exitCode, valid.stderr.toString()).toBe(0);
+      expect(execute({ GITHUB_RUN_ATTEMPT: "2" }).exitCode).toBe(0);
       for (const mismatch of [{ SOURCE_SHA: "c".repeat(40) }, { WORKFLOW_SHA: "c".repeat(40) },
-        { RELEASE_VERSION: "9.8.8" }, { GITHUB_RUN_ATTEMPT: "2" }, { EXPECTED_DIGEST: "0".repeat(64) }]) {
+        { RELEASE_VERSION: "9.8.8" }, { GITHUB_RUN_ATTEMPT: "0" }, { GITHUB_RUN_ATTEMPT: "bad" },
+        { GITHUB_RUN_ID: "124" }, { EXPECTED_DIGEST: "0".repeat(64) }]) {
         expect(execute(mismatch).exitCode, JSON.stringify(mismatch)).not.toBe(0);
       }
+      const receiptPath = join(root, "npm-artifact/receipt.json");
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+      writeFileSync(receiptPath, JSON.stringify({ ...receipt, gitHead: "c".repeat(40) }));
+      expect(execute().exitCode).not.toBe(0);
+      writeFileSync(join(root, "package/package.json"), JSON.stringify({ name: "@fixture/pkg", version: "9.8.7", gitHead: "c".repeat(40) }));
+      const forged = Bun.spawnSync(["tar", "-czf", archive, "package"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(forged.exitCode, forged.stderr.toString()).toBe(0);
+      const forgedDigest = createHash("sha256").update(readFileSync(archive)).digest("hex");
+      writeFileSync(receiptPath, JSON.stringify({ ...receipt, sha256: forgedDigest }));
+      expect(execute({ EXPECTED_DIGEST: forgedDigest }).exitCode).not.toBe(0);
       writeFileSync(archive, "changed payload");
       expect(execute().exitCode).not.toBe(0);
     } finally { removeTreeWithRetry(root); }
@@ -386,8 +530,11 @@ describe("release pipeline contract", () => {
       expect(execute("unknown").exitCode).not.toBe(0);
       expect(execute("latest", "0", "short").exitCode).not.toBe(0);
       const steps = release.jobs?.publish?.steps ?? [];
-      expect(steps.indexOf(steps.find(step => step.name === "Require reconciled publication history")!))
-        .toBe(steps.indexOf(steps.find(step => step.name === "Publish verified npm tarball")!) - 1);
+      const history = steps.findIndex(step => step.name === "Require reconciled publication history");
+      const publish = steps.findIndex(step => step.name === "Publish verified npm tarball");
+      expect(history).toBeGreaterThanOrEqual(0);
+      expect(history).toBeLessThan(publish);
+      expect(steps.slice(history + 1, publish).every(step => step.if?.includes("inputs.resume-after-npm-publish == true"))).toBe(true);
     } finally { removeTreeWithRetry(root); }
   });
 
@@ -601,12 +748,13 @@ describe("release pipeline contract", () => {
 
   test("unverified resume is refused and acknowledged publications are never retried", () => {
     const dispatch = release.jobs?.["validate-dispatch"]?.steps?.find(step => step.name === "Resolve eligible source");
-    expect(dispatch?.run).toContain("Resume requires a durable verified receipt");
+    expect(dispatch?.run).toContain("Resume requires the original source SHA and version");
     const steps = release.jobs?.publish?.steps ?? [];
     const publication = steps.find(step => step.id === "publication");
     expect(publication?.run).toContain('npm publish "$NPM_TARBALL" --ignore-scripts');
     expect(publication?.run).toContain('echo "published=true" >> "$GITHUB_OUTPUT"');
     expect(publication?.run).toContain("do not republish this version");
+    expect(publication?.run).toContain("VERIFIED_RESUME_DECISION");
     expect(steps.find(step => step.name === "Require reconciled publication history")?.run).toContain("release-history.cjs check");
   });
 

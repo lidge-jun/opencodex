@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /** Dispatch the trusted dev release workflow for a CI-verified source commit.
  * Usage: bun scripts/release.ts latest|preview [full-source-sha] [--publish]
+ *   bun scripts/release.ts watch
  * The workflow derives and stamps the version. Publication defaults to dry-run.
  */
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import { commandInvocation } from "../src/lib/win-exec";
 
 export { compareVersions as compareReleaseVersions } from "./version-line";
 
-const usage = "Usage: bun scripts/release.ts latest|preview [full-source-sha] [--publish]";
+const usage = "Usage: bun scripts/release.ts latest|preview [full-source-sha] [--publish] | watch";
 const fullSha = /^[0-9a-f]{40}$/;
 const releaseRepository = "lidge-jun/opencodex";
 
@@ -28,8 +29,81 @@ async function command(args: string[], label: string, env?: Record<string, strin
   return stdout.trim();
 }
 
+interface ReleaseRun {
+  createdAt: string;
+  databaseId: number;
+  headSha: string;
+  headBranch: string;
+  event: string;
+  workflowDatabaseId: number;
+  status: string;
+  url: string;
+}
+
+const githubRepo = `github.com/${releaseRepository}`;
+const runUrlPrefix = `https://github.com/${releaseRepository}/actions/runs/`;
+
+function runIdFromDispatch(output: string): number {
+  const urls = output.split(/\s+/).filter(part => part.startsWith("https://"));
+  if (urls.length !== 1 || !urls[0]!.startsWith(runUrlPrefix)) {
+    throw new Error("Dispatch did not return one identifiable release run URL; inspect Actions manually before retrying");
+  }
+  const idText = urls[0]!.slice(runUrlPrefix.length);
+  const id = Number(idText);
+  if (!/^[1-9][0-9]*$/.test(idText) || !Number.isSafeInteger(id)) {
+    throw new Error("Dispatch returned an invalid release run ID; inspect Actions manually before retrying");
+  }
+  return id;
+}
+
+function parseRuns(raw: string): ReleaseRun[] {
+  let result: unknown;
+  try { result = JSON.parse(raw); } catch { throw new Error("Invalid release run listing"); }
+  if (!Array.isArray(result)) throw new Error("Invalid release run listing");
+  return result as ReleaseRun[];
+}
+
+async function watchRun(id: number): Promise<void> {
+  console.log(`Watching release run ${id}.`);
+  await command(["gh", "run", "watch", String(id), "--repo", githubRepo, "--exit-status", "--interval", "10"], "Release run watch");
+}
+
+async function waitForReleaseWorkflowRun(workflowId: number, id: number, startedAt: number): Promise<ReleaseRun> {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const raw = await command(["gh", "run", "list", "--workflow", "release.yml", "--branch", "dev",
+      "--repo", githubRepo, "--event", "workflow_dispatch", "--limit", "100", "--json", "createdAt,databaseId,headSha,status,url,headBranch,event,workflowDatabaseId"], "Release run lookup");
+    const matching = parseRuns(raw).filter(run => run?.databaseId === id);
+    if (matching.length > 1) throw new Error("Release run lookup returned duplicate run IDs");
+    const run = matching[0];
+    if (run) {
+      if (typeof run.headSha !== "string" || !fullSha.test(run.headSha)
+        || run.headBranch !== "dev" || run.event !== "workflow_dispatch" || run.workflowDatabaseId !== workflowId
+        || run.url !== `${runUrlPrefix}${id}` || typeof run.createdAt !== "string"
+        || !Number.isFinite(Date.parse(run.createdAt)) || Date.parse(run.createdAt) < startedAt
+        || typeof run.status !== "string" || !run.status) {
+        throw new Error(`Release run ${id} does not match the dispatched workflow; inspect Actions manually`);
+      }
+      return run;
+    }
+    await Bun.sleep(2_000);
+  }
+  throw new Error(`Timed out locating release run ${id}; inspect Actions manually before retrying`);
+}
+
+async function watchLatest(): Promise<void> {
+  const raw = await command(["gh", "run", "list", "--workflow", "release.yml", "--branch", "dev", "--event", "workflow_dispatch",
+    "--repo", githubRepo, "--limit", "1", "--json", "createdAt,databaseId,headSha,status,url"], "Release run lookup");
+  const runs = parseRuns(raw);
+  const run = runs[0];
+  if (runs.length !== 1 || !run || !Number.isSafeInteger(run.databaseId) || run.databaseId <= 0
+    || run.url !== `${runUrlPrefix}${run.databaseId}`) throw new Error("No identifiable dev release run found");
+  await watchRun(run.databaseId);
+}
+
 async function main(args: string[]): Promise<void> {
   const [channel, ...options] = args;
+  if (channel === "watch" && options.length === 0) { await watchLatest(); return; }
   if (channel !== "latest" && channel !== "preview") throw new Error(usage);
   let requestedSha: string | undefined;
   let publish = false;
@@ -57,9 +131,15 @@ async function main(args: string[]): Promise<void> {
     throw new Error("Evidence resolver returned an invalid source or CI run identity");
   }
   console.log(`Selected source ${evidence.sourceSha} from CI run ${evidence.ciRunId}; ${publish ? "publication requested" : "dry run"}.`);
-  await command(["gh", "workflow", "run", "release.yml", "--repo", `github.com/${releaseRepository}`, "--ref", "dev", "-f", `tag=${channel}`,
+  const workflowIdText = await command(["gh", "api", `repos/${releaseRepository}/actions/workflows/release.yml`, "--hostname", "github.com", "--jq", ".id"], "Release workflow identity lookup");
+  const workflowId = Number(workflowIdText);
+  if (!/^[1-9][0-9]*$/.test(workflowIdText) || !Number.isSafeInteger(workflowId)) throw new Error("Invalid release workflow identity");
+  const startedAt = Math.floor(Date.now() / 1000) * 1000;
+  const dispatched = await command(["gh", "workflow", "run", "release.yml", "--repo", githubRepo, "--ref", "dev", "-f", `tag=${channel}`,
     "-f", `expected-sha=${evidence.sourceSha}`, "-f", `dry-run=${!publish}`], "Release workflow dispatch");
-  console.log("Release workflow dispatched on dev.");
+  const id = runIdFromDispatch(dispatched);
+  const releaseRun = await waitForReleaseWorkflowRun(workflowId, id, startedAt);
+  await watchRun(releaseRun.databaseId);
 }
 
 if (import.meta.main) {

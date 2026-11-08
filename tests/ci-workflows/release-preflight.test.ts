@@ -126,7 +126,7 @@ test.skipIf(process.platform === "win32")("source resolution refuses invalid dis
       const result = Bun.spawnSync(["bash", "-e", "-c", script!], { cwd: root, env: {
         PATH: `${bin}${delimiter}${process.env.PATH ?? "/usr/bin:/bin"}`, REAL_NODE: Bun.which("node")!,
         GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/dev", GITHUB_SHA: workflow,
-        GITHUB_OUTPUT: output, REQUESTED_SHA: "", RESUME: "false", EVIDENCE_STATUS: "0",
+        GITHUB_OUTPUT: output, REQUESTED_SHA: "", REQUESTED_VERSION: "", DRY_RUN: "false", RESUME: "false", EVIDENCE_STATUS: "0",
         EVIDENCE: JSON.stringify({ sourceSha: source, ciRunId: 123 }), ...extra,
       }, stdout: "pipe", stderr: "pipe" });
       return { code: result.exitCode, output: readFileSync(output, "utf8"), stderr: result.stderr.toString() };
@@ -134,7 +134,10 @@ test.skipIf(process.platform === "win32")("source resolution refuses invalid dis
     for (const bad of [
       { GITHUB_REF: "refs/heads/feature" }, { GITHUB_EVENT_NAME: "push" }, { GITHUB_SHA: "short" },
       { REQUESTED_SHA: "short" }, { REQUESTED_SHA: "c".repeat(40) }, { EVIDENCE_STATUS: "1" },
-      { EVIDENCE: JSON.stringify({ sourceSha: source, ciRunId: 0 }) }, { EVIDENCE: "{}" }, { RESUME: "true" },
+      { EVIDENCE: JSON.stringify({ sourceSha: source, ciRunId: 0 }) }, { EVIDENCE: "{}" },
+      { RESUME: "true", REQUESTED_VERSION: "2.1.0" },
+      { RESUME: "true", REQUESTED_SHA: source },
+      { RESUME: "true", REQUESTED_SHA: source, REQUESTED_VERSION: "2.1.0", DRY_RUN: "true" },
     ]) {
       const result = execute(bad);
       expect(result.code, JSON.stringify(bad)).not.toBe(0);
@@ -152,6 +155,9 @@ test.skipIf(process.platform === "win32")("source resolution refuses invalid dis
     const valid = execute({ REQUESTED_SHA: source });
     expect(valid.code, valid.stderr).toBe(0);
     expect(valid.output).toBe(`source_sha=${source}\nworkflow_sha=${workflow}\n`);
+    const resume = execute({ RESUME: "true", REQUESTED_SHA: source, REQUESTED_VERSION: "2.1.0" });
+    expect(resume.code, resume.stderr).toBe(0);
+    expect(resume.output).toBe(`source_sha=${source}\nworkflow_sha=${workflow}\n`);
   } finally { removeTreeWithRetry(root); }
 });
 
@@ -183,13 +189,17 @@ test.skipIf(process.platform === "win32")("the actual version step derives the v
     const execute = (extra: Record<string, string> = {}) => {
       writeFileSync(output, "");
       const result = Bun.spawnSync(["bash", "-e", "-c", script!], { cwd: root, env: { ...env,
-        RUNNER_TEMP: temp, GITHUB_OUTPUT: output, CHANNEL: "latest", EXPECTED_VERSION: "", MOCK_NPM_VERSIONS: '["2.2.0"]', ...extra,
+        RUNNER_TEMP: temp, GITHUB_OUTPUT: output, CHANNEL: "latest", EXPECTED_VERSION: "", RESUME: "false", MOCK_NPM_VERSIONS: '["2.2.0"]', ...extra,
       }, stdout: "pipe", stderr: "pipe" });
       return { code: result.exitCode, output: readFileSync(output, "utf8"), stderr: result.stderr.toString() };
     };
     const stable = execute();
     expect(stable.code, stable.stderr).toBe(0);
     expect(stable.output).toBe("version=2.2.1\n");
+    const resume = execute({ RESUME: "true", EXPECTED_VERSION: "2.2.0", MOCK_NPM_VERSIONS: "not-json" });
+    expect(resume.code, resume.stderr).toBe(0);
+    expect(resume.output).toBe("version=2.2.0\n");
+    expect(execute({ RESUME: "true", EXPECTED_VERSION: "" }).code).not.toBe(0);
     const preview = execute({ CHANNEL: "preview" });
     expect(preview.code, preview.stderr).toBe(0);
     expect(preview.output).toMatch(/^version=2\.2\.1-preview\.\d{8}\.1\n$/);

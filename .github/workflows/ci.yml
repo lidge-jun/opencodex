@@ -805,8 +805,8 @@ jobs:
       - name: Check the generated ocx skill surface is current
         run: bun run skill:surface:check
 
-      - name: Test release evidence and docs deployment
-        run: node --test .github/scripts/release-evidence.test.cjs .github/workflows/deploy-docs.test.cjs
+      - name: Test release evidence, history and docs deployment
+        run: node --test .github/scripts/release-dispatch-guard.test.cjs .github/scripts/release-evidence.test.cjs .github/scripts/release-history.test.cjs .github/scripts/release-resume.test.cjs .github/workflows/deploy-docs.test.cjs
 
       - name: Check release helper syntax
         run: bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check

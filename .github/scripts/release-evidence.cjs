@@ -63,7 +63,7 @@ function apiClient(repository, token) {
     return response.json();
   };
 }
-async function pages(api, path, key) {
+async function pages(api, path, key, maxTotal = 1000) {
   const collected = [];
   let total;
   for (let page = 1; ; page++) {
@@ -71,6 +71,8 @@ async function pages(api, path, key) {
     if (!data || !Number.isSafeInteger(data.total_count) || data.total_count < 0 || !Array.isArray(data[key]) || data[key].length > 100) throw new Error('invalid paginated response');
     if (total === undefined) total = data.total_count;
     if (total !== data.total_count) throw new Error('pagination changed during lookup');
+    if (total > maxTotal) throw new Error('pagination coverage exceeds the safe limit');
+    if (data[key].length !== Math.min(100, total - collected.length)) throw new Error('incomplete pagination');
     collected.push(...data[key]);
     if (collected.length === total) return collected;
     if (!data[key].length || collected.length > total) throw new Error('incomplete pagination');
@@ -168,14 +170,31 @@ async function ancestor(api, base, head) {
   if (!['ahead', 'behind', 'identical', 'diverged'].includes(data?.status)) throw new Error('invalid comparison');
   return data.status === 'ahead' || data.status === 'identical';
 }
-function createEvidence(api, policies = APPROVED_POLICIES) {
-  // Git objects are immutable. Reuse them across files and candidate runs so
-  // checking a long dev history does not repeatedly fetch the same subtrees.
+// GitHub limits filtered workflow searches to 1,000 results. Discovery may
+// inspect at most those 1,000; exact-SHA lists must fit completely in that cap.
+// The compare bound and global request budget make failure explicit when a
+// candidate is too old to prove newest within the available API budget.
+const MAX_COMPARE_COMMITS = 200;
+const MAX_API_REQUESTS = 800;
+function createEvidence(rawApi, policies = APPROVED_POLICIES) {
+  let requestCount = 0;
+  const api = async path => {
+    if (++requestCount > MAX_API_REQUESTS) throw new Error('GitHub API request budget exceeded');
+    return rawApi(path);
+  };
   const objects = new Map();
+  const comparisons = new Map();
   async function policyApi(path) {
     if (!/^\/git\/(?:commits|trees)\/[0-9a-f]{40}$/.test(path)) return api(path);
     if (!objects.has(path)) objects.set(path, api(path).catch(error => { objects.delete(path); throw error; }));
     return objects.get(path);
+  }
+  async function isAncestor(base, head) {
+    sha(base); sha(head);
+    if (base === head) return true;
+    const key = `${base}...${head}`;
+    if (!comparisons.has(key)) comparisons.set(key, ancestor(api, base, head));
+    return comparisons.get(key);
   }
   async function workflow(kind) {
     const filename = kind === 'ci' ? 'ci.yml' : 'service-lifecycle.yml';
@@ -189,43 +208,139 @@ function createEvidence(api, policies = APPROVED_POLICIES) {
     const jobs = await pages(api, `/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
     validateJobs(jobs, kind === 'ci' ? CI_JOBS : serviceJobs(sourceSha));
   }
+  async function qualifies(run, wf, kind, candidate, dev) {
+    try {
+      await eligible(run, wf, kind, candidate);
+    } catch (error) {
+      // API, pagination, resource limits and unknown errors are never evidence
+      // that a run is ineligible; stop instead of skipping them.
+      if (/^(unqualified run metadata|CI lane or source mismatch|unapproved .* workflow or helper policy|missing or unsuccessful job:|duplicate or malformed job|expected full lowercase commit SHA)/.test(error.message)) return false;
+      throw error;
+    }
+    return isAncestor(run.head_sha, dev);
+  }
+  function listPath(wf, head) {
+    const query = new URLSearchParams({event:'workflow_dispatch', branch:'dev', status:'success'});
+    if (head) query.set('head_sha', sha(head));
+    return `/actions/workflows/${wf.id}/runs?${query}`;
+  }
+  function signature(runs) {
+    const ids = new Set();
+    return JSON.stringify(runs.map(run => {
+      if (!run || !Number.isSafeInteger(run.id) || run.id <= 0 || ids.has(run.id)) throw new Error('duplicate or malformed run');
+      ids.add(run.id);
+      return [run.id,run.run_attempt,run.status,run.conclusion,run.head_sha,run.head_branch,run.event,run.workflow_id,run.repository?.id,run.head_repository?.id,run.display_title];
+    }));
+  }
+  const snapshots = [];
+  async function exactRuns(wf, head) {
+    const path = listPath(wf, head);
+    const runs = await pages(api, path, 'workflow_runs');
+    const stamp = signature(runs);
+    snapshots.push(async () => {
+      if (signature(await pages(api, path, 'workflow_runs')) !== stamp) throw new Error('run pagination changed during lookup');
+    });
+    return runs;
+  }
+  async function findEligible(runs, wf, kind, source, dev) {
+    for (const run of runs) {
+      const candidate = kind === 'ci' ? run.head_sha : source;
+      if (!FULL_SHA.test(candidate || '') || (kind === 'ci' && source && candidate !== source)) continue;
+      if (await qualifies(run, wf, kind, candidate, dev) && await isAncestor(candidate, dev)) return {sourceSha:candidate,ciRunId:run.id};
+    }
+    return undefined;
+  }
+  async function discover(wf, dev) {
+    const path = listPath(wf);
+    const observed = [];
+    let total;
+    for (let page = 1; page <= 10; page++) {
+      const data = await api(`${path}&per_page=100&page=${page}`);
+      if (!data || !Number.isSafeInteger(data.total_count) || data.total_count < 0 || !Array.isArray(data.workflow_runs)) throw new Error('invalid paginated response');
+      if (total === undefined) total = data.total_count;
+      if (total !== data.total_count) throw new Error('run pagination changed during lookup');
+      const expected = Math.min(100, Math.max(0, total - observed.length));
+      if (data.workflow_runs.length !== expected) throw new Error('incomplete run pagination');
+      observed.push(...data.workflow_runs);
+      signature(observed);
+      const found = await findEligible(data.workflow_runs, wf, 'ci', undefined, dev);
+      if (found) {
+        const count = page, stamp = signature(observed), initialTotal = total;
+        snapshots.push(async () => {
+          const again = [];
+          for (let n = 1; n <= count; n++) {
+            const result = await api(`${path}&per_page=100&page=${n}`);
+            if (result?.total_count !== initialTotal || !Array.isArray(result.workflow_runs)) throw new Error('run pagination changed during lookup');
+            again.push(...result.workflow_runs);
+          }
+          if (signature(again) !== stamp) throw new Error('run pagination changed during lookup');
+        });
+        return found;
+      }
+      if (observed.length === total) throw new Error('no qualifying ci evidence');
+    }
+    throw new Error('run pagination coverage exceeds the safe limit');
+  }
+  async function commitsSince(base, head) {
+    if (base === head) return [];
+    const collected = [], seen = new Set();
+    let total;
+    for (let page = 1; ; page++) {
+      const data = await api(`/compare/${base}...${head}?per_page=100&page=${page}`);
+      if (data?.status !== 'ahead' || !Number.isSafeInteger(data.total_commits) || data.total_commits < 1 || !Array.isArray(data.commits)) throw new Error('invalid commit comparison');
+      if (total === undefined) total = data.total_commits;
+      if (total !== data.total_commits) throw new Error('commit pagination changed during lookup');
+      if (total > MAX_COMPARE_COMMITS) throw new Error('commit comparison coverage exceeds the safe limit');
+      if (data.commits.length !== Math.min(100, total-collected.length)) throw new Error('incomplete commit pagination');
+      for (const commit of data.commits) {
+        const value = sha(commit?.sha);
+        if (value === base || seen.has(value)) throw new Error('duplicate or malformed comparison commit');
+        seen.add(value); collected.push(value);
+      }
+      if (collected.length === total) {
+        if (!seen.has(head)) throw new Error('incomplete commit comparison');
+        return collected;
+      }
+    }
+  }
   async function select(kind, sourceSha) {
+    if (!['ci','service'].includes(kind)) throw new Error('unknown evidence kind');
     if (sourceSha !== undefined) sha(sourceSha);
     if (kind === 'service' && !sourceSha) throw new Error('service requires source SHA');
     if (!policies.some(policy => policy.kind === kind && policy.version === 1)) throw new Error(`no approved ${kind} evidence policy`);
     const wf = await workflow(kind);
-    const dev = (await api('/commits/dev'))?.sha;
-    sha(dev);
-    if (sourceSha && !await ancestor(api, sourceSha, dev)) throw new Error('source is not a dev ancestor');
-    const runs = await pages(api, `/actions/workflows/${wf.id}/runs`, 'workflow_runs');
-    const ids = new Set();
-    const candidates = new Map();
-    for (const run of runs) {
-      if (!run || !Number.isSafeInteger(run.id) || ids.has(run.id)) throw new Error('duplicate or malformed run');
-      ids.add(run.id);
-      const candidate = kind === 'ci' ? run.head_sha : sourceSha;
-      if (!FULL_SHA.test(candidate || '') || (sourceSha && candidate !== sourceSha)) continue;
-      try {
-        await eligible(run, wf, kind, candidate);
-      } catch (error) {
-        if (/GitHub API request failed|pagination|invalid paginated|incomplete tree/.test(error.message)) throw error;
-        continue;
+    const dev = sha((await api('/commits/dev'))?.sha);
+    if (sourceSha && !await isAncestor(sourceSha, dev)) throw new Error('source is not a dev ancestor');
+    let found;
+    if (sourceSha) {
+      // A service dispatch runs the workflow from dev and may test an older
+      // source; its head_sha is the workflow revision, not the tested source.
+      const runs = await exactRuns(wf, kind === 'ci' ? sourceSha : undefined);
+      found = await findEligible(runs, wf, kind, sourceSha, dev);
+    } else {
+      found = await discover(wf, dev);
+      const candidates = [found];
+      for (const commit of await commitsSince(found.sourceSha, dev)) {
+        const runs = await exactRuns(wf, commit);
+        const candidate = await findEligible(runs, wf, 'ci', commit, dev);
+        if (candidate) candidates.push(candidate);
       }
-      if (!await ancestor(api, candidate, dev) || !await ancestor(api, run.head_sha, dev)) continue;
-      if (!candidates.has(candidate)) candidates.set(candidate, run.id);
-    }
-    if (!candidates.size) throw new Error(`no qualifying ${kind} evidence`);
-    let newest;
-    for (const candidate of candidates.keys()) {
-      let containsAll = true;
-      for (const other of candidates.keys()) if (!await ancestor(api, other, candidate)) { containsAll = false; break; }
-      if (containsAll) {
-        if (newest && newest !== candidate) throw new Error('ambiguous qualifying sources');
-        newest = candidate;
+      let newest;
+      for (const candidate of candidates) {
+        let includesAll = true;
+        for (const other of candidates) if (!await isAncestor(other.sourceSha, candidate.sourceSha)) { includesAll = false; break; }
+        if (includesAll) {
+          if (newest && newest.sourceSha !== candidate.sourceSha) throw new Error('ambiguous qualifying sources');
+          newest = candidate;
+        }
       }
+      if (!newest) throw new Error('ambiguous qualifying sources');
+      found = newest;
     }
-    if (!newest) throw new Error('ambiguous qualifying sources');
-    return { sourceSha: newest, ciRunId: candidates.get(newest) };
+    if (!found) throw new Error(`no qualifying ${kind} evidence`);
+    for (const confirm of snapshots) await confirm();
+    if (sha((await api('/commits/dev'))?.sha) !== dev) throw new Error('dev changed during evidence lookup');
+    return found;
   }
   return { select };
 }

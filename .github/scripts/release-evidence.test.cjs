@@ -14,6 +14,13 @@ test('full dispatch fixes path scopes and identifies its lane and SHA', () => {
   }
 });
 
+test('CI runs all release and Pages Node contract suites', () => {
+  const ci = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8');
+  const step = ci.split('\n').find(line => line.includes('node --test') && line.includes('release-evidence.test.cjs'));
+  assert.ok(step);
+  for (const suite of ['release-dispatch-guard.test.cjs','release-evidence.test.cjs','release-history.test.cjs','release-resume.test.cjs','deploy-docs.test.cjs']) assert.ok(step.includes(suite), suite);
+});
+
 test('service dispatch validates and binds the same full SHA in each job and checkout', () => {
   const service = fs.readFileSync(path.join(root, '.github/workflows/service-lifecycle.yml'), 'utf8');
   assert.match(service, /source_sha:/);
@@ -236,4 +243,130 @@ test('default production policy accepts its exact blobs and rejects a changed he
   const script = treeFor('scripts/ci').find(e => e.path === 'run-bun-test-batches.sh');
   script.sha = 'f'.repeat(40);
   await assert.rejects(createEvidence(api).select('ci', SHA), /no qualifying/);
+});
+
+function boundedFixture({ runs, order, race = false, raceState = false, devMoves = false, divergent = [], history = ['1','2','3'].map(x => x.repeat(40)) }) {
+  const { CI_JOBS } = require('./release-evidence.cjs');
+  const tree = 'd'.repeat(40), blob = 'e'.repeat(40), calls = [];
+  let exactReads = 0;
+  const readsByHead = new Map();
+  let devReads = 0;
+  const api = async url => {
+    calls.push(url);
+    if (url === '') return {id:1273824907,full_name:'lidge-jun/opencodex'};
+    if (url === '/actions/workflows/ci.yml') return {id:42,path:'.github/workflows/ci.yml'};
+    if (url === '/commits/dev') return {sha:devMoves && ++devReads > 1 ? 'f'.repeat(40) : history.at(-1)};
+    if (url.startsWith('/compare/')) {
+      const parsed = new URL(url, 'https://fixture.invalid');
+      const [base, head] = parsed.pathname.slice(9).split('...');
+      const a=history.indexOf(base), b=history.indexOf(head);
+      const status = a===b ? 'identical' : divergent.includes(base) && divergent.includes(head) ? 'diverged' : a<b ? 'ahead' : 'behind';
+      const commits = status === 'ahead' ? history.slice(a+1,b+1).map(sha => ({sha})) : [];
+      const page = Number(parsed.searchParams.get('page') || 1), size = Number(parsed.searchParams.get('per_page') || 100);
+      return {status,total_commits:commits.length,commits:commits.slice((page-1)*size,page*size)};
+    }
+    if (url.startsWith('/actions/workflows/42/runs?')) {
+      const query = new URL(url, 'https://fixture.invalid').searchParams;
+      if (query.get('event') !== 'workflow_dispatch' || query.get('branch') !== 'dev') throw new Error('unfiltered 25000-run history');
+      const head = query.get('head_sha');
+      if (head) { exactReads++; readsByHead.set(head, (readsByHead.get(head) || 0) + 1); }
+      let selected = runs.map(r => raceState && head && readsByHead.get(head) > 1 && r.status === 'in_progress' ? {...r,status:'completed',conclusion:'success'} : r)
+        .filter(r => (!head || r.head_sha === head) && (!query.has('status') || r.conclusion === query.get('status')));
+      if (order) selected = [...selected].sort((a,b) => order.indexOf(a.id)-order.indexOf(b.id));
+      const page=Number(query.get('page') || 1), size=Number(query.get('per_page') || 100);
+      const total_count = selected.length + (race && head && exactReads > 1 ? 1 : 0);
+      return {total_count,workflow_runs:selected.slice((page-1)*size,page*size)};
+    }
+    if (url.startsWith('/git/commits/')) return {tree:{sha:tree}};
+    if (url === `/git/trees/${tree}`) return {truncated:false,tree:[{path:'.github',type:'tree',sha:tree},{path:'workflows',type:'tree',sha:tree},{path:'ci.yml',type:'blob',mode:'100644',sha:blob}]};
+    if (/^\/actions\/runs\/\d+\/attempts\/1\/jobs\?/.test(url)) return {total_count:CI_JOBS.length,jobs:CI_JOBS.map(name => ({name,status:'completed',conclusion:'success'}))};
+    throw new Error(`unexpected API request ${url}`);
+  };
+  const makeRun = (id, source, conclusion='success') => ({id,workflow_id:42,repository:{id:1273824907},head_repository:{id:1273824907},event:'workflow_dispatch',head_branch:'dev',status:'completed',conclusion,run_attempt:1,head_sha:source,display_title:`ocx-ci-v1 lane=all sha=${source}`});
+  return {api,calls,history,makeRun,policies:[{kind:'ci',version:1,files:{'.github/workflows/ci.yml':blob}}]};
+}
+
+test('exact SHA filters 25000 unrelated runs on the server', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const data = boundedFixture({runs:[]});
+  const old = data.history[0];
+  const run = data.makeRun(7,old);
+  const fixture = boundedFixture({runs:[run]});
+  assert.deepEqual(await createEvidence(fixture.api,fixture.policies).select('ci',old), {sourceSha:old,ciRunId:7});
+  assert.ok(fixture.calls.filter(x=>x.startsWith('/actions/workflows/42/runs?')).every(x=>new URL(x,'https://fixture.invalid').searchParams.get('head_sha')===old));
+});
+
+test('newest selection proves ancestry independently of run completion ordering', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const seed = boundedFixture({runs:[]}), [older,,newer] = seed.history;
+  const fixture = boundedFixture({runs:[seed.makeRun(1,older),seed.makeRun(2,newer)],order:[1,2]});
+  assert.deepEqual(await createEvidence(fixture.api,fixture.policies).select('ci'), {sourceSha:newer,ciRunId:2});
+  assert.ok(fixture.calls.some(x=>x.startsWith('/compare/') && x.includes('per_page=')));
+});
+
+test('newer failed runs do not hide an older qualifying commit', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const seed = boundedFixture({runs:[]}), [older,,newer] = seed.history;
+  const fixture = boundedFixture({runs:[seed.makeRun(2,newer,'failure'),seed.makeRun(1,older)],order:[2,1]});
+  assert.deepEqual(await createEvidence(fixture.api,fixture.policies).select('ci'), {sourceSha:older,ciRunId:1});
+});
+
+test('more than 1000 failed newer runs do not exhaust the filtered search', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const seed=boundedFixture({runs:[]}), [older,,newer]=seed.history;
+  const failures=Array.from({length:1101},(_,i)=>seed.makeRun(i+2,newer,'failure'));
+  const fixture=boundedFixture({runs:[...failures,seed.makeRun(1,older)]});
+  assert.deepEqual(await createEvidence(fixture.api,fixture.policies).select('ci'), {sourceSha:older,ciRunId:1});
+});
+
+test('exact SHA pagination and concurrent list changes fail closed', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const seed = boundedFixture({runs:[]}), source=seed.history[0];
+  const runs=Array.from({length:101},(_,i)=>seed.makeRun(i+1,source));
+  const good=boundedFixture({runs});
+  assert.equal((await createEvidence(good.api,good.policies).select('ci',source)).sourceSha,source);
+  assert.ok(good.calls.some(x=>x.includes('page=2')));
+  const racing=boundedFixture({runs,race:true});
+  await assert.rejects(createEvidence(racing.api,racing.policies).select('ci',source), /pagination|changed|incomplete/i);
+});
+
+test('newest selection detects dev movement and a newer run completing during lookup', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const seed=boundedFixture({runs:[]}), [older,,newer]=seed.history;
+  const progress={...seed.makeRun(2,newer),status:'in_progress',conclusion:null};
+  const racing=boundedFixture({runs:[seed.makeRun(1,older),progress],raceState:true});
+  await assert.rejects(createEvidence(racing.api,racing.policies).select('ci'), /changed/i);
+  const moved=boundedFixture({runs:[seed.makeRun(1,older)],devMoves:true});
+  await assert.rejects(createEvidence(moved.api,moved.policies).select('ci'), /dev changed/i);
+});
+
+test('newest selection paginates the commit comparison and refuses excessive ancestry', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const history=Array.from({length:102},(_,i)=>(i+1).toString(16).padStart(40,'0'));
+  const seed=boundedFixture({runs:[],history});
+  const fixture=boundedFixture({runs:[seed.makeRun(1,history[0])],history});
+  assert.equal((await createEvidence(fixture.api,fixture.policies).select('ci')).sourceSha, history[0]);
+  assert.ok(fixture.calls.some(x=>x.startsWith('/compare/') && x.includes('page=2')));
+  const longHistory=Array.from({length:202},(_,i)=>(i+1).toString(16).padStart(40,'0'));
+  const long=boundedFixture({runs:[seed.makeRun(1,longHistory[0])],history:longHistory});
+  await assert.rejects(createEvidence(long.api,long.policies).select('ci'), /coverage exceeds/);
+});
+
+test('newest selection refuses incomparable green ancestors', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const history=['1','2','3','4'].map(x=>x.repeat(40));
+  const seed=boundedFixture({runs:[],history});
+  const fixture=boundedFixture({history,divergent:[history[1],history[2]],runs:[seed.makeRun(1,history[0]),seed.makeRun(2,history[1]),seed.makeRun(3,history[2])]});
+  await assert.rejects(createEvidence(fixture.api,fixture.policies).select('ci'), /ambiguous/);
+});
+
+test('filtered searches fail closed beyond GitHub’s 1000-result coverage', async () => {
+  const {createEvidence} = require('./release-evidence.cjs');
+  const seed=boundedFixture({runs:[]}), source=seed.history[0];
+  const runs=Array.from({length:1001},(_,i)=>({...seed.makeRun(i+1,source),display_title:'old policy'}));
+  const discovery=boundedFixture({runs});
+  await assert.rejects(createEvidence(discovery.api,discovery.policies).select('ci'), /coverage exceeds/);
+  assert.equal(discovery.calls.filter(x=>x.startsWith('/actions/workflows/42/runs?')).length,10);
+  const exact=boundedFixture({runs});
+  await assert.rejects(createEvidence(exact.api,exact.policies).select('ci',source), /coverage exceeds/);
 });

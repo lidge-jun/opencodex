@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Optional expected derived version; an exact match is required when supplied"
+        description: "Optional expected derived version; required original version when resuming"
         required: false
         type: string
       tag:
@@ -22,7 +22,7 @@ on:
         type: boolean
         default: true
       resume-after-npm-publish:
-        description: "Request exact recovery after npm publication; unavailable until prior receipt and provenance can be authenticated"
+        description: "Attest npm publication was acknowledged for the exact supplied source and version; skip npm publish"
         required: false
         type: boolean
         default: false
@@ -60,7 +60,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ inputs.expected-sha }}
+          REQUESTED_VERSION: ${{ inputs.version }}
           RESUME: ${{ inputs.resume-after-npm-publish }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch && test "$GITHUB_REF" = refs/heads/dev || {
@@ -73,9 +75,9 @@ jobs:
           if (failure) throw new Error(failure);
           NODE
           if [ "$RESUME" = true ]; then
-            echo '::error::Resume requires a durable verified receipt and is not yet supported: authenticate the original run/attempt and npm provenance before recovery.'
-            echo '::error::Release artifacts currently expire after seven days; if any original handoff is missing or expired, reconcile the publication manually.'
-            exit 1
+            if [ -z "$REQUESTED_SHA" ] || [ -z "$REQUESTED_VERSION" ] || [ "$DRY_RUN" != false ]; then
+              echo '::error::Resume requires the original source SHA and version and cannot be a dry run.'; exit 1
+            fi
           fi
           if [ -n "$REQUESTED_SHA" ]; then
             result="$(node .github/scripts/release-evidence.cjs resolve "$REQUESTED_SHA")"
@@ -107,9 +109,25 @@ jobs:
         env:
           CHANNEL: ${{ inputs.tag }}
           EXPECTED_VERSION: ${{ inputs.version }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
           bun scripts/release-version-sources.ts check --root candidate
+          if [ "$RESUME" = true ]; then
+            # JavaScript template literals are evaluated by Bun, not the shell.
+            # shellcheck disable=SC2016
+            bun -e '
+              import { parseVersion } from "./scripts/version-line.ts";
+              import { appendFileSync } from "node:fs";
+              const value = process.env.EXPECTED_VERSION ?? "", channel = process.env.CHANNEL;
+              const parsed = parseVersion(value);
+              if (!/^\d+\.\d+\.\d+(?:-preview\.\d{8}(?:\.\d+)?)?$/.test(value) || !parsed ||
+                  !((channel === "latest" && parsed.prerelease === null) ||
+                    (channel === "preview" && parsed.prerelease?.[0] === "preview"))) throw Error("invalid original release version or channel");
+              appendFileSync(process.env.GITHUB_OUTPUT, `version=${value}\n`);
+            '
+            exit 0
+          fi
           npm view "$(node -p "require('./package.json').name")" versions --json > "$RUNNER_TEMP/release-npm-versions.json"
           git tag --list 'v[0-9]*' > "$RUNNER_TEMP/release-tags.txt"
           # JavaScript template literals are evaluated by Bun, not the shell.
@@ -138,7 +156,7 @@ jobs:
 
   # Every publication precondition the dispatch can already decide, checked before any runner
   # starts packaging: channel and dist-tag, every version source, the tag, the GitHub release,
-  # npm, the global tag ordering and the dev pre-move (scripts/ci/release-preflight.sh).
+  # npm and the global tag ordering (scripts/ci/release-preflight.sh).
   #
   # Run 35783865160 packaged 2.62.0 for nineteen minutes and then failed the ordering gate in
   # `publish` on v2.63.0-preview.20260923. That tag already existed when the run's first job
@@ -954,6 +972,22 @@ jobs:
           set -euo pipefail
           npm run prepublishOnly
           npm run prepack
+          # All candidate lifecycle scripts have finished. Bind the packed manifest
+          # to the selected commit; npm pack below runs with scripts disabled.
+          node - <<'NODE'
+          const fs = require('node:fs'), { spawnSync } = require('node:child_process');
+          const source = process.env.SOURCE_SHA;
+          if (!/^[0-9a-f]{40}$/.test(source || '')) throw Error('invalid source SHA');
+          const git = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+          if (git.status !== 0 || git.stdout.trim() !== source) throw Error('npm checkout source mismatch');
+          const stat = fs.lstatSync('package.json');
+          if (!stat.isFile() || stat.isSymbolicLink()) throw Error('invalid npm manifest');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (pkg.version !== process.env.RELEASE_VERSION) throw Error('npm manifest version mismatch');
+          pkg.gitHead = source;
+          fs.writeFileSync('package.json.release-tmp', JSON.stringify(pkg, null, 2) + '\n', { flag: 'wx' });
+          fs.renameSync('package.json.release-tmp', 'package.json');
+          NODE
           mkdir -p "$RUNNER_TEMP/npm-pack" dist/npm
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-pack"
           shopt -s nullglob
@@ -1040,6 +1074,7 @@ jobs:
           fi
 
       - name: Require reconciled publication history
+        if: ${{ inputs.resume-after-npm-publish != true }}
         env:
           GH_TOKEN: ${{ github.token }}
           NPM_DIST_TAG: ${{ inputs.tag }}
@@ -1054,6 +1089,25 @@ jobs:
             *) echo '::error::Invalid release channel.'; exit 1 ;;
           esac
           node .github/scripts/release-history.cjs check "$SOURCE_SHA" "$RELEASE_VERSION" "$channel"
+
+      - name: Verify resume registry identity
+        id: resume-identity
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          registry_version="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read the exact npm version; resume refused.'; exit 1;
+          }
+          REGISTRY_VERSION="$registry_version" node - <<'NODE'
+          const value = JSON.parse(process.env.REGISTRY_VERSION);
+          if (typeof value !== 'string' || value !== process.env.RELEASE_VERSION) throw Error('npm version does not match original release');
+          NODE
+          registry_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read npm gitHead; resume refused.'; exit 1;
+          }
+          bun scripts/verify-release-resume.ts "$SOURCE_SHA" "$registry_head"
+          echo "resume_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create verified npm receipt
         id: receipt
@@ -1075,11 +1129,11 @@ jobs:
           const manifest = spawnSync('tar', ['-xOzf', archive, 'package/package.json'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
           if (manifest.status !== 0) throw new Error('cannot read npm manifest');
           const pkg = JSON.parse(manifest.stdout), trusted = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          if (pkg.name !== trusted.name || pkg.version !== process.env.RELEASE_VERSION) throw new Error('npm package identity mismatch');
+          if (pkg.name !== trusted.name || pkg.version !== process.env.RELEASE_VERSION || pkg.gitHead !== process.env.SOURCE_SHA) throw new Error('npm package identity or gitHead mismatch');
           const digest = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
           const receipt = { sourceSha: process.env.SOURCE_SHA, workflowSha: process.env.WORKFLOW_SHA,
             version: process.env.RELEASE_VERSION, runId: process.env.GITHUB_RUN_ID,
-            attempt: process.env.GITHUB_RUN_ATTEMPT, packageName: pkg.name, sha256: digest };
+            attempt: process.env.GITHUB_RUN_ATTEMPT, packageName: pkg.name, gitHead: pkg.gitHead, sha256: digest };
           fs.writeFileSync('npm-artifact/receipt.json', JSON.stringify(receipt) + '\n');
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${digest}\n`);
           NODE
@@ -1240,7 +1294,9 @@ jobs:
             const receipt = JSON.parse(fs.readFileSync('verification/receipt.json', 'utf8'));
             if (receipt.version !== process.env.RELEASE_VERSION || receipt.sha !== process.env.SOURCE_SHA ||
                 receipt.repo !== process.env.GITHUB_REPOSITORY || receipt.workflowSha !== process.env.WORKFLOW_SHA ||
-                receipt.runId !== process.env.GITHUB_RUN_ID || receipt.attempt !== process.env.GITHUB_RUN_ATTEMPT ||
+                receipt.runId !== process.env.GITHUB_RUN_ID || !/^[1-9]\d*$/.test(receipt.attempt || '') ||
+                !/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ATTEMPT || '') ||
+                BigInt(receipt.attempt) > BigInt(process.env.GITHUB_RUN_ATTEMPT) ||
                 !receipt.assets || typeof receipt.assets !== 'object' || Array.isArray(receipt.assets)) throw Error('release receipt identity mismatch');
             const names = fs.readdirSync('dist/release').sort(), recorded = Object.keys(receipt.assets).sort();
             if (!names.length || JSON.stringify(names) !== JSON.stringify(recorded)) throw Error('release asset set mismatch');
@@ -1253,6 +1309,22 @@ jobs:
               if (hash.digest('hex') !== receipt.assets[name]) throw Error(`asset sha256 mismatch: ${name}`);
             }
           })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
+
+      - name: Check resume assets
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$NPM_DIST_TAG" in latest) channel=stable ;; preview) channel=preview ;; *) exit 1 ;; esac
+          decision="$(node .github/scripts/release-resume.cjs check-assets "$RELEASE_VERSION" "$SOURCE_SHA" "$channel" verification/receipt.json)"
+          DECISION="$decision" CHANNEL="$channel" node - <<'NODE'
+          const result = JSON.parse(process.env.DECISION);
+          if (result.version !== process.env.RELEASE_VERSION || result.sourceSha !== process.env.SOURCE_SHA ||
+              result.channel !== process.env.CHANNEL || result.publishNpm !== false || result.assetsChecked !== true ||
+              !Array.isArray(result.reuseAssets) || !Array.isArray(result.missingAssets)) throw Error('invalid resume asset decision');
           NODE
 
       - name: Attach to the release
@@ -1426,17 +1498,20 @@ jobs:
           if (!/^[0-9a-f]{64}$/.test(process.env.EXPECTED_DIGEST) || sha256 !== process.env.EXPECTED_DIGEST ||
               receipt.sha256 !== sha256 || receipt.sourceSha !== process.env.SOURCE_SHA || receipt.workflowSha !== process.env.WORKFLOW_SHA ||
               receipt.version !== process.env.RELEASE_VERSION || receipt.runId !== process.env.GITHUB_RUN_ID ||
-              receipt.attempt !== process.env.GITHUB_RUN_ATTEMPT || receipt.packageName !== expectedName) throw new Error('npm receipt identity or digest mismatch');
+              !/^[1-9]\d*$/.test(receipt.attempt || '') || !/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ATTEMPT || '') ||
+              BigInt(receipt.attempt) > BigInt(process.env.GITHUB_RUN_ATTEMPT) || receipt.packageName !== expectedName ||
+              receipt.gitHead !== process.env.SOURCE_SHA) throw new Error('npm receipt identity or digest mismatch');
           const entries = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
           if (entries.status !== 0 || entries.stdout.split('\n').filter(p => p === 'package/package.json').length !== 1) throw new Error('invalid npm manifest entry');
           const manifest = spawnSync('tar', ['-xOzf', archive, 'package/package.json'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
           if (manifest.status !== 0) throw new Error('cannot read npm manifest');
           const pkg = JSON.parse(manifest.stdout);
-          if (pkg.name !== expectedName || pkg.version !== process.env.RELEASE_VERSION) throw new Error('npm package identity mismatch');
+          if (pkg.name !== expectedName || pkg.version !== process.env.RELEASE_VERSION || pkg.gitHead !== process.env.SOURCE_SHA || pkg.gitHead !== receipt.gitHead) throw new Error('npm package identity or gitHead mismatch');
           NODE
 
       # Prepare and validate the receipt before the irreversible npm publication.
       - name: Prepare publication receipt
+        if: ${{ inputs.resume-after-npm-publish != true }}
         env:
           NPM_DIST_TAG: ${{ inputs.tag }}
         run: |
@@ -1455,14 +1530,15 @@ jobs:
               !((tag === 'latest' && !version.includes('-')) || (tag === 'preview' && version.includes('-preview.')))) throw Error('invalid publication identity');
           if (receipt.sha !== process.env.SOURCE_SHA || receipt.workflowSha !== process.env.WORKFLOW_SHA ||
               receipt.version !== version || receipt.repo !== process.env.GITHUB_REPOSITORY ||
-              receipt.runId !== process.env.GITHUB_RUN_ID || receipt.attempt !== process.env.GITHUB_RUN_ATTEMPT ||
+              receipt.runId !== process.env.GITHUB_RUN_ID || !/^[1-9]\d*$/.test(receipt.attempt || '') ||
+              BigInt(receipt.attempt) > BigInt(process.env.GITHUB_RUN_ATTEMPT) ||
               !receipt.assets || typeof receipt.assets !== 'object' || Array.isArray(receipt.assets) || !Object.keys(receipt.assets).length) throw Error('release asset receipt mismatch');
           for (const [name, value] of Object.entries(receipt.assets)) {
             if (!name || /[\x00-\x1f/\\]/.test(name) || !digest.test(value)) throw Error('invalid release asset receipt');
           }
           const publication = { sourceSha: process.env.SOURCE_SHA, workflowSha: process.env.WORKFLOW_SHA,
             version, channel: tag === 'latest' ? 'stable' : 'preview', sha256: process.env.EXPECTED_DIGEST,
-            runId, attempt, published: true, assets: receipt.assets };
+            gitHead: process.env.SOURCE_SHA, runId, attempt, published: true, assets: receipt.assets };
           fs.writeFileSync('publication/pending.json', JSON.stringify(publication) + '\n', { flag: 'wx' });
           NODE
 
@@ -1496,10 +1572,18 @@ jobs:
           fi
 
       - name: Refuse a release the current tag set already outranks
+        env:
+          RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
-          git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION"
+          allow=""
+          existing_tag_sha="$(git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}^{commit}" || true)"
+          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$SOURCE_SHA" ]; then
+            echo '::error::Existing release tag points at a different source.'; exit 1
+          fi
+          if [ "$RESUME" = true ] && [ -n "$existing_tag_sha" ]; then allow="--allow-existing-tag-at-head"; fi
+          git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" ${allow:+"$allow"}
 
       - name: Build and validate release changelog
         env:
@@ -1523,6 +1607,7 @@ jobs:
           fi
 
       - name: Require reconciled publication history
+        if: ${{ inputs.resume-after-npm-publish != true }}
         env:
           GH_TOKEN: ${{ github.token }}
           NPM_DIST_TAG: ${{ inputs.tag }}
@@ -1538,26 +1623,73 @@ jobs:
           esac
           node .github/scripts/release-history.cjs check "$SOURCE_SHA" "$RELEASE_VERSION" "$channel"
 
+      - name: Verify resume registry identity
+        id: resume-identity
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          registry_version="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read the exact npm version; resume refused.'; exit 1;
+          }
+          REGISTRY_VERSION="$registry_version" node - <<'NODE'
+          const value = JSON.parse(process.env.REGISTRY_VERSION);
+          if (typeof value !== 'string' || value !== process.env.RELEASE_VERSION) throw Error('npm version does not match original release');
+          NODE
+          registry_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read npm gitHead; resume refused.'; exit 1;
+          }
+          bun scripts/verify-release-resume.ts "$SOURCE_SHA" "$registry_head"
+          echo "resume_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check resume publication
+        id: resume-check
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$NPM_DIST_TAG" in latest) channel=stable ;; preview) channel=preview ;; *) exit 1 ;; esac
+          decision="$(node .github/scripts/release-resume.cjs check "$RELEASE_VERSION" "$SOURCE_SHA" "$channel")"
+          DECISION="$decision" CHANNEL="$channel" node - <<'NODE'
+          const fs = require('node:fs'), result = JSON.parse(process.env.DECISION);
+          if (result.version !== process.env.RELEASE_VERSION || result.sourceSha !== process.env.SOURCE_SHA ||
+              result.channel !== process.env.CHANNEL || result.publishNpm !== false || result.assetsChecked !== false) throw Error('invalid resume publication decision');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `resume_checked_sha=${result.sourceSha}\n`);
+          NODE
+
       - name: Publish verified npm tarball
         id: publication
         env:
           NPM_DIST_TAG: ${{ inputs.tag }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
+          VERIFIED_RESUME_SHA: ${{ steps.resume-identity.outputs.resume_sha }}
+          VERIFIED_RESUME_DECISION: ${{ steps.resume-check.outputs.resume_checked_sha }}
         run: |
           set -euo pipefail
-          npm publish "$NPM_TARBALL" --ignore-scripts --tag "$NPM_DIST_TAG" --access public
+          if [ "$RESUME" = true ]; then
+            if [ -z "$VERIFIED_RESUME_SHA" ] || [ "$VERIFIED_RESUME_SHA" != "$SOURCE_SHA" ] ||
+               [ -z "$VERIFIED_RESUME_DECISION" ] || [ "$VERIFIED_RESUME_DECISION" != "$SOURCE_SHA" ]; then
+              echo '::error::Resume has no matching registry verification; refusing publication acknowledgement.'; exit 1
+            fi
+            echo "::notice::Resume verified; npm publish skipped."
+          else
+            npm publish "$NPM_TARBALL" --ignore-scripts --tag "$NPM_DIST_TAG" --access public
+          fi
           echo "published=true" >> "$GITHUB_OUTPUT"
           echo "Publication acknowledged for ${RELEASE_VERSION} at ${SOURCE_SHA}; do not republish this version." >> "$GITHUB_STEP_SUMMARY"
 
       # A same-run artifact is evidence to be authenticated, not provenance by itself.
       - name: Record acknowledged publication
-        if: ${{ steps.publication.outputs.published == 'true' }}
+        if: ${{ steps.publication.outputs.published == 'true' && inputs.resume-after-npm-publish != true }}
         run: |
           set -euo pipefail
           test -s publication/pending.json && test ! -e publication/receipt.json
           mv publication/pending.json publication/receipt.json
 
       - name: Upload publication receipt
-        if: ${{ steps.publication.outputs.published == 'true' }}
+        if: ${{ steps.publication.outputs.published == 'true' && inputs.resume-after-npm-publish != true }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-publication-receipt
@@ -1622,6 +1754,28 @@ jobs:
           echo "npm_dist_tag=unconfirmed" >> "$GITHUB_OUTPUT"
           echo "::warning::npm publish succeeded, but registry verification remains pending; continuing GitHub release creation without republishing"
           echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION}; registry verification pending after bounded reads. Inspect the registry before announcing availability. Do not republish this version." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify published npm source
+        if: ${{ steps.publication.outputs.published == 'true' }}
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          for attempt in $(seq 1 6); do
+            if head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000 2>/dev/null)"; then
+              if [ -n "$head" ] && [ "$head" != null ]; then
+                REGISTRY_HEAD="$head" node - <<'NODE'
+          const head = JSON.parse(process.env.REGISTRY_HEAD);
+          if (!/^[0-9a-f]{40}$/.test(process.env.SOURCE_SHA || '') || head !== process.env.SOURCE_SHA) {
+            throw Error('published npm gitHead does not match selected source');
+          }
+          NODE
+                exit 0
+              fi
+            fi
+            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+          done
+          echo '::error::Published npm gitHead could not be verified; do not republish and reconcile manually.'
+          exit 1
 
       - name: Create GitHub release
         if: ${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}
