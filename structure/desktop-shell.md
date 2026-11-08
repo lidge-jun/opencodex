@@ -378,11 +378,21 @@ acted on).
 
 `desktop/src-tauri/src/installer_telemetry.rs` runs in the startup sequence before `resolve::run`,
 so before the app resolves, attaches to or starts any proxy. A pending `optout` runs the bundled
-`ocx telemetry disable --json` (which creates `config.json` on a fresh install) and, after a clean
-exit, rewrites the value to `applied` so a later dashboard choice is never overridden. If the
-decline did not persist, `sidecar::start` adds `OCX_TELEMETRY=0` for that session and the next
-launch tries again. An MSI install puts no `ocx.exe` on PATH; the terminal command comes from this
-app, so the app always runs before any proxy from that install.
+`ocx telemetry disable --json` (on a fresh install it holds the decline as `pendingDecision` in
+`telemetry-state.json` without creating `config.json`, so `ocx init` still runs setup) and, after a
+clean exit, rewrites the value to `applied` so a later dashboard choice is never overridden. If the
+decline did not persist, `sidecar::start` adds `OCX_TELEMETRY=0` to a sidecar this app starts, and
+the save is retried in the background (`RETRY_DELAYS`, up to about 13 minutes) and on the next
+launch; a proxy the app only attaches to follows the decline once a retry succeeds. An MSI install
+puts no `ocx.exe` on PATH; the terminal command comes from this app, so the app always runs before
+any proxy from that install.
+
+The package is per-machine (`InstallScope="perMachine"` in Tauri's template), and the choice is an
+HKCU value written by the install. When a standard user elevates with a different administrator
+account, the value lands in that administrator's hive and the user's first launch finds no choice;
+the install stays undecided and nothing is sent until the user answers the dashboard notice. The
+page also says that leaving the box checked keeps the current choice, because `send` is never acted
+on and a re-install cannot read the config to pre-set the box.
 
 ### Linux packaged-shell acceptance
 

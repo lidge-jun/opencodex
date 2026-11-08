@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   TELEMETRY_INSTALLER_COMPONENT_GROUP,
   TELEMETRY_INSTALLER_DIALOG,
   TELEMETRY_INSTALLER_FRAGMENT_PATH,
+  TELEMETRY_INSTALLER_KEEP_NOTE,
   TELEMETRY_INSTALLER_OPT_OUT,
   TELEMETRY_INSTALLER_REGISTRY_KEY,
   TELEMETRY_INSTALLER_REGISTRY_VALUE,
@@ -22,7 +23,7 @@ import {
   TELEMETRY_DISCLOSURE_POINTS,
   TELEMETRY_POLICY_URL,
 } from "../../src/telemetry/disclosure";
-import { runTelemetryTick } from "../../src/telemetry/scheduler";
+import { readTelemetryState, runTelemetryTick, withPendingTelemetryDecision } from "../../src/telemetry/scheduler";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -70,6 +71,8 @@ describe("Windows installer telemetry choice", () => {
     expect(wxs).toContain(`<a href="${TELEMETRY_POLICY_URL}">Read the full privacy policy</a>`);
     expect(wxs).toContain(`<Property Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" Secure="yes" />`);
     expect(wxs).toMatch(new RegExp(`Type="CheckBox"[^>]*Property="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" CheckBoxValue="1" Text="${TELEMETRY_INSTALLER_CHECKBOX_TEXT}"`));
+    // A checked box writes "send", which is never acted on, and the page says so.
+    expect(wxs).toContain(`Text="${TELEMETRY_INSTALLER_KEEP_NOTE}"`);
     // Unchecking records an opt-out; silent installs default to send and opt out with the property.
     expect(wxs).toContain(`<Property Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" Secure="yes" />`);
     expect(wxs).toContain(
@@ -110,6 +113,8 @@ describe("Windows installer telemetry choice", () => {
     expect(sidecar).toMatch(/if crate::installer_telemetry::sidecar_env_opt_out\(\) \{\s*command = command\.env\("OCX_TELEMETRY", "0"\);/);
     const module = rustCode(RUST);
     expect(module).toContain(`.args(["telemetry", "disable", "--json"])`);
+    // A failed save is retried in the background, so a proxy the app only attaches to follows it too.
+    expect(module).toMatch(/Outcome::NotPersisted => \{[\s\S]*?tauri::async_runtime::spawn\(async move \{ retry\(app\)\.await \}\)/);
   });
 
   test("the command the app runs persists the opt-out, and nothing is sent afterwards", async () => {
@@ -128,14 +133,15 @@ describe("Windows installer telemetry choice", () => {
         stderr: "pipe",
       });
       expect(result.exitCode).toBe(0);
-      const saved = JSON.parse(readFileSync(join(home, "ocx", "config.json"), "utf8")) as Pick<OcxConfig, "telemetry">;
-      expect(saved.telemetry?.decision).toBe("declined");
-      expect(resolveTelemetryStatus(saved, {}).effective).toBe(false);
+      // On a fresh install the decline is held without creating config.json, so `ocx init` still runs setup.
+      expect(existsSync(join(home, "ocx", "config.json"))).toBe(false);
+      expect(readTelemetryState(join(home, "ocx")).pendingDecision?.decision).toBe("declined");
+      expect(resolveTelemetryStatus(withPendingTelemetryDecision({}, join(home, "ocx")), {}).effective).toBe(false);
 
       let fetchCalls = 0;
       const tick = await runTelemetryTick({
         configDir: join(home, "ocx"),
-        readConfig: () => JSON.parse(readFileSync(join(home, "ocx", "config.json"), "utf8")) as Pick<OcxConfig, "telemetry">,
+        readConfig: () => ({}),
         env: {},
         now: Date.parse("2026-11-12T12:00:00.000Z"),
         fetch: (async () => {

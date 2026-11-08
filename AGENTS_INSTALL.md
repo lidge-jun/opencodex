@@ -57,10 +57,10 @@ The following instructions concern **starring the repository on GitHub**.
 Anonymous daily usage telemetry defaults to on only after a human has seen the
 disclosure notice (in the GUI or an interactive TTY prompt). An agent must never
 enable telemetry or acknowledge the telemetry disclosure on the user's behalf:
-`PUT /api/telemetry`, `ocx telemetry enable`, and
-`ocx config set telemetry` refuse agent-driven callers with
-`agent_consent_required`. Opting out (`ocx telemetry disable` or
-`OCX_TELEMETRY=0`) is always permitted.
+`PUT /api/telemetry` and `ocx telemetry enable` refuse agent-driven callers with
+`agent_consent_required`, and `ocx config set`/`unset telemetry` refuse every
+caller. Opting out (`ocx telemetry disable` or `OCX_TELEMETRY=0`) is always
+permitted.
 
 ## Where things are installed
 

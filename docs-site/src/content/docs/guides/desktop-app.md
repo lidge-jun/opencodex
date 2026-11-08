@@ -40,6 +40,9 @@ msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
 
 Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
 notice first. Updates install without this page and never change an earlier opt-out.
+If an administrator account other than yours approves the install, the choice is recorded for that
+account; your first launch then asks again in the dashboard notice, and nothing is sent before you
+answer.
 
 ### Linux
 
