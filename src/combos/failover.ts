@@ -434,6 +434,9 @@ function hasIncompatibleDiagnosticCarrier(val: unknown, depth = 0): boolean {
     if (rec.details !== undefined && rec.details !== null) {
       if (hasIncompatibleDiagnosticCarrier(rec.details, depth + 1)) return true;
     }
+    if (rec.detail !== undefined && rec.detail !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.detail, depth + 1)) return true;
+    }
     if (rec.errors !== undefined && rec.errors !== null) {
       if (hasIncompatibleDiagnosticCarrier(rec.errors, depth + 1)) return true;
     }
@@ -466,6 +469,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (root.response !== undefined && root.response !== null) return false;
     if (root.last_error !== undefined && root.last_error !== null) return false;
     if (hasIncompatibleDiagnosticCarrier(root.details)) return false;
+    if (hasIncompatibleDiagnosticCarrier(root.detail)) return false;
     if (hasIncompatibleDiagnosticCarrier(root.errors)) return false;
     if (rootCode === "invalid_argument"
       && root.error === "Invalid reasoning effort."
@@ -484,6 +488,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (record.response !== undefined && record.response !== null) return false;
     if (record.last_error !== undefined && record.last_error !== null) return false;
     if (hasIncompatibleDiagnosticCarrier(record.details)) return false;
+    if (hasIncompatibleDiagnosticCarrier(record.detail)) return false;
     if (hasIncompatibleDiagnosticCarrier(record.errors)) return false;
     if (record.type === "upstream_error" && typeof record.message === "string"
       && record.message.startsWith("Provider error 400: ")

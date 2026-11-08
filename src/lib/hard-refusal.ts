@@ -43,6 +43,7 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
         (parsed.response as Record<string, unknown> | undefined)?.last_error,
         parsed.last_error,
         parsed.details,
+        parsed.detail,
         parsed.errors,
       ];
       let examined = 0;
@@ -102,7 +103,7 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
         }
 
         // Authoritative diagnostic carriers only (avoid request echo fields like input, prompt, request, body, reason)
-        for (const field of ["message", "error", "details", "last_error", "response", "errors"] as const) {
+        for (const field of ["message", "error", "details", "detail", "last_error", "response", "errors"] as const) {
           const val = rec[field];
           if (typeof val === "string") {
             if (

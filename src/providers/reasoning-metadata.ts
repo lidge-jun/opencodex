@@ -620,7 +620,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         const type = rec.type.trim().toLowerCase().replaceAll("-", "_");
         if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
       }
-      for (const field of ["message", "error", "details", "response", "last_error", "errors"] as const) {
+      for (const field of ["message", "error", "details", "detail", "response", "last_error", "errors"] as const) {
         const val = rec[field];
         if (val && typeof val === "object") {
           queue.push(val);
@@ -662,17 +662,44 @@ function diagnosticTextBlamesReasoningEffort(text: string): boolean {
   return false;
 }
 
-function diagnosticRecordBlamesReasoningEffort(rec: Record<string, unknown>): boolean {
+function diagnosticRecordBlamesReasoningEffort(rec: Record<string, unknown>, depth = 0): boolean {
+  if (depth > 4) return false;
   if (typeof rec.param === "string") {
     const param = rec.param.trim().toLowerCase();
     if (EFFORT_PARAM_NAMES.has(param)) return true;
     return false;
   }
-  if (typeof rec.message === "string" && diagnosticTextBlamesReasoningEffort(rec.message)) {
-    return true;
+  if (typeof rec.message === "string") {
+    if (rec.message.includes("{") || rec.message.startsWith("Provider error 400: ")) {
+      return isReasoningEffortRejection(rec.message, depth + 1);
+    }
+    if (diagnosticTextBlamesReasoningEffort(rec.message)) return true;
   }
-  if (typeof rec.error === "string" && diagnosticTextBlamesReasoningEffort(rec.error)) {
-    return true;
+  if (typeof rec.error === "string") {
+    if (rec.error.includes("{") || rec.error.startsWith("Provider error 400: ")) {
+      return isReasoningEffortRejection(rec.error, depth + 1);
+    }
+    if (diagnosticTextBlamesReasoningEffort(rec.error)) return true;
+  }
+  if (typeof rec.detail === "string") {
+    if (rec.detail.includes("{") || rec.detail.startsWith("Provider error 400: ")) {
+      return isReasoningEffortRejection(rec.detail, depth + 1);
+    }
+    if (diagnosticTextBlamesReasoningEffort(rec.detail)) return true;
+  } else if (Array.isArray(rec.detail)) {
+    for (const item of rec.detail) {
+      if (item && typeof item === "object") {
+        if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>, depth + 1)) return true;
+      } else if (typeof item === "string") {
+        if (item.includes("{") || item.startsWith("Provider error 400: ")) {
+          if (isReasoningEffortRejection(item, depth + 1)) return true;
+        } else if (diagnosticTextBlamesReasoningEffort(item)) {
+          return true;
+        }
+      }
+    }
+  } else if (rec.detail && typeof rec.detail === "object") {
+    if (diagnosticRecordBlamesReasoningEffort(rec.detail as Record<string, unknown>, depth + 1)) return true;
   }
   return false;
 }
@@ -680,12 +707,12 @@ function diagnosticRecordBlamesReasoningEffort(rec: Record<string, unknown>): bo
 /**
  * Evidence test for a rejection body: does it blame reasoning effort?
  *
- * Restricts inspections to authoritative diagnostic carriers (error, errors, details, last_error, response)
+ * Restricts inspections to authoritative diagnostic carriers (error, errors, details, detail, last_error, response)
  * so echoed request context (e.g. request.param: "reasoning_effort") does not falsely classify unrelated 400s
  * (such as temperature or max_tokens errors) as effort refusals (#8173).
  */
-export function isReasoningEffortRejection(text: string | undefined): boolean {
-  if (!text) return false;
+export function isReasoningEffortRejection(text: string | undefined, depth = 0): boolean {
+  if (!text || depth > 4) return false;
   if (isHardPolicyOrOriginRefusal(text)) return false;
   if (hasConflictingReasoningEffortCode(text)) return false;
 
@@ -710,13 +737,12 @@ export function isReasoningEffortRejection(text: string | undefined): boolean {
     if (Array.isArray(parsed)) {
       for (const item of parsed) {
         if (item && typeof item === "object") {
-          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>)) return true;
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>, depth + 1)) return true;
         } else if (typeof item === "string") {
-          try {
-            const inner = JSON.parse(item);
-            if (inner && typeof inner === "object" && diagnosticRecordBlamesReasoningEffort(inner as Record<string, unknown>)) return true;
-          } catch {
-            if (diagnosticTextBlamesReasoningEffort(item)) return true;
+          if (item.includes("{") || item.startsWith("Provider error 400: ")) {
+            if (isReasoningEffortRejection(item, depth + 1)) return true;
+          } else if (diagnosticTextBlamesReasoningEffort(item)) {
+            return true;
           }
         }
       }
@@ -727,22 +753,25 @@ export function isReasoningEffortRejection(text: string | undefined): boolean {
 
     if (root.error !== undefined && root.error !== null) {
       if (typeof root.error === "object" && !Array.isArray(root.error)) {
-        if (diagnosticRecordBlamesReasoningEffort(root.error as Record<string, unknown>)) return true;
+        if (diagnosticRecordBlamesReasoningEffort(root.error as Record<string, unknown>, depth + 1)) return true;
       } else if (typeof root.error === "string") {
-        if (diagnosticTextBlamesReasoningEffort(root.error)) return true;
+        if (root.error.includes("{") || root.error.startsWith("Provider error 400: ")) {
+          if (isReasoningEffortRejection(root.error, depth + 1)) return true;
+        } else if (diagnosticTextBlamesReasoningEffort(root.error)) {
+          return true;
+        }
       }
     }
 
     if (Array.isArray(root.errors)) {
       for (const item of root.errors) {
         if (item && typeof item === "object") {
-          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>)) return true;
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>, depth + 1)) return true;
         } else if (typeof item === "string") {
-          try {
-            const inner = JSON.parse(item);
-            if (inner && typeof inner === "object" && diagnosticRecordBlamesReasoningEffort(inner as Record<string, unknown>)) return true;
-          } catch {
-            if (diagnosticTextBlamesReasoningEffort(item)) return true;
+          if (item.includes("{") || item.startsWith("Provider error 400: ")) {
+            if (isReasoningEffortRejection(item, depth + 1)) return true;
+          } else if (diagnosticTextBlamesReasoningEffort(item)) {
+            return true;
           }
         }
       }
@@ -751,36 +780,57 @@ export function isReasoningEffortRejection(text: string | undefined): boolean {
     if (Array.isArray(root.details)) {
       for (const item of root.details) {
         if (item && typeof item === "object") {
-          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>)) return true;
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>, depth + 1)) return true;
         } else if (typeof item === "string") {
-          try {
-            const inner = JSON.parse(item);
-            if (inner && typeof inner === "object" && diagnosticRecordBlamesReasoningEffort(inner as Record<string, unknown>)) return true;
-          } catch {
-            if (diagnosticTextBlamesReasoningEffort(item)) return true;
+          if (item.includes("{") || item.startsWith("Provider error 400: ")) {
+            if (isReasoningEffortRejection(item, depth + 1)) return true;
+          } else if (diagnosticTextBlamesReasoningEffort(item)) {
+            return true;
           }
         }
       }
     } else if (root.details && typeof root.details === "object") {
-      if (diagnosticRecordBlamesReasoningEffort(root.details as Record<string, unknown>)) return true;
+      if (diagnosticRecordBlamesReasoningEffort(root.details as Record<string, unknown>, depth + 1)) return true;
+    }
+
+    if (typeof root.detail === "string") {
+      if (root.detail.includes("{") || root.detail.startsWith("Provider error 400: ")) {
+        if (isReasoningEffortRejection(root.detail, depth + 1)) return true;
+      } else if (diagnosticTextBlamesReasoningEffort(root.detail)) {
+        return true;
+      }
+    } else if (Array.isArray(root.detail)) {
+      for (const item of root.detail) {
+        if (item && typeof item === "object") {
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>, depth + 1)) return true;
+        } else if (typeof item === "string") {
+          if (item.includes("{") || item.startsWith("Provider error 400: ")) {
+            if (isReasoningEffortRejection(item, depth + 1)) return true;
+          } else if (diagnosticTextBlamesReasoningEffort(item)) {
+            return true;
+          }
+        }
+      }
+    } else if (root.detail && typeof root.detail === "object") {
+      if (diagnosticRecordBlamesReasoningEffort(root.detail as Record<string, unknown>, depth + 1)) return true;
     }
 
     if (root.last_error && typeof root.last_error === "object") {
-      if (diagnosticRecordBlamesReasoningEffort(root.last_error as Record<string, unknown>)) return true;
+      if (diagnosticRecordBlamesReasoningEffort(root.last_error as Record<string, unknown>, depth + 1)) return true;
     }
 
     if (root.response && typeof root.response === "object") {
       const resp = root.response as Record<string, unknown>;
       if (resp.error && typeof resp.error === "object") {
-        if (diagnosticRecordBlamesReasoningEffort(resp.error as Record<string, unknown>)) return true;
+        if (diagnosticRecordBlamesReasoningEffort(resp.error as Record<string, unknown>, depth + 1)) return true;
       }
       if (resp.last_error && typeof resp.last_error === "object") {
-        if (diagnosticRecordBlamesReasoningEffort(resp.last_error as Record<string, unknown>)) return true;
+        if (diagnosticRecordBlamesReasoningEffort(resp.last_error as Record<string, unknown>, depth + 1)) return true;
       }
     }
 
     if (root.error === undefined || typeof root.error !== "object") {
-      if (diagnosticRecordBlamesReasoningEffort(root)) return true;
+      if (diagnosticRecordBlamesReasoningEffort(root, depth + 1)) return true;
     } else if (typeof root.param === "string" && EFFORT_PARAM_NAMES.has(root.param.trim().toLowerCase())) {
       return true;
     }
