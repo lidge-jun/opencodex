@@ -195,8 +195,10 @@ export function isDefiniteContextOverflow(status: number, message: string, match
     ].find(candidate => typeof candidate.value === "string");
     if (!errorTextSource || typeof errorTextSource.value !== "string") return false;
     // A string-valued leaf can sit inside `response.error` while the outer envelope carries
-    // the validation code. Check both records before trusting the leaf's context wording.
+    // the validation code, or sit as a top-level `last_error` alongside `response`. Check
+    // all records before trusting the leaf's context wording.
     if (isParameterValidationRecord(record)
+      || (response !== undefined && isParameterValidationRecord(response))
       || (errorObject !== undefined && isParameterValidationRecord(errorObject))
       || isParameterValidationRecord(errorTextSource.owner)) return false;
     text = errorTextSource.value.trim();
