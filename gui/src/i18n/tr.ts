@@ -863,6 +863,8 @@ export const tr: Record<TKey, string> = {
   "subagentSurface.learnMore": "Neden başarısız oluyor",
   "prov.logoutOk": "{provider} çıkışı yapıldı.",
   "prov.logoutFail": "{provider} çıkışı yapılamadı.",
+  "prov.logoutBusy": "Hesap değişikliği sürüyor. Tamamlanmasını bekleyip tekrar çıkış yapmayı deneyin.",
+  "prov.accountRemoveUnverified": "{email} hesabının kaldırılıp kaldırılmadığı doğrulanamadı. Yeniden denemeden önce hesap listesini yenileyin.",
   "prov.removed": "\"{name}\" kaldırıldı.",
   "prov.removedDefault": "\"{name}\" kaldırıldı. Varsayılan sağlayıcı artık \"{defaultProvider}\".",
   "prov.removedShadowTarget": "\"{name}\" kaldırıldı. Gölge Çağrı Yakalama hâlâ \"{model}\" hedefini kullanıyor; başka bir hedef seçene kadar yardımcı çağrılar başarısız olur.",

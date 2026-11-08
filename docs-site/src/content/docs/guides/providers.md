@@ -13,6 +13,9 @@ These links preserve the preset's referral parameters. Sponsor information is sh
 the configured provider name, adapter and endpoint match the preset; it never changes routing,
 account selection or defaults.
 
+While a provider login is in progress, its Accounts panel offers **Cancel** once sign-in
+instructions appear.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
