@@ -32,7 +32,9 @@ Only a human can transition an undecided install to active sending:
   from `src/server/management/telemetry-routes.ts` and lazily mounted in `src/server/management-api.ts`)
   requires `hasHumanDashboardSession` from `src/server/management/consent-session.ts`.
   `GET /api/telemetry` previews the oldest eligible unsent day (or the latest completed day with
-  `previewEligible: false` when no day is eligible).
+  `previewEligible: false` when no day is eligible). It reads consent from `config.json` on disk,
+  like the scheduler, and reuses a day's aggregate for `TELEMETRY_PREVIEW_CACHE_MS` because the
+  dashboard polls it.
 - `ocx telemetry enable` in `src/cli/telemetry.ts` requires an interactive human terminal
   (`isatty` stdin and stdout, not `OCX_SERVICE`, not agent-driven), prints the disclosure block,
   and asks for confirmation before recording `accepted`; otherwise it exits non-zero with
@@ -44,8 +46,17 @@ Only a human can transition an undecided install to active sending:
   and record neither `noticeShownAt` nor `decision`.
 - `src/telemetry/disclosure.ts` is the one source for the disclosure text: the CLI prompt prints
   it and the Windows installer dialog is generated from it (`structure/desktop-shell.md`,
-  "Windows installer telemetry choice"). A decline on a fresh install creates `config.json`
-  through `initializePersistedConfigIfMissing`.
+  "Windows installer telemetry choice").
+- A decision made before `config.json` exists (`ocx telemetry disable`, the dashboard popup on a
+  fresh install, the Windows installer opt-out) is held as `pendingDecision` in
+  `telemetry-state.json` instead of creating the config, so `ocx init` still runs setup.
+  `withPendingTelemetryDecision` applies it wherever consent is resolved (scheduler, status route,
+  CLI prompt) until a decision is written into the config, which clears it.
+- The dashboard popup (`gui/src/components/telemetry-consent-card.tsx`) opens only for an undecided
+  install with no env override, after the star onboarding has closed, and never on a Remote Link
+  Child. Only Continue writes (`PUT /api/telemetry`); Escape, the backdrop and the close button
+  record nothing. Focus starts on the heading, so a stray Enter cannot accept. A saved decision
+  whose reply cannot be parsed is re-read with `GET` (`gui/src/telemetry-api.ts`).
 
 ## Identity, aggregation, and scheduling
 
@@ -68,11 +79,16 @@ with a 10-second `signalWithTimeout` and parses `Retry-After` on HTTP 429/503 re
 started from `src/server/background-lifecycle.ts`. Whenever an `OCX_TELEMETRY` or `DO_NOT_TRACK`
 opt-out is observed (at startup in `src/server/background-lifecycle.ts` or on a tick),
 `recordTelemetryEnvOptOut` persists `ineligibleThroughDay` (today's UTC day) and the
-`envOptOutActiveSince` marker in `telemetry-state.json` and deletes `telemetry-id.json`. A proxy
-started under the opt-out reads the env once and runs no ticks, so the marker stands for the whole
-period it ran: while it is set no day is eligible, and `endTelemetryEnvOptOut` closes the period
-(ineligible through the closing day, marker cleared) on that proxy's clean stop or on the first tick
-that runs without the opt-out. Each tick sends at most one completed UTC
+`envOptOutActiveSince` marker in `telemetry-state.json` and deletes `telemetry-id.json`; a proxy
+started under the opt-out records its pid in `envOptOutOwners` instead. Such a proxy reads the env
+once and runs no ticks, so the marker or owner stands for the whole period: while either is set no
+day is eligible. `endTelemetryEnvOptOut` closes the period (ineligible through the closing day) on
+that proxy's clean stop, which always covers its stop day, or on the first tick without the opt-out,
+which ends it only once no recorded owner pid is still alive and otherwise extends it to today. A
+`telemetry-state.json` that exists but cannot be read (symlink, oversized, malformed) stops sending
+(`state-unreadable`) rather than being read as empty. The state code lives in
+`src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
+aggregation and sender stay behind the dynamic import. Each tick sends at most one completed UTC
 day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
 `ineligibleThroughDay`, honors `retryAfterUntil` backoffs, re-reads persisted consent and env
 immediately before transmission, and carries an `AbortSignal` cancelled on stop or consent changes.

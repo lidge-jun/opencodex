@@ -183,7 +183,9 @@ function TelemetryConsentDialog({
       />
       <div className="modal-card telemetry-consent-card flex flex-col gap-3" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
-          <h3 id={titleId} className="m-0">
+          {/* Focus starts on the heading: the dialog can open while someone is typing, and a stray
+              Enter on a focused Continue would accept without the notice being read. */}
+          <h3 id={titleId} className="m-0" tabIndex={-1} autoFocus>
             {t("proxyV2.telemetryConsentTitle")}
           </h3>
         </div>
@@ -231,7 +233,6 @@ function TelemetryConsentDialog({
             onClick={() => {
               void handleContinue();
             }}
-            autoFocus
           >
             {t("proxyV2.telemetryConsentContinue")}
           </button>
