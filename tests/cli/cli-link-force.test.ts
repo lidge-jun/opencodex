@@ -138,4 +138,20 @@ describe("explicit forced link revoke", () => {
       expect(first).toBe(1); expect(second).toBe(0); expect(output).not.toHaveBeenCalled();
     } finally { await origin.stop(true); await destination.stop(true); }
   });
+
+  test("revoke --purge sends { purge: true }, rejects --force + --purge, and forced ephemeral revoke prints ocx-child detach recovery", async () => {
+    const f = fixture();
+    expect(await invoke(["--purge", "--json"], f.deps)).toBe(0);
+    expect(JSON.parse(String(f.calls[0]?.init?.body))).toEqual({ purge: true });
+
+    const fBoth = fixture();
+    expect(await invoke(["--purge", "--force", "--yes"], fBoth.deps)).toBe(2);
+    expect(fBoth.calls).toEqual([]);
+
+    output.mockClear();
+    const fEph = fixture();
+    fEph.deps.readStore = () => ({ version: 1, listenerPort: 18181, links: [{ id: ID, alias: "barebox", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 24500, apiKeyId: "k1", createdAt: "2026-11-07T00:00:00Z", childKind: "ephemeral" }] });
+    expect(await invoke(["--force", "--yes", "--json"], fEph.deps)).toBe(0);
+    expect(json()).toEqual({ linkId: ID, remoteCleanup: "skipped", recovery: "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client." });
+  });
 });

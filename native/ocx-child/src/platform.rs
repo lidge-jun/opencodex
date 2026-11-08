@@ -1005,7 +1005,78 @@ pub enum LockAcquireError {
     Io,
 }
 
+/// What a lock acquisition does with the lock file's parent directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockParentAction {
+    /// The parent is missing and ocx-child creates it, private, as its own directory.
+    CreatePrivate,
+    /// The parent already exists; its permissions are never changed. It may be an
+    /// `OPENCODEX_HOME` shared with a full OpenCodex install, or `CODEX_HOME`.
+    UseExisting,
+    Refuse,
+}
+
+/// `parent` is the parent's metadata, or `None` when it does not exist.
+pub fn lock_parent_action(parent: Option<&fs::Metadata>, create_missing: bool) -> LockParentAction {
+    match parent {
+        None if create_missing => LockParentAction::CreatePrivate,
+        None => LockParentAction::Refuse,
+        Some(meta) if meta.is_dir() => LockParentAction::UseExisting,
+        Some(_) => LockParentAction::Refuse,
+    }
+}
+
+/// Create `dir` private (`0700`, or a protected owner-only DACL on Windows) if it is missing.
+/// Returns whether this call created it. A directory that already exists, including one another
+/// process creates concurrently, is left exactly as it is.
+pub fn create_private_dir_if_missing(dir: &Path) -> Result<bool, String> {
+    if let Some(ancestor) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(ancestor)
+                .map_err(|e| format!("failed to create {}: {e}", ancestor.display()))?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir_all(ancestor)
+            .map_err(|e| format!("failed to create {}: {e}", ancestor.display()))?;
+    }
+    #[cfg(unix)]
+    let created = {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(dir)
+    };
+    #[cfg(not(unix))]
+    let created = fs::DirBuilder::new().create(dir);
+    match created {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return if fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+                Ok(false)
+            } else {
+                Err(format!("{} exists and is not a directory", dir.display()))
+            };
+        }
+        Err(e) => return Err(format!("failed to create {}: {e}", dir.display())),
+    }
+    reject_symlink(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("failed to chmod 0700 {}: {e}", dir.display()))?;
+    }
+    #[cfg(windows)]
+    windows_private_acl::harden_and_verify(dir, true)?;
+    Ok(true)
+}
+
 impl FileLock {
+    /// Lock `path`, creating its parent private only if it is missing. An existing parent keeps
+    /// its permissions; the lock file itself is created owner-only.
     pub fn try_acquire_nonblocking(path: &Path) -> Result<Self, LockAcquireError> {
         Self::acquire_inner(path, false, true)
     }
@@ -1023,13 +1094,17 @@ impl FileLock {
     fn acquire_inner(
         path: &Path,
         blocking: bool,
-        harden_parent: bool,
+        create_missing_parent: bool,
     ) -> Result<Self, LockAcquireError> {
         let parent = path.parent().ok_or(LockAcquireError::Io)?;
-        if harden_parent {
-            ensure_private_dir(parent).map_err(|_| LockAcquireError::Io)?;
-        } else if !fs::symlink_metadata(parent).is_ok_and(|m| m.is_dir()) {
-            return Err(LockAcquireError::Io);
+        // A symlinked parent is refused rather than followed, as ensure_private_dir did.
+        let parent_meta = fs::symlink_metadata(parent).ok();
+        match lock_parent_action(parent_meta.as_ref(), create_missing_parent) {
+            LockParentAction::CreatePrivate => {
+                create_private_dir_if_missing(parent).map_err(|_| LockAcquireError::Io)?;
+            }
+            LockParentAction::UseExisting => {}
+            LockParentAction::Refuse => return Err(LockAcquireError::Io),
         }
         reject_symlink(path).map_err(|_| LockAcquireError::Io)?;
         crate::test_hooks::barrier("lock-before-open");
@@ -1242,4 +1317,171 @@ pub fn resolve_codex_home() -> PathBuf {
         return PathBuf::from(custom);
     }
     resolve_user_home().join(".codex")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurgeExecutableOutcome {
+    Removed,
+    SkippedUnmanagedPath,
+}
+
+fn reject_managed_subpath_symlinks(root: &Path, components: &[&str]) -> Result<PathBuf, String> {
+    let mut cur = root.to_path_buf();
+    for comp in components {
+        cur.push(comp);
+        reject_symlink(&cur)?;
+    }
+    Ok(cur)
+}
+
+pub fn is_managed_plant_executable(
+    exe_path: &Path,
+    user_home: &Path,
+    local_appdata: Option<&Path>,
+) -> Result<bool, String> {
+    reject_symlink(exe_path)?;
+    if !fs::symlink_metadata(exe_path).is_ok_and(|m| m.file_type().is_file()) {
+        return Ok(false);
+    }
+    let Some(parent) = exe_path.parent() else {
+        return Ok(false);
+    };
+    reject_symlink(parent)?;
+    let expected_name = if cfg!(windows) {
+        "ocx-child.exe"
+    } else {
+        "ocx-child"
+    };
+    if exe_path.file_name().and_then(|n| n.to_str()) != Some(expected_name) {
+        return Ok(false);
+    }
+    let canon_parent = fs::canonicalize(parent)
+        .map_err(|e| format!("failed canonicalizing {}: {e}", parent.display()))?;
+    let cache_bin = reject_managed_subpath_symlinks(user_home, &[".cache", "opencodex", "bin"])?;
+    if fs::canonicalize(&cache_bin).ok().as_ref() == Some(&canon_parent) {
+        return Ok(true);
+    }
+    if let Some(appdata) = local_appdata {
+        let win_bin = reject_managed_subpath_symlinks(appdata, &["opencodex", "bin"])?;
+        if fs::canonicalize(&win_bin).ok().as_ref() == Some(&canon_parent) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn purge_managed_executable(
+    exe_path: &Path,
+    user_home: &Path,
+    local_appdata: Option<&Path>,
+) -> Result<PurgeExecutableOutcome, String> {
+    if !is_managed_plant_executable(exe_path, user_home, local_appdata)? {
+        return Ok(PurgeExecutableOutcome::SkippedUnmanagedPath);
+    }
+    #[cfg(unix)]
+    {
+        fs::remove_file(exe_path).map_err(|e| {
+            format!(
+                "failed removing planted ocx-child {}: {e}",
+                exe_path.display()
+            )
+        })?;
+        let _ = exe_path.parent().map(fs::remove_dir);
+        let _ = exe_path.parent().and_then(Path::parent).map(fs::remove_dir);
+        Ok(PurgeExecutableOutcome::Removed)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        let parent = exe_path
+            .parent()
+            .ok_or_else(|| "missing parent".to_owned())?;
+        let trashed = parent.join(format!(".ocx-child.purge.{}.old", std::process::id()));
+        let _ = fs::remove_file(&trashed);
+        fs::rename(exe_path, &trashed)
+            .map_err(|e| format!("failed renaming planted ocx-child for purge: {e}"))?;
+        let _ = Command::new("cmd.exe")
+            .args([
+                "/d",
+                "/c",
+                "ping -n 2 127.0.0.1 >nul & del /f /q \"%OCX_PURGE_TARGET%\"",
+            ])
+            .env("OCX_PURGE_TARGET", &trashed)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+            .spawn();
+        Ok(PurgeExecutableOutcome::Removed)
+    }
+}
+
+#[cfg(test)]
+mod lock_parent_tests {
+    use super::*;
+
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch() -> Scratch {
+        let dir = std::env::temp_dir().join(format!(
+            "ocx-child-lock-parent-{}-{}",
+            std::process::id(),
+            random_hex(6).unwrap()
+        ));
+        fs::create_dir(&dir).unwrap();
+        Scratch(dir)
+    }
+
+    #[test]
+    fn only_a_missing_parent_is_created_and_an_existing_one_is_never_touched() {
+        let root = scratch();
+        let file = root.0.join("plain-file");
+        fs::write(&file, b"x").unwrap();
+        let dir_meta = fs::symlink_metadata(&root.0).unwrap();
+        let file_meta = fs::symlink_metadata(&file).unwrap();
+        assert_eq!(
+            lock_parent_action(None, true),
+            LockParentAction::CreatePrivate
+        );
+        assert_eq!(lock_parent_action(None, false), LockParentAction::Refuse);
+        for create in [true, false] {
+            assert_eq!(
+                lock_parent_action(Some(&dir_meta), create),
+                LockParentAction::UseExisting
+            );
+            assert_eq!(
+                lock_parent_action(Some(&file_meta), create),
+                LockParentAction::Refuse
+            );
+        }
+    }
+
+    #[test]
+    fn create_private_dir_if_missing_reports_creation_and_keeps_existing_modes() {
+        let root = scratch();
+        let created = root.0.join("new").join("home");
+        assert!(create_private_dir_if_missing(&created).unwrap());
+        assert!(!create_private_dir_if_missing(&created).unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&created), 0o700);
+            let shared = root.0.join("shared");
+            fs::create_dir(&shared).unwrap();
+            fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(!create_private_dir_if_missing(&shared).unwrap());
+            let lock = FileLock::acquire_blocking(&shared.join("child.lock")).unwrap();
+            drop(lock);
+            assert_eq!(mode(&shared), 0o755);
+            assert_eq!(mode(&shared.join("child.lock")), 0o600);
+        }
+    }
 }
