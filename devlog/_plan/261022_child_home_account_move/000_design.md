@@ -13,9 +13,10 @@ program. The Child keeps its copy until the person removes it." GOAT's hub switc
   Account commands on a Child read the Home and refuse writes, so a Child has no way to manage its local
   accounts through the normal account surface while linked.
 - The link is one-directional at the HTTP layer. Whichever side opened SSH, the Child is the HTTP client and the
-  Home's hub-link listener is the server. Requests are admitted from two tables: the data plane
-  (`src/link/routes.ts`) and the read-only management table (`src/link/management-routes.ts`). There is no
-  Child-to-Home write path.
+  Home's hub-link listener is the server. Requests are admitted by three predicates: the data plane
+  (`src/link/routes.ts`), the read-only management table (`src/link/management-routes.ts`), and the single
+  Child parity report `POST /v1/link-management/child-parity` (`src/link/child-parity.ts`), whose only effect
+  is an in-memory entry bound to the key's own link. No Child-to-Home write reaches a durable store.
 - Every relayed request runs on one socket proven by the relay-auth challenge (`src/link/relay-auth.ts`,
   `src/client/link-relay-transport.ts`) with a one-use session nonce
   (`src/server/index/link-relay-sessions.ts`). SSH owns host authentication and encryption.
@@ -98,9 +99,10 @@ stateDiagram-v2
 
 ### 3.1 Offer (Child to Home, no secrets)
 
-`POST /v1/link-accounts/offers` on the Home's hub-link listener, admitted by a new third table next to the data
-plane and management tables. The body carries an `offerId` the Child generates and up to a small fixed number
-of items, each with:
+`POST /v1/link-accounts/offers` on the Home's hub-link listener, admitted by a new fourth predicate next to the
+data plane, the management table and the child-parity report. Like child-parity, admission binds the request to
+the link key's own link and caps the body size; unlike it, an accepted offer is durable. The body carries an
+`offerId` the Child generates and up to a small fixed number of items, each with:
 
 - `itemId`, `provider` (the Home provider name it targets), `kind` (`codex-pool`, `oauth`, `api-key`);
 - the masked identity the dashboards already show (for example a masked email or the last four key characters);
@@ -153,7 +155,7 @@ For one item, under `withConfigMutationLockSync`:
 5. Append the audit record, then mark the item `Committed`.
 
 Imported accounts arrive not active: an OAuth import never becomes the provider's `activeAccountId`, and a
-Codex pool import starts validation-pending, as new imports do today. The person can make it active on the
+Codex pool import starts validation-pending, as Orca imports do today. The person can make it active on the
 Home like any other account (decision D6).
 
 ### 3.5 After commit (Child)
@@ -222,7 +224,8 @@ never a token), and a closed result code. Events: `offered`, `approved`, `declin
 No line carries a token, key, refresh token, full email or `payloadDigest`. `bun run privacy:scan` gains a
 fixture for the format.
 
-The Home exposes the audit through `GET /api/link/account-moves` on its dashboard. The Child exposes its own.
+The Home will expose the audit through `GET /api/link/account-moves` on its dashboard. The Child will expose
+its own.
 
 ## 8. Failure and rollback
 
@@ -271,7 +274,7 @@ H7 drives the steps through OpenCodex surfaces and never handles a credential:
   as §1.8 of the GOAT design already says.
 
 The `/readyz` feature `link-account-move/1` ([Runtime](../../../structure/runtime.md), `src/remote/features.ts`)
-lets GOAT and the Child check support on both ends before offering.
+will let GOAT and the Child check support on both ends before offering.
 
 ## 10. Implementation outline (for the follow-up PRs)
 

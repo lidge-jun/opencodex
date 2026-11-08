@@ -56,7 +56,8 @@ both places", never "the account exists nowhere".
 
 ### Interception on a machine
 
-SSH encrypts between machines. Relay auth proves the port's owner but, as the Remote Link doc states, is not
+SSH encrypts between machines. Relay auth proves the port's owner but, as the
+[Remote Link doc](../../../structure/remote-link.md#connection-bound-relay-authentication) states, is not
 encryption against an active local intermediary on the loopback port. Sealing payloads to a per-offer Home key
 (D2) closes that gap for credentials: an intermediary sees only ciphertext bound to the offer and item.
 
