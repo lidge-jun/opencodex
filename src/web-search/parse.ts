@@ -63,9 +63,10 @@ function partBucket(itemId: string, contentIndex: number | undefined, exact: boo
 }
 
 function indexPart(lookup: PartLookup, part: StreamedPart, add: boolean): void {
-  const positionBucket = part.outputIndex !== undefined ? ["output", part.outputIndex]
-    : part.contentIndex !== undefined ? ["unpositioned-content", part.contentIndex] : undefined;
-  if (positionBucket) {
+  const positionBuckets = part.outputIndex !== undefined
+    ? [["output", part.outputIndex], ["output-content", part.outputIndex, part.contentIndex ?? null]]
+    : [["unpositioned-content", part.contentIndex ?? null]];
+  for (const positionBucket of positionBuckets) {
     const key = JSON.stringify(positionBucket);
     let bucket = lookup.get(key);
     if (add) {
@@ -120,19 +121,39 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
     && (outputIndex === undefined || part.outputIndex === undefined || outputIndex === part.outputIndex)
     && (contentIndex === undefined || part.contentIndex === undefined || contentIndex === part.contentIndex);
   const indexedPart = indexedKey ? parts.get(indexedKey) : undefined;
-  if (indexedPart && compatible(indexedPart)) return indexedKey!;
-
   let match = itemId ? identifiedPart(lookup, itemId, contentIndex, !!indexedKey, outputIndex) : undefined;
   if (match && !compatible(match)) match = undefined;
-  if (!match && outputOnly && compatible(outputOnly)) match = outputOnly;
+  const outputBucket = outputIndex === undefined ? undefined : lookup.get(JSON.stringify(["output", outputIndex]));
+  const outputContentBucket = outputIndex === undefined || contentIndex === undefined ? undefined
+    : lookup.get(JSON.stringify(["output-content", outputIndex, contentIndex]));
+  const outputUnknownContentBucket = outputIndex === undefined ? undefined
+    : lookup.get(JSON.stringify(["output-content", outputIndex, null]));
+  const outputCandidates = contentIndex === undefined ? outputBucket?.size ?? 0
+    : (outputContentBucket?.size ?? 0) + (outputUnknownContentBucket?.size ?? 0);
+  if (indexedPart && compatible(indexedPart)) {
+    // A later full snapshot can link a previously ambiguous position to a unique item draft.
+    if (data.type === "response.output_text.done" && itemId && !indexedPart.itemId && outputCandidates === 1
+      && match && match !== indexedPart && match.outputIndex === undefined) {
+      indexPart(lookup, match, false);
+      parts.delete(match.key);
+      return indexedKey!;
+    }
+    if (match && match !== indexedPart) return match.key;
+    if ((itemId && indexedPart.itemId === itemId) || outputCandidates === 1) return indexedKey!;
+  }
+  if (outputCandidates > 1 && (indexedPart || outputOnly) && !match) return `conflict:${nextOrder}`;
+  if (!match && outputOnly && compatible(outputOnly) && outputCandidates === 1) match = outputOnly;
   if (!match && outputIndex !== undefined && contentIndex === undefined) {
-    const bucket = lookup.get(JSON.stringify(["output", outputIndex]));
-    const only = bucket?.size === 1 ? bucket.values().next().value : undefined;
+    const only = outputBucket?.size === 1 ? outputBucket.values().next().value : undefined;
     if (only && compatible(only)) match = only;
   }
-  if (!match && !itemId && indexedKey && !indexedPart) {
+  if (!match && !itemId && indexedKey && !indexedPart && outputCandidates === 0) {
     const bucket = lookup.get(JSON.stringify(["unpositioned-content", contentIndex]));
-    if (bucket?.size === 1) match = bucket.values().next().value;
+    const unknown = lookup.get(JSON.stringify(["unpositioned-content", null]));
+    if ((bucket?.size ?? 0) + (unknown?.size ?? 0) === 1) {
+      const candidate = (bucket ?? unknown)?.values().next().value;
+      if (candidate?.contentIndex !== undefined || candidate?.itemId || parts.size === 1) match = candidate;
+    }
   }
   // A content-only part can acquire its item or output identity after other parts arrived.
   const contentOnly = contentIndex === undefined ? undefined : parts.get(`content:${contentIndex}`);
@@ -179,7 +200,8 @@ function comparePartKeys(left: string, right: string, streamed: Map<string, Stre
   };
   const [leftOutput, leftContent] = position(left);
   const [rightOutput, rightContent] = position(right);
-  return leftOutput - rightOutput || leftContent - rightContent;
+  return leftOutput - rightOutput || leftContent - rightContent
+    || (streamed.get(left)?.order ?? -1) - (streamed.get(right)?.order ?? -1);
 }
 
 /** One part's streamed text: its done text when present, otherwise its deltas. */
@@ -235,13 +257,18 @@ function reconcileCompletedParts(final: CompletedOutput, streamed: Map<string, S
   const matched = new Set<StreamedPart>();
   for (const [key, identity] of final.slots) {
     const existing = reconciled.get(key);
+    let part = identity.itemId ? identifiedPart(lookup, identity.itemId, identity.contentIndex, true) : undefined;
     if (existing) {
-      if (!identity.itemId || !existing.itemId || identity.itemId === existing.itemId) continue;
-      // The completed slot and the streamed part cannot be the same item, even at the same index.
+      const atContent = lookup.get(JSON.stringify(["output-content", identity.outputIndex, identity.contentIndex]));
+      const atUnknownContent = lookup.get(JSON.stringify(["output-content", identity.outputIndex, null]));
+      const ambiguous = !identity.itemId && (atContent?.size ?? 0) + (atUnknownContent?.size ?? 0) > 1;
+      const different = identity.itemId && existing.itemId && identity.itemId !== existing.itemId;
+      const otherIdentified = identity.itemId && !existing.itemId && part && part !== existing;
+      if (!ambiguous && !different && !otherIdentified) continue;
+      // Preserve a conflicting or ambiguous stream beside the completed slot.
       reconciled.delete(key);
       reconciled.set(`conflict:completed:${existing.order}`, existing);
     }
-    let part = identity.itemId ? identifiedPart(lookup, identity.itemId, identity.contentIndex, true) : undefined;
     if (!part && identity.singleContent) {
       const bucket = lookup.get(JSON.stringify(["output", identity.outputIndex]));
       const candidate = bucket?.size === 1 ? bucket.values().next().value : undefined;

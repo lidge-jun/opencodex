@@ -4,6 +4,93 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test("promotes a unique item-only draft when an indexed snapshot arrives", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
+      { type: "response.output_text.delta", item_id: "b", delta: "draftB" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("AB");
+  });
+
+  test("preserves item-only drafts when another unpositioned part is compatible", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "B" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("CAB");
+  });
+
+  test("keeps an indexed snapshot separate when its position has competing identities", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, content_index: 0, text: "B" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "C" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("ABC");
+  });
+
+  test("preserves competing indexed parts beside an anonymous partial completed slot", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, content_index: 0, text: "B" },
+      { type: "response.completed", response: { output: [
+        { type: "message", content: [{ type: "output_text", text: "C" }] }, null,
+      ] } },
+    ]));
+    expect(result.text).toBe("CAB");
+  });
+
+  test("matches an identified completed slot without discarding an anonymous competing snapshot", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "draftB" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.output_text.delta", item_id: "b", output_index: 1, content_index: 0, delta: "!" },
+      { type: "response.completed", response: { output: [null,
+        { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] },
+      ] } },
+    ]));
+    expect(result.text).toContain("A");
+    expect(result.text).toContain("B");
+    expect(result.text).toContain("C");
+    expect(result.text).not.toContain("draftB");
+  });
+
+  test("uses an explicit item identity when an indexed position is ambiguous", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, text: "draftB" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, content_index: 0, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("AB");
+  });
+
+  test("retains all parts when the output index has competing item identities", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: "A" },
+      { type: "response.output_text.done", item_id: "b", output_index: 0, text: "B" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "C" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("CAB");
+  });
+
+  test("joins an ambiguous snapshot only when a later frame supplies both identities", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "draftB" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("BA");
+  });
   test("matches a unique identified content part when an output index arrives without its item ID", async () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.delta", item_id: "a", output_index: 0, content_index: 0, delta: "draftA" },
@@ -36,9 +123,9 @@ describe("identity transition matrix", () => {
     expect(result.text).toBe("CAB");
   });
 
-  test("looks up ambiguous unpositioned content without scanning its bucket", async () => {
+  test.each([false, true])("looks up ambiguous unpositioned parts without scanning their bucket, item-only: %s", async itemOnly => {
     const frames: unknown[] = Array.from({ length: 500 }, (_, i) =>
-      ({ type: "response.output_text.delta", item_id: `item_${i}`, content_index: 0, delta: "" }));
+      ({ type: "response.output_text.delta", item_id: `item_${i}`, ...(itemOnly ? {} : { content_index: 0 }), delta: "" }));
     frames.push(...Array.from({ length: 500 }, (_, output_index) =>
       ({ type: "response.output_text.done", output_index, content_index: 0, text: "" })));
     frames.push({ type: "response.completed" });
