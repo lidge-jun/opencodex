@@ -8,11 +8,12 @@
  * at most one child per process, and backs off after a timeout so a locked keychain does
  * not get one prompt per request.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const CLAUDE_KEYCHAIN_TIMEOUT_MS = 5_000;
 export const CLAUDE_KEYCHAIN_BACKOFF_MS = 60_000;
+const SECURITY_ARGS = ["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"] as const;
 /** The credential is a small JSON blob; anything larger is not a credential. */
 const MAX_STDOUT_BYTES = 1024 * 1024;
 
@@ -28,6 +29,8 @@ export interface KeychainChild extends UnrefHandle {
 export interface ClaudeKeychainReaderDeps {
   platform: string;
   spawn(command: string, args: readonly string[]): KeychainChild;
+  /** Synchronous run with a timeout; returns stdout and throws on a nonzero exit or a timeout. */
+  execSync(command: string, args: readonly string[], timeoutMs: number): string;
   now(): number;
   /** Runs `fn` after `ms`; returns a cancel function. */
   schedule(ms: number, fn: () => void): () => void;
@@ -38,10 +41,13 @@ export interface ClaudeKeychainReaderDeps {
 export interface ClaudeKeychainReader {
   /** Resolves the item's secret, or null on absence, failure, timeout, backoff or a non-darwin host. */
   readAsync(): Promise<string | null>;
-  /** True while a child is still running or a timeout backoff is active; sync readers must not spawn. */
+  /**
+   * Synchronous read. It cannot time out without killing its child, so it does not run while a
+   * child is still running or a backoff is active, and its own timeout starts the backoff.
+   */
+  readSync(): string | null;
+  /** True while a child is still running or a timeout backoff is active. */
   syncReadBlocked(): boolean;
-  /** Records a timeout from a synchronous reader, which cannot time out without killing its child. */
-  noteSyncTimeout(): void;
 }
 
 export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): ClaudeKeychainReader {
@@ -49,8 +55,9 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
   const backoffMs = deps.backoffMs ?? CLAUDE_KEYCHAIN_BACKOFF_MS;
   let backoffUntil = 0;
   // Held until the child exits, not until the caller's promise settles: a child that
-  // outlives its deadline is still blocked on the prompt and must not get a sibling.
-  let childRunning = false;
+  // outlives its deadline is still blocked on the prompt and must not get a sibling. Only the
+  // owning child may release it, so a late event from an earlier child cannot free the slot.
+  let runningChild: KeychainChild | undefined;
   let pending: Promise<string | null> | undefined;
 
   const backingOff = (): boolean => deps.now() < backoffUntil;
@@ -59,15 +66,16 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
   function readAsync(): Promise<string | null> {
     if (deps.platform !== "darwin") return Promise.resolve(null);
     if (pending) return pending;
-    if (childRunning || backingOff()) return Promise.resolve(null);
+    if (runningChild || backingOff()) return Promise.resolve(null);
 
     let child: KeychainChild;
     try {
-      child = deps.spawn("security", ["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"]);
+      child = deps.spawn("security", SECURITY_ARGS);
     } catch {
       return Promise.resolve(null);
     }
-    childRunning = true;
+    runningChild = child;
+    const release = (): void => { if (runningChild === child) runningChild = undefined; };
     const read = new Promise<string | null>(resolve => {
       let settled = false;
       const chunks: Buffer[] = [];
@@ -93,13 +101,13 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
         if (stdoutBytes <= MAX_STDOUT_BYTES) chunks.push(bytes);
       });
       child.once("error", () => {
-        childRunning = false;
+        release();
         settle(null);
       });
       // `close`, not `exit`: `exit` can fire before stdout is drained, which would truncate
       // the credential. Decode once so a multi-byte character split across chunks survives.
       child.once("close", code => {
-        childRunning = false;
+        release();
         if (code !== 0 || stdoutBytes > MAX_STDOUT_BYTES) return settle(null);
         settle(Buffer.concat(chunks).toString("utf8").trim() || null);
       });
@@ -108,14 +116,24 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
     return read;
   }
 
+  function readSync(): string | null {
+    if (deps.platform !== "darwin" || runningChild || backingOff()) return null;
+    try {
+      return deps.execSync("security", SECURITY_ARGS, timeoutMs).trim() || null;
+    } catch (error) {
+      if (isSyncTimeout(error)) startBackoff();
+      return null;
+    }
+  }
+
   return {
     readAsync,
-    syncReadBlocked: () => childRunning || backingOff(),
-    noteSyncTimeout: startBackoff,
+    readSync,
+    syncReadBlocked: () => runningChild !== undefined || backingOff(),
   };
 }
 
-/** `execSync` reports its own timeout as ETIMEDOUT or a kill signal; a nonzero exit is not one. */
+/** `execFileSync` reports its own timeout as ETIMEDOUT or a kill signal; a nonzero exit is not one. */
 export function isSyncTimeout(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const { code, signal } = error as { code?: unknown; signal?: unknown };
@@ -126,6 +144,8 @@ export function isSyncTimeout(error: unknown): boolean {
 export const claudeKeychainReader = createClaudeKeychainReader({
   platform: process.platform,
   spawn: (command, args) => spawn(command, [...args], { stdio: ["ignore", "pipe", "ignore"] }),
+  execSync: (command, args, timeoutMs) =>
+    execFileSync(command, [...args], { encoding: "utf8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }),
   now: () => Date.now(),
   schedule(ms, fn) {
     const timer = setTimeout(fn, ms);

@@ -3,11 +3,10 @@
  * Read-only: never writes to external credential stores.
  * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
  */
-import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CLAUDE_KEYCHAIN_SERVICE, CLAUDE_KEYCHAIN_TIMEOUT_MS, claudeKeychainReader, isSyncTimeout } from "./claude-keychain-read";
+import { claudeKeychainReader } from "./claude-keychain-read";
 import type { OAuthCredentials } from "./types";
 
 const XAI_AUTH_KEY_PREFIX = "https://auth.x.ai::";
@@ -77,19 +76,10 @@ function claudeConfigDir(): string {
  * Read the Claude Code OAuth credential from the macOS Keychain (darwin only). A synchronous
  * read cannot time out without killing `security`, which can crash `securityd` while an unlock
  * prompt is pending (#8161), so it does not spawn while a read is still running or backing off,
- * and its own timeout starts that backoff.
+ * and its own timeout starts that backoff (`claude-keychain-read.ts`).
  */
 function readClaudeKeychain(): string | null {
-  if (process.platform !== "darwin") return null;
-  if (claudeKeychainReader.syncReadBlocked()) return null;
-  try {
-    return execSync(`security find-generic-password -s "${CLAUDE_KEYCHAIN_SERVICE}" -w`, {
-      encoding: "utf8", timeout: CLAUDE_KEYCHAIN_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-  } catch (error) {
-    if (isSyncTimeout(error)) claudeKeychainReader.noteSyncTimeout();
-    return null;
-  }
+  return claudeKeychainReader.readSync();
 }
 
 /**

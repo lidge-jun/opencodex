@@ -169,6 +169,8 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
   function harness(platform = "darwin") {
     let clock = 1_000;
     const children: FakeChild[] = [];
+    const syncRuns: number[] = [];
+    let syncResult: () => string = () => "sync-secret\n";
     const deadlines: Array<{ ms: number; fn: () => void; cancelled: boolean }> = [];
     const reader = createClaudeKeychainReader({
       platform,
@@ -178,6 +180,12 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
         const child = new FakeChild();
         children.push(child);
         return child;
+      },
+      execSync: (command, args, timeoutMs) => {
+        expect(command).toBe("security");
+        expect(args).toEqual(["find-generic-password", "-s", "Claude Code-credentials", "-w"]);
+        syncRuns.push(timeoutMs);
+        return syncResult();
       },
       now: () => clock,
       schedule(ms, fn) {
@@ -192,7 +200,11 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
       const entry = deadlines[index]!;
       if (!entry.cancelled) entry.fn();
     };
-    return { reader, children, deadlines, fireDeadline, advance: (ms: number) => { clock += ms; } };
+    return {
+      reader, children, deadlines, fireDeadline, syncRuns,
+      advance: (ms: number) => { clock += ms; },
+      setSyncResult: (fn: () => string) => { syncResult = fn; },
+    };
   }
 
   test("a non-darwin host never spawns", async () => {
@@ -316,12 +328,65 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     expect(h.reader.syncReadBlocked()).toBe(false);
   });
 
-  test("a synchronous timeout starts the same backoff", () => {
+  test("a synchronous read returns trimmed stdout with the same deadline", () => {
     const h = harness();
-    h.reader.noteSyncTimeout();
-    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(h.reader.readSync()).toBe("sync-secret");
+    expect(h.syncRuns).toEqual([5_000]);
+  });
+
+  test("a synchronous read does not run while an async child is still running", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    expect(h.reader.readSync()).toBeNull();
+    h.fireDeadline();
+    await read;
+    h.advance(60_001);
+    // Backoff is over, but the timed-out child is still blocked on the prompt.
+    expect(h.reader.readSync()).toBeNull();
+    expect(h.syncRuns).toHaveLength(0);
+    h.children[0]!.emit("close", 0, null);
+    expect(h.reader.readSync()).toBe("sync-secret");
+  });
+
+  test("a synchronous timeout starts the backoff for both readers", async () => {
+    const h = harness();
+    h.setSyncResult(() => { throw Object.assign(new Error("t"), { code: "ETIMEDOUT", signal: "SIGTERM" }); });
+    expect(h.reader.readSync()).toBeNull();
+    h.setSyncResult(() => "sync-secret");
+    expect(h.reader.readSync()).toBeNull();
+    expect(await h.reader.readAsync()).toBeNull();
+    expect(h.syncRuns).toHaveLength(1);
+    expect(h.children).toHaveLength(0);
     h.advance(60_000);
+    expect(h.reader.readSync()).toBe("sync-secret");
+  });
+
+  test("a synchronous nonzero exit (item not found) does not back off", () => {
+    const h = harness();
+    h.setSyncResult(() => { throw Object.assign(new Error("e"), { status: 44, signal: null }); });
+    expect(h.reader.readSync()).toBeNull();
     expect(h.reader.syncReadBlocked()).toBe(false);
+    h.setSyncResult(() => "sync-secret");
+    expect(h.reader.readSync()).toBe("sync-secret");
+  });
+
+  test("a non-darwin host never runs the synchronous read", () => {
+    const h = harness("linux");
+    expect(h.reader.readSync()).toBeNull();
+    expect(h.syncRuns).toHaveLength(0);
+  });
+
+  test("a late close from an errored child does not free its replacement's slot", async () => {
+    const h = harness();
+    const first = h.reader.readAsync();
+    h.children[0]!.emit("error", new Error("spawn failure"));
+    expect(await first).toBeNull();
+    void h.reader.readAsync();
+    expect(h.children).toHaveLength(2);
+    h.children[0]!.emit("close", -2, null);
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(h.reader.readSync()).toBeNull();
+    expect(h.syncRuns).toHaveLength(0);
   });
 
   test("isSyncTimeout distinguishes an execSync timeout from a nonzero exit", () => {
