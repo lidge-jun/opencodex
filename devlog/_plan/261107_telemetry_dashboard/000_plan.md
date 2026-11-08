@@ -100,6 +100,6 @@ rejects `/` tokens and host identifiers there (010).
 
 ## PR review round 1
 
-Reviewer feedback on the open stack is recorded, with owner decisions D1–D20, in
+Reviewer feedback on the open stack is recorded, with owner decisions D1–D21, in
 [060_review_round.md](060_review_round.md). Those decisions supersede conflicting text in 000–050, including
 the public privacy statement change that must land with the first layer able to send.

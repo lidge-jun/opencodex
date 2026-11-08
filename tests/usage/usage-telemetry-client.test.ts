@@ -40,6 +40,7 @@ import {
   computeTelemetryIntervalDelayMs,
   computeTelemetryStartupDelayMs,
   nudgeTelemetryScheduler,
+  endTelemetryEnvOptOut,
   readTelemetryState,
   recordTelemetryEnvOptOut,
   runTelemetryTick,
@@ -743,7 +744,11 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     test("never sends its opt-out days when it did not stop cleanly before a normal proxy ticks", async () => {
       const lease = startOptedOutProxy("2026-11-02T09:00:00.000Z");
       try {
-        // Monday through Thursday ran opted out. A normal proxy takes over on Friday.
+        // Monday through Thursday ran opted out, then the proxy crashed: its recorded pid is gone.
+        const crashed = readTelemetryState(home);
+        expect(crashed.envOptOutOwners?.map(owner => owner.pid)).toEqual([process.pid]);
+        writeTelemetryState({ ...crashed, envOptOutOwners: [{ pid: 2_000_000_000, since: crashed.envOptOutOwners![0]!.since }] }, home);
+        // A normal proxy takes over on Friday.
         setSystemTime(new Date("2026-11-06T12:00:00.000Z"));
         expect((await tickAt("2026-11-06T12:00:00.000Z")).sent).toBe(false);
         expect((await tickAt("2026-11-07T12:00:00.000Z")).sent).toBe(false);
@@ -807,6 +812,65 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     expect(await runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse("2026-11-04T12:00:00.000Z"), fetch: mockFetch })).toMatchObject({ sent: true });
     expect(sent[1]!.newInstall).toBe(false);
     expect(readTelemetryState(home).everReported).toBe(true);
+  });
+
+  test("D2: a proxy without the opt-out never ends the period of an opted-out proxy that is still running", async () => {
+    const sentDays: string[] = [];
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentDays.push((JSON.parse(String(init?.body)) as TelemetryPayloadV1).day);
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-10-30T10:00:00.000Z", noticeShownAt: "2026-10-30T10:00:00.000Z" },
+    };
+    const tickAt = (iso: string) => runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse(iso), fetch: mockFetch });
+
+    // Process B (this test process, so it is alive) starts opted out on 2026-11-02 and keeps running.
+    recordTelemetryEnvOptOut(home, Date.parse("2026-11-02T09:00:00.000Z"), process.pid);
+    // Process A, sharing the home without the opt-out, ticks on the same and later days.
+    expect((await tickAt("2026-11-02T12:00:00.000Z")).sent).toBe(false);
+    expect((await tickAt("2026-11-04T12:00:00.000Z")).sent).toBe(false);
+    expect(sentDays).toEqual([]);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-04");
+
+    // B stops cleanly on 2026-11-05: every day through its stop day stays unsent.
+    endTelemetryEnvOptOut(home, Date.parse("2026-11-05T08:00:00.000Z"), process.pid);
+    expect((await tickAt("2026-11-06T12:00:00.000Z")).sent).toBe(false);
+    expect(await tickAt("2026-11-07T12:00:00.000Z")).toMatchObject({ sent: true, day: "2026-11-06" });
+    expect(sentDays).toEqual(["2026-11-06"]);
+  });
+
+  test("D2: an opted-out proxy that died is closed by the next tick", async () => {
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-10-30T10:00:00.000Z", noticeShownAt: "2026-10-30T10:00:00.000Z" },
+    };
+    // A pid far above any real one stands for a process that has exited.
+    recordTelemetryEnvOptOut(home, Date.parse("2026-11-02T09:00:00.000Z"), 2_000_000_000);
+    const result = await runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse("2026-11-04T12:00:00.000Z"), fetch: (async () => new Response("{}", { status: 202 })) as unknown as typeof fetch });
+    expect(result.sent).toBe(false);
+    expect(readTelemetryState(home)).toMatchObject({ ineligibleThroughDay: "2026-11-04", envOptOutActiveSince: null });
+    expect(readTelemetryState(home).envOptOutOwners ?? []).toEqual([]);
+  });
+
+  test("an unreadable telemetry-state.json blocks sending instead of forgetting opt-out days", async () => {
+    let fetchCalls = 0;
+    const mockFetch = (async () => {
+      fetchCalls += 1;
+      return new Response("{}", { status: 202 });
+    }) as unknown as typeof fetch;
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-10-30T10:00:00.000Z", noticeShownAt: "2026-10-30T10:00:00.000Z" },
+    };
+    writeFileSync(telemetryStatePath(home), "{ not json", "utf8");
+    expect(await runTelemetryTick({ configDir: home, config, env: {}, now: NOW, fetch: mockFetch })).toEqual({ sent: false, reason: "state-unreadable" });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("a telemetry-id.json deleted by another process is not served from memory", () => {
+    const { identity } = ensureTelemetryInstallId(home);
+    expect(readTelemetryInstallId(home)?.installId).toBe(identity.installId);
+    unlinkSync(telemetryIdPath(home));
+    expect(readTelemetryInstallId(home)).toBeNull();
   });
 
   test("D7: re-reads consent and env before transmission and aborts in-flight ticks on stop or nudge", async () => {
